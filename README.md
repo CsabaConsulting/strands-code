@@ -287,5 +287,5 @@ This library is licensed under the MIT-0 License. See the LICENSE file.
 
 Example agents built with this library:
 
-- [Data Analyst Agent](https://github.com/aws-solutions-library-samples/guidance-for-agentic-data-analyst-using-amazon-bedrock-agentcore-on-aws/blob/main/agent/aws_data_analyst/data_analyst_agent.py#L92)
-- [Geospatial Agent](https://github.com/aws-samples/sample-geospatial-code-agent/blob/main/agent/geospatial_agent/agent.py#L93)
+- [Data Analyst Agent](https://github.com/aws-solutions-library-samples/guidance-for-agentic-data-analyst-using-amazon-bedrock-agentcore-on-aws/blob/4d96650b9f2c4df1bb991f6369433c7e9e09df75/agent/aws_data_analyst/data_analyst_agent.py#L122)
+- [Geospatial Agent](https://github.com/aws-samples/sample-geospatial-code-agent/blob/0b7498685f962d8e23a2d6ca85c616a790b06141/agent/geospatial_agent/agent.py#L121)
