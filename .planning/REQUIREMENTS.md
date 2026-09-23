@@ -89,12 +89,31 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (unmapped — roadmap not yet created) | — | Pending |
+| LOOP-01 | Phase 1 | Pending |
+| LOOP-02 | Phase 4 | Pending |
+| LOOP-03 | Phase 7 | Pending |
+| LOOP-04 | Phase 4 | Pending |
+| MODE-01 | Phase 4 | Pending |
+| MODE-02 | Phase 4 | Pending |
+| TOOL-01 | Phase 2 | Pending |
+| TOOL-02 | Phase 2 | Pending |
+| TOOL-03 | Phase 3 | Pending |
+| TOOL-04 | Phase 2 | Pending |
+| SES-01 | Phase 1 | Pending |
+| SES-02 | Phase 5 | Pending |
+| SES-03 | Phase 1 | Pending |
+| MODEL-01 | Phase 5 | Pending |
+| MODEL-02 | Phase 5 | Pending |
+| SKILL-01 | Phase 6 | Pending |
+| SKILL-02 | Phase 6 | Pending |
+| GITHUB-01 | Phase 8 | Pending |
+| GITHUB-02 | Phase 8 | Pending |
+| REVIEW-01 | Phase 8 | Pending |
 
 **Coverage:**
 - v1 requirements: 20 total
-- Mapped to phases: 0
-- Unmapped: 20 ⚠️
+- Mapped to phases: 20
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-22*
