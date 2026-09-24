@@ -31,10 +31,16 @@ dependencies = [
     "jinja2>=3.0",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "typer>=0.27.2",
+    "prompt-toolkit>=3.0.53",
+    "platformdirs>=4.11.12",
 ]
 
 [project.optional-dependencies]
 agentcore = ["boto3>=1.35.0"]
+
+[project.scripts]
+strands-code = "strands_code_cli.main:main"
 
 [dependency-groups]
 # Test-only runtime needs: toolkit wiring tests execute real numpy/pandas
