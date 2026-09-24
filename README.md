@@ -22,6 +22,35 @@ Details: [docs/competitive-gap-analysis.md](docs/competitive-gap-analysis.md).
 uv sync                   # project-local .venv + lockfile, incl. strands-harness
 ```
 
+Full run guide: [docs/QUICKSTART.md](docs/QUICKSTART.md).
+
+## Run the CLI
+
+From this repo:
+
+```bash
+uv run strands-code
+```
+
+From any other directory (sessions stay local to that directory):
+
+```bash
+uv run --project /home/csaba/repos/AWS/strands-code strands-code
+```
+
+Sessions live in `./.agent/sessions` relative to your working directory —
+`cd` into the repo you want to work on, then launch. Resume with
+`strands-code --session-id <uuid>` or the picker at launch.
+
+First run without AWS credentials stops with a Bedrock setup pointer
+(exit 2); the provider choice persists to a config file afterwards.
+
+REPL basics: type an ask, keep asking — one conversation. `/resume`,
+`/rename`, `/exit` work; unknown `/slash` shows a usage hint. Ctrl-C
+cancels the line, Ctrl-D exits with state saved.
+
+## Library use
+
 ```python
 from strands_code_agent import CodeAgent
 
@@ -37,7 +66,7 @@ The agent receives a `python_repl` tool automatically and solves tasks by writin
 |---|---|
 | `CodeAgent` | `strands.Agent` subclass; auto-registers `python_repl`, assembles the system prompt from toolkits (`strands_code_agent/code_agent.py`). Extra tools via `tools=[...]`; model etc. via `**kwargs`. |
 | `Toolkit` | Domain bundle: `libraries` → interpreter allowlist, `initialization_code` → REPL preamble, `usage_instructions` → prompt guidance, `domain_specific_code` → auto-imported + documented symbols. Ships `VISUALIZATION_TOOLKIT`, `DATA_ANALYSIS_TOOLKIT`. |
-| Interpreters | `SandboxedPythonInterpreter` (default, allowlisted), `ExecPythonInterpreter` (trusted, unrestricted), `AgentCorePythonInterpreter` (remote Bedrock AgentCore sandbox; needs `pip install .[agentcore]` + AWS creds). Selected via `python_interpreter_class`. |
+| Interpreters | `SandboxedPythonInterpreter` (default, allowlisted), `ExecPythonInterpreter` (trusted, unrestricted), `AgentCorePythonInterpreter` (remote Bedrock AgentCore sandbox; needs `uv sync --extra agentcore` + AWS creds). Selected via `python_interpreter_class`. |
 | Knowledge (OKF) | `strands_code_agent.knowledge`: convert PDFs to OKF concept bundles, navigate via `find` / `read` / `children` / `toc`. See `examples/pdf_to_okf_bundle/`. |
 | Callback | `CodeAgentCallbackHandler`: Rich terminal rendering (code highlighting, Markdown/JSON detection). |
 
@@ -51,9 +80,13 @@ agent = CodeAgent(
 )
 ```
 
-## CLI direction
+## CLI status
 
-The CLI composes harness defaults with this library: `create_harness(tools=[python_repl, ...], instructions=..., plugins=..., memory=..., session=...)`, keeping `CodeAgent` as the agent class. Planned surface: `/model /resume /compact /clear /memory /cost /diff /review`, `--session-id`, fuzzy file picker, approval prompts. The harness `strands` CLI is the UX reference.
+Working today (Phase 1): resumable multi-ask REPL, resume picker,
+`--session-id`, `/resume` `/rename` `/exit`, session auto-titles,
+Bedrock-or-stop first-run gate, kill-safe persistence. Coming next:
+/model /compact /clear /memory /cost /diff /review, permissions UX,
+fuzzy file picker, approval prompts.
 
 ## Upstream sync
 
