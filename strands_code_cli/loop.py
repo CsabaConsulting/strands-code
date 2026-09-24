@@ -12,10 +12,16 @@ from prompt_toolkit.history import FileHistory, History
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 
+from strands_code_cli.router import dispatch
 from strands_code_cli.session_index import SessionIndex
 
 logger = logging.getLogger(__name__)
 console = Console()
+
+TITLE_PROMPT = "Summarize this exchange in at most six words, plain words only: "
+TITLE_WORDS = 6
+TITLE_FALLBACK_WORDS = 8
+TITLE_FALLBACK_CHARS = 60
 
 
 def _history() -> History:
@@ -47,16 +53,48 @@ def explicit_save(agent: Any) -> None:
         logger.warning("Explicit session save on exit failed: %s", exc)
 
 
-def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
-    """Run the REPL until Ctrl-D.
+def _fallback_title(first_text: str) -> str:
+    """First-ask truncation used when the model title call fails."""
+    clipped = " ".join(first_text.split()[:TITLE_FALLBACK_WORDS])
+    return clipped[:TITLE_FALLBACK_CHARS].strip() or "untitled"
 
-    One ``PromptSession`` owns input; each turn runs synchronously with the
-    prompt suspended via ``patch_stdout`` while the agent streams through
-    the shared callback handler. Ctrl-C cancels the line, Ctrl-D exits
-    cleanly with an explicit save plus an index recency bump.
+
+def _maybe_auto_title(agent: Any, session_id: str, index: SessionIndex, first_text: str) -> None:
+    """Title once from the first exchange (D-04); a manual rename always wins.
+
+    A cheap direct model call is attempted first; any failure falls back to
+    first-ask truncation. ``update_title`` no-ops on user-renamed sessions.
+    """
+    title = _fallback_title(first_text)
+    try:
+        generate = getattr(getattr(agent, "model", None), "generate", None)
+        if generate is None:
+            raise AttributeError("agent exposes no direct model call")
+        raw = generate(f"{TITLE_PROMPT}{first_text[:500]}")
+        candidate = raw if isinstance(raw, str) else getattr(raw, "text", "") or ""
+        words = candidate.split()
+        if words:
+            title = " ".join(words[:TITLE_WORDS])
+    except Exception:
+        pass  # fallback title stands
+    title = title.replace("/", "-").replace("\\", "-")
+    try:
+        index.update_title(session_id, title)
+    except (KeyError, ValueError) as exc:
+        logger.warning("Auto-title skipped for session %s: %s", session_id, exc)
+
+
+def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
+    """Run the REPL until Ctrl-D or /exit.
+
+    One ``PromptSession`` owns input; slash lines dispatch through the
+    router while plain text runs synchronously with the prompt suspended
+    via ``patch_stdout``. Ctrl-C cancels the line, Ctrl-D exits cleanly
+    with an explicit save plus an index recency bump.
     """
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
     session: PromptSession = PromptSession(history=_history())
+    titled = False
     while True:
         try:
             text = session.prompt("> ")
@@ -66,12 +104,21 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
             break  # Ctrl-D exits
         if not text.strip():
             continue  # empty input submits nothing; re-prompt
+        action, message = dispatch(text, session_id=session_id, index=index)
+        if action == "exit":
+            break
+        if action == "reply":
+            if message:
+                console.print(message)
+            continue
         try:
             with patch_stdout():
                 agent(text)
         except KeyboardInterrupt:
             console.print("[yellow]Turn interrupted; earlier turns are saved.[/yellow]")
-            continue
+        if not titled:
+            titled = True
+            _maybe_auto_title(agent, session_id, index, text)
     explicit_save(agent)
     index.ensure(session_id)
     console.print("[dim]Session saved.[/dim]")

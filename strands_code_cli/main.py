@@ -20,6 +20,7 @@ from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
 from strands_code_cli.loop import run_loop
+from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
 
 app = typer.Typer(
@@ -108,7 +109,11 @@ def _root(
     # Index construction creates directories, so it runs only after the
     # side-effect-free validation above.
     index = SessionIndex(Path(DEFAULT_SESSION_DIR).parent / "session_index")
-    resolved = resolve_session_id(session_id, index)
+    if session_id is not None:
+        resolved = resolve_session_id(session_id, index)
+    else:
+        picked = show_picker(index, session_dir=DEFAULT_SESSION_DIR)
+        resolved = index.ensure(picked)["id"] if picked is not None else index.mint()
     _preflight_credentials()
     agent = build_agent(resolved, DEFAULT_SESSION_DIR)
     run_loop(agent, session_id=resolved, index=index)
