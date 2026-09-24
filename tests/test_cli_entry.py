@@ -161,3 +161,111 @@ class TestAutoTitle:
         sid = index.mint()
         _maybe_auto_title(object(), sid, index, "explain the retry logic here please")
         assert index.list_recent()[0]["title"] == "explain the retry logic here please"
+
+
+# ---------------------------------------------------------------------------
+# CliRunner routing (D-01/D-02, agent construction patched out)
+# ---------------------------------------------------------------------------
+
+
+def _patched_launch(main_module):
+    """Patch the expensive seams; yields (build_agent, run_loop) mocks."""
+    from contextlib import ExitStack, contextmanager
+
+    @contextmanager
+    def _launch():
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(main_module, "_preflight_credentials", return_value=None)
+            )
+            build = stack.enter_context(
+                patch.object(main_module, "build_agent", return_value=object())
+            )
+            yield build, stack.enter_context(patch.object(main_module, "run_loop"))
+
+    return _launch()
+
+
+class TestCliRouting:
+    def test_no_arg_reaches_repl(self, tmp_path, monkeypatch):
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
+        with _patched_launch(main_module) as (_, loop):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(main_module.app, [])
+        assert result.exit_code == 0, result.output
+        loop.assert_called_once()
+        minted = loop.call_args[1]["session_id"]
+        import uuid
+
+        uuid.UUID(minted)  # no-arg mints a fresh session id (D-01)
+
+    def test_session_id_routes_to_given_session(self, tmp_path, monkeypatch):
+        import importlib
+        import uuid
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)
+        session_id = str(uuid.uuid4())
+        with _patched_launch(main_module) as (build, loop):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(main_module.app, ["--session-id", session_id])
+        assert result.exit_code == 0, result.output
+        assert build.call_args[0][0] == session_id
+        assert loop.call_args[1]["session_id"] == session_id
+
+    def test_session_id_skips_picker(self, tmp_path, monkeypatch):
+        import importlib
+        import uuid
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)
+        with _patched_launch(main_module) as loop, patch.object(
+            main_module, "show_picker", side_effect=AssertionError("picker must be skipped")
+        ):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(
+                main_module.app, ["--session-id", str(uuid.uuid4())]
+            )
+        assert result.exit_code == 0, result.output
+
+    def test_no_arg_with_sessions_shows_picker(self, tmp_path, monkeypatch):
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(".agent/session_index")
+        chosen = index.mint()
+        index.rename(chosen, "Picked Work")
+        (Path(".agent/sessions/session") / chosen).mkdir(parents=True)
+        with _patched_launch(main_module) as (_, loop):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(main_module.app, [], input="1\n")
+        assert result.exit_code == 0, result.output
+        assert "Picked Work" in result.output
+        assert loop.call_args[1]["session_id"] == chosen
+
+    def test_malformed_id_is_usage_error_without_sessions(self, tmp_path, monkeypatch):
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(main_module.app, ["--session-id", "../../x"])
+        assert result.exit_code != 0
+        assert "session-id" in result.output.lower()
+        assert not Path(".agent").exists()
