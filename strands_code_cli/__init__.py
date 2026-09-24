@@ -1,3 +1,5 @@
 """strands-code conversational CLI (Phase 1 tracer slice)."""
 
-from __future__ import annotations
+from strands_code_cli.main import main
+
+__all__ = ["main"]

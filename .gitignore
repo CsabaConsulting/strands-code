@@ -32,3 +32,6 @@ wiki/
 # Examples (generated)
 examples/pdf_to_okf_bundle/agentcore_bundle/
 examples/pdf_to_okf_bundle/bedrock_agentcore_guide.pdf
+
+# CLI runtime (sessions, snapshots, sidecar index)
+.agent/

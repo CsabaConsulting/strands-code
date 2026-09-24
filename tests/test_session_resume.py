@@ -116,6 +116,87 @@ class TestSessionResume:
 
 
 # ----------------------------------------------------------------------
+# Entry routing + --session-id validation (T-01-01)
+# ----------------------------------------------------------------------
+
+
+class TestEntryRouting:
+    def test_invalid_session_id_is_usage_error(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from strands_code_cli.main import app
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["--session-id", "../../x"])
+        assert result.exit_code != 0
+        assert "session-id" in result.output.lower()
+
+    def test_invalid_session_id_creates_no_session_dir(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+
+        from strands_code_cli.main import app
+
+        monkeypatch.chdir(tmp_path)
+        CliRunner().invoke(app, ["--session-id", "../../x"])
+        assert not Path(".agent").exists()
+
+    def test_explicit_session_id_routes_to_loop(self, tmp_path):
+        from unittest.mock import patch
+
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        session_id = str(uuid.uuid4())
+        seen: dict[str, object] = {}
+        with (
+            patch.object(main_module, "_preflight_credentials", return_value=None),
+            patch.object(main_module, "build_agent", return_value=object()) as built,
+            patch.object(main_module, "run_loop") as loop,
+            patch.object(main_module, "SessionIndex") as index_cls,
+        ):
+            from typer.testing import CliRunner
+
+            runner = CliRunner()
+            with runner.isolation():
+                result = runner.invoke(main_module.app, ["--session-id", session_id])
+        assert result.exit_code == 0, result.output
+        assert built.call_args[0][0] == session_id
+        seen["agent"] = loop.call_args[0][0]
+        assert loop.call_args[1]["session_id"] == session_id
+        assert seen["agent"] is built.return_value
+        index_cls.assert_called_once()
+
+    def test_no_arg_mints_fresh_session(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.main")
+
+        monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
+        with (
+            patch.object(main_module, "_preflight_credentials", return_value=None),
+            patch.object(main_module, "build_agent", return_value=object()),
+            patch.object(main_module, "run_loop") as loop,
+        ):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(main_module.app, [])
+        assert result.exit_code == 0, result.output
+        minted = loop.call_args[1]["session_id"]
+        uuid.UUID(minted)  # fresh id parses as a UUID
+
+    def test_build_agent_wires_session_dict(self, tmp_path):
+        from strands_code_cli.main import build_agent
+
+        session_id = str(uuid.uuid4())
+        agent = build_agent(session_id, tmp_path / "sessions", model=_ReplayModel("hi"))
+        assert agent.session_id == session_id
+        assert agent.agent_id == "default"
+
+
+# ----------------------------------------------------------------------
 # CLI construction contract (no bare Agent / CodeAgent in CLI code)
 # ----------------------------------------------------------------------
 
