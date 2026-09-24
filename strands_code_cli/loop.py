@@ -25,13 +25,23 @@ TITLE_FALLBACK_CHARS = 60
 
 
 def _history() -> History:
-    """Reply history backed by a file; in-memory when the cache dir is unusable."""
+    """Reply history backed by a file; in-memory when the cache dir is unusable.
+
+    History holds typed asks (T-01-03): the cache dir and file get the same
+    0o700 treatment as the session/index dirs.
+    """
+    import os
+
     try:
         import platformdirs
 
         cache = Path(platformdirs.user_cache_dir("strands-code"))
         cache.mkdir(parents=True, exist_ok=True)
-        return FileHistory(str(cache / "repl_history"))
+        os.chmod(cache, 0o700)
+        history_file = cache / "repl_history"
+        history_file.touch(exist_ok=True)
+        os.chmod(history_file, 0o600)
+        return FileHistory(str(history_file))
     except Exception as exc:  # best-effort history must never block the loop
         logger.warning("Falling back to in-memory REPL history: %s", exc)
         return History()
