@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 _INDEX_NAME = "index.json"
+_TITLE_MAX_CHARS = 120
 
 
 def _utcnow() -> str:
@@ -70,6 +71,8 @@ class SessionIndex:
                 for sid, entry in data.items()
                 if isinstance(entry, dict)
             }
+            for entry in self._entries.values():
+                entry.setdefault("renamed_by_user", False)
 
     def _save(self) -> None:
         assert self._entries is not None
@@ -98,9 +101,10 @@ class SessionIndex:
         session_id = str(uuid.uuid4())
         now = _utcnow()
         self._entries[session_id] = {
-            "title": title,
+            "title": self._validate_title(title),
             "created_at": now,
             "updated_at": now,
+            "renamed_by_user": False,
         }
         self._save()
         return session_id
@@ -113,7 +117,12 @@ class SessionIndex:
         entry = self._entries.get(session_id)
         if entry is None:
             now = _utcnow()
-            entry = {"title": "untitled", "created_at": now, "updated_at": now}
+            entry = {
+                "title": "untitled",
+                "created_at": now,
+                "updated_at": now,
+                "renamed_by_user": False,
+            }
             self._entries[session_id] = entry
         else:
             entry["updated_at"] = _utcnow()
@@ -134,19 +143,32 @@ class SessionIndex:
         return [{"id": sid, **entry} for sid, entry in ordered]
 
     def rename(self, session_id: str, title: str) -> dict[str, Any]:
-        """Rename a known session. Raises ``KeyError`` when unknown."""
+        """Rename a known session; marks it user-named so auto-title backs off.
+
+        Raises ``KeyError`` when unknown, ``ValueError`` on invalid titles.
+        """
         self._ensure_loaded()
         assert self._entries is not None
         if session_id not in self._entries:
             raise KeyError(f"Unknown session id: {session_id}")
         self._entries[session_id]["title"] = self._validate_title(title)
+        self._entries[session_id]["renamed_by_user"] = True
         self._entries[session_id]["updated_at"] = _utcnow()
         self._save()
         return {"id": session_id, **self._entries[session_id]}
 
     def update_title(self, session_id: str, title: str) -> dict[str, Any]:
-        """Model auto-title path; shares rename semantics for now."""
-        return self.rename(session_id, title)
+        """Model auto-title path; never overwrites a manual rename (D-04)."""
+        self._ensure_loaded()
+        assert self._entries is not None
+        if session_id not in self._entries:
+            raise KeyError(f"Unknown session id: {session_id}")
+        if self._entries[session_id].get("renamed_by_user"):
+            return {"id": session_id, **self._entries[session_id]}
+        self._entries[session_id]["title"] = self._validate_title(title)
+        self._entries[session_id]["updated_at"] = _utcnow()
+        self._save()
+        return {"id": session_id, **self._entries[session_id]}
 
     # ------------------------------------------------------------------
     # Validation
@@ -161,7 +183,10 @@ class SessionIndex:
 
     @staticmethod
     def _validate_title(title: str) -> str:
-        """Reject empty titles so the picker never shows a blank row."""
+        """Validate titles (T-02-01): reject blanks and path separators, cap length."""
         if not title or not title.strip():
             raise ValueError("title must be a non-empty string")
-        return title.strip()
+        cleaned = title.strip()
+        if any(sep in cleaned for sep in ("/", "\\", "\x00")):
+            raise ValueError("title must not contain path separators")
+        return cleaned[:_TITLE_MAX_CHARS]
