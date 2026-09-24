@@ -19,7 +19,9 @@ from strands_code_agent.code_agent import (
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
+from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
 from strands_code_cli.loop import run_loop
+from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
 
@@ -29,11 +31,7 @@ app = typer.Typer(
     help="Conversational coding CLI. Runs the REPL immediately; resumes with --session-id.",
 )
 
-Bedrock_SETUP_POINTER = (
-    "No AWS credentials found. strands-code runs its model on Amazon Bedrock.\n"
-    "Set credentials via the ambient boto3 chain (env vars, ~/.aws/config, or an "
-    "IAM role), then relaunch."
-)
+Bedrock_SETUP_POINTER = BEDROCK_SETUP_POINTER
 
 
 def _validate_session_id(value: str) -> str:
@@ -50,18 +48,7 @@ def _validate_session_id(value: str) -> str:
 
 def _preflight_credentials() -> None:
     """Stop with a Bedrock setup pointer when credentials are absent (D-05)."""
-    try:
-        import boto3
-        from botocore.config import Config
-
-        sts = boto3.client(
-            "sts",
-            config=Config(connect_timeout=2, read_timeout=3, retries={"max_attempts": 0}),
-        )
-        sts.get_caller_identity()
-    except Exception:
-        typer.secho(Bedrock_SETUP_POINTER, err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=2)
+    preflight_credentials()
 
 
 def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
@@ -106,16 +93,19 @@ def _root(
             _validate_session_id(session_id)
         except ValueError as exc:
             raise typer.BadParameter(f"invalid --session-id: {exc}") from exc
+    # Gate runs before construction and before any session or config side
+    # effect (D-05; reversing this to offline-first reworks launch).
+    _preflight_credentials()
+    config = ProviderConfig.load()
     # Index construction creates directories, so it runs only after the
-    # side-effect-free validation above.
+    # side-effect-free validation and the credential gate above.
     index = SessionIndex(Path(DEFAULT_SESSION_DIR).parent / "session_index")
     if session_id is not None:
         resolved = resolve_session_id(session_id, index)
     else:
         picked = show_picker(index, session_dir=DEFAULT_SESSION_DIR)
         resolved = index.ensure(picked)["id"] if picked is not None else index.mint()
-    _preflight_credentials()
-    agent = build_agent(resolved, DEFAULT_SESSION_DIR)
+    agent = build_agent(resolved, DEFAULT_SESSION_DIR, model=config.model)
     run_loop(agent, session_id=resolved, index=index)
 
 
