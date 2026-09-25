@@ -1,26 +1,42 @@
 ---
 phase: 01-session-wiring-repl-skeleton
-verified: 2026-09-24T07:30:00Z
+verified: 2026-09-25T00:22:06Z
 status: passed
 score: 13/13 must-haves verified
 covered_files:
   - strands_code_cli/first_run.py
   - strands_code_cli/loop.py
   - strands_code_cli/main.py
+  - strands_code_cli/output.py
   - strands_code_cli/provider_config.py
   - strands_code_cli/router.py
   - strands_code_cli/session_index.py
-covered_digest: "v1:sha256:76b391febb55028bc550744a2be42bd2c0b14041ddf0c1a47e7d5a4ae66fcb66"
+covered_digest: "v1:sha256:4689de3e126dbc82dcd4cc12b41b7fea713be75437e9d09bc044ddd4270d924d"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: passed
+  previous_score: 13/13
+  gaps_closed: []
+  gaps_remaining: []
+  regressions: []
 ---
 
 # Phase 01: Session Wiring + REPL Skeleton Verification Report
 
 **Phase Goal:** Users can hold a multi-ask conversation that survives restarts via session resume
-**Verified:** 2026-09-24T07:30:00Z
+**Verified:** 2026-09-25T00:22:06Z
 **Status:** passed
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — final verification covering two post-plan fixes on top of the 13/13 passed baseline (no prior gaps)
+
+## Re-verification (post-plan fixes)
+
+Two fixes landed after the initial 13/13 pass; both verified against the current tree this session:
+
+1. **REPL history chmod (commit `b619966`, closes WR-01):** `loop.py:28-48` `_history()` now `os.chmod`s the cache dir to `0o700` and the `repl_history` file to `0o600` (including re-chmod of pre-existing files), closing the prior WR-01 info. Pinned by `tests/test_repl_history.py` (2 tests: fresh-restricted + re-chmod-existing, green this session).
+2. **ANSI escape preservation (commit `1a0143c`):** new `strands_code_cli/output.py` `output_context()` mirrors `patch_stdout` exactly but uses `StdoutProxy(raw=True)` so Rich styling no longer degrades to literal `?[1m` sequences; wired into the agent turn at `loop.py:126` (`with output_context(): agent(text)`). Pinned by `tests/test_output.py` (`proxy.raw is True`, green this session).
+
+Regression check: `git diff 8026d00..HEAD` touches no other implementation file (`main.py`, `router.py`, `session_index.py`, `first_run.py`, `provider_config.py` unchanged), so all 13 baseline truths hold on their original evidence. Full suite: **247 passed, 5 deselected** (observed this session, up from 244 — the 3 new fix tests).
 
 ## Goal Achievement
 
@@ -50,7 +66,8 @@ overrides_applied: 0
 |----------|----------|--------|---------|
 | `strands_code_cli/__init__.py` | package export | ✓ VERIFIED | exists, exports main |
 | `strands_code_cli/main.py` | Typer entry, gate, picker wiring | ✓ VERIFIED | substantive, wired (imports loop/router/index/config/harness) |
-| `strands_code_cli/loop.py` | REPL loop, exit save, auto-title | ✓ VERIFIED | substantive, wired into main |
+| `strands_code_cli/loop.py` | REPL loop, exit save, auto-title | ✓ VERIFIED | substantive, wired into main; re-verified: `_history()` chmod 0o700/0o600 (`b619966`), turn under `output_context()` (`1a0143c`) |
+| `strands_code_cli/output.py` | raw-stdout proxy preserving ANSI | ✓ VERIFIED | substantive (30 lines), wired into `run_loop`; `test_output.py` pins `raw is True` |
 | `strands_code_cli/session_index.py` | sidecar index, rename/title lifecycle | ✓ VERIFIED | substantive, wired into main/loop/router |
 | `strands_code_cli/router.py` | slash dispatch + picker | ✓ VERIFIED | substantive, wired into loop + main |
 | `strands_code_cli/provider_config.py` | persisted provider choice | ✓ VERIFIED | substantive, wired into main |
@@ -60,6 +77,8 @@ overrides_applied: 0
 | `tests/test_session_index.py` | index round-trip tests | ✓ VERIFIED | 21 tests pass |
 | `tests/test_kill_resume.py` | kill-resume + exit-flush tests | ✓ VERIFIED | 5 tests pass |
 | `tests/test_first_run.py` | gate + config tests | ✓ VERIFIED | 12 tests pass |
+| `tests/test_repl_history.py` | history-perm tests (fix `b619966`) | ✓ VERIFIED | 2 tests pass |
+| `tests/test_output.py` | raw-stdout contract test (fix `1a0143c`) | ✓ VERIFIED | 1 test passes |
 
 ### Key Link Verification
 
@@ -86,7 +105,10 @@ overrides_applied: 0
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
 | Phase test files green | `uv run pytest tests/test_session_resume.py test_cli_entry.py test_session_index.py test_kill_resume.py test_first_run.py -q` | 67 passed | ✓ PASS |
-| Full suite green | `uv run pytest tests/ -q` | 244 passed, 5 deselected | ✓ PASS |
+| Full suite green | `uv run pytest tests/ -q` | 247 passed, 5 deselected | ✓ PASS |
+| Fix tests green | `uv run pytest tests/test_repl_history.py tests/test_output.py tests/test_session_resume.py tests/test_kill_resume.py -q` | 17 passed | ✓ PASS |
+| History perms enforced | `grep chmod/0o600/0o700 strands_code_cli/loop.py` | cache 0o700 + file 0o600 | ✓ PASS |
+| Raw stdout wired | `grep output_context/StdoutProxy strands_code_cli/` | `output.py` raw=True, `loop.py:126` uses it | ✓ PASS |
 | CLI documents resume flag | `uv run strands-code --help` | `--session-id` present, exit 0 | ✓ PASS |
 | No bare-Agent construction | `grep Agent( strands_code_cli/` | only `create_harness` in main.py | ✓ PASS |
 | No `/model`, no `atexit` in CLI | `grep` | no matches (only docstring mention of Phase 5 `/model`) | ✓ PASS |
@@ -111,7 +133,7 @@ No orphaned requirements: only LOOP-01, SES-01, SES-03 map to Phase 1, all claim
 |------|------|---------|----------|--------|
 | — | — | `TBD/FIXME/XXX/TODO/placeholder` in phase files | none | grep clean — no debt markers |
 | loop.py | 114-118 | CR-01: agent-turn `except` covers only `KeyboardInterrupt`; other turn exceptions skip exit save and kill REPL | ⚠️ Warning (reviewer: critical — downgraded, see judgment) | No silent loss (per-message saves already durably store completed turns; only the failed in-flight turn is lost, which the SES-03 assumption allows); transient model errors end the conversation instead of re-prompting — robustness gap, not a goal failure |
-| loop.py | 27-37 | WR-01: REPL history file without 0o700 | ℹ️ Info | Prompt history readable under permissive umask; privacy hardening, goal unaffected |
+| loop.py | 28-48 | WR-01: REPL history file without 0o700 | ✅ Closed by fix `b619966` | Cache dir chmod 0o700 + history file chmod 0o600 (incl. re-chmod); pinned by `test_repl_history.py`, green this session |
 | router.py | 92-95 | WR-02: Rich markup swallows `[..]` in titles | ℹ️ Info | Display-only misrender; rename/picker truth still holds |
 | main.py | 103-107 | WR-03: picker ids bypass `_validate_session_id` | ⚠️ Warning | Malformed sidecar id reaches harness without usage-error path; narrow (needs hand-edited index); SES-01 happy path unaffected |
 | session_index.py | 132-143 | WR-04: `list_recent` sort crashes on mixed-type `updated_at` | ℹ️ Info | Needs tampered index; fail-soft read guarantee partially undermined |
@@ -132,13 +154,13 @@ Same reasoning for WR-03/WR-06/WR-07: each degrades an edge (picker discoverabil
 
 ### Human Verification Required
 
-None. All truths are verified by a combination of passing automated tests (67 phase tests + 244 full suite, observed this session), live CLI evidence (`--help`, 01-01 live ask + live SIGKILL probe on the unchanged save path), and code inspection against the installed SDK/harness. The open manual SIGKILL-after-gate-reorder probe from 01-03 D5 is covered: the 01-03 change only reordered startup (gate before index construction) and did not touch the save/resume path, and the restore-without-flush simulation tests pin the mechanism offline.
+None. All truths are verified by a combination of passing automated tests (70 phase tests incl. 3 new fix tests + 247 full suite, observed this session), live CLI evidence (`--help`, 01-01 live ask + live SIGKILL probe on the unchanged save path), and code inspection against the installed SDK/harness. The open manual SIGKILL-after-gate-reorder probe from 01-03 D5 is covered: the 01-03 change only reordered startup (gate before index construction) and did not touch the save/resume path, and the restore-without-flush simulation tests pin the mechanism offline.
 
 ### Gaps Summary
 
-No gaps. All 13 must-have truths across the three plans are VERIFIED against the actual codebase, all 12 artifacts are present/substantive/wired with real data flowing, all key links hold, all three phase requirements (LOOP-01, SES-01, SES-03) are satisfied, the full suite is green (244 passed), and no debt markers exist in phase files. The code-review findings (1 critical, 7 warnings, 5 info) were each judged against the phase goal: CR-01 is a real robustness defect but causes no silent work loss and leaves resume-as-recovery intact, so it is recorded as a non-blocking follow-up rather than a gap. Prohibitions hold: no bare `Agent` construction (only `create_harness`), no custom session format (sidecar JSON only), no cross-session transcript leakage (tested), no `/model` command, no `atexit` durability dependency.
+No gaps. All 13 must-have truths across the three plans are VERIFIED against the actual codebase, all 15 artifacts (incl. new `output.py` + 2 fix test files) are present/substantive/wired with real data flowing, all key links hold, all three phase requirements (LOOP-01, SES-01, SES-03) are satisfied, the full suite is green (247 passed), and no debt markers exist in phase files. Re-verification adds: WR-01 closed by the history-chmod fix; ANSI preservation verified via `output_context` wiring. The code-review findings (1 critical, 7 warnings, 5 info) were each judged against the phase goal: CR-01 is a real robustness defect but causes no silent work loss and leaves resume-as-recovery intact, so it is recorded as a non-blocking follow-up rather than a gap. Prohibitions hold: no bare `Agent` construction (only `create_harness`), no custom session format (sidecar JSON only), no cross-session transcript leakage (tested), no `/model` command, no `atexit` durability dependency.
 
 ---
 
-_Verified: 2026-09-24T07:30:00Z_
+_Verified: 2026-09-25T00:22:06Z (re-verification; initial: 2026-09-24T07:30:00Z)_
 _Verifier: the agent (gsd-verifier)_
