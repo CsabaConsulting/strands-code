@@ -7,6 +7,9 @@ from rich.markdown import Markdown
 from rich.pretty import Pretty
 from rich.console import Console
 
+DIFF_TOOLS = ("write", "edit")
+SEARCH_TOOLS = ("search",)
+
 
 def format_message(text):
     # Python data-structure
@@ -27,6 +30,45 @@ def format_message(text):
         return Markdown(text)
 
     return text
+
+
+def format_diff_use(name, tool_input):
+    """Render a write/edit tool call as a unified diff via Syntax("diff").
+
+    ``edit`` inputs carry old/new snippets so the preview is exact; ``write``
+    carries only new content, rendered as an all-addition diff. The body
+    always carries ``---`` / ``+++`` markers. Printed inside the existing
+    output_context wrap by the caller (loop.py), so raw stdout holds.
+    """
+    import difflib
+
+    path = tool_input.get('path', '<unknown>')
+    if name == "edit":
+        old = tool_input.get('old_str', '')
+        new = tool_input.get('new_str', '')
+        old_lines = old.splitlines(keepends=True)
+        new_lines = new.splitlines(keepends=True)
+    else:
+        old_lines = []
+        content = tool_input.get('content', '')
+        new_lines = content.splitlines(keepends=True)
+    body = "".join(
+        difflib.unified_diff(
+            old_lines, new_lines, fromfile=f"a/{path}", tofile=f"b/{path}"
+        )
+    )
+    if not body:
+        body = f"--- a/{path}\n+++ b/{path}\n(no content change)\n"
+    return Syntax(body, "diff")
+
+
+def format_search_use(tool_input):
+    """Render a search tool call as plain path:line-oriented text."""
+    pattern = tool_input.get('pattern', '')
+    path = tool_input.get('path', '.')
+    glob = tool_input.get('file_glob')
+    suffix = f" --glob {glob}" if glob else ""
+    return f"search {pattern!r} under {path}{suffix}"
 
 
 class CodeAgentCallbackHandler:
@@ -62,6 +104,10 @@ class CodeAgentCallbackHandler:
                     language = self.code_tools[name]
                     syntax = Syntax(tool_use['input']['code'], language)
                     self.console.print(syntax)
+                elif name in DIFF_TOOLS:
+                    self.console.print(format_diff_use(name, tool_use['input']))
+                elif name in SEARCH_TOOLS:
+                    self.console.print(format_search_use(tool_use['input']))
                 else:
                     for var, value in tool_use['input'].items():
                         self.console.print(f"\t- {var}: {value}")

@@ -19,6 +19,13 @@ from strands_code_agent.code_agent import (
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
+from strands_code_agent.search_tool import search as search_tool
+from strands_code_cli.diff_gate import (
+    PendingStore,
+    bind_session,
+    make_gated_edit,
+    make_gated_write,
+)
 from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
 from strands_code_cli.loop import run_loop
 from strands_code_cli.provider_config import ProviderConfig
@@ -64,13 +71,35 @@ def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
 
 
 def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
-    """Construct the session agent through the harness factory only."""
+    """Construct the session agent through the harness factory only.
+
+    The harness default tool set (shell/read/write/edit live) is edited via
+    an explicit ``builtin_tools`` MAPPING — not a pin list — so future
+    upstream defaults still flow: shell/read stay on, builtin write/edit are
+    pinned off in favor of the diff-gated wrappers of the same names
+    (name-collision rule), and the local ``search`` tool rides the
+    consumer ``tools`` list.
+    """
     session_path = Path(session_dir)
     session_path.mkdir(parents=True, exist_ok=True)
     os.chmod(session_path, 0o700)
     interpreter = SandboxedPythonInterpreter("", authorized_imports=set())
+    cwd = os.getcwd()
+    store = PendingStore(session_path)
+    bind_session(session_id, store)
     kwargs: dict[str, Any] = {
-        "tools": [interpreter.get_tool()],
+        "tools": [
+            interpreter.get_tool(),
+            search_tool,
+            make_gated_write(cwd=cwd, store=store),
+            make_gated_edit(cwd=cwd, store=store),
+        ],
+        "builtin_tools": {
+            "shell": True,
+            "read": True,
+            "write": False,
+            "edit": False,
+        },
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
         "callback_handler": DEFAULT_CODE_AGENT_CALLBACK_HANDLER,

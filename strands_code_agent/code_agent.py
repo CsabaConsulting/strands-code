@@ -14,6 +14,14 @@ You are a code agent. You solve tasks by writing and executing Python code using
 
 The Python interpreter state resets completely with each new user message, but it persists across multiple tool invocations within a single response.
 You can perform multi-step computation within a single turn, but do not assume that results from a previous turn are still in memory.
+
+Prefer the dedicated tools for file and shell work: use search to navigate
+(search-before-read: grep for symbols before opening files), read to view
+files, write/edit for file mutations, and shell for commands. Use absolute
+paths; file tools are confined to the working directory plus subdirectories
+and /tmp. Keep python_repl for computation — do not write files from
+generated Python via open(); that path bypasses /diff review, as does shell
+redirection (echo >/sed -i).
 """
 
 CODE_PREAMBLE_TEMPLATE = Template("""
@@ -137,7 +145,7 @@ class CodeAgent(Agent):
         )
         python_repl_tool = self.python_repl.get_tool()
         if tools is not None:
-            tools.append(python_repl_tool)
+            tools = list(tools) + [python_repl_tool]
         else:
             tools = [python_repl_tool]
 
