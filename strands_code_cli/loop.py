@@ -9,9 +9,10 @@ from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory, History
-from prompt_toolkit.patch_stdout import patch_stdout
+
 from rich.console import Console
 
+from strands_code_cli.output import output_context
 from strands_code_cli.router import dispatch
 from strands_code_cli.session_index import SessionIndex
 
@@ -122,7 +123,7 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
                 console.print(message)
             continue
         try:
-            with patch_stdout():
+            with output_context():
                 agent(text)
         except KeyboardInterrupt:
             console.print("[yellow]Turn interrupted; earlier turns are saved.[/yellow]")
