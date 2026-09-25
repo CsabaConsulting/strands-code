@@ -4,6 +4,19 @@ verified: 2026-09-25T00:22:06Z
 status: passed
 score: 13/13 must-haves verified
 covered_files:
+  - .planning/phases/01-session-wiring-repl-skeleton/01-01-PLAN.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-01-SUMMARY.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-02-PLAN.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-02-SUMMARY.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-03-PLAN.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-03-SUMMARY.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-CONTEXT.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-PATTERNS.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-RESEARCH.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-REVIEW.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-SECURITY.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-UAT.md
+  - .planning/phases/01-session-wiring-repl-skeleton/01-VALIDATION.md
   - strands_code_cli/first_run.py
   - strands_code_cli/loop.py
   - strands_code_cli/main.py
@@ -11,7 +24,7 @@ covered_files:
   - strands_code_cli/provider_config.py
   - strands_code_cli/router.py
   - strands_code_cli/session_index.py
-covered_digest: "v1:sha256:4689de3e126dbc82dcd4cc12b41b7fea713be75437e9d09bc044ddd4270d924d"
+covered_digest: "v1:sha256:daccd7072486d50bf58c66f73d9a0602588f3ea4f84588bd53ff2a604ec20af6"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
