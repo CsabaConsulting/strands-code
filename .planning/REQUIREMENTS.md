@@ -21,7 +21,7 @@
 
 - [x] **TOOL-01**: Agent can read, write, and edit files and run shell commands as first-class tools
 - [x] **TOOL-02**: User can review pending changes in a `/diff` viewer before they apply
-- [ ] **TOOL-03**: User is prompted for approval before edits, shell, and network actions per a deny-first policy file
+- [x] **TOOL-03**: User is prompted for approval before edits, shell, and network actions per a deny-first policy file
 - [x] **TOOL-04**: Agent navigates repos with agentic grep/READ without an index to maintain
 
 ### Session & Context
@@ -98,7 +98,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MODE-02 | Phase 4 | Pending |
 | TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
-| TOOL-03 | Phase 3 | Pending |
+| TOOL-03 | Phase 3 | Complete |
 | TOOL-04 | Phase 2 | Complete |
 | SES-01 | Phase 1 | Complete |
 | SES-02 | Phase 5 | Pending |

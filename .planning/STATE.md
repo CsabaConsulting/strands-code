@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 3
-current_phase_name: Permissions Gate
+current_phase: 4
+current_phase_name: Plan/Act Modes + Steering
 status: planning
-stopped_at: Phase 3 verified (PASS) and UAT 5/5, ready to secure
-last_updated: "2026-09-25T08:16:03.644Z"
-last_activity: 2026-09-24
-last_activity_desc: Phase 2 complete, transitioned to Phase 3
-state_head: 18f84458ff5b9ced1439f92f8c5ffa14e61c8841
+stopped_at: Phase 3 complete, ready to plan Phase 4
+last_updated: "2026-09-25T08:17:02.650Z"
+last_activity: 2026-09-25
+last_activity_desc: Phase 3 complete, transitioned to Phase 4
+state_head: 214ef6ba1ffa04434a925f40e042a0d101100b0a
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 5
   completed_plans: 5
-  percent: 25
+  percent: 38
 ---
 
 # Project State
@@ -27,18 +27,18 @@ See: .planning/PROJECT.md (updated 2026-09-23)
 
 ## Current Position
 
-Phase: 3 — Permissions Gate
+Phase: 4 — Plan/Act Modes + Steering
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-24 — Phase 2 complete, transitioned to Phase 3
+Last activity: 2026-09-25 — Phase 3 complete, transitioned to Phase 4
 
-Progress: [███░░░░░░░] 25%
+Progress: [████░░░░░░] 38%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: -
 - Total execution time: -
 
@@ -48,6 +48,7 @@ Progress: [███░░░░░░░] 25%
 |-------|-------|-------|----------|
 | 01 | 3 | - | - |
 | 2 | 1 | - | - |
+| 3 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -84,5 +85,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-25T08:16:03.597Z
-Stopped at: Phase 3 verified (PASS) and UAT 5/5, ready to secure
+Stopped at: Phase 3 complete, ready to plan Phase 4
 Resume file: .planning/phases/03-permissions-gate/03-UAT.md
