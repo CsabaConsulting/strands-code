@@ -67,6 +67,7 @@
 ### Interaction
 
 - **TOOL-05**: User can attach files and symbols to the prompt with a fuzzy picker (on reported friction)
+- **TOOL-06**: User can export trimmed session content to a text file via `/copy` (trailing whitespace stripped, optional back-scroll limit)
 - **MODE-03**: User can pick fast/thorough effort presets layered over Plan/Act (on demand)
 - **REVIEW-02**: User can run review flows with modes, locally and in CI through the headless runner
 
