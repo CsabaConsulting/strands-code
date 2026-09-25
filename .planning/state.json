@@ -1,0 +1,53 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": null,
+  "phases": [
+    {
+      "number": "1",
+      "name": "Session Wiring + REPL Skeleton",
+      "status": "complete"
+    },
+    {
+      "number": "2",
+      "name": "File/Edit/Shell Surface + /diff",
+      "status": "pending"
+    },
+    {
+      "number": "3",
+      "name": "Permissions Gate",
+      "status": "pending"
+    },
+    {
+      "number": "4",
+      "name": "Plan/Act Modes + Steering",
+      "status": "pending"
+    },
+    {
+      "number": "5",
+      "name": "Model + Cost + Context Commands",
+      "status": "pending"
+    },
+    {
+      "number": "6",
+      "name": "Skills + Memory File",
+      "status": "pending"
+    },
+    {
+      "number": "7",
+      "name": "Subagents + /btw Side Channel",
+      "status": "pending"
+    },
+    {
+      "number": "8",
+      "name": "GitHub Loop + Review + Parity",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 2)",
+    "reason": "Phase 2 of 8 — needs a plan"
+  },
+  "updated_at": "2026-09-25T00:30:17.037Z"
+}
