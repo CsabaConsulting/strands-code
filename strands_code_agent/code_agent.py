@@ -9,6 +9,10 @@ from strands_code_agent.imports import get_import_string, extract_imports
 from strands_code_agent.callback_handler import CodeAgentCallbackHandler
 
 
+# Phase 4 note: Plan-mode read-only shaping is a per-turn input prefix
+# (strands_code_cli.mode.PLAN_PREFIX, prepended at the loop.py call site),
+# not baked into the instructions below — Act turns are unchanged, and no
+# separate planner agent exists (single-agent spine preserved).
 CODE_AGENT_INSTRUCTIONS = """
 You are a code agent. You solve tasks by writing and executing Python code using the python_repl tool.
 

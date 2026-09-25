@@ -12,17 +12,19 @@ from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.diff_config import MODES, DiffConfig
 from strands_code_cli.diff_gate import apply_stashed, store_for
+from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_OK, MODE_USAGE, ModeState
 from strands_code_cli.session_index import SessionIndex
 
 USAGE_HINT = (
     "Available commands: /resume, /rename <title>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
-    "/search <pattern>, /policy [show|last], /exit"
+    "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, /exit"
 )
 
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
+_MODE_USAGE = MODE_USAGE
 
 _PICKER_LIMIT = 10
 
@@ -34,6 +36,7 @@ def dispatch(
     index: SessionIndex,
     cwd: str | Path | None = None,
     diff_config_path: str | Path | None = None,
+    mode: ModeState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -43,6 +46,8 @@ def dispatch(
         index: Sidecar title index backing /resume and /rename.
         cwd: Working directory for /search and scope checks (default: process cwd).
         diff_config_path: Override for the persisted diff mode (tests only).
+        mode: Session-sticky mode holder (None → Act default, keeps
+            standalone/test behaviour without a loop-owned holder).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -67,7 +72,45 @@ def dispatch(
         return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
     if cmd == "/policy":
         return ("reply", _policy_message(rest))
+    if cmd == "/mode":
+        return ("reply", _mode_message(rest, mode))
+    if cmd == "/approve":
+        return ("reply", _approve_message(mode))
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
+
+
+def _mode_holder(mode: ModeState | None) -> ModeState:
+    """Loop-owned holder when present, else a throwaway Act default."""
+    return mode if mode is not None else ModeState()
+
+
+def _mode_message(rest: str, mode: ModeState | None) -> str:
+    """Handle /mode: report, switch with announcement, or usage — replies only.
+
+    No agent turn ever leaves this branch; approval prompts never live
+    here (established reply-only pattern).
+    """
+    holder = _mode_holder(mode)
+    verb = rest.strip().lower()
+    if not verb:
+        return holder.announce()
+    if verb in ("plan", "act"):
+        return holder.set(verb)
+    return _MODE_USAGE
+
+
+def _approve_message(mode: ModeState | None) -> str:
+    """Handle /approve: explicit plan handoff gated on a pending plan.
+
+    A router reply, never a gate prompt: on success the session flips
+    to act (logged in history via the normal transcript).
+    """
+    if mode is None:
+        return APPROVE_EMPTY
+    if not mode.pending_plan:
+        return APPROVE_EMPTY
+    mode.approve()
+    return APPROVE_OK
 
 
 def _diff_message(session_id: str, rest: str, config_path: str | Path | None) -> str:

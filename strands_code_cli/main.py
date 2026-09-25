@@ -28,7 +28,13 @@ from strands_code_cli.diff_gate import (
 )
 from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
 from strands_code_cli.loop import run_loop
-from strands_code_cli.policy_gate import bind_main_agent, build_interventions
+from strands_code_cli.policy_gate import (
+    bind_main_agent,
+    bind_steering,
+    build_interventions,
+    set_mode,
+)
+from strands_code_cli.steering import register_steering_hook
 from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
@@ -118,6 +124,13 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         kwargs["model"] = model
     agent = create_harness(**kwargs)
     bind_main_agent(agent)  # D-12 delegated-turn detection
+    # Phase 4: single steering hook (BeforeToolCallEvent at SDK_FIRST, so
+    # it runs before the HITL approval prompt) closed over a session slot
+    # the loop swaps per turn; the classifier skips the prompt for armed
+    # boundaries and starts in Act. Still exactly one HumanInTheLoop.
+    slot = register_steering_hook(agent)
+    bind_steering(slot)
+    set_mode("act")
     return agent
 
 

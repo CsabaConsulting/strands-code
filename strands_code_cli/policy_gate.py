@@ -28,6 +28,7 @@ import asyncio
 import inspect
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -48,6 +49,26 @@ from strands_code_cli.policy import (
 logger = logging.getLogger(__name__)
 
 _ASK_SUFFIX = "Approve? [y/n/always/never] "
+
+gate_open = threading.Event()
+"""Set while the gate ``ask`` prompt blocks on ``input()``.
+
+The steering reader checks this flag and never consumes stdin while it
+is set, so a steering line can never be consumed as a y/n answer (and
+the prompt answer is never diverted into steering).
+"""
+
+PLAN_MUTATING_TOOLS = ("write", "edit", "shell", "python_repl")
+"""Tools denied in Plan mode (MODE-01, D-03).
+
+Read-only = ``read`` + ``search`` (gate allowlist) plus GET-shaped
+``web_fetch``/``web_search`` (pre-allowed, harmless). ``python_repl``
+is mutating-by-construction (interior ``open()``/write, residual
+T-03-08) so it is denied, not merely discouraged.
+"""
+
+PLAN_DENY_TEMPLATE = "Plan mode is read-only — {tool} skipped, continuing."
+"""Mode-vocabulary denial (never a policy-rule or diff-mode word)."""
 
 
 class BatchState:
@@ -135,6 +156,8 @@ class PolicyClassifier:
         self._main_agent: Any = None
         self._main_bound = False
         self._last: dict[str, Any] | None = None
+        self._mode = "act"
+        self._steering: Any = None
 
     @property
     def batch(self) -> BatchState:
@@ -145,6 +168,25 @@ class PolicyClassifier:
         """Record the main agent for D-12 delegated-turn detection."""
         self._main_agent = agent
         self._main_bound = True
+
+    def set_mode(self, mode: str) -> None:
+        """Flip the Plan/Act enforcement flag (MODE-02, D-06/D-07).
+
+        Raises:
+            ValueError: For anything outside ``plan|act``.
+        """
+        if mode not in ("plan", "act"):
+            raise ValueError(f"unknown mode {mode!r}: expected plan|act")
+        self._mode = mode
+
+    def bind_steering(self, source: Any) -> None:
+        """Bind the steering slot for armed-boundary skip-prompt.
+
+        ``source`` needs only ``consume_arm(tool_use_id) -> bool``
+        (``SteeringState`` or ``SteeringSlot``); duck-typed so this
+        module never imports the steering layer.
+        """
+        self._steering = source
 
     def _current_policy(self) -> PolicyConfig:
         try:
@@ -159,6 +201,33 @@ class PolicyClassifier:
         tool_input = tool_use.get("input", {})
         if not isinstance(tool_input, dict):
             tool_input = {}
+        tool_use_id = tool_use.get("toolUseId", "")
+        # Steering-armed boundary: the hook already redirected this call
+        # via cancel_tool, so skip the approval prompt (Proceed) while the
+        # executor still cancels with the redirect message. One-shot and
+        # above everything — a steered call is never prompted.
+        if tool_use_id and self._steering is not None:
+            try:
+                if self._steering.consume_arm(tool_use_id):
+                    return ClassifierResult(
+                        requires_human_in_the_loop=False, reason="steering-redirected"
+                    )
+            except Exception as exc:  # fail-closed: a broken arm still prompts
+                logger.warning("Steering arm check failed closed: %s", exc)
+        # Plan-deny sits ABOVE the trust_delegated early return: delegated
+        # turns do not escape read-only. Always denied (never batch-covered
+        # to Proceed) so Plan mode cannot execute a mutation on retry.
+        if self._mode == "plan" and tool_name in PLAN_MUTATING_TOOLS:
+            reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
+            verdict = Deny(reason=reason)
+            signature = _signature(tool_name, verdict)
+            self._last = {
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "verdict": verdict,
+                "signature": signature,
+            }
+            return ClassifierResult(requires_human_in_the_loop=True, reason=f"DENY:{reason}")
         policy = self._current_policy()
         agent = getattr(event, "agent", None)
         if (
@@ -205,6 +274,12 @@ class PolicyClassifier:
                 signature = ctx["signature"]
                 if isinstance(verdict, Deny):
                     rule_text = verdict.rule.describe() if verdict.rule is not None else verdict.reason
+                    if rule_text.startswith("Plan mode is read-only"):
+                        # Plan denial: mode vocabulary only, never the
+                        # policy-rule wrapper (vocabulary lock, T-04-10).
+                        print(rule_text)
+                        self._batch.mark(signature, f"plan-mode denied {tool_name}")
+                        return "n"
                     print(f"Denied by policy rule [deny {rule_text}] — skipped, continuing.")
                     self._batch.mark(signature, f"denied {tool_name} [{rule_text}]")
                     return "n"
@@ -212,7 +287,11 @@ class PolicyClassifier:
                 print(f"Approval needed: {tool_name}")
                 print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
-                answer = input(_ASK_SUFFIX).strip().lower()
+                gate_open.set()
+                try:
+                    answer = input(_ASK_SUFFIX).strip().lower()
+                finally:
+                    gate_open.clear()
                 if answer in ("y", "yes"):
                     self._batch.mark(signature, f"approved {tool_name}: {verdict.reason}")
                     return "y"
@@ -297,6 +376,20 @@ def bind_main_agent(agent: Any) -> None:
     classifier = _active_classifier()
     if classifier is not None:
         classifier.bind_main_agent(agent)
+
+
+def set_mode(mode: str) -> None:
+    """Flip the active classifier's Plan/Act flag (no-op before build)."""
+    classifier = _active_classifier()
+    if classifier is not None:
+        classifier.set_mode(mode)
+
+
+def bind_steering(source: Any) -> None:
+    """Bind the steering slot for armed-boundary skip-prompt (no-op before build)."""
+    classifier = _active_classifier()
+    if classifier is not None:
+        classifier.bind_steering(source)
 
 
 def bind_turn(turn_id: str) -> None:
