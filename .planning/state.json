@@ -11,7 +11,7 @@
     {
       "number": "2",
       "name": "File/Edit/Shell Surface + /diff",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "3",
@@ -46,8 +46,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 2)",
-    "reason": "Phase 2 of 8 — needs a plan"
+    "label": "Advance to the next step (plan phase 3)",
+    "reason": "Phase 3 of 8 — needs a plan"
   },
-  "updated_at": "2026-09-25T00:30:17.037Z"
+  "updated_at": "2026-09-25T05:25:53.311Z"
 }
