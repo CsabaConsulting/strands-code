@@ -150,3 +150,38 @@ class TestPromptSteering:
 
     def test_cwd_default_is_process_cwd(self, tmp_path):
         assert os.getcwd()
+
+
+# ---------------------------------------------------------------------------
+# Scope-policy ordering (Phase 3 D-13: policy match runs before confine)
+# ---------------------------------------------------------------------------
+
+
+class TestScopePolicyOrdering:
+    def test_outside_path_with_allow_rule_admitted(self, tmp_path):
+        from strands_code_cli.policy import PolicyConfig, Rule
+        from strands_code_cli.scope import confine, effective_roots
+
+        cwd = Path("/opt/scope-test-proj")
+        policy = PolicyConfig(allow=[Rule(tool="write", path="/opt/granted/*.md")])
+        roots = effective_roots(cwd, policy)
+        assert any(str(r).startswith("/opt/granted") for r in roots)
+        admitted = confine("/opt/granted/notes.md", cwd, [r for r in roots if str(r) not in (str(cwd), "/tmp")])
+        assert str(admitted) == "/opt/granted/notes.md"
+
+    def test_outside_path_without_rule_denied_names_roots(self):
+        from strands_code_cli.policy import PolicyConfig
+        from strands_code_cli.scope import confine, effective_roots
+
+        cwd = Path("/opt/scope-test-proj")
+        roots = effective_roots(cwd, PolicyConfig())
+        assert [str(r) for r in roots] == [str(cwd), "/tmp"]
+        with pytest.raises(ValueError, match="allowed roots"):
+            confine("/opt/other-repo/a.py", cwd)
+
+    def test_relative_allow_rule_grants_no_extra_roots(self, tmp_path):
+        from strands_code_cli.policy import PolicyConfig, Rule
+        from strands_code_cli.scope import effective_roots
+
+        policy = PolicyConfig(allow=[Rule(tool="write", path="docs/*.md")])
+        assert [str(r) for r in effective_roots(tmp_path, policy)] == [str(tmp_path), "/tmp"]

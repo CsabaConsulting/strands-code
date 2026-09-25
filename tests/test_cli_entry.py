@@ -269,3 +269,34 @@ class TestCliRouting:
         assert result.exit_code != 0
         assert "session-id" in result.output.lower()
         assert not Path(".agent").exists()
+
+
+# ---------------------------------------------------------------------------
+# /policy inspect-only dispatch (Phase 3: reply-only, never an agent turn)
+# ---------------------------------------------------------------------------
+
+
+class TestPolicyDispatch:
+    def test_policy_show_is_reply(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        action, message = dispatch("/policy show", session_id=index.mint(), index=index)
+        assert action == "reply"
+        assert "deny-wins" in message
+
+    def test_policy_bare_show_is_reply(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        action, message = dispatch("/policy", session_id=index.mint(), index=index)
+        assert action == "reply"
+        assert "Effective policy" in message
+
+    def test_policy_last_is_reply(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        action, message = dispatch("/policy last", session_id=index.mint(), index=index)
+        assert action == "reply"
+        assert message is not None
+
+    def test_policy_bogus_shows_usage_never_agent_turn(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        action, message = dispatch("/policy bogus", session_id=index.mint(), index=index)
+        assert action == "reply"
+        assert "Usage: /policy" in message

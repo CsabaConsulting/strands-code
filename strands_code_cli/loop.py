@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from prompt_toolkit.history import FileHistory, History
 from rich.console import Console
 
 from strands_code_cli.output import output_context
+from strands_code_cli.policy_gate import bind_turn
 from strands_code_cli.router import dispatch
 from strands_code_cli.session_index import SessionIndex
 
@@ -124,6 +126,7 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
             continue
         try:
             with output_context():
+                bind_turn(f"{session_id}:{uuid.uuid4().hex}")
                 agent(text)
         except KeyboardInterrupt:
             console.print("[yellow]Turn interrupted; earlier turns are saved.[/yellow]")

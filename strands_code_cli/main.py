@@ -28,6 +28,7 @@ from strands_code_cli.diff_gate import (
 )
 from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
 from strands_code_cli.loop import run_loop
+from strands_code_cli.policy_gate import bind_main_agent, build_interventions
 from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
@@ -91,22 +92,33 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         "tools": [
             interpreter.get_tool(),
             search_tool,
-            make_gated_write(cwd=cwd, store=store),
-            make_gated_edit(cwd=cwd, store=store),
+            make_gated_write(cwd=cwd, store=store, gate_active=True),
+            make_gated_edit(cwd=cwd, store=store, gate_active=True),
         ],
         "builtin_tools": {
             "shell": True,
             "read": True,
             "write": False,
             "edit": False,
+            # Risk 9: programmatic_tool_caller inner tool calls are
+            # unverifiable through before_tool_call without a live model,
+            # so the convenience tool stays off (fail-closed); airtightness
+            # over convenience until the tracer proves inner-call gating.
+            "programmatic_tool_caller": False,
         },
+        # The single HumanInTheLoop (allowlist + TOML classifier + ask);
+        # never a second instance (name-collision rule) and never
+        # "ask"/"smart"/NL-string/Cedar (D-05 determinism).
+        "interventions": build_interventions(),
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
         "callback_handler": DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
     }
     if model is not None:
         kwargs["model"] = model
-    return create_harness(**kwargs)
+    agent = create_harness(**kwargs)
+    bind_main_agent(agent)  # D-12 delegated-turn detection
+    return agent
 
 
 @app.callback(invoke_without_command=True)

@@ -17,11 +17,12 @@ from strands_code_cli.session_index import SessionIndex
 USAGE_HINT = (
     "Available commands: /resume, /rename <title>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
-    "/search <pattern>, /exit"
+    "/search <pattern>, /policy [show|last], /exit"
 )
 
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
+_POLICY_USAGE = "Usage: /policy [show|last]"
 
 _PICKER_LIMIT = 10
 
@@ -64,6 +65,8 @@ def dispatch(
         return ("reply", _diff_message(session_id, rest, diff_config_path))
     if cmd == "/search":
         return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
+    if cmd == "/policy":
+        return ("reply", _policy_message(rest))
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
 
 
@@ -103,6 +106,38 @@ def _diff_message(session_id: str, rest: str, config_path: str | Path | None) ->
         store.clear()
         return f"Discarded {count} pending change(s)."
     return f"Unknown /diff mode {verb!r}. {_DIFF_USAGE}"
+
+
+def _policy_message(rest: str) -> str:
+    """Handle /policy: inspect-only replies (show rules, last covered).
+
+    Approval prompts never live here (they would race the prompt); this
+    only reports the effective policy and the gate's covered-action log.
+    """
+    from strands_code_cli.policy import PolicyConfig
+    from strands_code_cli.policy_gate import last_covered
+
+    verb = rest.strip().lower()
+    if verb in ("", "show"):
+        try:
+            config = PolicyConfig.load()
+        except ValueError as exc:
+            return f"Policy config error: {exc}"
+        lines = ["Effective policy (deny-wins across home + repo union):"]
+        lines.append("Builtins: allow read, search; allow GET-shaped fetch, git fetch.")
+        for rule in config.allow:
+            lines.append(f"  allow {rule.describe()}")
+        for rule in config.deny:
+            lines.append(f"  deny {rule.describe()}")
+        if config.options.trust_delegated:
+            lines.append("  options: trust_delegated = true")
+        return "\n".join(lines)
+    if verb == "last":
+        covered = last_covered()
+        if not covered:
+            return "No gated actions this session yet."
+        return "Covered actions:\n" + "\n".join(f"  {line}" for line in covered)
+    return f"Unknown /policy mode {verb!r}. {_POLICY_USAGE}"
 
 
 def _search_message(rest: str, cwd: str | Path) -> str:

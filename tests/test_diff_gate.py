@@ -343,3 +343,117 @@ class TestDiffRendering:
             }}]},
         )
         assert "foo" in out and "bar" in out
+
+
+# ---------------------------------------------------------------------------
+# Gate subsumption (Phase 3 D-10: one prompt total per write)
+# ---------------------------------------------------------------------------
+
+
+class TestGateSubsumption:
+    def _two_hunk_files(self, tmp_path):
+        old = "".join(f"line{i}\n" for i in range(1, 21))
+        new = old.replace("line3\n", "CHANGED3\n").replace("line17\n", "CHANGED17\n")
+        assert len(split_hunks(unified_diff(old, new, "m.txt"))) == 2
+        return old, new
+
+    def test_gate_active_skips_per_hunk_ask(self, tmp_path):
+        files: dict = {}
+        read, write = _mem_io(files)
+        old, new = self._two_hunk_files(tmp_path)
+        files[str(tmp_path / "m.txt")] = old
+        calls = {"n": 0}
+
+        def fail_ask(prompt):
+            calls["n"] += 1
+            raise AssertionError("gate-active approve-each must not ask per hunk")
+
+        gated = make_gated_write(
+            cwd=tmp_path, get_mode=lambda: "approve-each", ask=fail_ask,
+            reader=read, writer=write, gate_active=True,
+        )
+        result = _run(gated(path="m.txt", content=new))
+        assert "Applied" in result
+        assert calls["n"] == 0
+
+    def test_gate_inactive_still_prompts_per_hunk(self, tmp_path):
+        files: dict = {}
+        read, write = _mem_io(files)
+        old, new = self._two_hunk_files(tmp_path)
+        files[str(tmp_path / "m.txt")] = old
+        calls = {"n": 0}
+
+        def count_ask(prompt):
+            calls["n"] += 1
+            return True
+
+        gated = make_gated_write(
+            cwd=tmp_path, get_mode=lambda: "approve-each", ask=count_ask,
+            reader=read, writer=write,
+        )
+        result = _run(gated(path="m.txt", content=new))
+        assert "Applied" in result
+        assert calls["n"] == 2  # Phase 2 per-hunk contract intact
+
+    def test_one_prompt_total_with_gate(self, tmp_path):
+        """Gate ask (1, answered y) + gate-active wrapper (0) == 1 total."""
+        from strands_code_cli.policy import PolicyConfig
+        from strands_code_cli.policy_gate import PolicyClassifier
+
+        files: dict = {}
+        read, write = _mem_io(files)
+        gate_prompts = {"n": 0}
+
+        from strands.vended_interventions.hitl import HumanInTheLoop
+
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        import builtins
+
+        real_input = builtins.input
+        builtins.input = lambda _: (gate_prompts.__setitem__("n", gate_prompts["n"] + 1), "y")[1]
+        try:
+            import asyncio
+            from types import SimpleNamespace
+
+            class _Agent:
+                state: dict = {}
+
+            action = asyncio.run(
+                handler.before_tool_call(
+                    SimpleNamespace(
+                        agent=_Agent(),
+                        tool_use={"name": "write", "input": {"path": "n.txt"}, "toolUseId": "w1"},
+                    )
+                )
+            )
+        finally:
+            builtins.input = real_input
+        from strands.interventions.actions import Confirm
+
+        assert isinstance(action, Confirm)
+
+        def fail_ask(prompt):
+            raise AssertionError("wrapper must not re-prompt under gate_active")
+
+        gated = make_gated_write(
+            cwd=tmp_path, get_mode=lambda: "approve-each", ask=fail_ask,
+            reader=read, writer=write, gate_active=True,
+        )
+        result = _run(gated(path="n.txt", content="hello\n"))
+        assert "Applied" in result
+        assert gate_prompts["n"] == 1
+
+    def test_on_demand_apply_never_reprompts(self, tmp_path):
+        files: dict = {}
+        read, write = _mem_io(files)
+        store = PendingStore(tmp_path / "sess")
+        gated = make_gated_write(
+            cwd=tmp_path, get_mode=lambda: "on-demand", store=store,
+            reader=read, writer=write, gate_active=True,
+        )
+        assert "Stashed" in _run(gated(path="n.txt", content="hello\n"))
+        applied = _run(apply_stashed(store, reader=read, writer=write))
+        assert "Applied" in applied

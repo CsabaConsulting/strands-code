@@ -226,6 +226,21 @@ async def _persist_text(path: str, content: str, writer: AsyncWriter | None, too
     await _fs_write(path, content)
 
 
+def _policy_roots(cwd: str | Path) -> list[Path]:
+    """Allow-rule-granted roots for union confinement (best-effort).
+
+    Lazy import keeps this module free of a hard policy dependency;
+    any failure yields no extras (fail-closed to default roots).
+    """
+    try:
+        from strands_code_cli.policy import PolicyConfig
+        from strands_code_cli.scope import effective_roots
+
+        return [r for r in effective_roots(cwd, PolicyConfig.load())]
+    except Exception:
+        return []
+
+
 async def _gate_and_apply(
     *,
     op: str,
@@ -240,21 +255,33 @@ async def _gate_and_apply(
     reader: AsyncReader | None,
     writer: AsyncWriter | None,
     tool_context: Any,
+    gate_active: bool = False,
 ) -> str:
-    """Run one gated mutation: scope-check, preview, mode branch, guarded apply."""
-    confined = confine(resolve(raw_path, cwd), cwd)
+    """Run one gated mutation: scope-check, preview, mode branch, guarded apply.
+
+    Policy match runs BEFORE confinement (risk 6): the path is confined
+    against the union of cwd + /tmp + allow-rule-granted roots so an
+    outside path with a covering allow rule is admitted.
+    """
+    confined = confine(resolve(raw_path, cwd), cwd, _policy_roots(cwd))
     path = str(confined)
     mode = get_mode()
     if mode not in MODES:
         mode = DEFAULT_MODE
     hunks = split_hunks(preview)
-    if mode == "approve-each":
+    if mode == "approve-each" and not gate_active:
         if ask is None:
             raise ValueError("approve-each mode needs an ask callable")
         for pos, hunk in enumerate(hunks, 1):
             if not ask(f"Apply {op} to {path} (hunk {pos}/{len(hunks)})?\n{hunk}"):
                 return f"Discarded {op} to {path}."
         # Fall through to exact-once apply below.
+    # When gate_active the interventions gate already prompted once with
+    # full detail, so approve-each skips its per-hunk ask and falls through
+    # to the exact-once apply path (D-10: one prompt total per write).
+    # Invariant: /diff apply never re-prompts — apply_stashed uses _fs_write
+    # (a router-side filesystem write), not a tool call, so the intervention
+    # never sees it.
     elif mode == "on-demand":
         if store is None:
             raise ValueError("on-demand mode needs a pending store")
@@ -328,8 +355,14 @@ def make_gated_write(
     store: PendingStore | None = None,
     reader: AsyncReader | None = None,
     writer: AsyncWriter | None = None,
+    gate_active: bool = False,
 ):
-    """Build the gated ``write`` wrapper (same name as the builtin it replaces)."""
+    """Build the gated ``write`` wrapper (same name as the builtin it replaces).
+
+    ``gate_active`` subsumes approve-each under the interventions gate
+    (D-10: one prompt total); default False keeps standalone/test
+    behaviour on the Phase 2 contract.
+    """
     if get_mode is None:
         get_mode = lambda: DiffConfig.load().mode  # noqa: E731
     ask_fn = ask if ask is not None else _default_ask
@@ -342,7 +375,9 @@ def make_gated_write(
             path: Absolute path, or relative to the working directory.
             content: The full file content to write.
         """
-        old_text = await _current_text(str(confine(resolve(path, cwd), cwd)), reader, tool_context)
+        old_text = await _current_text(
+            str(confine(resolve(path, cwd), cwd, _policy_roots(cwd))), reader, tool_context
+        )
         preview = unified_diff(old_text or "", content, path)
         return await _gate_and_apply(
             op="write",
@@ -357,6 +392,7 @@ def make_gated_write(
             reader=reader,
             writer=writer,
             tool_context=tool_context,
+            gate_active=gate_active,
         )
 
     return gated_write
@@ -370,8 +406,14 @@ def make_gated_edit(
     store: PendingStore | None = None,
     reader: AsyncReader | None = None,
     writer: AsyncWriter | None = None,
+    gate_active: bool = False,
 ):
-    """Build the gated ``edit`` wrapper (same name as the builtin it replaces)."""
+    """Build the gated ``edit`` wrapper (same name as the builtin it replaces).
+
+    ``gate_active`` subsumes approve-each under the interventions gate
+    (D-10: one prompt total); default False keeps standalone/test
+    behaviour on the Phase 2 contract.
+    """
     if get_mode is None:
         get_mode = lambda: DiffConfig.load().mode  # noqa: E731
     ask_fn = ask if ask is not None else _default_ask
@@ -385,7 +427,7 @@ def make_gated_edit(
             old_str: Exact text to find. Must be unique within the file.
             new_str: Replacement text.
         """
-        confined = confine(resolve(path, cwd), cwd)
+        confined = confine(resolve(path, cwd), cwd, _policy_roots(cwd))
         current = await _current_text(str(confined), reader, tool_context)
         if current is None:
             raise ValueError(f"Cannot edit {confined}: file does not exist.")
@@ -411,6 +453,7 @@ def make_gated_edit(
             reader=reader,
             writer=writer,
             tool_context=tool_context,
+            gate_active=gate_active,
         )
 
     return gated_edit
