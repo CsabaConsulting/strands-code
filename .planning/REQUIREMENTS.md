@@ -7,7 +7,7 @@
 
 ### Task Loop
 
-- [ ] **LOOP-01**: User can hold a multi-ask conversation where the CLI plans and executes each ask with subagents and tools
+- [x] **LOOP-01**: User can hold a multi-ask conversation where the CLI plans and executes each ask with subagents and tools
 - [ ] **LOOP-02**: User can steer a running task with freeform input applied at the next tool-call boundary
 - [ ] **LOOP-03**: User can ask a side question mid-task via a `/btw`-style escape answered by a subagent without disturbing the main task
 - [ ] **LOOP-04**: User can cancel a running task with Ctrl-C without quitting the CLI
@@ -26,9 +26,9 @@
 
 ### Session & Context
 
-- [ ] **SES-01**: User can resume a session by UUID across runs (`--session-id`, `/resume`)
+- [x] **SES-01**: User can resume a session by UUID across runs (`--session-id`, `/resume`)
 - [ ] **SES-02**: User can compact, clear, and inspect context usage (`/compact`, `/clear`, `/context`)
-- [ ] **SES-03**: Sessions flush on exit so resume never silently loses work
+- [x] **SES-03**: Sessions flush on exit so resume never silently loses work
 
 ### Models & Cost
 
@@ -90,7 +90,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LOOP-01 | Phase 1 | Pending |
+| LOOP-01 | Phase 1 | Complete |
 | LOOP-02 | Phase 4 | Pending |
 | LOOP-03 | Phase 7 | Pending |
 | LOOP-04 | Phase 4 | Pending |
@@ -100,9 +100,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-02 | Phase 2 | Pending |
 | TOOL-03 | Phase 3 | Pending |
 | TOOL-04 | Phase 2 | Pending |
-| SES-01 | Phase 1 | Pending |
+| SES-01 | Phase 1 | Complete |
 | SES-02 | Phase 5 | Pending |
-| SES-03 | Phase 1 | Pending |
+| SES-03 | Phase 1 | Complete |
 | MODEL-01 | Phase 5 | Pending |
 | MODEL-02 | Phase 5 | Pending |
 | SKILL-01 | Phase 6 | Pending |
@@ -112,6 +112,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REVIEW-01 | Phase 8 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 20 total
 - Mapped to phases: 20
 - Unmapped: 0 ✓

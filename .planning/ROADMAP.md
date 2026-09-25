@@ -13,7 +13,7 @@ From a bare library to a conversational coding CLI: first a resumable REPL skele
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Session Wiring + REPL Skeleton** - Resumable conversation loop over file-local sessions
+- [x] **Phase 1: Session Wiring + REPL Skeleton** - Resumable conversation loop over file-local sessions (completed 2026-09-24)
 - [ ] **Phase 2: File/Edit/Shell Surface + /diff** - Real agent actuation with change review
 - [ ] **Phase 3: Permissions Gate** - Deny-first approval before every side effect
 - [ ] **Phase 4: Plan/Act Modes + Steering** - Read-only plans, approval checkpoint, anytime steering, cancel
@@ -147,7 +147,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Session Wiring + REPL Skeleton | 3/3 | In Progress|  |
+| 1. Session Wiring + REPL Skeleton | 3/3 | Complete    | 2026-09-24 |
 | 2. File/Edit/Shell Surface + /diff | 0/TBD | Not started | - |
 | 3. Permissions Gate | 0/TBD | Not started | - |
 | 4. Plan/Act Modes + Steering | 0/TBD | Not started | - |
