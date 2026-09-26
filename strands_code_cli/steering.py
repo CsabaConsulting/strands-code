@@ -305,6 +305,10 @@ def start_steering_reader(
                     break
                 if not ready:
                     continue
+                if gate_open.is_set():
+                    # Set between select-return and read: the gate owns the
+                    # terminal now — reading here would steal the y/n answer.
+                    continue
                 try:
                     chunk = os.read(fd, 4096)
                 except BlockingIOError:

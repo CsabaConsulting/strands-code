@@ -28,6 +28,7 @@ import asyncio
 import inspect
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -288,9 +289,15 @@ class PolicyClassifier:
                 print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
                 gate_open.set()
+                restore_blocking = _blocking_stdin_for_prompt()
                 try:
                     answer = input(_ASK_SUFFIX).strip().lower()
                 finally:
+                    if restore_blocking is not None:
+                        try:
+                            restore_blocking()
+                        except OSError:
+                            pass
                     gate_open.clear()
                 if answer in ("y", "yes"):
                     self._batch.mark(signature, f"approved {tool_name}: {verdict.reason}")
@@ -319,6 +326,35 @@ class PolicyClassifier:
         except Exception as exc:  # never leak a raise into the HITL run
             logger.warning("Policy ask failed closed: %s", exc)
             return "n"
+
+
+def _blocking_stdin_for_prompt() -> Any:
+    """Restore blocking mode on stdin for the approval ``input()``.
+
+    The steering reader flips the turn's stdin fd to nonblocking; a
+    blocking ``input()`` on that fd misbehaves (observed: prompt
+    auto-fails without waiting). Returns a restore closure, or ``None``
+    when no switch was needed or possible.
+    """
+    try:
+        fd = sys.stdin.fileno()
+    except Exception:
+        return None
+    try:
+        was_blocking = os.get_blocking(fd)
+    except OSError:
+        return None
+    if was_blocking:
+        return None
+    try:
+        os.set_blocking(fd, True)
+    except OSError:
+        return None
+
+    def _restore() -> None:
+        os.set_blocking(fd, False)
+
+    return _restore
 
 
 def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:

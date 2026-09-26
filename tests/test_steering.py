@@ -178,6 +178,52 @@ class TestSteeringReader:
             os.close(write_fd)
             os.close(read_fd)
 
+    def test_gate_set_after_select_never_steals(self, monkeypatch):
+        # The select→read race: flag set after select returns but before
+        # os.read must still skip the read, or the y/n answer is stolen.
+        import select as select_module
+
+        received: list[str] = []
+        state = SteeringState()
+        gate = threading.Event()
+        read_fd, write_fd = os.pipe()
+        real_select = select_module.select
+
+        selected = threading.Event()
+        release = threading.Event()
+        fired: list[bool] = []
+
+        def choreographed(read, write, exc, timeout=None):
+            ready, _, _ = real_select(read, write, exc, 0)
+            if ready and not fired:
+                # select fired with data present: hold the reader here so
+                # the main thread can open the gate before os.read runs.
+                fired.append(True)
+                selected.set()
+                release.wait(5)
+            return (ready, [], [])
+
+        monkeypatch.setattr(select_module, "select", choreographed)
+        try:
+            reader = start_steering_reader(
+                state, gate, stdin=_PipeStdin(read_fd), on_line=received.append
+            )
+            os.write(write_fd, b"y\n")
+            assert selected.wait(5)  # reader parked between select and read
+            gate.set()  # gate opens in the race window
+            release.set()
+            time.sleep(0.3)
+            assert not state.has_pending()  # never stolen mid-prompt
+            assert received == []
+            gate.clear()  # prompt closed: buffered answer applies next
+            assert _wait_for(state.has_pending)
+            assert state.take() == "y"
+            reader.stop()
+            assert not reader.alive
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
     def test_gate_open_leaves_approval_unaffected(self, monkeypatch):
         # While gate_open is set, the classifier still returns its normal
         # verdict — the reader never diverts the y/n answer.
