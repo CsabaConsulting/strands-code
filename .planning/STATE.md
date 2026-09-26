@@ -1,44 +1,44 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 4
-current_phase_name: Plan/Act Modes + Steering
+current_phase: 5
+current_phase_name: Model + Cost + Context Commands
 status: planning
-stopped_at: Phase 4 wave 1 executed, tests green, implementation committed
-last_updated: "2026-09-25T16:53:57.367Z"
-last_activity: 2026-09-25
-last_activity_desc: Phase 3 complete, transitioned to Phase 4
-state_head: 7039686fa536ed5066656ea896a58601b8c2d629
+stopped_at: Phase 4 complete, ready to plan Phase 5
+last_updated: "2026-09-26T09:16:04.321Z"
+last_activity: 2026-09-26
+last_activity_desc: Phase 4 complete, transitioned to Phase 5
+state_head: c686279332cbd159d2fcdd400e8af129ff9c9eda
 progress:
   total_phases: 8
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 6
   completed_plans: 6
-  percent: 38
+  percent: 50
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-23)
+See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 01 — session-wiring-repl-skeleton
+**Current focus:** Phase 5 — Model + Cost + Context Commands
 
 ## Current Position
 
-Phase: 4 — Plan/Act Modes + Steering
+Phase: 5 — Model + Cost + Context Commands
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-09-25 — Phase 3 complete, transitioned to Phase 4
+Last activity: 2026-09-26 — Phase 4 complete, transitioned to Phase 5
 
-Progress: [████░░░░░░] 38%
+Progress: [█████░░░░░] 50%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: -
 - Total execution time: -
 
@@ -49,6 +49,7 @@ Progress: [████░░░░░░] 38%
 | 01 | 3 | - | - |
 | 2 | 1 | - | - |
 | 3 | 1 | - | - |
+| 4 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -64,7 +65,9 @@ Progress: [████░░░░░░] 38%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-None yet.
+- Approval prompts served on main thread via ApprovalBroker (Phase 4).
+- Denials never cover batch signatures; only approvals do (Phase 4).
+- Choice dialogs use a bespoke owned-keys control, not stock RadioList (Phase 4).
 
 ### Pending Todos
 
@@ -72,7 +75,7 @@ None yet.
 
 ### Blockers/Concerns
 
-None yet.
+- ⚠️ [Phase 5] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models (e.g. gpt-6-luna); workaround is a fresh session — durable strip-on-restore is a Phase 5 candidate.
 
 ## Deferred Items
 
@@ -84,6 +87,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-25T16:53:57.325Z
-Stopped at: Phase 4 wave 1 executed, tests green, implementation committed
-Resume file: .planning/phases/04-plan-act-modes-steering/04-PLAN.md
+Last session: 2026-09-26T09:16:00Z
+Stopped at: Phase 4 complete, secured, verification refreshed, transitioned — ready to plan Phase 5
+Resume file: None

@@ -22,8 +22,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 ### Active
 
 - [ ] Conversational task loop: series of user asks planned and executed with subagent + tool orchestration
-- [ ] Plan / Act modes with approval between them
-- [ ] Anytime steering: freeform input injected at the next tool-call boundary without disturbing the task
+- ✓ Plan / Act modes with approval between them — Phase 4 (classifier-deny, /approve handoff, session-sticky /mode)
+- ✓ Anytime steering: freeform input injected at the next tool-call boundary without disturbing the task — Phase 4 (cancel_tool hook, finish-then-redirect)
+- [ ] Strip reasoningContent from restored history for non-reasoning Bedrock models (emerged Phase 4: opus history fails validation on model switch; fresh session is the workaround)
 - [ ] Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched
 - [ ] Grep-first code understanding (agentic grep/READ); persistent semantic index deferred
 - [ ] Full GitHub loop: read issues/PRs, branch, implement, test, open PRs, plus issue creation, review comments, CI checks
@@ -47,7 +48,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
 - Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.57.0; both move fast and are flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers (local markdown → Hindsight → memsearch).
-- Full test suite green (`uv run pytest tests/`); dev group carries the data-science packages the toolkit tests execute.
+- Full test suite green (`uv run pytest tests/`, 460 passed); dev group carries the data-science packages the toolkit tests execute.
 
 ## Constraints
 
@@ -65,6 +66,8 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 | Plan/Act as the v1 mode | Closest to proven competitor behavior; effort presets can layer on later | — Pending |
 | Anytime-steering + subagent side questions | Matches Codex/Muse Code UX the user prefers over command-gated steering | — Pending |
 | Token display without budgets | Visibility first; enforcement is a policy decision for later | — Pending |
+| Approval prompts served on main thread (ApprovalBroker) | SDK invokes ask in its event-loop worker, where stdin reads park on Ctrl-C and asyncio.run cannot nest; worker aborts via TurnCancelled | ✓ Good |
+| Denials never cover batch signatures | Deny-marked-covered let model retries execute silently in-turn (fail-open); only approvals cover, denials re-prompt | ✓ Good |
 
 ## Evolution
 
@@ -84,4 +87,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-22 after initialization*
+*Last updated: 2026-09-26 after Phase 4*
