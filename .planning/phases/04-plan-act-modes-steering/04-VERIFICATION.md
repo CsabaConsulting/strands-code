@@ -1,6 +1,6 @@
 ---
 phase: 04-plan-act-modes-steering
-verified: 2026-09-25T16:55:22Z
+verified: 2026-09-26T09:15:39Z
 status: passed
 score: 4/4 must-haves verified
 covered_files:
@@ -10,19 +10,20 @@ covered_files:
   - .planning/phases/04-plan-act-modes-steering/04-RESEARCH.md
   - .planning/phases/04-plan-act-modes-steering/04-UAT.md
   - strands_code_agent/code_agent.py
+  - strands_code_cli/choice.py
   - strands_code_cli/loop.py
   - strands_code_cli/main.py
   - strands_code_cli/mode.py
   - strands_code_cli/policy_gate.py
   - strands_code_cli/router.py
   - strands_code_cli/steering.py
-covered_digest: "v1:sha256:763eb0e9f0bdefe29be0c1fc1942172b68dd09352f71fb048dfdaffa3240e23f"
+covered_digest: "v1:sha256:16de9f161b4c79b1ae0d073b24e8001be135c6f0e91f80c861e08408106a62f5"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
   previous_status: passed
   previous_score: 4/4
-  gaps_closed: [reply-only-/approve, approval-input-vs-nonblocking-stdin, answer-echo-placement, stdin-flip-parked-reader-terminal-wedge]
+  gaps_closed: [reply-only-/approve, approval-input-vs-nonblocking-stdin, answer-echo-placement, stdin-flip-parked-reader-terminal-wedge, dialog-asyncio-nesting-deny, deny-batch-cover-fail-open, parked-worker-stdin-wedge, done-without-answer-assert, missing-last-dialog-option]
   gaps_remaining: []
   regressions: []
 ---
@@ -93,3 +94,16 @@ UAT found 3 real gaps after the initial PASS; all fixed with regression tests, f
 3. **Answer-echo placement.** `input()`'s prompt arg bypassed the output proxy. Prompt block now prints through one stream; bare `input()` echoes on the `> ` line. Test fakes updated to `lambda *args`.
 
 Truths T1–T4 and all prohibitions re-confirmed unaffected: the fixes narrow the approve handoff and the prompt/reader sharing protocol without touching mode vocabulary, the single-HITL spine, or scope roots.
+
+## Re-verification (dialog/broker delta, 2026-09-26)
+
+Scope: `1c015e2` (arrow-key dialogs, ApprovalBroker main-thread pump, deny-never-covers) re-checked against current line anchors; prior truths stand, changed regions re-anchored:
+
+- T1 — Plan-deny core unchanged, re-anchored: `policy_gate.py:66` (`PLAN_MUTATING_TOOLS`), `:75` (`PLAN_DENY_TEMPLATE`), `:334` (mode check above trust_delegated), `:391-397` (Plan/policy deny short-circuit, now record-only). Mode vocabulary intact.
+- T2 — untouched (`mode.py`, `/mode` router paths unmodified by the delta).
+- T3 — steering core unchanged; gate coordination extended: `gate_open` set/clear around broker handoff (`policy_gate.py:423,430`), reader checks unchanged (`steering.py:294,306,344`), dialog keystrokes owned at control level (`choice.py`), reader skips while gate open so arrows/Enter never leak into steering. Choice dialog renders to the real terminal, never the output proxy.
+- T4 — cancel machine unchanged (`loop._handle_turn_cancel`); invocation now pumped: broker serves prompts on main (`loop.py:150-151` pump + worker pool), worker aborts via `TurnCancelled` (`policy_gate.py` broker), including done-without-answer after dialog Ctrl-C. No parked stdin readers: reader joined per turn (`loop.py:312`), worker joined via pool context.
+- P1 single HITL — still exactly one construction site (`policy_gate.py:516`); `ApprovalBroker` is a prompt router, not an intervention.
+- P2/P3/P4/P5/P6/P7 — re-grepped clean: vocabulary lock holds, no new commands surface, no re-entrant `agent()`, no kill primitive, `scope.py` untouched, `programmatic_tool_caller` still `False` (`main.py:113`).
+- Tests: full suite `460 passed, 5 deselected` on the final tree (new `tests/test_choice.py` headless-dialog incl. all-options-rendered; new `tests/test_broker.py` handoff/cancel/deny-retry).
+- Live UAT on the final tree (user-confirmed): session picker lists all sessions + Start-new; approval dialog shows all four options with fail-closed default; Ctrl-C in dialog cancels with no terminal damage and no residue line; deny-retry re-prompts (fail-closed observed end to end).
