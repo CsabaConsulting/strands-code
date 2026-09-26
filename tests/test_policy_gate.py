@@ -93,7 +93,7 @@ def _gate(
     )
     if answers is not None and monkeypatch is not None:
         it = iter(answers)
-        monkeypatch.setattr("builtins.input", lambda _: next(it))
+        monkeypatch.setattr("builtins.input", lambda *args: next(it))
     return classifier, handler
 
 
@@ -191,7 +191,7 @@ class TestGateLayer:
         handler = HumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
-        monkeypatch.setattr("builtins.input", lambda _: "always")
+        monkeypatch.setattr("builtins.input", lambda *args: "always")
         result = _run(handler, _event("shell", {"command": "git status"}, uid="u1"))
         assert isinstance(result, Confirm)
         reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
@@ -215,7 +215,7 @@ class TestGateLayer:
         handler = HumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
-        monkeypatch.setattr("builtins.input", lambda _: "never")
+        monkeypatch.setattr("builtins.input", lambda *args: "never")
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
         assert isinstance(result, Confirm)
         assert result.evaluate("n") is False
@@ -254,7 +254,7 @@ class TestGateLayer:
         handler = HumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
-        monkeypatch.setattr("builtins.input", lambda _: "n")
+        monkeypatch.setattr("builtins.input", lambda *args: "n")
         result = _run(handler, _event("shell", {"command": "make test"}, _FakeAgent(), "u1"))
         assert isinstance(result, Confirm)
 
@@ -293,7 +293,7 @@ class TestReplAndDelegation:
             return PolicyConfig(deny=[Rule(tool="shell", command="curl")])
 
         _, handler = _gate(loader=loader, monkeypatch=monkeypatch, answers=[])
-        monkeypatch.setattr("builtins.input", lambda _: (_ for _ in ()).throw(AssertionError()))
+        monkeypatch.setattr("builtins.input", lambda *args: (_ for _ in ()).throw(AssertionError()))
         result = _run(handler, _event("shell", {"command": "curl http://x"}, uid="d1"))
         assert isinstance(result, Confirm)
         assert "DENY" in result.prompt and "curl" in result.prompt
@@ -312,7 +312,7 @@ class TestBindHelpers:
 
         classifier = gate_module._ACTIVE["classifier"]
         assert isinstance(classifier, PolicyClassifier)
-        monkeypatch.setattr("builtins.input", lambda _: "y")
+        monkeypatch.setattr("builtins.input", lambda *args: "y")
         classifier(_event("shell", {"command": "make test"}))
         classifier.ask("Approve?")
         assert last_covered() != []

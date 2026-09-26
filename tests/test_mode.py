@@ -145,7 +145,7 @@ class TestTracerPlanDeny:
         _, handler = classifier, HumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
-        monkeypatch.setattr("builtins.input", lambda _: "n")
+        monkeypatch.setattr("builtins.input", lambda *args: "n")
         result = asyncio.run(handler.before_tool_call(_event("shell", {"command": "x"})))
         assert isinstance(result, Confirm)
 
