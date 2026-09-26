@@ -21,7 +21,7 @@
     {
       "number": "4",
       "name": "Plan/Act Modes + Steering",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "5",
@@ -46,8 +46,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 4)",
-    "reason": "Phase 4 of 8 — needs a plan"
+    "label": "Advance to the next step (plan phase 5)",
+    "reason": "Phase 5 of 8 — needs a plan"
   },
-  "updated_at": "2026-09-25T08:17:02.667Z"
+  "updated_at": "2026-09-26T09:16:04.340Z"
 }

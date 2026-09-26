@@ -8,14 +8,14 @@
 ### Task Loop
 
 - [x] **LOOP-01**: User can hold a multi-ask conversation where the CLI plans and executes each ask with subagents and tools
-- [ ] **LOOP-02**: User can steer a running task with freeform input applied at the next tool-call boundary
+- [x] **LOOP-02**: User can steer a running task with freeform input applied at the next tool-call boundary
 - [ ] **LOOP-03**: User can ask a side question mid-task via a `/btw`-style escape answered by a subagent without disturbing the main task
-- [ ] **LOOP-04**: User can cancel a running task with Ctrl-C without quitting the CLI
+- [x] **LOOP-04**: User can cancel a running task with Ctrl-C without quitting the CLI
 
 ### Modes
 
-- [ ] **MODE-01**: User can work in Plan mode (read-only, presents a plan) and approve before Act executes
-- [ ] **MODE-02**: User can cycle modes without restarting the session
+- [x] **MODE-01**: User can work in Plan mode (read-only, presents a plan) and approve before Act executes
+- [x] **MODE-02**: User can cycle modes without restarting the session
 
 ### Tools & Safety
 
@@ -91,11 +91,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | LOOP-01 | Phase 1 | Complete |
-| LOOP-02 | Phase 4 | Pending |
+| LOOP-02 | Phase 4 | Complete |
 | LOOP-03 | Phase 7 | Pending |
-| LOOP-04 | Phase 4 | Pending |
-| MODE-01 | Phase 4 | Pending |
-| MODE-02 | Phase 4 | Pending |
+| LOOP-04 | Phase 4 | Complete |
+| MODE-01 | Phase 4 | Complete |
+| MODE-02 | Phase 4 | Complete |
 | TOOL-01 | Phase 2 | Complete |
 | TOOL-02 | Phase 2 | Complete |
 | TOOL-03 | Phase 3 | Complete |
