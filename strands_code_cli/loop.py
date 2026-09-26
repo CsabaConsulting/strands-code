@@ -220,10 +220,11 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
                 slot.state = steering
                 set_gate_mode(mode.mode)
                 reader = start_steering_reader(steering, gate_open)
+                agent_text = message if message is not None else text
                 if mode.mode == "plan":
-                    _invoke_agent(agent, f"{PLAN_PREFIX}\n\n{text}", cancel_event)
+                    _invoke_agent(agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event)
                 else:
-                    _invoke_agent(agent, text, cancel_event)
+                    _invoke_agent(agent, agent_text, cancel_event)
         except KeyboardInterrupt:
             cancelled = True
             cancel_armed_at = _handle_turn_cancel(

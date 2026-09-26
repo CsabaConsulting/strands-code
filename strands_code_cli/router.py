@@ -12,7 +12,7 @@ from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.diff_config import MODES, DiffConfig
 from strands_code_cli.diff_gate import apply_stashed, store_for
-from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_OK, MODE_USAGE, ModeState
+from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
 from strands_code_cli.session_index import SessionIndex
 
 USAGE_HINT = (
@@ -75,7 +75,7 @@ def dispatch(
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
     if cmd == "/approve":
-        return ("reply", _approve_message(mode))
+        return _approve_message(mode)
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
 
 
@@ -99,18 +99,21 @@ def _mode_message(rest: str, mode: ModeState | None) -> str:
     return _MODE_USAGE
 
 
-def _approve_message(mode: ModeState | None) -> str:
+def _approve_message(mode: ModeState | None) -> tuple:
     """Handle /approve: explicit plan handoff gated on a pending plan.
 
-    A router reply, never a gate prompt: on success the session flips
-    to act (logged in history via the normal transcript).
+    Empty cases stay replies. On success the session flips to act and
+    the caller runs an agent turn carrying the execute prompt — the
+    plan text lives in session history, so approval must *run*, not
+    just announce (a reply-only /approve flips the mode and drops the
+    plan). Approval prompts themselves never live here.
     """
     if mode is None:
-        return APPROVE_EMPTY
+        return ("reply", APPROVE_EMPTY)
     if not mode.pending_plan:
-        return APPROVE_EMPTY
+        return ("reply", APPROVE_EMPTY)
     mode.approve()
-    return APPROVE_OK
+    return ("agent", f"{APPROVE_OK}\n{APPROVE_EXECUTE}")
 
 
 def _diff_message(session_id: str, rest: str, config_path: str | Path | None) -> str:

@@ -105,6 +105,17 @@ class TestPlanTurnPrefix:
         out = _flat(capsys.readouterr().out)
         assert MODE_PLAN_REPLY in out
 
+    def test_approve_runs_execution_turn_with_prompt(self, tmp_path, monkeypatch, capsys):
+        from strands_code_cli.mode import APPROVE_EXECUTE, APPROVE_OK
+
+        agent, _, _ = _run_script(
+            ["/mode plan", "design it", "/approve", "/exit"],
+            tmp_path,
+            monkeypatch=monkeypatch,
+        )
+        assert agent.inputs[0] == f"{PLAN_PREFIX}\n\ndesign it"
+        assert agent.inputs[1] == f"{APPROVE_OK}\n{APPROVE_EXECUTE}"
+
     def test_cancelled_plan_turn_arms_no_approve(self, tmp_path, monkeypatch, capsys):
         agent = _LoopAgent(behavior=_raise_keyboard_interrupt)
         _run_script(["/mode plan", "doomed", "/approve", "/exit"], tmp_path, agent,

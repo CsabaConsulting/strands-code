@@ -334,10 +334,15 @@ class TestRouterMode:
         assert mode.mode == "plan"
 
     def test_approve_with_plan_hands_off(self, tmp_path):
+        from strands_code_cli.mode import APPROVE_EXECUTE
+
         mode = ModeState()
         mode.set("plan")
         mode.note_plan_proposed()
-        assert self._dispatch("/approve", tmp_path, mode) == ("reply", APPROVE_OK)
+        action, message = self._dispatch("/approve", tmp_path, mode)
+        assert action == "agent"
+        assert APPROVE_OK in message
+        assert APPROVE_EXECUTE in message
         assert mode.mode == "act"
 
     def test_approve_without_holder_guides(self, tmp_path):
@@ -361,9 +366,12 @@ class TestPlanPrefix:
         assert "Reply with revisions in plain words, or /approve to execute." in PLAN_PREFIX
 
     def test_prefix_vocabulary_lock(self):
-        lowered = PLAN_PREFIX.lower()
-        for banned in ("policy", "approve-each", "on-demand", "auto", "yolo"):
-            assert banned not in lowered
+        from strands_code_cli.mode import APPROVE_EXECUTE
+
+        for copy in (PLAN_PREFIX, APPROVE_EXECUTE):
+            lowered = copy.lower()
+            for banned in ("policy", "approve-each", "on-demand", "auto", "yolo"):
+                assert banned not in lowered
 
 
 # ----------------------------------------------------------------------

@@ -29,6 +29,7 @@ MODE_ACT_REPLY = "Mode: act — executing with approvals."
 MODE_USAGE = "Usage: /mode [plan|act]"
 APPROVE_OK = "Plan approved — switched to act."
 APPROVE_EMPTY = "No pending plan — switch to Plan with /mode plan first."
+APPROVE_EXECUTE = "Execute the plan you proposed in the previous turn, step by step."
 
 
 class ModeState:
