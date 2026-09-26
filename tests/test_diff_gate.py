@@ -413,7 +413,7 @@ class TestGateSubsumption:
         import builtins
 
         real_input = builtins.input
-        builtins.input = lambda _: (gate_prompts.__setitem__("n", gate_prompts["n"] + 1), "y")[1]
+        builtins.input = lambda *args: (gate_prompts.__setitem__("n", gate_prompts["n"] + 1), "y")[1]
         try:
             import asyncio
             from types import SimpleNamespace
