@@ -49,7 +49,9 @@ from strands_code_cli.policy import (
 
 logger = logging.getLogger(__name__)
 
-_ASK_SUFFIX = "Approve? [y/n/always/never] "
+_ASK_OPTIONS = "Approve? [y/n/always/never]"
+_ASK_SUFFIX = _ASK_OPTIONS + " "
+_ANSWER_PROMPT = "> "
 
 gate_open = threading.Event()
 """Set while the gate ``ask`` prompt blocks on ``input()``.
@@ -291,7 +293,8 @@ class PolicyClassifier:
                 gate_open.set()
                 restore_blocking = _blocking_stdin_for_prompt()
                 try:
-                    answer = input(_ASK_SUFFIX).strip().lower()
+                    print(_ASK_OPTIONS)
+                    answer = input(_ANSWER_PROMPT).strip().lower()
                 finally:
                     if restore_blocking is not None:
                         try:
