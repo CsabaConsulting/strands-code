@@ -8,6 +8,7 @@ covered_files:
   - .planning/phases/04-plan-act-modes-steering/04-PLAN-SUMMARY.md
   - .planning/phases/04-plan-act-modes-steering/04-PLAN.md
   - .planning/phases/04-plan-act-modes-steering/04-RESEARCH.md
+  - .planning/phases/04-plan-act-modes-steering/04-UAT.md
   - strands_code_agent/code_agent.py
   - strands_code_cli/loop.py
   - strands_code_cli/main.py
@@ -15,13 +16,13 @@ covered_files:
   - strands_code_cli/policy_gate.py
   - strands_code_cli/router.py
   - strands_code_cli/steering.py
-covered_digest: "v1:sha256:4d91466286eda3f76231a74f3232197b4fd7849577ccced1a197ea10bf4a0ab1"
+covered_digest: "v1:sha256:763eb0e9f0bdefe29be0c1fc1942172b68dd09352f71fb048dfdaffa3240e23f"
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
-  previous_status: none
-  previous_score: none
-  gaps_closed: []
+  previous_status: passed
+  previous_score: 4/4
+  gaps_closed: [reply-only-/approve, approval-input-vs-nonblocking-stdin, answer-echo-placement, stdin-flip-parked-reader-terminal-wedge]
   gaps_remaining: []
   regressions: []
 ---
@@ -82,3 +83,13 @@ re_verification:
 ## Tests
 - Focused: `uv run pytest tests/test_mode.py tests/test_steering.py tests/test_plan_cancel.py tests/test_cli_entry.py tests/test_policy_gate.py tests/test_kill_resume.py -q` → **102 passed**.
 - Full: `uv run pytest tests/ -q` → **429 passed, 5 deselected** (pre-existing deselects; warnings only).
+
+## Re-verification (post-verification UAT gaps)
+
+UAT found 3 real gaps after the initial PASS; all fixed with regression tests, full suite 434 green:
+
+1. **`/approve` reply-only (UAT Test 3 FAIL → PASS).** Router returned `("reply", …)` so the mode flipped and the plan died. Now returns `("agent", APPROVE_OK + APPROVE_EXECUTE)`; loop runs the turn with the message payload (`loop.py` `agent_text`). Live-retested: plan executed under the gate. Tests: `test_approve_with_plan_hands_off`, `test_approve_runs_execution_turn_with_prompt`.
+2. **Approval `input()` vs nonblocking stdin (UAT Test 3 retry FAIL → PASS).** The steering reader's turn-scoped nonblocking fd broke the gate's blocking `input()` (auto-fail, empty cause). Ask now restores blocking around `input()`; reader re-checks gate-open post-select (steal race closed). Proven by choreographed race test (fails pre-fix, passes post-fix). Tests: `test_gate_set_after_select_never_steals`, `TestBlockingStdinForPrompt` (3).
+3. **Answer-echo placement.** `input()`'s prompt arg bypassed the output proxy. Prompt block now prints through one stream; bare `input()` echoes on the `> ` line. Test fakes updated to `lambda *args`.
+
+Truths T1–T4 and all prohibitions re-confirmed unaffected: the fixes narrow the approve handoff and the prompt/reader sharing protocol without touching mode vocabulary, the single-HITL spine, or scope roots.

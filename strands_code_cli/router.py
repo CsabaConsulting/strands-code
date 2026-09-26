@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -268,6 +269,19 @@ def show_picker(index: SessionIndex, *, session_dir: str | Path | None = None) -
         entries = [e for e in entries if _has_snapshot(session_dir, e["id"])]
     if not entries:
         return None
+    if sys.stdin.isatty():
+        # Arrow-key dialog (choice.radio_choice): same SIGINT-safe prompt
+        # as the approval gate. ESC/failure means start-new (None);
+        # Ctrl-C re-raises so startup cancel still works.
+        from strands_code_cli.choice import radio_choice
+
+        picked = radio_choice(
+            "Recent sessions",
+            [(e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]") for e in entries]
+            + [(None, "Start new session")],
+            default=len(entries),
+        )
+        return picked if isinstance(picked, str) else None
     console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
     console.print("Recent sessions:")
     for pos, entry in enumerate(entries, 1):

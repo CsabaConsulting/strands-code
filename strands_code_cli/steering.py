@@ -1,7 +1,8 @@
 """Boundary steering for mid-task redirect (LOOP-02, D-09..D-12).
 
 Machinery: a turn-owned reader thread (select+read on the stdin fd,
-temporarily nonblocking so the turn-end join is prompt) captures
+whose mode is never changed — select guarantees data so reads return
+immediately and the 50 ms poll keeps the turn-end join prompt) captures
 anything typed while a turn runs (D-12) into an explicit per-turn
 :class:`SteeringState`; a ``BeforeToolCallEvent`` hook registered at
 ``HookOrder.SDK_FIRST`` (runs before the HITL intervention dispatcher at
@@ -277,57 +278,62 @@ def start_steering_reader(
             _run_readline()
 
     def _run_fd(fd: int) -> None:
-        """Select+read loop on a nonblocking fd; shutdown is always prompt.
+        """Select+read loop on the shared stdin fd; shutdown is prompt.
 
-        A blocking ``readline`` cannot be woken for the turn-end join,
-        and a parked reader would steal the next idle prompt's input
-        (T-04-12) — so the fd is switched to nonblocking for the turn
-        and restored afterwards. In cooked terminal mode the kernel
-        still delivers complete lines, preserving line editing.
+        The fd mode is NEVER changed: select guarantees data before
+        every read, so even a blocking fd returns immediately and the
+        50 ms poll keeps the turn-end join fast. Flipping the shared fd
+        nonblocking parked the reader permanently when the gate toggled
+        the mode back mid-turn (thread parked in ``os.read``, immune to
+        signals, then eating the next prompt's input — a dead terminal).
+        In cooked terminal mode the kernel still delivers complete
+        lines, preserving line editing.
         """
-        try:
-            blocking = os.get_blocking(fd)
-        except OSError:
-            return
         buf = ""
-        try:
-            os.set_blocking(fd, False)
-            while not shutdown.is_set():
-                if gate_open.is_set():
-                    if shutdown.wait(poll_interval):
-                        break
-                    continue
-                try:
-                    ready, _, _ = select.select([fd], [], [], poll_interval)
-                except (OSError, ValueError):
+        while not shutdown.is_set():
+            if gate_open.is_set():
+                if shutdown.wait(poll_interval):
                     break
-                if shutdown.is_set():
-                    break
-                if not ready:
-                    continue
-                if gate_open.is_set():
-                    # Set between select-return and read: the gate owns the
-                    # terminal now — reading here would steal the y/n answer.
-                    continue
-                try:
-                    chunk = os.read(fd, 4096)
-                except BlockingIOError:
-                    continue
-                except OSError:
-                    break
-                if not chunk:  # EOF: pause, do not spin
-                    if shutdown.wait(poll_interval):
-                        break
-                    continue
-                buf += chunk.decode("utf-8", errors="replace")
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    _emit(line)
-        finally:
+                continue
             try:
-                os.set_blocking(fd, blocking)
+                ready, _, _ = select.select([fd], [], [], poll_interval)
+            except (OSError, ValueError):
+                break
+            if shutdown.is_set():
+                break
+            if not ready:
+                continue
+            if gate_open.is_set():
+                # Set between select-return and read: the gate owns the
+                # terminal now — reading here would steal the y/n answer.
+                continue
+            try:
+                # Re-poll with zero timeout: a line the first select saw
+                # may have been consumed by the approval prompt racing us
+                # (typed steering + gate opening together). Reading an
+                # empty buffer on a blocking fd parks this thread
+                # permanently — immune to signals, it then eats every
+                # later prompt's input (dead terminal). No blocking call
+                # sits between the two selects, so the window is ~100ns.
+                ready2, _, _ = select.select([fd], [], [], 0)
+            except (OSError, ValueError):
+                break
+            if not ready2:
+                continue
+            try:
+                chunk = os.read(fd, 4096)
+            except BlockingIOError:
+                continue
             except OSError:
-                pass
+                break
+            if not chunk:  # EOF: pause, do not spin
+                if shutdown.wait(poll_interval):
+                    break
+                continue
+            buf += chunk.decode("utf-8", errors="replace")
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                _emit(line)
 
     def _run_readline() -> None:
         """Fallback for streams without a fileno (never production stdin)."""

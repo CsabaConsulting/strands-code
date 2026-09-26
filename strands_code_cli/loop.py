@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from time import monotonic
 from pathlib import Path
 from typing import Any
@@ -17,7 +20,13 @@ from rich.console import Console
 
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.output import output_context
-from strands_code_cli.policy_gate import bind_turn, gate_open, set_mode as set_gate_mode
+from strands_code_cli.policy_gate import (
+    TurnCancelled,
+    _active_broker,
+    bind_turn,
+    gate_open,
+    set_mode as set_gate_mode,
+)
 from strands_code_cli.router import dispatch
 from strands_code_cli.session_index import SessionIndex
 from strands_code_cli.steering import (
@@ -120,11 +129,40 @@ def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> None:
     Real agents expose ``cancel_signal`` and accept a per-invocation
     ``cancel_signal`` kwarg (observed, never mutated, by the agent);
     plain test doubles take bare text.
+
+    The agent call runs in an owned worker thread while this (main) thread
+    pumps approval prompts via the session broker: the SDK invokes ``ask``
+    inside its event-loop thread, where blocking on stdin is fatal
+    (signals land here, the worker would park; ``asyncio.run`` cannot
+    nest). Served prompts run here, where signals and prompt_toolkit
+    behave; a KeyboardInterrupt propagates with the cancel event already
+    set, so the worker aborts instead of parking. No broker (tests,
+    direct calls) → legacy direct call.
     """
-    if hasattr(agent, "cancel_signal"):
-        agent(text, cancel_signal=cancel_event)
-    else:
-        agent(text)
+    broker = _active_broker()
+    if broker is None:
+        if hasattr(agent, "cancel_signal"):
+            agent(text, cancel_signal=cancel_event)
+        else:
+            agent(text)
+        return
+    kwargs = {"cancel_signal": cancel_event} if hasattr(agent, "cancel_signal") else {}
+    with broker.pump(cancel_event):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(agent, text, **kwargs)
+            while True:
+                if future.done():
+                    try:
+                        future.result()
+                    except TurnCancelled:
+                        # Worker aborted on cancel without a main-thread
+                        # KeyboardInterrupt reaching us: same cancel path.
+                        raise KeyboardInterrupt from None
+                    return
+                req = broker.poll()
+                if req is None:
+                    continue
+                req.run_prompt()
 
 
 def _handle_turn_cancel(
@@ -160,6 +198,37 @@ def _handle_turn_cancel(
     explicit_save(agent)
     index.ensure(session_id)
     return now
+
+
+def _make_turn_sigint_handler(
+    cancel_event: threading.Event, prev: Any
+) -> Any:
+    """SIGINT handler for the duration of one turn (LOOP-04).
+
+    The SDK may absorb KeyboardInterrupt internally (converting it to a
+    graceful stop of the current model stream) so the loop's
+    ``except KeyboardInterrupt`` two-press path never runs and the turn
+    continues to the next tool — observed live as "Ctrl-C ignored, next
+    approval prompt arrives anyway". Setting the caller-owned event here
+    makes press #1 effective regardless: the SDK observes ``cancel_signal``
+    at its next checkpoint and stops after the current step (D-10/D-13),
+    even when no KeyboardInterrupt ever reaches the loop.
+
+    The previous disposition is always chained (default re-raises
+    KeyboardInterrupt), so the two-press UX is preserved whenever the
+    exception does propagate. The handler itself stays side-effect-free
+    apart from setting the event (async-signal-safety).
+    """
+
+    def _handler(signum: Any, frame: Any) -> None:
+        cancel_event.set()
+        if callable(prev):
+            prev(signum, frame)
+        elif prev == signal.SIG_DFL:
+            signal.default_int_handler(signum, frame)  # raises KeyboardInterrupt
+        # SIG_IGN stays absorbed; the event above still stops the turn.
+
+    return _handler
 
 
 def _steering_slot_for(agent: Any) -> SteeringSlot:
@@ -213,6 +282,12 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
         cancel_event = threading.Event()
         reader = None
         cancelled = False
+        prev_sigint: Any = None
+        if threading.current_thread() is threading.main_thread():
+            prev_sigint = signal.getsignal(signal.SIGINT)
+            signal.signal(
+                signal.SIGINT, _make_turn_sigint_handler(cancel_event, prev_sigint)
+            )
         try:
             with output_context():
                 bind_turn(turn_id)
@@ -231,6 +306,8 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
                 agent, session_id, index, cancel_event, cancel_armed_at
             )
         finally:
+            if prev_sigint is not None:
+                signal.signal(signal.SIGINT, prev_sigint)
             if reader is not None:
                 reader.stop()
             slot.state = None

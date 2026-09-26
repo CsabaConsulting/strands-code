@@ -10,9 +10,11 @@ Semantics pinned here (04-PLAN.md resolved items 5+8+11):
   the honest still-cancelling copy: the SDK offers no un-cancel, the
   remainder is dropped, and no resume is ever promised.
 - Ctrl-C at the idle prompt still clears the line (D-14, untouched).
-- Ctrl-C inside an open gate prompt stays deny-this-tool (the ask
-  broad-except converts it, ``policy_gate.py`` ask) and never reaches
-  the turn branch — not discovered in review, documented here.
+- Ctrl-C inside an open gate prompt propagates (``except Exception``
+  cannot catch KeyboardInterrupt): the ask finally clears the gate flag
+  and the turn takes the normal two-press path. The per-turn SIGINT
+  handler additionally sets the caller-owned cancel event first, so the
+  stop is also observed when the SDK absorbs the exception.
 - After cancel the loop falls through to the prompt in the same
   session with the mode unchanged (D-07/D-16).
 """
@@ -193,3 +195,71 @@ class TestKillAfterCancel:
         # SIGKILL here: no exit flush, no index update.
         second = _make_session_agent(session_id, session_dir, "second answer")
         assert "completed turn marker" in _transcript_text(second)
+
+
+class TestTurnSigintHandler:
+    """Per-turn SIGINT handler: effective even when the SDK absorbs KI."""
+
+    def test_handler_sets_event_and_chains_default(self):
+        import signal
+        import threading
+
+        from strands_code_cli.loop import _make_turn_sigint_handler
+
+        event = threading.Event()
+        handler = _make_turn_sigint_handler(event, signal.SIG_DFL)
+        try:
+            handler(signal.SIGINT, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("default disposition must re-raise")
+        assert event.is_set()
+
+    def test_handler_chains_callable_prev(self):
+        import signal
+        import threading
+
+        from strands_code_cli.loop import _make_turn_sigint_handler
+
+        event = threading.Event()
+        seen: list[str] = []
+        handler = _make_turn_sigint_handler(event, lambda s, f: seen.append("prev"))
+        handler(signal.SIGINT, None)
+        assert event.is_set()
+        assert seen == ["prev"]
+
+    def test_handler_ignores_sig_ign_but_sets_event(self):
+        import signal
+        import threading
+
+        from strands_code_cli.loop import _make_turn_sigint_handler
+
+        event = threading.Event()
+        handler = _make_turn_sigint_handler(event, signal.SIG_IGN)
+        handler(signal.SIGINT, None)  # must not raise
+        assert event.is_set()
+
+    def test_turn_installs_and_restores_handler(self, tmp_path, monkeypatch):
+        import signal
+
+        before = signal.getsignal(signal.SIGINT)
+        agent, _, _ = _run_script(["hello", "/exit"], tmp_path, monkeypatch=monkeypatch)
+        assert agent.inputs == ["hello"]
+        assert signal.getsignal(signal.SIGINT) is before
+
+    def test_handler_installed_during_turn(self, tmp_path, monkeypatch):
+        import signal
+
+        import strands_code_cli.loop as loop_module
+
+        seen: list[str] = []
+
+        def behavior(text: str) -> None:
+            current = signal.getsignal(signal.SIGINT)
+            seen.append("wrapped" if "turn_sigint" in repr(getattr(current, "__qualname__", "")) else "other")
+
+        agent = _LoopAgent(behavior=behavior)
+        _run_script(["hello", "/exit"], tmp_path, agent, monkeypatch=monkeypatch)
+        assert seen == ["wrapped"]
+

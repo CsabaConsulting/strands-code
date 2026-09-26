@@ -28,10 +28,12 @@ import asyncio
 import inspect
 import logging
 import os
+import queue
 import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterator
 
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
@@ -54,12 +56,12 @@ _ASK_SUFFIX = _ASK_OPTIONS + " "
 _ANSWER_PROMPT = "> "
 
 gate_open = threading.Event()
-"""Set while the gate ``ask`` prompt blocks on ``input()``.
+"""Set while the gate ``ask`` prompt waits for an answer.
 
 The steering reader checks this flag and never consumes stdin while it
-is set, so a steering line can never be consumed as a y/n answer (and
-the prompt answer is never diverted into steering).
-"""
+is set, so a steering line can never be consumed as an answer (and
+the prompt answer is never diverted into steering). Covers both the
+typed ``input()`` fallback and the arrow-key dialog."""
 
 PLAN_MUTATING_TOOLS = ("write", "edit", "shell", "python_repl")
 """Tools denied in Plan mode (MODE-01, D-03).
@@ -79,11 +81,12 @@ class BatchState:
 
     Tool calls execute sequentially, so upfront listing of future actions
     is impossible: the first matching call per (signature, turn) prompts
-    with full detail naming the covering rule; later same-signature calls
-    in the turn proceed silently and are recorded. Reset per turn via
-    :meth:`bind_turn` (called from ``loop.py`` before each ``agent(text)``);
-    the cache never crosses turns. Also keeps the covered-action log for
-    ``/policy last``.
+    with full detail naming the covering rule; later same-signature
+    APPROVED calls in the turn proceed silently and are recorded. Denied
+    calls never cover — a denied-then-retried call re-prompts
+    (fail-closed). Reset per turn via :meth:`bind_turn` (called from
+    ``loop.py`` before each ``agent(text)``); the cache never crosses
+    turns. Also keeps the covered-action log for ``/policy last``.
     """
 
     def __init__(self) -> None:
@@ -108,6 +111,114 @@ class BatchState:
     def covered(self) -> list[str]:
         """Covered-action descriptions for ``/policy last``."""
         return list(self._log)
+
+    def record(self, description: str) -> None:
+        """Log a one-shot outcome for ``/policy last`` WITHOUT covering.
+
+        Denials never cover: a denied-then-retried call must re-prompt
+        (fail-closed). Only approvals cover, keeping the D-04
+        same-signature silence for the approved case.
+        """
+        self._log.append(description)
+
+
+class TurnCancelled(Exception):
+    """Worker-side abort: cancel fired while awaiting a prompt answer.
+
+    Raised in the SDK worker thread when the turn's cancel event is set.
+    Never swallowed: ``ask`` re-raises past its fail-closed handler so the
+    worker exits instead of parking on stdin.
+    """
+
+
+class _ApprovalRequest:
+    """One prompt handoff from the SDK worker thread to the pump thread."""
+
+    def __init__(self, prompt: Callable[[], str]) -> None:
+        self._prompt = prompt
+        self._done = threading.Event()
+        self.answer: str | None = None
+
+    def run_prompt(self) -> None:
+        """Execute the prompt in the pump thread (KeyboardInterrupt propagates)."""
+        try:
+            self.answer = self._prompt()
+        finally:
+            self._done.set()
+
+    def wait_answer(self, cancel: threading.Event | None) -> str:
+        """Worker side: block for the answer; abort promptly on cancel.
+
+        A set done-flag with no answer means the pump died without
+        answering (Ctrl-C took the dialog's cancel path while prompt_toolkit
+        owned SIGINT, so the turn handler never set cancel): that is a
+        cancellation too, never an ``AssertionError`` — the bare assert's
+        empty message used to surface as a blank "failed closed" line.
+        """
+        while not self._done.wait(0.05):
+            if cancel is not None and cancel.is_set():
+                raise TurnCancelled()
+        if cancel is not None and cancel.is_set():
+            raise TurnCancelled()
+        if self.answer is None:
+            raise TurnCancelled()
+        return self.answer
+
+
+class ApprovalBroker:
+    """Hands approval prompts from the SDK worker thread to the pump thread.
+
+    The SDK invokes ``ask`` inside its event-loop worker thread
+    (``ThreadPoolExecutor`` + ``asyncio.run``), where blocking on stdin is
+    fatal twice over: SIGINT lands in the main thread (parked in
+    ``future.result()``), so the worker stays parked in the read while the
+    main thread unwinds — executor ``shutdown(wait=True)`` then stalls
+    until Enter, and a second Ctrl-C leaks the parked worker, which steals
+    every later prompt's input (the double-Ctrl-C wedge). Prompt_toolkit
+    is unusable there too: ``asyncio.run`` cannot nest in the running loop
+    (observed ``run_async was never awaited`` → fail-closed deny).
+
+    So the worker hands the prompt to the pump thread and waits on a
+    per-request event plus the turn's cancel signal; the pump (main thread
+    during ``_invoke_agent``) prompts synchronously, where signals and
+    ``asyncio.run`` behave. With no pump registered (tests, direct calls)
+    the prompt runs inline, legacy behaviour.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue[_ApprovalRequest] = queue.Queue()
+        self._pumping = threading.Event()
+        self._cancel: threading.Event | None = None
+        self._pump_ident: int | None = None
+
+    @contextmanager
+    def pump(self, cancel: threading.Event) -> Iterator["ApprovalBroker"]:
+        """Serve prompts on this thread until the turn ends."""
+        old_cancel, old_ident = self._cancel, self._pump_ident
+        self._cancel = cancel
+        self._pump_ident = threading.get_ident()
+        self._pumping.set()
+        try:
+            yield self
+        finally:
+            self._pumping.clear()
+            self._cancel = old_cancel
+            self._pump_ident = old_ident
+
+    def request(self, prompt: Callable[[], str]) -> str:
+        """Worker side: have the prompt answered by the pump thread."""
+        if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
+            return prompt()
+        req = _ApprovalRequest(prompt)
+        self._queue.put(req)
+        return req.wait_answer(self._cancel)
+
+    def poll(self, timeout: float = 0.05) -> _ApprovalRequest | None:
+        """Pump side: next pending prompt, or None on timeout."""
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
 
 
 def _signature(tool_name: str, verdict: Prompt | Deny) -> tuple[str, ...]:
@@ -281,88 +392,102 @@ class PolicyClassifier:
                         # Plan denial: mode vocabulary only, never the
                         # policy-rule wrapper (vocabulary lock, T-04-10).
                         print(rule_text)
-                        self._batch.mark(signature, f"plan-mode denied {tool_name}")
+                        self._batch.record(f"plan-mode denied {tool_name}")
                         return "n"
                     print(f"Denied by policy rule [deny {rule_text}] — skipped, continuing.")
-                    self._batch.mark(signature, f"denied {tool_name} [{rule_text}]")
+                    self._batch.record(f"denied {tool_name} [{rule_text}]")
                     return "n"
                 assert isinstance(verdict, Prompt)
                 print(f"Approval needed: {tool_name}")
                 print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
-                gate_open.set()
-                restore_blocking = _blocking_stdin_for_prompt()
-                try:
+                def read_answer() -> str:
+                    if sys.stdin.isatty():
+                        # Arrow-key dialog (choice.radio_choice): prompt_toolkit
+                        # owns SIGINT + termios for the duration. Runs in the
+                        # pump thread (main), never the SDK worker thread.
+                        # Ctrl-C re-raises (cancel path); ESC/failure denies.
+                        return self._dialog_answer()
                     # Print the whole prompt block through the same stream:
                     # input()'s own prompt arg bypasses the output proxy and
                     # lands lines too early (observed "> " jumping above the
                     # Approval block). Bare input() keeps echo on the "> " line.
+                    # The stdin fd mode is never touched here (nor by the
+                    # steering reader): flipping the shared fd parked the
+                    # reader in os.read and wedged the terminal.
                     print(_ASK_OPTIONS)
                     print(_ANSWER_PROMPT, end="", flush=True)
-                    answer = input().strip().lower()
+                    return input().strip().lower()
+
+                broker = _active_broker()
+                gate_open.set()
+                try:
+                    if broker is not None:
+                        answer = broker.request(read_answer)
+                    else:
+                        answer = read_answer()
                 finally:
-                    if restore_blocking is not None:
-                        try:
-                            restore_blocking()
-                        except OSError:
-                            pass
                     gate_open.clear()
-                if answer in ("y", "yes"):
-                    self._batch.mark(signature, f"approved {tool_name}: {verdict.reason}")
-                    return "y"
-                if answer in ("always", "never"):
-                    derived = _derive_rule(tool_name, ctx["tool_input"])
-                    if derived is None:
-                        print("Cannot derive a narrow rule here; one-shot answer only.")
-                        single = "y" if answer == "always" else "n"
-                        self._batch.mark(signature, f"{single}-once {tool_name}: {verdict.reason}")
-                        return single
-                    kind = "allow" if answer == "always" else "deny"
-                    try:
-                        if self._append_path is not None:
-                            PolicyConfig().append_rule(kind, derived, repo_path=self._append_path)
-                        else:
-                            PolicyConfig().append_rule(kind, derived)
-                    except (OSError, ValueError) as exc:
-                        print(f"Could not append standing rule: {exc}")
-                        return "n" if answer == "never" else "y"
-                    print(f"Appended standing rule [{kind} {derived.describe()}].")
-                    self._batch.mark(signature, f"{answer} {tool_name} [{derived.describe()}]")
-                    return "y" if answer == "always" else "n"
-                self._batch.mark(signature, f"denied {tool_name}: {verdict.reason}")
-                return "n"
+                return self._apply_answer(answer, ctx)
+        except TurnCancelled:
+            raise  # worker abort on cancel: must reach the SDK, never deny
         except Exception as exc:  # never leak a raise into the HITL run
             logger.warning("Policy ask failed closed: %s", exc)
             return "n"
 
+    def _dialog_answer(self) -> str:
+        """Arrow-key approval choice; ESC/failure denies, Ctrl-C re-raises."""
+        from strands_code_cli.choice import radio_choice
 
-def _blocking_stdin_for_prompt() -> Any:
-    """Restore blocking mode on stdin for the approval ``input()``.
+        picked = radio_choice(
+            "Approve?",
+            [
+                ("y", "Yes — approve once"),
+                ("n", "No — skip (deny once)"),
+                ("always", "Always — approve + remember rule"),
+                ("never", "Never — deny + remember rule"),
+            ],
+            default=1,  # fail-closed highlight
+        )
+        if picked is None:
+            return "n"
+        return str(picked)
 
-    The steering reader flips the turn's stdin fd to nonblocking; a
-    blocking ``input()`` on that fd misbehaves (observed: prompt
-    auto-fails without waiting). Returns a restore closure, or ``None``
-    when no switch was needed or possible.
-    """
-    try:
-        fd = sys.stdin.fileno()
-    except Exception:
-        return None
-    try:
-        was_blocking = os.get_blocking(fd)
-    except OSError:
-        return None
-    if was_blocking:
-        return None
-    try:
-        os.set_blocking(fd, True)
-    except OSError:
-        return None
-
-    def _restore() -> None:
-        os.set_blocking(fd, False)
-
-    return _restore
+    def _apply_answer(self, answer: str, ctx: dict[str, Any]) -> str:
+        """Shared verdict handling for the dialog and typed answers."""
+        verdict = ctx["verdict"]
+        tool_name = ctx["tool_name"]
+        signature = ctx["signature"]
+        if answer in ("y", "yes"):
+            self._batch.mark(signature, f"approved {tool_name}: {verdict.reason}")
+            return "y"
+        if answer in ("always", "never"):
+            derived = _derive_rule(tool_name, ctx["tool_input"])
+            if derived is None:
+                print("Cannot derive a narrow rule here; one-shot answer only.")
+                single = "y" if answer == "always" else "n"
+                if single == "y":
+                    self._batch.mark(signature, f"{single}-once {tool_name}: {verdict.reason}")
+                else:
+                    self._batch.record(f"{single}-once {tool_name}: {verdict.reason}")
+                return single
+            kind = "allow" if answer == "always" else "deny"
+            try:
+                if self._append_path is not None:
+                    PolicyConfig().append_rule(kind, derived, repo_path=self._append_path)
+                else:
+                    PolicyConfig().append_rule(kind, derived)
+            except (OSError, ValueError) as exc:
+                print(f"Could not append standing rule: {exc}")
+                return "n" if answer == "never" else "y"
+            print(f"Appended standing rule [{kind} {derived.describe()}].")
+            if answer == "always":
+                self._batch.mark(signature, f"{answer} {tool_name} [{derived.describe()}]")
+            else:
+                self._batch.record(f"{answer} {tool_name} [{derived.describe()}]")
+            return "y" if answer == "always" else "n"
+        self._batch.record(f"denied {tool_name}: {verdict.reason}")
+        return "n"
 
 
 def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:
@@ -393,15 +518,23 @@ def build_interventions(
         classifier=classifier,
         ask=classifier.ask,
     )
+    broker = ApprovalBroker()
     _ACTIVE["classifier"] = classifier
     _ACTIVE["batch"] = classifier.batch
     _ACTIVE["handler"] = gate
+    _ACTIVE["broker"] = broker
     return [gate]
 
 
 def _active_classifier() -> PolicyClassifier | None:
     candidate = _ACTIVE.get("classifier")
     return candidate if isinstance(candidate, PolicyClassifier) else None
+
+
+def _active_broker() -> ApprovalBroker | None:
+    """Session broker for main-thread prompts (None before build / in tests)."""
+    candidate = _ACTIVE.get("broker")
+    return candidate if isinstance(candidate, ApprovalBroker) else None
 
 
 def policy_ask(prompt: str, **kwargs: Any) -> str:

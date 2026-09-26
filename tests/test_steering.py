@@ -258,3 +258,38 @@ class TestSteeringReader:
 
     def test_streaming_limit_named(self):
         assert "next step" in STREAMING_LIMIT
+
+
+class TestFdModeInvariant:
+    """The reader MUST NEVER change the shared stdin fd mode.
+
+    Flipping the shared fd nonblocking parked the reader in os.read
+    when the gate toggled the mode back mid-turn (worker thread, immune
+    to signals), and the parked reader then ate the next prompt's input
+    — a dead terminal requiring kill. select-then-read needs no flip.
+    """
+
+    def test_reader_preserves_blocking_mode(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            assert os.get_blocking(read_fd) is True
+            state = SteeringState()
+            gate = threading.Event()
+            reader = start_steering_reader(
+                state, gate, stdin=_PipeStdin(read_fd)
+            )
+            os.write(write_fd, b"steer me\n")
+            assert _wait_for(state.has_pending)
+            assert state.take() == "steer me"
+            # Gate opens mid-turn (approval prompt): mode must not move.
+            gate.set()
+            os.write(write_fd, b"y\n")
+            time.sleep(0.3)
+            assert not state.has_pending()
+            gate.clear()
+            reader.stop()
+            assert not reader.alive
+            assert os.get_blocking(read_fd) is True
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)

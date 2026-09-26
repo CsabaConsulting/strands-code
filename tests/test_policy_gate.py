@@ -55,7 +55,6 @@ from strands_harness.interventions import resolve_interventions
 
 from strands_code_cli.policy import PolicyConfig, PolicyOptions, Rule
 from strands_code_cli.policy_gate import (
-    _blocking_stdin_for_prompt,
     BatchState,
     PolicyClassifier,
     bind_main_agent,
@@ -321,61 +320,3 @@ class TestBindHelpers:
 
     def test_bind_main_agent_noop_without_crash(self):
         bind_main_agent(object())
-
-
-# ---------------------------------------------------------------------------
-# Approval input() vs nonblocking stdin (steering reader coexistence)
-# ---------------------------------------------------------------------------
-
-
-class _FdStdin:
-    """sys.stdin double exposing a real fd."""
-
-    def __init__(self, fd: int) -> None:
-        self._fd = fd
-
-    def fileno(self) -> int:
-        return self._fd
-
-
-class TestBlockingStdinForPrompt:
-    def test_restores_blocking_then_restores(self, monkeypatch):
-        import os
-        import sys
-
-        import strands_code_cli.policy_gate as gate_module
-
-        read_fd, write_fd = os.pipe()
-        try:
-            os.set_blocking(read_fd, False)  # as the steering reader leaves it
-            monkeypatch.setattr(sys, "stdin", _FdStdin(read_fd))
-            restore = gate_module._blocking_stdin_for_prompt()
-            assert restore is not None
-            assert os.get_blocking(read_fd) is True
-            restore()
-            assert os.get_blocking(read_fd) is False
-        finally:
-            os.close(write_fd)
-            os.close(read_fd)
-
-    def test_noop_when_already_blocking(self, monkeypatch):
-        import os
-        import sys
-
-        import strands_code_cli.policy_gate as gate_module
-
-        read_fd, write_fd = os.pipe()
-        try:
-            monkeypatch.setattr(sys, "stdin", _FdStdin(read_fd))
-            assert gate_module._blocking_stdin_for_prompt() is None
-        finally:
-            os.close(write_fd)
-            os.close(read_fd)
-
-    def test_none_without_fileno(self, monkeypatch):
-        import sys
-
-        import strands_code_cli.policy_gate as gate_module
-
-        monkeypatch.setattr(sys, "stdin", object())
-        assert gate_module._blocking_stdin_for_prompt() is None
