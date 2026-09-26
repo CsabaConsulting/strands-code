@@ -293,8 +293,13 @@ class PolicyClassifier:
                 gate_open.set()
                 restore_blocking = _blocking_stdin_for_prompt()
                 try:
+                    # Print the whole prompt block through the same stream:
+                    # input()'s own prompt arg bypasses the output proxy and
+                    # lands lines too early (observed "> " jumping above the
+                    # Approval block). Bare input() keeps echo on the "> " line.
                     print(_ASK_OPTIONS)
-                    answer = input(_ANSWER_PROMPT).strip().lower()
+                    print(_ANSWER_PROMPT, end="", flush=True)
+                    answer = input().strip().lower()
                 finally:
                     if restore_blocking is not None:
                         try:
