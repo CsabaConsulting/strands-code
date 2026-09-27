@@ -19,9 +19,13 @@ from prompt_toolkit.history import FileHistory, History
 from rich.console import Console
 
 from strands_code_cli.cost_context import (
-    extractive_summarize,
+    AUTO_COMPACT_PCT,
+    MODEL_PRICING,
     compact_messages,
-    scrub_credentials,
+    estimate_messages_tokens,
+    model_summarize,
+    usage_line,
+    window_for,
 )
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.model_switch import (
@@ -134,7 +138,50 @@ CANCEL_CONFIRMED = "Cancel confirmed — partial work kept."
 CANCEL_STILL = "Still cancelling — graceful stop already requested; the current step finishes first."
 
 
-def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> None:
+def record_turn_metrics(
+    result: Any, current_model: str, session_turns: list
+) -> str | None:
+    """Append one per-turn token row; return the usage line when computable.
+
+    Best-effort display only: doubles without metrics (tests, direct calls)
+    yield None instead of raising.
+    """
+    from strands_code_agent.utils import get_response_metrics
+
+    try:
+        metrics = get_response_metrics(
+            result, model_id=current_model, price_table=MODEL_PRICING
+        )
+    except Exception:
+        return None
+    try:
+        in_tok = int(metrics.get("input_tokens", 0))
+        out_tok = int(metrics.get("output_tokens", 0))
+    except (TypeError, ValueError):
+        return None
+    session_turns.append(
+        {"turn": len(session_turns) + 1, "input_tokens": in_tok, "output_tokens": out_tok}
+    )
+    return usage_line(in_tok, out_tok, current_model)
+
+
+def maybe_auto_compact(agent: Any, current_model: str) -> str | None:
+    """Compact at 80% of the window, pair-atomic; announce or return None."""
+    window = window_for(current_model)
+    if not window:
+        return None  # unknown window: no signal, no compaction
+    messages = getattr(agent, "messages", None) or []
+    if not messages:
+        return None
+    tokens = estimate_messages_tokens(list(messages))
+    pct = tokens / window * 100.0
+    if pct < AUTO_COMPACT_PCT:
+        return None
+    kept = compact_messages(agent, summarize=lambda old: model_summarize(agent, old))
+    return f"Context at {pct:.0f}% — auto-compacted, {kept} recent messages kept."
+
+
+def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> Any:
     """Run one turn, handing the caller-owned cancel event to SDK agents.
 
     Real agents expose ``cancel_signal`` and accept a per-invocation
@@ -153,10 +200,8 @@ def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> None:
     broker = _active_broker()
     if broker is None:
         if hasattr(agent, "cancel_signal"):
-            agent(text, cancel_signal=cancel_event)
-        else:
-            agent(text)
-        return
+            return agent(text, cancel_signal=cancel_event)
+        return agent(text)
     kwargs = {"cancel_signal": cancel_event} if hasattr(agent, "cancel_signal") else {}
     with broker.pump(cancel_event):
         with ThreadPoolExecutor(max_workers=1) as pool:
@@ -164,12 +209,11 @@ def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> None:
             while True:
                 if future.done():
                     try:
-                        future.result()
+                        return future.result()
                     except TurnCancelled:
                         # Worker aborted on cancel without a main-thread
                         # KeyboardInterrupt reaching us: same cancel path.
                         raise KeyboardInterrupt from None
-                    return
                 req = broker.poll()
                 if req is None:
                     continue
@@ -250,37 +294,6 @@ def _steering_slot_for(agent: Any) -> SteeringSlot:
     return register_steering_hook(agent)
 
 
-def _live_summarize(agent: Any, old: list) -> str:
-    """Summarize old messages via the session model, extractive fallback.
-
-    Summarizer input is credential-scrubbed best-effort; failures fall back
-    to the offline extractive summary (compact must never crash the loop).
-    """
-    texts = [
-        block.get("text", "")
-        for message in old
-        if message.get("role") == "user"
-        for block in message.get("content", [])
-        if "text" in block
-    ]
-    prompt = (
-        "Summarize this earlier conversation for context compaction. "
-        "Keep decisions, file paths, and tool outcomes; drop chatter:\n"
-        + scrub_credentials("\n".join(texts))[:6000]
-    )
-    try:
-        generate = getattr(getattr(agent, "model", None), "generate", None)
-        if generate is None:
-            raise AttributeError("agent exposes no direct model call")
-        raw = generate(prompt)
-        candidate = raw if isinstance(raw, str) else getattr(raw, "text", "") or ""
-        if candidate.strip():
-            return candidate.strip()
-    except Exception:
-        pass
-    return extractive_summarize(old)
-
-
 def apply_model_action(
     agent: Any,
     new_id: str,
@@ -316,7 +329,7 @@ def apply_model_action(
         del agent.messages[:]
         agent.messages.extend(converted)
         kept = compact_messages(
-            agent, summarize=lambda old: _live_summarize(agent, old)
+            agent, summarize=lambda old: model_summarize(agent, old)
         )
         mode_word = "compacted" if kept < len(converted) else "kept"
     _model, resolved_id = apply_switch(agent, new_id)
@@ -361,6 +374,7 @@ def run_loop(
     current_model = (
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
+    session_turns: list = []
     slot = _steering_slot_for(agent)
     set_gate_mode(mode.mode)
     cancel_armed_at: float | None = None
@@ -380,6 +394,8 @@ def run_loop(
             index=index,
             mode=mode,
             current_model=current_model,
+            agent=agent,
+            session_turns=session_turns,
         )
         if action == "exit":
             break
@@ -387,6 +403,10 @@ def run_loop(
             if message:
                 console.print(message)
             set_gate_mode(mode.mode)  # /mode or /approve may have flipped
+            head = text.strip().partition(" ")[0].lower()
+            if head in ("/compact", "/clear"):
+                explicit_save(agent)  # history mutated: flush immediately
+                index.ensure(session_id)
             continue
         if action == "model" and message is not None:
             resolved_id, reply = apply_model_action(
@@ -422,9 +442,19 @@ def run_loop(
                 reader = start_steering_reader(steering, gate_open)
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
-                    _invoke_agent(agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event)
+                    result = _invoke_agent(
+                        agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event
+                    )
                 else:
-                    _invoke_agent(agent, agent_text, cancel_event)
+                    result = _invoke_agent(agent, agent_text, cancel_event)
+                usage = record_turn_metrics(result, current_model, session_turns)
+                if usage is not None:
+                    console.print(f"[dim]{usage}[/dim]")
+                announcement = maybe_auto_compact(agent, current_model)
+                if announcement is not None:
+                    console.print(announcement)
+                    explicit_save(agent)
+                    index.ensure(session_id)
         except KeyboardInterrupt:
             cancelled = True
             cancel_armed_at = _handle_turn_cancel(

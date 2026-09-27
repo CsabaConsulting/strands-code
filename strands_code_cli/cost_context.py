@@ -2,7 +2,7 @@
 
 Static tables keyed by id substring: money and context-% appear only on a
 hit, otherwise tokens-only (D-02/D-07). Display only — no budgets, no
-enforcement, nothing here can halt, deny, or redirect a turn.
+enforcement, nothing here can deny, redirect, or cut short a turn.
 """
 
 from __future__ import annotations
@@ -226,6 +226,37 @@ def extractive_summarize(old: list[dict[str, Any]]) -> str:
     ][:3]
     Pts = " | ".join(scrub_credentials(t)[:200] for t in texts)
     return f"Earlier context ({len(old)} messages): {Pts}"
+
+
+def model_summarize(agent: Any, old: list[dict[str, Any]]) -> str:
+    """Summarize old messages via the session model, extractive fallback.
+
+    Summarizer input is credential-scrubbed best-effort; any failure falls
+    back to the offline extractive summary (compaction never crashes).
+    """
+    texts = [
+        block.get("text", "")
+        for message in old
+        if message.get("role") == "user"
+        for block in message.get("content", [])
+        if "text" in block
+    ]
+    prompt = (
+        "Summarize this earlier conversation for context compaction. "
+        "Keep decisions, file paths, and tool outcomes; drop chatter:\n"
+        + scrub_credentials("\n".join(texts))[:6000]
+    )
+    try:
+        generate = getattr(getattr(agent, "model", None), "generate", None)
+        if generate is None:
+            raise AttributeError("agent exposes no direct model call")
+        raw = generate(prompt)
+        candidate = raw if isinstance(raw, str) else getattr(raw, "text", "") or ""
+        if candidate.strip():
+            return candidate.strip()
+    except Exception:
+        pass
+    return extractive_summarize(old)
 
 
 def _pair_safe_start(messages: list[dict[str, Any]], keep_from: int) -> int:

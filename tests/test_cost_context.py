@@ -324,3 +324,188 @@ class TestContextOps:
         small = [{"role": "user", "content": [{"text": "hi"}]}]
         big = [{"role": "user", "content": [{"text": "x" * 4000}]}]
         assert estimate_messages_tokens(big) > estimate_messages_tokens(small) > 0
+
+
+# ----------------------------------------------------------------------
+# P1: router branches + loop usage/auto-compact wiring
+# ----------------------------------------------------------------------
+
+
+class TestCostRouterBranches:
+    def _dispatch(self, tmp_path, text, agent=None, turns=None, model=None):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        return dispatch(
+            text,
+            session_id=index.mint(),
+            index=index,
+            agent=agent,
+            session_turns=turns,
+            current_model=model or "bedrock/global.anthropic.claude-sonnet-4-6",
+        )
+
+    def test_cost_rows_and_footer(self, tmp_path):
+        turns = [{"turn": 1, "input_tokens": 451270, "output_tokens": 1000}]
+        action, message = self._dispatch(tmp_path, "/cost", turns=turns)
+        assert action == "reply"
+        assert "451.27K" in message
+        assert "$" in message
+        assert "Display only — no budgets or enforcement." in message
+
+    def test_context_exact_fields(self, tmp_path):
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(_pair_history())
+        action, message = self._dispatch(tmp_path, "/context", agent=agent)
+        assert action == "reply"
+        assert "bedrock/global.anthropic.claude-sonnet-4-6" in message
+        assert "%" in message and "messages:" in message and "tool calls:" in message
+        assert "per-task accumulated tokens:" in message
+
+    def test_compact_pair_atomic_with_marker_and_replay(self, tmp_path):
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(
+            {"role": "user", "content": [{"text": f"filler {n}"}]} for n in range(12)
+        )
+        agent.messages.extend(_pair_history())
+        action, message = self._dispatch(tmp_path, "/compact", agent=agent)
+        assert action == "reply"
+        assert "recent messages kept" in message
+        texts = _texts(agent)
+        assert any(SUMMARY_MARKER in t for t in texts)
+        assert any("latest ask" in t for t in texts)
+        uses = {
+            block["toolUse"]["toolUseId"]
+            for msg in agent.messages
+            for block in msg.get("content", [])
+            if "toolUse" in block
+        }
+        results = {
+            block["toolResult"]["toolUseId"]
+            for msg in agent.messages
+            for block in msg.get("content", [])
+            if "toolResult" in block
+        }
+        assert sorted(uses) == sorted(results)
+
+    def test_clear_keeps_session_id_exact_reply(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        agent = _make_replay_agent(sid, tmp_path / "sessions")
+        agent("something to forget")
+        action, message = dispatch("/clear", session_id=sid, index=index, agent=agent)
+        assert action == "reply"
+        assert message == f"Context cleared — session {sid} kept."
+        assert agent.messages == []
+
+    def test_branches_without_agent_stay_replies(self, tmp_path):
+        for cmd in ("/compact", "/clear", "/context"):
+            action, message = self._dispatch(tmp_path, cmd)
+            assert action == "reply"
+            assert message == "No active session."
+
+
+class TestLoopUsageWiring:
+    def test_record_turn_metrics_appends_row_and_usage_line(self):
+        from strands_code_cli.loop import record_turn_metrics
+
+        turns: list = []
+        line = record_turn_metrics(
+            _Summary(451270, 1000),
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            turns,
+        )
+        assert line is not None and "451.27K (45%)" in line and "$" in line
+        assert turns == [{"turn": 1, "input_tokens": 451270, "output_tokens": 1000}]
+
+    def test_record_turn_metrics_without_metrics_returns_none(self):
+        from strands_code_cli.loop import record_turn_metrics
+
+        assert record_turn_metrics(None, "bedrock/x", []) is None
+
+    def test_auto_compact_fires_at_80_and_keeps_pairs(self, tmp_path):
+        from strands_code_cli.loop import maybe_auto_compact
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(
+            {"role": "user", "content": [{"text": "z" * 400}]} for _ in range(1700)
+        )
+        agent.messages.extend(_pair_history())
+        announcement = maybe_auto_compact(
+            agent, "bedrock/anthropic.claude-3-haiku-20240307"
+        )
+        assert announcement is not None
+        assert "auto-compacted" in announcement
+        assert "recent messages kept" in announcement
+        uses = {
+            block["toolUse"]["toolUseId"]
+            for msg in agent.messages
+            for block in msg.get("content", [])
+            if "toolUse" in block
+        }
+        results = {
+            block["toolResult"]["toolUseId"]
+            for msg in agent.messages
+            for block in msg.get("content", [])
+            if "toolResult" in block
+        }
+        assert sorted(uses) == sorted(results)
+
+    def test_auto_compact_quiet_below_threshold_and_unknown(self, tmp_path):
+        from strands_code_cli.loop import maybe_auto_compact
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.append({"role": "user", "content": [{"text": "hi"}]})
+        assert (
+            maybe_auto_compact(agent, "bedrock/global.anthropic.claude-sonnet-4-6")
+            is None
+        )
+        assert maybe_auto_compact(agent, "mystery/acme-1") is None
+
+    def test_no_budgets_or_enforcement_vocabulary(self):
+        from pathlib import Path as _Path
+
+        roots = [
+            _Path("strands_code_cli/model_switch.py"),
+            _Path("strands_code_cli/cost_context.py"),
+            _Path("strands_code_cli/router.py"),
+            _Path("strands_code_cli/loop.py"),
+            _Path("strands_code_agent/utils.py"),
+        ]
+        for path in roots:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for pos, line in enumerate(lines):
+                lowered = line.lower()
+                hits = [
+                    word
+                    for word in ("budget", "enforce", "quota", "halt")
+                    if word in lowered
+                ]
+                if not hits:
+                    continue
+                # The display-only posture names what cost display never does;
+                # allow the negation within a two-line window (wrapped prose).
+                window = "\n".join(lines[max(0, pos - 1) : pos + 1]).lower()
+                assert (
+                    "display only" in window or "never" in window or "no " in window
+                ), (path, line.strip())
+
+    def test_no_credential_persistence_sinks(self, tmp_path):
+        from strands_code_cli.provider_config import ProviderConfig
+
+        path = tmp_path / "config.yaml"
+        ProviderConfig(model="bedrock/x", base_url="https://proxy.local").save(path)
+        import yaml
+
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert set(payload) <= {"model", "base_url"}  # keys only, never secrets
+
+        from pathlib import Path as _Path
+
+        for mod in ("model_switch", "cost_context", "router", "loop", "main"):
+            text = _Path(f"strands_code_cli/{mod}.py").read_text(encoding="utf-8")
+            assert "os.getenv" not in text and "os.environ" not in text, mod

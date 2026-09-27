@@ -43,6 +43,8 @@ def dispatch(
     diff_config_path: str | Path | None = None,
     mode: ModeState | None = None,
     current_model: str | None = None,
+    agent=None,
+    session_turns: list | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -56,6 +58,9 @@ def dispatch(
             standalone/test behaviour without a loop-owned holder).
         current_model: Active ``provider/name`` string for /model discovery
             fallback context (read-only; the router never swaps inline).
+        agent: Live session agent for /compact, /clear, /context (read-only
+            except the history mutation those commands own).
+        session_turns: Per-turn token rows accumulated by the loop for /cost.
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -87,7 +92,54 @@ def dispatch(
         return _approve_message(mode)
     if cmd == "/model":
         return _model_message(rest, current_model)
+    if cmd == "/cost":
+        return ("reply", _cost_message(session_turns, current_model))
+    if cmd == "/compact":
+        return ("reply", _compact_message(agent))
+    if cmd == "/clear":
+        return ("reply", _clear_message(agent, session_id))
+    if cmd == "/context":
+        return ("reply", _context_message(agent, current_model, session_turns))
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
+
+
+def _cost_message(session_turns: list | None, current_model: str | None) -> str:
+    """Render /cost: per-turn rows plus session totals, display only."""
+    from strands_code_cli.cost_context import cost_report
+
+    return cost_report(list(session_turns or []), current_model or "unknown-model")
+
+
+def _compact_message(agent) -> str:
+    """Run /compact: summarize-old + keep-recent, pair-atomic, then report."""
+    if agent is None:
+        return "No active session."
+    from strands_code_cli.cost_context import compact_messages, model_summarize
+
+    before = len(getattr(agent, "messages", []) or [])
+    if not before:
+        return "Nothing to compact — history is empty."
+    kept = compact_messages(agent, summarize=lambda old: model_summarize(agent, old))
+    return f"Context compacted — {kept} recent messages kept, last ask re-grounded."
+
+
+def _clear_message(agent, session_id: str) -> str:
+    """Run /clear: wipe history in place, keep the session id."""
+    if agent is None:
+        return "No active session."
+    from strands_code_cli.cost_context import clear_messages
+
+    clear_messages(agent)
+    return f"Context cleared — session {session_id} kept."
+
+
+def _context_message(agent, current_model: str | None, session_turns: list | None) -> str:
+    """Render /context: the exact item-3 field list, read-only."""
+    if agent is None:
+        return "No active session."
+    from strands_code_cli.cost_context import context_report
+
+    return context_report(agent, current_model or "unknown-model", session_turns)
 
 
 def _model_message(rest: str, current_model: str | None) -> tuple:
