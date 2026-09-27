@@ -523,6 +523,25 @@ class TestModelRouterBranch:
         assert action == "reply"
         assert "bedrock/global.anthropic.claude-opus-5" in message
 
+    def test_bare_model_offline_empty_returns_pair(self, tmp_path, monkeypatch):
+        import sys
+
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(model_switch_mod, "discover_models", lambda **_: ([], True))
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model",
+            session_id=index.mint(),
+            index=index,
+            current_model=None,
+        )
+        assert action == "reply"
+        assert "No models discovered offline" in message
+
 
 class TestIdleOnlySwap:
     def test_idle_switch_continues_conversation(self, tmp_path):

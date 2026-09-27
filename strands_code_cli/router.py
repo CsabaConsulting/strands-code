@@ -178,9 +178,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                 return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
             return ("model", picked)
         if not seen:
-            return (
-                ("reply", f"No models discovered offline. {_MODEL_USAGE}"),
-            )
+            return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
         lines = ["Available models:"] + [f"  {entry}" for entry in seen]
         lines.append(f"Custom: {_MODEL_USAGE}")
         return ("reply", "\n".join(lines))
