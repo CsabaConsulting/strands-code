@@ -77,6 +77,29 @@ def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
     return index.mint()
 
 
+def model_for_config(model: str | None, base_url: str | None = None) -> Any:
+    """Map a persisted model string (+ optional endpoint host) to a model.
+
+    Plain ``provider/name`` strings pass through for ``create_harness`` to
+    resolve. Custom OpenAI-compatible endpoints (``openai/`` or ``litellm/``
+    prefix with a persisted non-secret ``base_url`` host) build an
+    ``OpenAIModel`` with ``client_args={"base_url": ...}`` — the key is never
+    persisted, only supplied at runtime. Falls back to the string when the
+    optional provider SDK is unavailable.
+    """
+    if model is None:
+        return None
+    prefix = model.partition("/")[0] if "/" in model else "bedrock"
+    if base_url and prefix in ("openai", "litellm"):
+        try:
+            from strands.models.openai import OpenAIModel
+
+            return OpenAIModel(model_id=model, client_args={"base_url": base_url})
+        except ImportError:
+            pass  # provider SDK missing: harness resolve reports it
+    return model
+
+
 def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     """Construct the session agent through the harness factory only.
 
@@ -159,7 +182,11 @@ def _root(
     else:
         picked = show_picker(index, session_dir=DEFAULT_SESSION_DIR)
         resolved = index.ensure(picked)["id"] if picked is not None else index.mint()
-    agent = build_agent(resolved, DEFAULT_SESSION_DIR, model=config.model)
+    agent = build_agent(
+        resolved,
+        DEFAULT_SESSION_DIR,
+        model=model_for_config(config.model, config.base_url),
+    )
     run_loop(agent, session_id=resolved, index=index)
 
 

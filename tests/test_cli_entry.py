@@ -69,11 +69,13 @@ class TestSlashDispatch:
         assert action == "reply"
         assert USAGE_HINT in message
 
-    def test_model_command_out_of_scope(self, tmp_path):
+    def test_model_command_routes_to_loop(self, tmp_path):
+        # Phase 5 (MODEL-01): /model is a first-class command. A bare Bedrock
+        # id validates via resolve_model and returns the loop-owned action.
         index = _fresh_index(tmp_path)
         action, message = dispatch("/model sonnet", session_id=index.mint(), index=index)
-        assert action == "reply"
-        assert USAGE_HINT in message
+        assert action == "model"
+        assert message == "sonnet"
 
 
 # ---------------------------------------------------------------------------

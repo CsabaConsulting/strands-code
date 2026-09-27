@@ -215,7 +215,7 @@ def scrub_credentials(text: str) -> str:
     return scrubbed
 
 
-def _default_summarize(old: list[dict[str, Any]]) -> str:
+def extractive_summarize(old: list[dict[str, Any]]) -> str:
     """Extractive offline fallback: first user texts, credential-scrubbed."""
     texts = [
         block.get("text", "")
@@ -285,7 +285,7 @@ def compact_messages(
     old, recent = messages[:cut], messages[cut:]
     if not old:
         return len(recent)
-    summarizer = summarize or _default_summarize
+    summarizer = summarize or extractive_summarize
     summary = summarizer([dict(m) for m in old])
     summary_message = {
         "role": "user",

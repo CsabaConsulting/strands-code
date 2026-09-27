@@ -435,3 +435,193 @@ class TestCompactReplaySpike:
         assert callable(model_switch.estimate_fit)
         assert callable(model_switch.apply_switch)
         assert isinstance(model_switch.MODEL_REFUSAL, str) and "idle prompt" in model_switch.MODEL_REFUSAL
+
+
+# ----------------------------------------------------------------------
+# P1: /model switching — discovery, convert-or-compact, idle-only swap
+# ----------------------------------------------------------------------
+
+
+class TestModelRouterBranch:
+    def test_valid_selection_returns_model_action(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        action, message = dispatch(
+            "/model bedrock/global.anthropic.claude-sonnet-4-6",
+            session_id=sid,
+            index=index,
+        )
+        assert action == "model"
+        assert message == "bedrock/global.anthropic.claude-sonnet-4-6"
+
+    def test_router_never_swaps_inline(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        before = agent.model
+        action, _ = dispatch(
+            "/model bedrock/global.anthropic.claude-sonnet-4-6",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert action == "model"
+        assert agent.model is before  # dispatch validates only; loop owns the swap
+
+    def test_unknown_provider_reply_lists_providers(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch("/model bogus/xyz", session_id=index.mint(), index=index)
+        assert action == "reply"
+        assert "Supported providers" in message
+
+    def test_uninstallable_provider_reply_fail_soft(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model anthropic/claude-3-7-sonnet-latest",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert action == "reply"
+        assert "anthropic/claude-3-7-sonnet-latest" in message
+
+    def test_arn_prefix_preserved_verbatim(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model us.anthropic.claude-sonnet-4-6",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert (action, message) == ("model", "us.anthropic.claude-sonnet-4-6")
+
+    def test_bare_model_offline_lists_configured(self, tmp_path, monkeypatch):
+        import sys
+
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model",
+            session_id=index.mint(),
+            index=index,
+            current_model="bedrock/global.anthropic.claude-opus-5",
+        )
+        assert action == "reply"
+        assert "bedrock/global.anthropic.claude-opus-5" in message
+
+
+class TestIdleOnlySwap:
+    def test_idle_switch_continues_conversation(self, tmp_path):
+        from strands_code_cli.loop import apply_model_action
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
+        agent("first ask")
+        agent.messages.extend(_fixture_history())
+
+        resolved, reply = apply_model_action(
+            agent,
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            turn_running=False,
+            current_model="bedrock/global.anthropic.claude-opus-5",
+        )
+        assert resolved == "global.anthropic.claude-sonnet-4-6"
+        assert reply.startswith("Model: bedrock/global.anthropic.claude-sonnet-4-6")
+        assert "messages kept" in reply
+        assert type(agent.model).__name__ == "BedrockModel"
+        # Tool pairs survived conversion byte-identical.
+        uses = {
+            block["toolUse"]["toolUseId"]
+            for message in agent.messages
+            for block in message.get("content", [])
+            if "toolUse" in block
+        }
+        results = {
+            block["toolResult"]["toolUseId"]
+            for message in agent.messages
+            for block in message.get("content", [])
+            if "toolResult" in block
+        }
+        assert uses == results != set()
+
+        agent.model = _ReplayModel("after")  # back to offline for the next turn
+        agent("second ask")
+        texts = [
+            block.get("text", "")
+            for message in agent.messages
+            for block in message.get("content", [])
+            if "text" in block
+        ]
+        assert "first ask" in texts and "second ask" in texts
+
+    def test_oversize_switch_compacts(self, tmp_path):
+        from strands_code_cli.loop import apply_model_action
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(
+            {"role": "user", "content": [{"text": "y" * 400}]} for _ in range(1500)
+        )
+        resolved, reply = apply_model_action(
+            agent,
+            "bedrock/anthropic.claude-3-haiku-20240307",
+            turn_running=False,
+            current_model="bedrock/global.anthropic.claude-opus-5",
+        )
+        assert resolved is not None
+        assert "compacted" in reply
+
+    def test_mid_turn_refusal_exact_text_model_unchanged(self, tmp_path):
+        from strands_code_cli.loop import apply_model_action
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        before = agent.model
+        resolved, reply = apply_model_action(
+            agent,
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            turn_running=True,
+            current_model="bedrock/global.anthropic.claude-opus-5",
+        )
+        assert resolved is None
+        assert reply == "Model switches apply at the idle prompt — wait for the turn to finish."
+        assert agent.model is before
+
+
+class TestModelPersistence:
+    def test_save_model_choice_round_trip_no_secrets(self, tmp_path):
+        from strands_code_cli.provider_config import ProviderConfig
+
+        path = tmp_path / "config.yaml"
+        config = ProviderConfig(model="bedrock/old", base_url="https://proxy.local")
+        config.save_model_choice("bedrock/global.anthropic.claude-sonnet-4-6", path)
+        reloaded = ProviderConfig.load(path)
+        assert reloaded.model == "bedrock/global.anthropic.claude-sonnet-4-6"
+        assert reloaded.base_url == "https://proxy.local"  # non-secret host kept
+        text = path.read_text(encoding="utf-8").lower()
+        assert "api_key" not in text and "bearer" not in text and "secret" not in text
+
+    def test_model_for_config_shapes(self):
+        from strands_code_cli.main import model_for_config
+
+        assert model_for_config(None) is None
+        assert (
+            model_for_config("bedrock/global.anthropic.claude-sonnet-4-6")
+            == "bedrock/global.anthropic.claude-sonnet-4-6"
+        )
+        # openai SDK not installed here → verbatim string fallback, never a raise.
+        assert (
+            model_for_config("openai/nemotron-70b", "https://proxy.local/v1")
+            == "openai/nemotron-70b"
+        )

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _CONFIG_DIR_NAME = "strands-code"
 _CONFIG_FILE_NAME = "config.yaml"
 
-_KNOWN_KEYS = {"model"}
+_KNOWN_KEYS = {"model", "base_url"}
 
 
 def default_config_path() -> Path:
@@ -29,10 +29,12 @@ class ProviderConfig:
     """Persisted provider choice for Phase 5 ``/model`` to inherit.
 
     The loaded ``model`` string feeds ``create_harness`` as a constructor
-    kwarg; the file holds only the provider string, never credentials.
+    kwarg; the file holds only the model string plus the non-secret
+    ``base_url`` host for custom OpenAI-compatible endpoints — never keys.
     """
 
     model: str | None = None
+    base_url: str | None = None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> ProviderConfig:
@@ -62,7 +64,17 @@ class ProviderConfig:
         model = data.get("model")
         if model is not None and not isinstance(model, str):
             raise ValueError("Provider config 'model' must be a string")
-        return cls(model=model)
+        base_url = data.get("base_url")
+        if base_url is not None and not isinstance(base_url, str):
+            raise ValueError("Provider config 'base_url' must be a string")
+        return cls(model=model, base_url=base_url)
+
+    def save_model_choice(self, model: str, path: str | Path | None = None) -> Path:
+        """Persist a /model switch keeping other keys (never credentials)."""
+        if not isinstance(model, str):
+            raise ValueError("Provider config 'model' must be a string")
+        self.model = model
+        return self.save(path)
 
     def save(self, path: str | Path | None = None) -> Path:
         """Persist the provider choice; creates the config home when needed.
@@ -75,12 +87,16 @@ class ProviderConfig:
         """
         if self.model is not None and not isinstance(self.model, str):
             raise ValueError("Provider config 'model' must be a string")
+        if self.base_url is not None and not isinstance(self.base_url, str):
+            raise ValueError("Provider config 'base_url' must be a string")
         resolved = Path(path) if path is not None else default_config_path()
         if resolved.is_symlink():
             raise ValueError(f"Provider config must not be a symlink: {resolved}")
         payload: dict[str, Any] = {}
         if self.model is not None:
             payload["model"] = self.model
+        if self.base_url is not None:
+            payload["base_url"] = self.base_url
         resolved.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(resolved.parent, 0o700)
         tmp = resolved.with_suffix(".yaml.tmp")

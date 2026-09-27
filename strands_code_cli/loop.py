@@ -18,7 +18,18 @@ from prompt_toolkit.history import FileHistory, History
 
 from rich.console import Console
 
+from strands_code_cli.cost_context import (
+    extractive_summarize,
+    compact_messages,
+    scrub_credentials,
+)
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
+from strands_code_cli.model_switch import (
+    MODEL_REFUSAL,
+    apply_switch,
+    convert_history,
+    estimate_fit,
+)
 from strands_code_cli.output import output_context
 from strands_code_cli.policy_gate import (
     TurnCancelled,
@@ -239,7 +250,90 @@ def _steering_slot_for(agent: Any) -> SteeringSlot:
     return register_steering_hook(agent)
 
 
-def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
+def _live_summarize(agent: Any, old: list) -> str:
+    """Summarize old messages via the session model, extractive fallback.
+
+    Summarizer input is credential-scrubbed best-effort; failures fall back
+    to the offline extractive summary (compact must never crash the loop).
+    """
+    texts = [
+        block.get("text", "")
+        for message in old
+        if message.get("role") == "user"
+        for block in message.get("content", [])
+        if "text" in block
+    ]
+    prompt = (
+        "Summarize this earlier conversation for context compaction. "
+        "Keep decisions, file paths, and tool outcomes; drop chatter:\n"
+        + scrub_credentials("\n".join(texts))[:6000]
+    )
+    try:
+        generate = getattr(getattr(agent, "model", None), "generate", None)
+        if generate is None:
+            raise AttributeError("agent exposes no direct model call")
+        raw = generate(prompt)
+        candidate = raw if isinstance(raw, str) else getattr(raw, "text", "") or ""
+        if candidate.strip():
+            return candidate.strip()
+    except Exception:
+        pass
+    return extractive_summarize(old)
+
+
+def apply_model_action(
+    agent: Any,
+    new_id: str,
+    *,
+    turn_running: bool,
+    current_model: str,
+) -> tuple[str | None, str]:
+    """Apply a validated /model selection (loop-owned; never the router).
+
+    Idle only: a running turn gets the immediate refusal reply, never a
+    queue (D-01 fail-closed). Otherwise convert-when-fits else
+    summarize-old + keep-recent + replay-last-user-message, then the
+    tracer-winning in-place swap.
+
+    Args:
+        agent: Live session agent.
+        new_id: Validated ``provider/name`` selection (verbatim).
+        turn_running: True when a turn is in flight → refuse.
+        current_model: Active model id string for the fit estimate.
+
+    Returns:
+        ``(resolved_id, reply)``; resolved_id is None on refusal.
+    """
+    if turn_running:
+        return (None, MODEL_REFUSAL)
+    converted = convert_history(list(agent.messages), current_model, new_id)
+    fits, _pct, _tokens = estimate_fit(converted, new_id)
+    if fits:
+        del agent.messages[:]
+        agent.messages.extend(converted)
+        mode_word = "kept"
+    else:
+        del agent.messages[:]
+        agent.messages.extend(converted)
+        kept = compact_messages(
+            agent, summarize=lambda old: _live_summarize(agent, old)
+        )
+        mode_word = "compacted" if kept < len(converted) else "kept"
+    _model, resolved_id = apply_switch(agent, new_id)
+    count = len(agent.messages)
+    return (
+        resolved_id,
+        f"Model: {new_id} — conversation continued ({count} messages {mode_word}).",
+    )
+
+
+def run_loop(
+    agent: Any,
+    *,
+    session_id: str,
+    index: SessionIndex,
+    model_id: str | None = None,
+) -> None:
     """Run the REPL until Ctrl-D or /exit.
 
     One ``PromptSession`` owns input; slash lines dispatch through the
@@ -252,10 +346,21 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
     per-turn :class:`SteeringState` lifecycle (reader started before
     ``agent(text)``, stopped after), and the per-turn caller-owned
     cancel event behind the two-press Ctrl-C state machine.
+
+    Phase 5: the loop owns the active model id (``/model`` swaps apply
+    here at the idle prompt, never mid-turn) and persists the choice to
+    ``ProviderConfig`` (model string only, never credentials).
     """
+    from strands_harness.defaults import DEFAULT_MODEL
+
+    from strands_code_cli.provider_config import ProviderConfig
+
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
     session: PromptSession = PromptSession(history=_history())
     mode = ModeState()
+    current_model = (
+        model_id or ProviderConfig.load().model or DEFAULT_MODEL
+    )
     slot = _steering_slot_for(agent)
     set_gate_mode(mode.mode)
     cancel_armed_at: float | None = None
@@ -269,13 +374,33 @@ def run_loop(agent: Any, *, session_id: str, index: SessionIndex) -> None:
             break  # Ctrl-D exits
         if not text.strip():
             continue  # empty input submits nothing; re-prompt
-        action, message = dispatch(text, session_id=session_id, index=index, mode=mode)
+        action, message = dispatch(
+            text,
+            session_id=session_id,
+            index=index,
+            mode=mode,
+            current_model=current_model,
+        )
         if action == "exit":
             break
         if action == "reply":
             if message:
                 console.print(message)
             set_gate_mode(mode.mode)  # /mode or /approve may have flipped
+            continue
+        if action == "model" and message is not None:
+            resolved_id, reply = apply_model_action(
+                agent, message, turn_running=False, current_model=current_model
+            )
+            console.print(reply)
+            if resolved_id is not None:
+                current_model = message  # verbatim selection string persists
+                try:
+                    ProviderConfig.load().save_model_choice(message)
+                except ValueError as exc:
+                    logger.warning("Model choice not persisted: %s", exc)
+                explicit_save(agent)
+                index.ensure(session_id)
             continue
         steering = SteeringState()
         turn_id = f"{session_id}:{uuid.uuid4().hex}"

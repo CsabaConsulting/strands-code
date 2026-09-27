@@ -19,8 +19,12 @@ from strands_code_cli.session_index import SessionIndex
 USAGE_HINT = (
     "Available commands: /resume, /rename <title>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
-    "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, /exit"
+    "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
+    "/model [provider/name|id|ARN], /cost, /compact, /clear, /context, /exit"
 )
+
+_MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
+_MODEL_CUSTOM = "custom-model-id"
 
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
@@ -38,6 +42,7 @@ def dispatch(
     cwd: str | Path | None = None,
     diff_config_path: str | Path | None = None,
     mode: ModeState | None = None,
+    current_model: str | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -49,11 +54,14 @@ def dispatch(
         diff_config_path: Override for the persisted diff mode (tests only).
         mode: Session-sticky mode holder (None → Act default, keeps
             standalone/test behaviour without a loop-owned holder).
+        current_model: Active ``provider/name`` string for /model discovery
+            fallback context (read-only; the router never swaps inline).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
-        model turn), ``"exit"`` (caller leaves the loop), or ``"reply"``
-        (caller shows message, never an agent turn).
+        model turn), ``"exit"`` (caller leaves the loop), ``"reply"``
+        (caller shows message, never an agent turn), or ``"model"`` (a
+        validated /model selection the loop applies at the idle prompt).
     """
     stripped = text.strip()
     if not stripped.startswith("/"):
@@ -77,7 +85,61 @@ def dispatch(
         return ("reply", _mode_message(rest, mode))
     if cmd == "/approve":
         return _approve_message(mode)
+    if cmd == "/model":
+        return _model_message(rest, current_model)
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
+
+
+def _model_message(rest: str, current_model: str | None) -> tuple:
+    """Handle /model: validate a selection or offer the discovered list.
+
+    Never swaps inline — success returns ``("model", new_id)`` for the loop
+    to apply at the idle prompt; every other path is a reply. Unknown
+    providers surface resolve_model's supported-provider ValueError as a
+    reply; uninstallable providers (missing optional SDK deps) reply
+    fail-soft instead of raising.
+    """
+    from strands_harness.defaults import DEFAULT_MODEL
+    from strands_harness.models import resolve_model
+
+    from strands_code_cli.model_switch import discover_models
+
+    if not rest:
+        configured = [current_model] if current_model else []
+        options, _offline = discover_models(configured=configured)
+        seen = list(dict.fromkeys(configured + options))
+        if sys.stdin.isatty():
+            from strands_code_cli.choice import radio_choice
+
+            try:
+                picked = radio_choice(
+                    "Select model",
+                    [(entry, entry) for entry in seen]
+                    + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
+                    default=0,
+                )
+            except RuntimeError:
+                picked = None
+            if picked is None:
+                return ("reply", "Model unchanged.")
+            if picked == _MODEL_CUSTOM:
+                return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
+            return ("model", picked)
+        if not seen:
+            return (
+                ("reply", f"No models discovered offline. {_MODEL_USAGE}"),
+            )
+        lines = ["Available models:"] + [f"  {entry}" for entry in seen]
+        lines.append(f"Custom: {_MODEL_USAGE}")
+        return ("reply", "\n".join(lines))
+    selection = rest.strip()
+    try:
+        resolve_model(selection, DEFAULT_MODEL)
+    except ValueError as exc:
+        return ("reply", f"Unknown model {selection!r}: {exc}")
+    except ImportError as exc:
+        return ("reply", f"Cannot use model {selection!r}: {exc} (provider SDK not installed)")
+    return ("model", selection)
 
 
 def _mode_holder(mode: ModeState | None) -> ModeState:
