@@ -8,6 +8,19 @@ STDERR_LABEL = "STDERR:"
 
 
 class PythonInterpreter(ABC):
+    """Execution backend for agent-generated Python code.
+
+    Backends stay pluggable: local execution (``local_exec``,
+    ``local_sandboxed``) and remote sandboxes (``agentcore``) all implement
+    this interface, and future remote backends (e.g. Daytona or equivalents)
+    should do the same rather than coupling the agent or CLI to one vendor.
+
+    Remote-backend constraint: code shipped off-box must carry inspectable
+    source (``inspect.getsource``), so ``domain_specific_code`` callables need
+    real source files — no lambdas, REPL-defined, or dynamically generated
+    functions. Local backends do not have this constraint.
+    """
+
     def __init__(self, state_initialization=None, stdout_label=STDOUT_LABEL, stderr_label=STDERR_LABEL, authorized_imports=None, additional_functions=None, timeout_seconds=60):
         self.state_initialization = state_initialization
         self.stdout_label = stdout_label
