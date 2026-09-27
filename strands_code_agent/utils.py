@@ -10,9 +10,18 @@ def image_to_base64(image_path):
 def get_response_metrics(
           response,
           price_1M_input_tokens=None,
-          price_1M_output_tokens=None):
+          price_1M_output_tokens=None,
+          model_id=None,
+          price_table=None):
     """
     For the latest pricing see: https://aws.amazon.com/bedrock/pricing
+
+    Static-table threading (Phase 5, display only): when explicit prices are
+    absent but ``model_id`` plus a ``price_table`` (id-substring to
+    ``(in, out)`` USD-per-1M pair, e.g. ``MODEL_PRICING``) are given, prices
+    resolve from the table on exact-substring hit; unknown ids simply omit
+    ``cost``. The table lives in the CLI layer — this module never imports
+    it (layering: the caller passes it in).
     """
     summary = response.metrics.get_summary()
     inputTokens = summary['accumulated_usage']['inputTokens']
@@ -23,6 +32,14 @@ def get_response_metrics(
         'input_tokens': inputTokens,
         'output_tokens': outputTokens,
     }
+
+    if (not price_1M_input_tokens or not price_1M_output_tokens) and model_id and price_table:
+        lowered = str(model_id).lower()
+        for key in price_table:
+            if key in lowered:
+                price_1M_input_tokens = price_table[key][0]
+                price_1M_output_tokens = price_table[key][1]
+                break
 
     if price_1M_input_tokens and price_1M_output_tokens:
         metrics['cost'] = (inputTokens * price_1M_input_tokens / 1_000_000) + (outputTokens * price_1M_output_tokens / 1_000_000)
