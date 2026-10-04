@@ -46,9 +46,11 @@ First run without AWS credentials stops with a Bedrock setup pointer
 (exit 2); the provider choice persists to a config file afterwards.
 
 REPL basics: type an ask, keep asking — one conversation. `/resume`,
-`/rename`, `/forget`, `/model`, `/cost`, `/compact`, `/clear`, `/context`,
-`/mode`, `/diff`, `/exit` work; unknown `/slash` shows a usage hint. Ctrl-C
-cancels the line, Ctrl-D exits with state saved.
+`/rename`, `/forget`, `/model`, `/cost [refresh|table]`, `/compact`,
+`/clear`, `/context`, `/mode`, `/diff`, `/exit` work; unknown `/slash`
+shows a usage hint. Ctrl-C cancels the line, Ctrl-D exits with state
+saved. See `docs/QUICKSTART.md` for the live-pricing sources behind
+`/cost`.
 
 ## Library use
 

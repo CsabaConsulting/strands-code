@@ -84,6 +84,18 @@ overrides:
 First match wins; `/context` shows how many overrides are active. Typos
 warn-and-skip — they never break startup. Restart the CLI to reload.
 
+## Cost + live pricing
+
+- `/cost` shows per-turn tokens plus session totals, with a `Prices:`
+  line naming the source: live Bedrock Price List, live OpenRouter
+  (for `openrouter/...` ids), LiteLLM bundled data, or the static
+  fallback. Display only — never budgets or enforcement.
+- `/cost refresh` re-fetches both live sources now (cached 24h in
+  `~/.cache/strands-code/`); `/cost table [filter]` lists the cached
+  per-1M-token prices without touching the network.
+- Set `STRANDS_CODE_NO_LIVE_PRICING=1` to force static-only
+  resolution (fully offline, unknown models show tokens without `$`).
+
 ## REPL basics (Phase 1)
 
 - Type an ask, get a streamed answer, keep asking — one conversation.
