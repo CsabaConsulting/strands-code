@@ -306,3 +306,32 @@ skipped: 0
   those blocks ACCEPTED (no ValidationException). Almanac keeps
   fail-closed reasoning (our turns run thinking-off) with the evidence
   recorded in code; media rows fixed per G-05-1l.
+
+## Test 1 re-test (2026-09-27, session 8ca53ddd) — PASS (Llama excepted)
+
+- Gemma relabel verified live: one switch deepseek→gemma healed the
+  history via convert-time migration; Gemma answers directly (single
+  usage line, no empty-turn notice). Mute fixed.
+- Recall note (model capability, not our bug): Gemma listed 5/6
+  countries, missing Switzerland; Haiku on the same history named all
+  six plus the last-asked. No action.
+- Plan-shape outputs from DeepSeek/Gemma are history mimicry: this
+  50-message session still carries old plan-mode turns, and weaker
+  models copy the shape (footer included). Same session, Haiku /
+  Mistral / Qwen did not — not a mode-flag bug. Cosmetic; /compact
+  would flush the old plan turns.
+- G-05-1n (found in re-test, fixed 85c9fb4): 13 stability image-tool
+  rows in the picker. Root: `discover_models` classified only
+  ON_DEMAND models, so INFERENCE_PROFILE-only non-chat models never
+  reached `non_chat_ids` and their profiles slipped through fail-open.
+  Fix: classify every summary for the denylist, list bare ids only on
+  ON_DEMAND chat. Live check us-west-2: 121 options, zero stability /
+  embed / rerank. twelvelabs Pegasus (TEXT-out video model) remains —
+  fail-open by design, one row.
+- Nit (by design, D-02): `(n/a)` % and missing `$` on non-Anthropic
+  models — MODEL_LIMITS/MODEL_PRICING know only Anthropic (+gpt-4o
+  window); unknown ids fall back to tokens-only, never guessed.
+  Consequence: no % and no 80% auto-compact for those models. The
+  `context_window_limit not set` console line is the harness's own
+  separate estimate, not ours. Almanac extension (documented windows /
+  prices per Bedrock family) offered, scope pending.
