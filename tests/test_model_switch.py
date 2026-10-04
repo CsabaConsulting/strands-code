@@ -551,7 +551,44 @@ class TestGroupModels:
         assert route_label("qwen.qwen3-32b-v1:0") == "qwen.qwen3-32b-v1:0"
 
 
-class TestTwoStepPicker:
+class TestBuildModelTree:
+    def test_vendor_family_nesting_sorted(self):
+        from strands_code_cli.model_switch import build_model_tree
+
+        tree = build_model_tree(
+            [
+                "qwen.qwen3-32b-v1:0",
+                "anthropic.claude-opus-5",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "amazon.nova-lite-v1:0",
+            ]
+        )
+        assert [vendor for vendor, _ in tree] == ["amazon", "anthropic", "qwen"]
+        families = next(fams for vendor, fams in tree if vendor == "anthropic")
+        assert [family for family, _ in families] == ["claude"]
+        models = families[0][1]
+        assert [base for base, _ in models] == [
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-opus-5",
+        ]
+
+    def test_gpt_oss_stays_compound_family(self):
+        from strands_code_cli.model_switch import build_model_tree
+
+        tree = build_model_tree(["openai.gpt-oss-120b-1:0", "openai.gpt-5-mini"])
+        families = dict(next(fams for vendor, fams in tree if vendor == "openai"))
+        assert sorted(families) == ["gpt", "gpt-oss"]
+
+    def test_dotless_id_groups_under_itself(self):
+        from strands_code_cli.model_switch import build_model_tree
+
+        tree = build_model_tree(["bedrock/x"])
+        assert tree[0][0] == "x"
+        assert tree[0][1][0][0] == "x"
+        assert tree[0][1][0][1][0][0] == "x"
+
+
+class TestCascadePicker:
     _DIRECT = "anthropic.claude-haiku-4-5-20251001-v1:0"
     _US_ARN = (
         "arn:aws:bedrock:us-west-2:1:inference-profile/"
@@ -583,30 +620,52 @@ class TestTwoStepPicker:
         )
         return action, message, calls
 
-    def test_two_steps_confirm_full_arn(self, tmp_path, monkeypatch):
+    def test_full_cascade_confirms_full_arn(self, tmp_path, monkeypatch):
+        # Single vendor/family/model auto-advance; only vendor + route ask.
         action, message, calls = self._dispatch(
             monkeypatch,
             tmp_path,
-            [self._DIRECT, self._US_ARN],
+            ["anthropic", self._US_ARN],
             [self._DIRECT, self._US_ARN],
         )
-        assert calls == ["Select model", f"Select route for {self._DIRECT}"]
+        assert calls == ["Select vendor", f"Select route for {self._DIRECT}"]
         assert (action, message) == ("model", self._US_ARN)
 
-    def test_single_route_skips_second_step(self, tmp_path, monkeypatch):
+    def test_four_levels_when_tree_branches(self, tmp_path, monkeypatch):
         action, message, calls = self._dispatch(
-            monkeypatch, tmp_path, ["qwen.qwen3-32b-v1:0"], ["qwen.qwen3-32b-v1:0"]
+            monkeypatch,
+            tmp_path,
+            ["anthropic", "claude", self._DIRECT, self._US_ARN],
+            [
+                "qwen.qwen3-32b-v1:0",
+                "anthropic.fable-5",
+                "anthropic.claude-opus-5",
+                self._DIRECT,
+                self._US_ARN,
+            ],
         )
-        assert calls == ["Select model"]
+        assert calls == [
+            "Select vendor",
+            "Select anthropic family",
+            "Select anthropic claude model",
+            f"Select route for {self._DIRECT}",
+        ]
+        assert (action, message) == ("model", self._US_ARN)
+
+    def test_single_route_skips_deeper_steps(self, tmp_path, monkeypatch):
+        action, message, calls = self._dispatch(
+            monkeypatch, tmp_path, ["qwen"], ["qwen.qwen3-32b-v1:0"]
+        )
+        assert calls == ["Select vendor"]
         assert (action, message) == ("model", "qwen.qwen3-32b-v1:0")
 
     def test_escape_at_route_step_keeps_model(self, tmp_path, monkeypatch):
         action, message, _calls = self._dispatch(
-            monkeypatch, tmp_path, [self._DIRECT, None], [self._DIRECT, self._US_ARN]
+            monkeypatch, tmp_path, ["anthropic", None], [self._DIRECT, self._US_ARN]
         )
         assert (action, message) == ("reply", "Model unchanged.")
 
-    def test_non_tty_lists_groups_sorted(self, tmp_path, monkeypatch):
+    def test_non_tty_lists_tree_sorted(self, tmp_path, monkeypatch):
         import sys
 
         import strands_code_cli.model_switch as model_switch_mod
@@ -624,9 +683,39 @@ class TestTwoStepPicker:
             "/model", session_id=index.mint(), index=index, current_model=None
         )
         assert action == "reply"
-        assert f"  {self._DIRECT}:" in message  # group header
-        assert f"    {self._US_ARN}" in message  # indented full ARN
+        assert "  anthropic:\n    claude:" in message
+        assert f"      {self._DIRECT}:" in message
+        assert f"        {self._US_ARN}" in message
+        assert "      qwen.qwen3-32b-v1:0" in message
         assert message.index("anthropic") < message.index("qwen")  # ABC order
+
+    def test_models_alias_lists_like_model(self, tmp_path, monkeypatch):
+        import sys
+
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(
+            model_switch_mod, "discover_models", lambda **_: (["qwen.qwen3-32b-v1:0"], False)
+        )
+        index = SessionIndex(tmp_path / "index")
+        session_id = index.mint()
+        assert dispatch(
+            "/models", session_id=session_id, index=index, current_model=None
+        ) == dispatch("/model", session_id=session_id, index=index, current_model=None)
+
+    def test_models_alias_validates_selection(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/models nope/not-a-provider", session_id=index.mint(), index=index
+        )
+        assert action == "reply"
+        assert "Unknown model" in message
 
 
 # ----------------------------------------------------------------------

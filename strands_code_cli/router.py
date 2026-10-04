@@ -20,7 +20,7 @@ USAGE_HINT = (
     "Available commands: /resume, /rename <title>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
-    "/model [provider/name|id|ARN], /cost, /compact, /clear, /context, /exit"
+    "/model|/models [provider/name|id|ARN], /cost, /compact, /clear, /context, /exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -90,7 +90,7 @@ def dispatch(
         return ("reply", _mode_message(rest, mode))
     if cmd == "/approve":
         return _approve_message(mode)
-    if cmd == "/model":
+    if cmd in ("/model", "/models"):
         return _model_message(rest, current_model)
     if cmd == "/cost":
         return ("reply", _cost_message(session_turns, current_model))
@@ -155,8 +155,8 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_harness.models import resolve_model
 
     from strands_code_cli.model_switch import (
+        build_model_tree,
         discover_models,
-        group_models,
         route_label,
     )
 
@@ -164,57 +164,100 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         configured = [current_model] if current_model else []
         options, _offline = discover_models(configured=configured)
         seen = list(dict.fromkeys(configured + options))
-        groups = group_models(seen)
+        tree = build_model_tree(seen)
         if sys.stdin.isatty():
             from strands_code_cli.choice import radio_choice
 
-            try:
-                current_idx = next(
-                    (i for i, (_, routes) in enumerate(groups) if current_model in routes),
-                    0,
-                )
-                picked = radio_choice(
-                    "Select model",
-                    [
-                        (
-                            base,
-                            base if len(routes) == 1 else f"{base} ({len(routes)} routes)",
-                        )
-                        for base, routes in groups
-                    ]
-                    + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
-                    default=current_idx,
-                )
-            except RuntimeError:
-                picked = None
-            if picked is None:
+            def _ask(title, items, default):
+                try:
+                    return radio_choice(title, items, default=default)
+                except RuntimeError:
+                    return None
+
+            def _default_index(items, contains):
+                return next((i for i, item in enumerate(items) if contains(item)), 0)
+
+            def _unchanged():
                 return ("reply", "Model unchanged.")
+
+            picked = _ask(
+                "Select vendor",
+                [
+                    (
+                        vendor,
+                        f"{vendor} ({sum(len(models) for _, models in families)} models)",
+                    )
+                    for vendor, families in tree
+                ]
+                + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
+                _default_index(
+                    tree,
+                    lambda vf: any(
+                        current_model in routes
+                        for _, models in vf[1]
+                        for _, routes in models
+                    ),
+                ),
+            )
+            if picked is None:
+                return _unchanged()
             if picked == _MODEL_CUSTOM:
                 return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
-            routes = next(routes for base, routes in groups if base == picked)
-            if len(routes) > 1:
-                try:
-                    picked = radio_choice(
-                        f"Select route for {picked}",
-                        [(route, route_label(route)) for route in routes],
-                        default=0,
-                    )
-                except RuntimeError:
-                    picked = None
-                if picked is None:
-                    return ("reply", "Model unchanged.")
+            families = next(fams for vendor, fams in tree if vendor == picked)
+            if len(families) == 1:
+                picked_family = families[0][0]
             else:
-                picked = routes[0]
-            return ("model", picked)
+                picked_family = _ask(
+                    f"Select {picked} family",
+                    [
+                        (family, f"{family} ({len(models)} models)")
+                        for family, models in families
+                    ],
+                    _default_index(
+                        families,
+                        lambda fm: any(current_model in routes for _, routes in fm[1]),
+                    ),
+                )
+                if picked_family is None:
+                    return _unchanged()
+            models = next(m for family, m in families if family == picked_family)
+            if len(models) == 1:
+                base, routes = models[0]
+            else:
+                base = _ask(
+                    f"Select {picked} {picked_family} model",
+                    [
+                        (b, b if len(r) == 1 else f"{b} ({len(r)} routes)")
+                        for b, r in models
+                    ],
+                    _default_index(models, lambda br: current_model in br[1]),
+                )
+                if base is None:
+                    return _unchanged()
+                routes = next(r for b, r in models if b == base)
+            if len(routes) > 1:
+                picked_route = _ask(
+                    f"Select route for {base}",
+                    [(route, route_label(route)) for route in routes],
+                    0,
+                )
+                if picked_route is None:
+                    return _unchanged()
+                return ("model", picked_route)
+            return ("model", routes[0])
         if not seen:
             return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
         lines = ["Available models:"]
-        for base, routes in groups:
-            if len(routes) == 1:
-                lines.append(f"  {routes[0]}")
-            else:
-                lines.append(f"  {base}:")
-                lines.extend(f"    {route}" for route in routes)
+        for vendor, families in tree:
+            lines.append(f"  {vendor}:")
+            for family, models in families:
+                lines.append(f"    {family}:")
+                for base, routes in models:
+                    if len(routes) == 1:
+                        lines.append(f"      {routes[0]}")
+                    else:
+                        lines.append(f"      {base}:")
+                        lines.extend(f"        {route}" for route in routes)
         lines.append(f"Custom: {_MODEL_USAGE}")
         return ("reply", "\n".join(lines))
     selection = rest.strip()

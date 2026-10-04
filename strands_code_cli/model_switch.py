@@ -276,6 +276,44 @@ def route_label(route: str) -> str:
     return route
 
 
+_COMPOUND_FAMILIES = (("gpt", "oss"),)
+
+
+def _vendor_family(base: str) -> tuple[str, str]:
+    """Split a base model key into ``(vendor, family)``.
+
+    Vendor is the first dot segment (``anthropic``); family is the first
+    dash token of the remainder (``claude``, ``nova``, ``gemma``), except
+    known compound families (``gpt-oss`` vs ``gpt``) which keep two tokens.
+    Dot-less ids group under themselves so custom entries still cascade.
+    """
+    vendor, dot, rest = base.partition(".")
+    if not dot:
+        return (base, base)
+    tokens = rest.split("-")
+    if len(tokens) >= 2 and (tokens[0], tokens[1]) in _COMPOUND_FAMILIES:
+        return (vendor, "-".join(tokens[:2]))
+    return (vendor, tokens[0])
+
+
+def build_model_tree(
+    options: list[str],
+) -> list[tuple[str, list[tuple[str, list[tuple[str, list[str]]]]]]]:
+    """Nest groups as vendor → family → ``[(base, routes)]``, ABC everywhere.
+
+    One cascade level per nesting depth; single-child levels auto-advance in
+    the picker so shallow trees stay one step.
+    """
+    tree: dict[str, dict[str, list[tuple[str, list[str]]]]] = {}
+    for base, routes in group_models(options):
+        vendor, family = _vendor_family(base)
+        tree.setdefault(vendor, {}).setdefault(family, []).append((base, routes))
+    return [
+        (vendor, [(family, models) for family, models in sorted(families.items())])
+        for vendor, families in sorted(tree.items())
+    ]
+
+
 def estimate_fit(
     messages: list[dict[str, Any]], new_id: str
 ) -> tuple[bool, float | None, int]:
