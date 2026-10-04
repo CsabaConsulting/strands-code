@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from prompt_toolkit.completion import CompleteEvent, DynamicCompleter
+from prompt_toolkit.document import Document
+
+from strands_code_cli.completer import SlashCompleter, build_completer
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import SkillIndex, remove_skill
+from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex, remove_skill
 
 
 def _write_skill(
@@ -332,3 +336,90 @@ class TestSkillsCommand:
 
     def test_usage_hint_advertises_skills(self):
         assert "/skills [show <name>|remove <name>]" in USAGE_HINT
+
+
+def _loop_style_words(index: SkillIndex) -> list[tuple[str, str]]:
+    """Word callable mirroring the loop: builtins plus unshadowed skills."""
+    words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
+    words.extend(
+        (entry.name, entry.namespaced)
+        for entry in index.list_entries()
+        if not entry.shadowed
+    )
+    return words
+
+
+# ----------------------------------------------------------------------
+# Skill completer + loop wiring
+# ----------------------------------------------------------------------
+
+
+class TestSkillCompleter:
+    def test_skill_bare_prefix_completes_namespaced_form(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+        completions = list(
+            completer.get_completions(Document("/pd"), CompleteEvent())
+        )
+        assert any(c.text == "local:pdf-tools" for c in completions)
+
+    def test_shadowed_skill_never_completes_builtin_head_intact(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "model")
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+        completions = list(
+            completer.get_completions(Document("/model"), CompleteEvent())
+        )
+        assert any(c.text == "/model" for c in completions)
+        assert all(not c.text.startswith("local:") for c in completions)
+
+    def test_removed_skill_stops_completing(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+        assert any(
+            c.text == "local:pdf-tools"
+            for c in completer.get_completions(Document("/pd"), CompleteEvent())
+        )
+        assert index.remove("pdf-tools") is True
+        assert (
+            list(completer.get_completions(Document("/pd"), CompleteEvent())) == []
+        )
+
+    def test_trailing_space_yields_no_completions(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+        assert (
+            list(
+                completer.get_completions(Document("/pdf-tools "), CompleteEvent())
+            )
+            == []
+        )
+
+    def test_fuzzy_wrapped_completer_keeps_skill_match(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = build_completer(lambda: _loop_style_words(index))
+        assert isinstance(completer, DynamicCompleter)
+        completions = list(
+            completer.get_completions(Document("/pd"), CompleteEvent())
+        )
+        match = [c for c in completions if c.text == "local:pdf-tools"]
+        assert len(match) == 1
+        assert match[0].start_position == -len("/pd")
+
+    def test_loop_wires_completer_exactly_once(self):
+        loop_source = (
+            Path(__file__).resolve().parent.parent
+            / "strands_code_cli"
+            / "loop.py"
+        ).read_text(encoding="utf-8")
+        assert loop_source.count("completer=build_completer") == 1

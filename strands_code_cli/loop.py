@@ -537,10 +537,27 @@ def run_loop(
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
+    from strands_code_cli.completer import build_completer
     from strands_code_cli.provider_config import ProviderConfig
+    from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
 
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
-    session: PromptSession = PromptSession(history=_history())
+    skills = SkillIndex()
+    for warning in skills.warnings:
+        console.print(f"[yellow]{warning}[/yellow]")
+
+    def _skill_words() -> list[tuple[str, str]]:
+        words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
+        words.extend(
+            (entry.name, entry.namespaced)
+            for entry in skills.list_entries()
+            if not entry.shadowed
+        )
+        return words
+
+    session: PromptSession = PromptSession(
+        history=_history(), completer=build_completer(_skill_words)
+    )
     mode = ModeState()
     current_model = (
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
@@ -574,6 +591,7 @@ def run_loop(
             current_model=current_model,
             agent=agent,
             session_turns=session_turns,
+            skills=skills,
         )
         if action == "exit":
             break
