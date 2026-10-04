@@ -1342,6 +1342,51 @@ class TestDiscoverModels:
         assert any("bare-profile" in o for o in options)
         assert not any("embed-profile" in o for o in options)
 
+    def test_profile_only_image_model_drops_its_profile(self, monkeypatch):
+        import sys
+        import types
+
+        fake = types.ModuleType("boto3")
+
+        def _profile(name, model_arns):
+            return {
+                "inferenceProfileArn": (
+                    f"arn:aws:bedrock:us-east-1:123:inference-profile/{name}"
+                ),
+                "models": [{"modelArn": arn} for arn in model_arns],
+            }
+
+        _img = "arn:aws:bedrock:us-east-1::foundation-model/stability.stable-up:0"
+
+        class _Client:
+            def list_foundation_models(self, **kwargs):
+                return {
+                    "modelSummaries": [
+                        {
+                            # Profile-only image tool: no TEXT output, no
+                            # ON_DEMAND route. Must still land on the
+                            # non-chat denylist so its profile drops.
+                            "modelId": "stability.stable-up:0",
+                            "inferenceTypesSupported": ["INFERENCE_PROFILE"],
+                            "inputModalities": ["TEXT", "IMAGE"],
+                            "outputModalities": ["IMAGE"],
+                        },
+                    ]
+                }
+
+            def list_inference_profiles(self, **kwargs):
+                return {
+                    "inferenceProfileSummaries": [
+                        _profile("stability.stable-up:0", [_img]),
+                    ]
+                }
+
+        fake.client = lambda *a, **k: _Client()  # noqa: E731
+        monkeypatch.setitem(sys.modules, "boto3", fake)
+        options, offline = discover_models(region="us-east-1")
+        assert offline is False
+        assert options == []
+
 
 # ----------------------------------------------------------------------
 # Grouped picker: one model, several routes

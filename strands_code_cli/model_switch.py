@@ -397,7 +397,9 @@ def discover_models(
     verbatim with prefixes intact. Only chat-capable models are listed
     (TEXT in/out modalities, rerank/embed names dropped); inference profiles
     are dropped only when their referenced model is positively identified as
-    non-chat, otherwise kept. Any failure (no creds, denied, no boto3)
+    non-chat, otherwise kept. Profile-only models still inform the
+    non-chat denylist (classified but never listed as bare ids).
+    Any failure (no creds, denied, no boto3)
     falls back to the configured + custom entries — never escalates, never
     prompts for keys, never raises.
 
@@ -420,14 +422,17 @@ def discover_models(
         options: list[str] = []
         non_chat_ids: set[str] = set()
         for entry in summaries:
-            if "ON_DEMAND" not in entry.get("inferenceTypesSupported", []):
-                continue
             model_id = entry.get("modelId")
             if not isinstance(model_id, str):
                 continue
             if _is_chat_model(entry):
-                options.append(model_id)
+                if "ON_DEMAND" in entry.get("inferenceTypesSupported", []):
+                    options.append(model_id)
             else:
+                # Denylist learns every non-chat model, including
+                # profile-only ones (e.g. stability image tools), so
+                # their inference profiles drop below instead of
+                # slipping through fail-open.
                 non_chat_ids.add(model_id)
         try:
             profiles = client.list_inference_profiles().get("inferenceProfileSummaries", [])
