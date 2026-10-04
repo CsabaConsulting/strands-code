@@ -262,6 +262,29 @@ class TestCanonicalPrefixHash:
         edited[0]["content"][0]["text"] = "run something else"
         assert canonical_prefix_hash(edited) != canonical_prefix_hash(fixture)
 
+    def test_legacy_labels_migrate_on_convert(self):
+        import copy
+
+        from strands_code_cli.model_switch import _LEGACY_TRACE_LABELS
+
+        legacy_block = (
+            _LEGACY_TRACE_LABELS[0] + "\nThe user is asking about capitals."
+        )
+        src = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {"role": "assistant", "content": [{"text": legacy_block}]},
+        ]
+        before = copy.deepcopy(src)
+        out = convert_history(
+            src,
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            "google.gemma-3-27b-it",
+        )
+        assert out[1]["content"][0] == {
+            "text": f"{TRACE_LABEL}\nThe user is asking about capitals."
+        }
+        assert src == before  # convert never mutates its input
+
     def test_legacy_label_still_stripped(self):
         import copy
         import warnings

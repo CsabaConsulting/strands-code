@@ -275,6 +275,8 @@ def convert_history(
       mimicking internal reasoning as assistant speech.
     - toolUse/toolResult blocks stay byte-identical (adapter layer owns them).
     - Image/video blocks → placeholder text on media-less targets.
+    - Retired trace labels migrate to the current label, so pre-upgrade
+      sessions heal on their next switch (the bracketed shape muted Gemma).
     - Never trims: trimming happens at pair boundaries in compaction only.
 
     Args:
@@ -312,6 +314,16 @@ def convert_history(
                 )
                 if text.strip():
                     new_message["content"].append({"text": f"{TRACE_LABEL}\n{text}"})
+                continue
+            elif isinstance(block.get("text"), str) and block["text"].startswith(
+                _LEGACY_TRACE_LABELS
+            ):
+                migrated = copy.deepcopy(block)
+                for legacy in _LEGACY_TRACE_LABELS:
+                    if migrated["text"].startswith(legacy):
+                        migrated["text"] = TRACE_LABEL + migrated["text"][len(legacy):]
+                        break
+                new_message["content"].append(migrated)
                 continue
             elif ("image" in block or "video" in block) and not media_ok:
                 kind = "image" if "image" in block else "video"
