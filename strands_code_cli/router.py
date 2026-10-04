@@ -26,7 +26,7 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /exit"
+    "/compact, /clear, /context, /skills [show <name>|remove <name>], /exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -60,6 +60,7 @@ def _sdk_hint(selection: str) -> str:
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
+_SKILLS_USAGE = "Usage: /skills [show <name>|remove <name>]"
 _MODE_USAGE = MODE_USAGE
 
 _PICKER_LIMIT = 10
@@ -125,6 +126,8 @@ def dispatch(
         return ("reply", _policy_message(rest))
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
+    if cmd == "/skills":
+        return ("reply", _skills_message(rest, skills))
     if cmd == "/approve":
         return _approve_message(mode)
     if cmd in ("/model", "/models"):
@@ -446,6 +449,57 @@ def _approve_message(mode: ModeState | None) -> tuple:
         return ("reply", APPROVE_EMPTY)
     mode.approve()
     return ("agent", f"{APPROVE_OK}\n{APPROVE_EXECUTE}")
+
+
+def _skills_message(rest: str, skills: SkillIndex | None) -> str:
+    """Handle /skills: list, show one record, or remove locally — replies only.
+
+    Never invokes a skill and never enforces allowed-tools (shown
+    verbatim as informational). Removal deletes only via the guarded
+    index helper; show resolves through the index, never joining raw
+    input to a path.
+    """
+    entries = skills.list_entries() if skills is not None else []
+    if not rest:
+        if not entries:
+            return "No skills loaded (./.agent/skills missing or empty)."
+        lines = []
+        for entry in entries:
+            if entry.shadowed:
+                lines.append(
+                    f"{entry.namespaced} — shadowed by builtin '/{entry.name.lower()}'"
+                )
+            else:
+                lines.append(f"{entry.namespaced} — {entry.description}")
+        return "\n".join(lines)
+    verb, _, arg = rest.partition(" ")
+    verb = verb.lower()
+    name = arg.strip()
+    if verb == "show":
+        entry = skills.resolve(name) if skills is not None else None
+        if entry is None:
+            return f"Unknown skill {name!r}."
+        tools = " ".join(entry.allowed_tools) if entry.allowed_tools else "none"
+        return "\n".join(
+            [
+                f"{entry.name} ({entry.namespaced})",
+                f"Description: {entry.description}",
+                f"Allowed tools: {tools}",
+                f"Path: {entry.path}",
+            ]
+        )
+    if verb == "remove":
+        entry = skills.resolve(name) if skills is not None else None
+        if entry is None:
+            return f"Unknown skill {name!r}."
+        assert skills is not None
+        if skills.remove(entry.name):
+            return f"Removed skill '{entry.namespaced}'."
+        return (
+            f"Refused to remove skill '{entry.namespaced}':"
+            " not a plain directory inside ./.agent/skills."
+        )
+    return f"Unknown /skills verb {verb!r}. {_SKILLS_USAGE}"
 
 
 def _diff_message(session_id: str, rest: str, config_path: str | Path | None) -> str:

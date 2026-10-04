@@ -13,7 +13,7 @@ from pathlib import Path
 
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import SkillIndex
+from strands_code_cli.skills import SkillIndex, remove_skill
 
 
 def _write_skill(
@@ -189,3 +189,146 @@ class TestSkillRouting:
         )
         assert action == "reply"
         assert message == f"Unknown command '/nope'. {USAGE_HINT}"
+
+
+# ----------------------------------------------------------------------
+# /skills list/show/remove
+# ----------------------------------------------------------------------
+
+
+class TestSkillsCommand:
+    def test_bare_list_sorted_with_shadowed_tag(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "b-tools", description="Bee tools.")
+        _write_skill(skills_dir, "a-tools", description="Ay tools.")
+        _write_skill(skills_dir, "model", description="Hijack attempt.")
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/skills", session_id="s1", index=_session_index(tmp_path), skills=index
+        )
+        assert action == "reply"
+        assert message is not None
+        assert "local:a-tools — Ay tools." in message
+        assert "local:b-tools — Bee tools." in message
+        assert message.index("local:a-tools") < message.index("local:b-tools")
+        assert "local:model — shadowed by builtin '/model'" in message
+
+    def test_bare_list_empty_or_missing_reports_no_skills(self, tmp_path):
+        missing = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        action, message = dispatch(
+            "/skills", session_id="s1", index=_session_index(tmp_path), skills=missing
+        )
+        assert (action, message) == (
+            "reply",
+            "No skills loaded (./.agent/skills missing or empty).",
+        )
+        action, message = dispatch(
+            "/skills", session_id="s1", index=_session_index(tmp_path), skills=None
+        )
+        assert (action, message) == (
+            "reply",
+            "No skills loaded (./.agent/skills missing or empty).",
+        )
+
+    def test_show_returns_full_record_with_allowed_tools_verbatim(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(
+            skills_dir,
+            "pdf-tools",
+            description="Extract text from PDFs.",
+            extra_frontmatter="allowed-tools: Read Bash\n",
+        )
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/skills show pdf-tools",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "reply"
+        assert message is not None
+        assert "pdf-tools (local:pdf-tools)" in message
+        assert "Extract text from PDFs." in message
+        assert "Allowed tools: Read Bash" in message
+        assert "SKILL.md" not in message  # path points at the skill dir
+        assert str(skills_dir / "pdf-tools") in message
+
+    def test_show_unknown_skill(self, tmp_path):
+        index = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        action, message = dispatch(
+            "/skills show nope",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert (action, message) == ("reply", "Unknown skill 'nope'.")
+
+    def test_remove_deletes_skill_dir(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        target = _write_skill(skills_dir, "gone")
+        _write_skill(skills_dir, "stays")
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/skills remove gone",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert (action, message) == ("reply", "Removed skill 'local:gone'.")
+        assert not target.exists()
+        assert (skills_dir / "stays").is_dir()
+        assert index.resolve("gone") is None  # evicted, not just deleted
+
+    def test_remove_traversal_name_leaves_tree_intact(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "stays")
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/skills remove ../x",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert (action, message) == ("reply", "Unknown skill '../x'.")
+        assert (skills_dir / "stays" / "SKILL.md").is_file()
+
+    def test_remove_skill_helper_refuses_traversal_directly(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "stays")
+        assert remove_skill(skills_dir, "../x") is False
+        assert remove_skill(skills_dir, "missing") is False
+        assert (skills_dir / "stays" / "SKILL.md").is_file()
+
+    def test_remove_symlinked_skill_dir_refused(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / "outside"
+        _write_skill(outside, "linky")
+        (skills_dir / "linky").symlink_to(outside / "linky", target_is_directory=True)
+        index = SkillIndex(skills_dir=skills_dir)
+        assert index.resolve("linky") is not None  # symlinked skill still loads
+        action, message = dispatch(
+            "/skills remove linky",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "reply"
+        assert message is not None and "Refused to remove skill 'local:linky'" in message
+        assert (outside / "linky" / "SKILL.md").is_file()
+
+    def test_unknown_verb_returns_usage(self, tmp_path):
+        index = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        action, message = dispatch(
+            "/skills frobnicate x",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "reply"
+        assert message is not None
+        assert "Unknown /skills verb 'frobnicate'." in message
+        assert "Usage: /skills [show <name>|remove <name>]" in message
+
+    def test_usage_hint_advertises_skills(self):
+        assert "/skills [show <name>|remove <name>]" in USAGE_HINT

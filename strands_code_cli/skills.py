@@ -7,6 +7,7 @@ map, builtin-collision shadow warnings, and exact-match resolution.
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -147,3 +148,49 @@ class SkillIndex:
             for entry in self.list_entries()
             if entry.shadowed
         ]
+
+    def remove(self, name: str) -> bool:
+        """Delete one skill by bare name; evict it from the index on success.
+
+        Returns:
+            True when a skill dir was deleted, False when refused
+            (unknown name, traversal, symlink, or filesystem trouble).
+        """
+        entry = self.resolve(name)
+        if entry is None:
+            return False
+        if not remove_skill(self.skills_dir, entry.name):
+            return False
+        assert self._entries is not None
+        self._entries.pop(entry.name, None)
+        return True
+
+
+def remove_skill(skills_dir: str | Path, name: str) -> bool:
+    """Delete one skill dir; guarded against traversal and outside roots.
+
+    Mirrors ``_remove_snapshot_dir``: resolve, same-parent check,
+    name-equality check, symlinked skill dirs refused. Only plain
+    directories directly inside the skills root are ever deleted.
+
+    Returns:
+        True when a skill dir was deleted, False otherwise.
+    """
+    root = Path(skills_dir)
+    candidate = root / name
+    if candidate.is_symlink():
+        return False
+    try:
+        resolved = candidate.resolve()
+        root_resolved = root.resolve()
+    except OSError:
+        return False
+    if resolved.parent != root_resolved or resolved.name != name:
+        return False
+    if not resolved.is_dir():
+        return False
+    try:
+        shutil.rmtree(resolved)
+    except OSError:
+        return False
+    return not resolved.exists()
