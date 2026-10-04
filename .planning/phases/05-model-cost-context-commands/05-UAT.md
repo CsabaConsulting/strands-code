@@ -405,5 +405,5 @@ skipped: 0
       issue: "single-model pricing + provenance for mixed-model rows"
   missing:
     - "per-row turn model with report-model fallback; per-row pricing; mixed provenance label"
-  resolved_by: pending-commit
+  resolved_by: b24b188
   resolved_at: 2026-10-04
