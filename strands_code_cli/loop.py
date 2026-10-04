@@ -402,6 +402,23 @@ def _has_thinking(messages: list) -> bool:
     )
 
 
+def _turn_appended_empty(before: int, messages: list) -> bool:
+    """True when the turn recorded its user message but zero content blocks.
+
+    The observed shape is ``[user, assistant(content=[])]`` — a successful
+    turn whose output never landed (376 billed output tokens, nothing
+    kept). Anything else (nothing appended, no user message, any content
+    block at all) is not an empty turn: retrying blind there risks
+    duplicating side effects or scrambling role order.
+    """
+    appended = list(messages)[before:]
+    if not appended:
+        return False
+    if not any(m.get("role") == "user" for m in appended):
+        return False
+    return not any(m.get("content") for m in appended if m.get("role") == "assistant")
+
+
 def apply_model_action(
     agent: Any,
     new_id: str,
@@ -604,28 +621,58 @@ def run_loop(
                 set_gate_mode(mode.mode)
                 reader = start_steering_reader(steering, gate_open)
                 agent_text = message if message is not None else text
-                try:
-                    if mode.mode == "plan":
-                        result = _invoke_agent(
-                            agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event
-                        )
-                    else:
+                if mode.mode == "plan":
+                    agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
+                history = getattr(agent, "messages", None)
+                before = len(history) if isinstance(history, list) else 0
+                attempts = 0
+                result = None
+                failed = False
+                while True:
+                    attempts += 1
+                    try:
                         result = _invoke_agent(agent, agent_text, cancel_event)
-                except (KeyboardInterrupt, TurnCancelled):
-                    raise
-                except Exception as exc:
-                    # Provider/model errors (validation, throttling, ...) must
-                    # fail the turn, never the session: report and re-prompt.
-                    console.print(f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]")
-                    if "tool use in streaming mode" in str(exc):
+                    except (KeyboardInterrupt, TurnCancelled):
+                        raise
+                    except Exception as exc:
+                        # Provider/model errors (validation, throttling, ...)
+                        # must fail the turn, never the session: report and
+                        # re-prompt. Errors never retry — only empty success.
                         console.print(
-                            "[red]This model needs non-streaming tool use — "
-                            "/model to switch to a supported model.[/red]"
+                            f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]"
                         )
+                        if "tool use in streaming mode" in str(exc):
+                            console.print(
+                                "[red]This model needs non-streaming tool use — "
+                                "/model to switch to a supported model.[/red]"
+                            )
+                        failed = True
+                        break
+                    usage = record_turn_metrics(result, current_model, session_turns)
+                    if usage is not None:
+                        console.print(f"[dim]{usage}[/dim]")
+                    history = getattr(agent, "messages", None)
+                    if (
+                        attempts >= 2
+                        or not isinstance(history, list)
+                        or not _turn_appended_empty(before, history)
+                    ):
+                        break
+                    # Empty success: drop the no-op attempt so history shows
+                    # the question once, then run it back exactly once.
+                    del history[before:]
+                    logger.info("Empty turn response; retrying once.")
+                if failed:
                     continue
-                usage = record_turn_metrics(result, current_model, session_turns)
-                if usage is not None:
-                    console.print(f"[dim]{usage}[/dim]")
+                history = getattr(agent, "messages", None)
+                if (
+                    attempts == 2
+                    and isinstance(history, list)
+                    and _turn_appended_empty(before, history)
+                ):
+                    console.print(
+                        "[dim]No response content — the model returned empty twice.[/dim]"
+                    )
                 announcement = maybe_auto_compact(agent, current_model)
                 if announcement is not None:
                     console.print(announcement)

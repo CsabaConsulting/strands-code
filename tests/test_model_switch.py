@@ -911,6 +911,137 @@ class TestTurnGuard:
         assert "Turn failed (RuntimeError)" in out
         assert "needs non-streaming tool use" in out
 
+    def test_empty_turn_retries_once_then_succeeds(self, tmp_path, monkeypatch, capsys):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+        prompts = iter(["hello"])
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration:
+                    raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+        calls = []
+
+        def _flake_then_answer(agent, text, event):
+            calls.append(text)
+            agent.messages.append({"role": "user", "content": [{"text": text}]})
+            if len(calls) == 1:
+                agent.messages.append({"role": "assistant", "content": []})
+            else:
+                agent.messages.append({"role": "assistant", "content": [{"text": "hi"}]})
+            return None
+
+        monkeypatch.setattr(loop_mod, "_invoke_agent", _flake_then_answer)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "start_steering_reader",
+            lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
+        )
+        agent = SimpleNamespace(messages=[], _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        assert calls == ["hello", "hello"]  # retried exactly once
+        # No-op attempt dropped: history shows the question once.
+        assert agent.messages == [
+            {"role": "user", "content": [{"text": "hello"}]},
+            {"role": "assistant", "content": [{"text": "hi"}]},
+        ]
+        assert "returned empty twice" not in capsys.readouterr().out
+
+    def test_double_empty_notices_and_stops(self, tmp_path, monkeypatch, capsys):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+        prompts = iter(["hello"])
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration:
+                    raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+        calls = []
+
+        def _always_empty(agent, text, event):
+            calls.append(text)
+            agent.messages.append({"role": "user", "content": [{"text": text}]})
+            agent.messages.append({"role": "assistant", "content": []})
+            return None
+
+        monkeypatch.setattr(loop_mod, "_invoke_agent", _always_empty)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "start_steering_reader",
+            lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
+        )
+        agent = SimpleNamespace(messages=[], _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        assert calls == ["hello", "hello"]  # one retry, then stop
+        assert agent.messages == [
+            {"role": "user", "content": [{"text": "hello"}]},
+            {"role": "assistant", "content": []},
+        ]
+        assert "returned empty twice" in capsys.readouterr().out
+
+    def test_empty_detector_rejects_weird_shapes(self):
+        from strands_code_cli.loop import _turn_appended_empty
+
+        assert _turn_appended_empty(0, []) is False  # nothing appended
+        assert (
+            _turn_appended_empty(
+                0, [{"role": "assistant", "content": []}]
+            )
+            is False  # no user message
+        )
+        assert (
+            _turn_appended_empty(
+                0,
+                [
+                    {"role": "user", "content": [{"text": "hi"}]},
+                    {"role": "assistant", "content": [{"toolUse": {"toolUseId": "t"}}]},
+                ],
+            )
+            is False  # tool-only turn is not empty
+        )
+        assert (
+            _turn_appended_empty(
+                0,
+                [
+                    {"role": "user", "content": [{"text": "hi"}]},
+                    {"role": "assistant", "content": []},
+                ],
+            )
+            is True
+        )
+
     def test_startup_on_llama_warns_once(self, tmp_path, monkeypatch, capsys):
         from contextlib import nullcontext
         from types import SimpleNamespace

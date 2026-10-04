@@ -270,6 +270,11 @@ skipped: 0
   persisted model, and hints `/model` on the matching turn failure.
   Advisory only — never gates conversion. Functional fix (non-streaming
   fallback) is upstream.
+- Empty-turn retry: a turn that succeeds with zero content blocks (user
+  message recorded, assistant empty — observed once on Gemma, 376 billed
+  output tokens lost below the SDK) is dropped and re-run exactly once;
+  usage prints per attempt, and a double-empty prints a notice instead
+  of silence. Errors never retry; weird history shapes never retry.
 
 ## Live verification notes (2026-09-27, /tmp probes, not committed)
 
