@@ -17,20 +17,24 @@ from types import SimpleNamespace
 
 import pytest
 
+from strands_code_cli.loop import flush_memory
 from strands_code_cli.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
     MEMORY_INJECT_CAP,
     MEMORY_PRECEDENCE_LINE,
+    MEMORY_RELOAD_NOTE,
     MEMORY_TRUNCATION_MARKER,
     MEMORY_UNTRUSTED_PREFIX,
     ROOT_MEMORY,
     MemorySnapshot,
     dump_memory_file,
     load_memory,
+    memory_banner,
     parse_memory_file,
     register_memory_plugin,
     render_memory_block,
+    sweep_memory_files,
 )
 
 
@@ -164,3 +168,67 @@ class TestMemoryFileContract:
         assert len(calls) == 1
         assert second is first
         assert stub._memory_plugin_registered is True
+
+
+# ----------------------------------------------------------------------
+# Reload: external-edit sweep + banner + flush (no live loop)
+# ----------------------------------------------------------------------
+
+
+class TestMemoryReload:
+    def test_sweep_detects_touched_file_only(self, tmp_path):
+        root = _write(tmp_path / "STRANDS.md", ROOT_BODY)
+        agent = _write(tmp_path / ".agent" / "MEMORY.md", AGENT_BODY)
+        snapshot = load_memory(root, agent)
+        assert sweep_memory_files(snapshot, paths=(root, agent)) == []
+        stamp = root.stat().st_mtime + 100
+        os.utime(root, (stamp, stamp))
+        assert sweep_memory_files(snapshot, paths=(root, agent)) == [root]
+
+    def test_sweep_counts_presence_flips_as_changed(self, tmp_path):
+        root = _write(tmp_path / "STRANDS.md", ROOT_BODY)
+        agent = tmp_path / ".agent" / "MEMORY.md"
+        snapshot = load_memory(root, agent)
+        assert sweep_memory_files(snapshot, paths=(root, agent)) == []
+        _write(agent, AGENT_BODY)  # missing-to-present
+        assert sweep_memory_files(snapshot, paths=(root, agent)) == [agent]
+        reloaded = load_memory(root, agent)
+        root.unlink()  # present-to-missing
+        assert sweep_memory_files(reloaded, paths=(root, agent)) == [root]
+
+    def test_reload_note_format(self):
+        assert (
+            MEMORY_RELOAD_NOTE.format(filename="STRANDS.md")
+            == "Memory reloaded — STRANDS.md changed on disk."
+        )
+
+    def test_banner_names_both_files_with_missing_pointer(self, tmp_path):
+        root = _write(tmp_path / "STRANDS.md", ROOT_BODY)
+        agent = tmp_path / ".agent" / "MEMORY.md"
+        snapshot = load_memory(root, agent)
+        banner = memory_banner(snapshot, paths=(root, agent))
+        assert "STRANDS.md" in banner
+        assert "MEMORY.md" in banner
+        assert "run /init to scaffold" in banner
+
+    def test_flush_awaits_manager_flush_exactly_once(self):
+        calls: list = []
+
+        async def fake_flush():
+            calls.append(1)
+
+        flush_memory(SimpleNamespace(memory_manager=SimpleNamespace(flush=fake_flush)))
+        assert len(calls) == 1
+
+    def test_flush_with_flush_less_double_returns_silently(self):
+        flush_memory(SimpleNamespace())
+        flush_memory(SimpleNamespace(memory_manager=SimpleNamespace()))
+        flush_memory(object())
+
+    def test_loop_calls_flush_on_exit_and_mutation_paths(self):
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "strands_code_cli"
+            / "loop.py"
+        ).read_text(encoding="utf-8")
+        assert source.count("flush_memory(agent)") == 2

@@ -28,6 +28,12 @@ from strands_code_cli.cost_context import (
     usage_line,
     window_for,
 )
+from strands_code_cli.memory_file import (
+    MEMORY_RELOAD_NOTE,
+    load_memory,
+    memory_banner,
+    sweep_memory_files,
+)
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.model_switch import (
     MODEL_REFUSAL,
@@ -105,6 +111,22 @@ def explicit_save(agent: Any) -> None:
         asyncio.run(save(agent, is_latest=True))
     except Exception as exc:
         logger.warning("Explicit session save on exit failed: %s", exc)
+
+
+def flush_memory(agent: Any) -> None:
+    """Flush pending harness memory extractions so short runs lose nothing.
+
+    Mirrors explicit_save exactly: guarded for test doubles, logged,
+    never raised.
+    """
+    manager = getattr(agent, "memory_manager", None)
+    flush = getattr(manager, "flush", None)
+    if flush is None:
+        return
+    try:
+        asyncio.run(flush())
+    except Exception as exc:
+        logger.warning("Memory flush on exit failed: %s", exc)
 
 
 def _fallback_title(first_text: str) -> str:
@@ -534,6 +556,11 @@ def run_loop(
     Phase 5: the loop owns the active model id (``/model`` swaps apply
     here at the idle prompt, never mid-turn) and persists the choice to
     ``ProviderConfig`` (model string only, never credentials).
+
+    Phase 6: the loop owns the dual-memory :class:`MemorySnapshot`
+    (first-load banner, per-turn mtime reload sweep with one transcript
+    note per changed file) and flushes pending harness extractions via
+    ``flush_memory`` on exit and after ``/compact``/``/clear``.
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -545,6 +572,8 @@ def run_loop(
     skills = SkillIndex()
     for warning in skills.warnings:
         console.print(f"[yellow]{warning}[/yellow]")
+    memory_snapshot = load_memory()
+    console.print(memory_banner(memory_snapshot))
 
     def _skill_words() -> list[tuple[str, str]]:
         words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
@@ -575,6 +604,11 @@ def run_loop(
     cancel_armed_at: float | None = None
     titled = False
     while True:
+        changed = sweep_memory_files(memory_snapshot)
+        if changed:
+            memory_snapshot = load_memory()
+            for changed_path in changed:
+                console.print(MEMORY_RELOAD_NOTE.format(filename=changed_path))
         try:
             text = session.prompt("> ")
         except KeyboardInterrupt:
@@ -602,6 +636,7 @@ def run_loop(
             head = text.strip().partition(" ")[0].lower()
             if head in ("/compact", "/clear"):
                 explicit_save(agent)  # history mutated: flush immediately
+                flush_memory(agent)
                 index.ensure(session_id)
                 rich.reset()
                 rich.save(stash_path)  # empty stash removes the sidecar
@@ -718,5 +753,6 @@ def run_loop(
             titled = True
             _maybe_auto_title(agent, session_id, index, text)
     explicit_save(agent)
+    flush_memory(agent)
     index.ensure(session_id)
     console.print("[dim]Session saved.[/dim]")
