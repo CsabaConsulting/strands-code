@@ -26,6 +26,7 @@ USAGE_HINT = (
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
 _MODEL_CUSTOM = "custom-model-id"
 _MODEL_BACK = "back-one-level"
+_MODEL_CANCEL = "cancel-stay-with-current"
 
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
@@ -210,12 +211,19 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                             ),
                         )
                     )
+                    cancel_label = (
+                        f"Cancel (stay with {current_model})"
+                        if current_model
+                        else "Cancel"
+                    )
                     picked = _ask(
                         "Select vendor",
-                        items + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
+                        items
+                        + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")]
+                        + [(_MODEL_CANCEL, cancel_label)],
                         default,
                     )
-                    if picked is None:
+                    if picked is None or picked == _MODEL_CANCEL:
                         return _unchanged()
                     if picked == _MODEL_CUSTOM:
                         return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")

@@ -739,6 +739,37 @@ class TestCascadePicker:
         assert "      qwen.qwen3-32b-v1:0" in message
         assert message.index("anthropic") < message.index("qwen")  # ABC order
 
+    def test_cancel_entry_stays_with_current(self, tmp_path, monkeypatch):
+        import sys
+
+        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.router import _MODEL_CANCEL, dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        seen_options = []
+        monkeypatch.setattr(
+            choice_mod,
+            "radio_choice",
+            lambda title, options, **kwargs: seen_options.append(options)
+            or _MODEL_CANCEL,
+        )
+        monkeypatch.setattr(
+            model_switch_mod, "discover_models", lambda **_: (["qwen.qwen3-32b-v1:0"], False)
+        )
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model",
+            session_id=index.mint(),
+            index=index,
+            current_model="anthropic.claude-opus-5",
+        )
+        assert (action, message) == ("reply", "Model unchanged.")
+        labels = [label for _, label in seen_options[0]]
+        assert labels[-1] == "Cancel (stay with anthropic.claude-opus-5)"
+        assert any("Custom model id" in label for label in labels)
+
     def test_models_alias_lists_like_model(self, tmp_path, monkeypatch):
         import sys
 
