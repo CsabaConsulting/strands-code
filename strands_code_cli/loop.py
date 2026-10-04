@@ -7,6 +7,7 @@ import copy
 import logging
 import os
 import signal
+import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,12 @@ from strands_code_cli.memory_file import (
     memory_banner,
     sweep_memory_files,
 )
+from strands_code_cli.memory_modes import (
+    MEMORY_FACT_DIR,
+    CurateQueue,
+    MemoryModeState,
+    silent_note,
+)
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.model_switch import (
     MODEL_REFUSAL,
@@ -56,7 +63,7 @@ from strands_code_cli.policy_gate import (
     gate_open,
     set_mode as set_gate_mode,
 )
-from strands_code_cli.router import dispatch
+from strands_code_cli.router import apply_memory_proposal, dispatch
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 from strands_code_cli.steering import (
     SteeringSlot,
@@ -533,6 +540,87 @@ def apply_model_action(
     )
 
 
+def _review_answer() -> str:
+    """One approve/deny/revise answer; anything unclear fails closed to deny."""
+    if sys.stdin.isatty():
+        from strands_code_cli.choice import radio_choice
+
+        try:
+            picked = radio_choice(
+                "Memory proposal",
+                [
+                    ("approve", "Approve — apply to memory"),
+                    ("deny", "Deny — skip, don't ask again"),
+                    ("revise", "Revise in words — describe the change"),
+                ],
+                default=1,  # fail-closed highlight on deny
+            )
+        except RuntimeError:
+            return "deny"
+        return picked if picked in ("approve", "deny", "revise") else "deny"
+    # Same stream discipline as the gate: print the prompt, then bare
+    # input() so echo stays on the prompt line.
+    print("approve / deny / revise [deny]: ", end="", flush=True)
+    typed = input().strip().lower()
+    if typed in ("approve", "a", "y", "yes"):
+        return "approve"
+    if typed in ("revise", "r"):
+        return "revise"
+    return "deny"  # empty and unknown fail closed
+
+
+def review_memory_queue(
+    queue: CurateQueue,
+    mode_state: MemoryModeState,
+    apply_fn: Any,
+    on_revise: Any = None,
+) -> list[str]:
+    """Turn-boundary curate review; returns transcript lines to print.
+
+    Silent mode applies every pending proposal with one
+    :func:`silent_note` line each. Curate mode prompts per proposal
+    with the full body quoted plus the source line, then an
+    approve/deny/revise-in-words choice (fail-closed default on deny;
+    typed path when stdin is not a tty). The revise choice reads one
+    instruction line and hands ``(proposal, instruction)`` to
+    ``on_revise`` (None until plan task 2 wires ReviseState arming);
+    the proposal stays pending either way. Ctrl-C stops the review;
+    unreviewed proposals stay pending for the next turn.
+    """
+    lines: list[str] = []
+    pending = queue.list_pending()
+    if mode_state.mode == "silent":
+        for proposal in pending:
+            queue.approve(proposal.id, apply_fn)
+            lines.append(silent_note(proposal.section, proposal.source))
+        return lines
+    for proposal in pending:
+        try:
+            with output_context():
+                for body_line in proposal.body.splitlines() or [""]:
+                    print(f"> {body_line}")
+                print(f"Source: {proposal.source} → section {proposal.section}")
+                answer = _review_answer()
+                instruction = ""
+                if answer == "revise":
+                    print("Describe the change in words: ", end="", flush=True)
+                    instruction = input().strip()
+        except KeyboardInterrupt:
+            break
+        if answer == "approve":
+            lines.append(queue.approve(proposal.id, apply_fn))
+        elif answer == "revise":
+            if on_revise is None:
+                lines.append(f"Revise for {proposal.id} noted — proposal kept pending.")
+            else:
+                note = on_revise(proposal, instruction)
+                if note:
+                    lines.append(note)
+        else:
+            lines.append(queue.deny(proposal.id))
+    return lines
+
+
 def run_loop(
     agent: Any,
     *,
@@ -560,7 +648,11 @@ def run_loop(
     Phase 6: the loop owns the dual-memory :class:`MemorySnapshot`
     (first-load banner, per-turn mtime reload sweep with one transcript
     note per changed file) and flushes pending harness extractions via
-    ``flush_memory`` on exit and after ``/compact``/``/clear``.
+    ``flush_memory`` on exit and after ``/compact``/``/clear``. The loop
+    also owns the session-sticky :class:`MemoryModeState` plus
+    :class:`CurateQueue`: each turn boundary sweeps promotion
+    candidates, then reviews the queue (prompting in curate mode,
+    auto-applying in silent mode).
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -588,6 +680,9 @@ def run_loop(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
+    memory_mode = MemoryModeState()
+    curate_queue = CurateQueue()
+    promotion_seen: set[str] = set()
     current_model = (
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
@@ -609,6 +704,11 @@ def run_loop(
             memory_snapshot = load_memory()
             for changed_path in changed:
                 console.print(MEMORY_RELOAD_NOTE.format(filename=changed_path))
+        curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)
+        for review_line in review_memory_queue(
+            curate_queue, memory_mode, apply_memory_proposal
+        ):
+            console.print(review_line)
         try:
             text = session.prompt("> ")
         except KeyboardInterrupt:
@@ -626,6 +726,8 @@ def run_loop(
             agent=agent,
             session_turns=session_turns,
             skills=skills,
+            memory_mode=memory_mode,
+            curate=curate_queue,
         )
         if action == "exit":
             break

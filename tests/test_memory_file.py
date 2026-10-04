@@ -294,7 +294,10 @@ class TestMemoryModes:
             index=SessionIndex(tmp_path / "index"),
         )
         assert action == "reply"
-        assert message == "Usage: /memory [mode [curate|silent]]"
+        assert (
+            message
+            == "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
+        )
 
     def test_bad_mode_pick_returns_mode_usage(self, tmp_path):
         action, message = dispatch(
@@ -312,4 +315,7 @@ class TestMemoryModes:
         )
 
     def test_usage_hint_lists_memory(self):
-        assert "/memory [mode [curate|silent]]" in USAGE_HINT
+        assert (
+            "/memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
+            in USAGE_HINT
+        )

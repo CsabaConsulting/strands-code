@@ -15,7 +15,19 @@ from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.diff_config import MODES, DiffConfig
 from strands_code_cli.diff_gate import apply_stashed, store_for
-from strands_code_cli.memory_modes import MEMORY_MODE_USAGE, MemoryModeState
+from strands_code_cli.memory_file import (
+    AGENT_MEMORY,
+    MEMORY_FRONTMATTER_DEFAULTS,
+    dump_memory_file,
+    parse_memory_file,
+)
+from strands_code_cli.memory_modes import (
+    MEMORY_EMPTY_QUEUE,
+    MEMORY_MODE_USAGE,
+    CurateQueue,
+    MemoryModeState,
+    Proposal,
+)
 from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
@@ -28,7 +40,8 @@ USAGE_HINT = (
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
     "/compact, /clear, /context, /skills [show <name>|remove <name>], "
-    "/memory [mode [curate|silent]], /exit"
+    "/memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>], "
+    "/exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -64,7 +77,9 @@ _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
 _SKILLS_USAGE = "Usage: /skills [show <name>|remove <name>]"
 _MODE_USAGE = MODE_USAGE
-_MEMORY_USAGE = "Usage: /memory [mode [curate|silent]]"
+_MEMORY_USAGE = (
+    "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
+)
 _MEMORY_MODE_USAGE = MEMORY_MODE_USAGE
 
 _PICKER_LIMIT = 10
@@ -83,6 +98,7 @@ def dispatch(
     session_turns: list | None = None,
     skills: SkillIndex | None = None,
     memory_mode: MemoryModeState | None = None,
+    curate: CurateQueue | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -105,6 +121,9 @@ def dispatch(
         memory_mode: Session-sticky memory-mode holder (None → curate
             default, keeps standalone/test behaviour without a
             loop-owned holder).
+        curate: Session-sticky curate queue backing /memory list,
+            approve, and deny (None → throwaway empty queue, keeping
+            existing callers untouched).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -135,7 +154,7 @@ def dispatch(
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
     if cmd == "/memory":
-        return ("reply", _memory_message(rest, memory_mode))
+        return ("reply", _memory_message(rest, memory_mode, curate))
     if cmd == "/skills":
         return ("reply", _skills_message(rest, skills))
     if cmd == "/approve":
@@ -449,24 +468,90 @@ def _memory_mode_holder(memory_mode: MemoryModeState | None) -> MemoryModeState:
     return memory_mode if memory_mode is not None else MemoryModeState()
 
 
-def _memory_message(rest: str, memory_mode: MemoryModeState | None) -> str:
-    """Handle /memory: mode verb now, curate verbs in plan 06-03 — replies only.
+def _first_body_line(body: str) -> str:
+    """First non-empty body line for queue listings (``(empty)`` when blank)."""
+    for line in body.splitlines():
+        if line.strip():
+            return line.strip()
+    return "(empty)"
 
-    The ``mode`` verb mirrors ``_mode_message`` (empty announces,
-    ``curate``/``silent`` flips, anything else is mode usage); every
-    other verb returns ``_MEMORY_USAGE`` until plan 06-03 extends this
-    branch with list, approve, deny, and revise.
+
+def apply_memory_proposal(proposal: Proposal) -> None:
+    """Append one approved proposal to .agent/MEMORY.md (atomic dump path).
+
+    Section-scoped: when a ``## {section}`` heading already exists the
+    body lands at the end of that section, otherwise a new section is
+    appended. Module-global so tests can monkeypatch the writer.
     """
+    if AGENT_MEMORY.exists():
+        frontmatter, body = parse_memory_file(AGENT_MEMORY)
+    else:
+        frontmatter, body = dict(MEMORY_FRONTMATTER_DEFAULTS), ""
+    heading = f"## {proposal.section}"
+    block = proposal.body if proposal.body.endswith("\n") else proposal.body + "\n"
+    lines = body.splitlines(keepends=True)
+    head_idx = next(
+        (i for i, line in enumerate(lines) if line.rstrip("\n") == heading), None
+    )
+    if head_idx is None:
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.append(f"{heading}\n{block}")
+    else:
+        end = next(
+            (i for i in range(head_idx + 1, len(lines)) if lines[i].startswith("## ")),
+            len(lines),
+        )
+        insert = [block]
+        if end > head_idx + 1 and lines[end - 1].strip():
+            insert.insert(0, "\n")
+        lines[end:end] = insert
+    dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
+
+
+def _memory_message(
+    rest: str,
+    memory_mode: MemoryModeState | None,
+    curate: CurateQueue | None = None,
+) -> str:
+    """Handle /memory: mode, list, approve, deny — replies only.
+
+    Bare ``/memory`` lists the pending queue; explicit approve/deny
+    verbs act immediately through the queue's file write. Approval
+    *prompts* never live here (they would race the prompt);
+    per-proposal prompting happens at the loop turn boundary via
+    ``review_memory_queue``.
+    """
+    queue = curate if curate is not None else CurateQueue()
     verb, _, arg = rest.partition(" ")
-    if verb.strip().lower() != "mode":
-        return _MEMORY_USAGE
-    holder = _memory_mode_holder(memory_mode)
-    pick = arg.strip().lower()
-    if not pick:
-        return holder.announce()
-    if pick in ("curate", "silent"):
-        return holder.set(pick)
-    return _MEMORY_MODE_USAGE
+    verb = verb.strip().lower()
+    if verb in ("", "list"):
+        pending = queue.list_pending()
+        if not pending:
+            return MEMORY_EMPTY_QUEUE
+        return "\n".join(
+            f"{p.id} [{p.source}] {p.section} — {_first_body_line(p.body)}"
+            for p in pending
+        )
+    if verb == "mode":
+        holder = _memory_mode_holder(memory_mode)
+        pick = arg.strip().lower()
+        if not pick:
+            return holder.announce()
+        if pick in ("curate", "silent"):
+            return holder.set(pick)
+        return _MEMORY_MODE_USAGE
+    if verb == "approve":
+        target = arg.strip()
+        if not target:
+            return _MEMORY_USAGE
+        return queue.approve(target, apply_memory_proposal)
+    if verb == "deny":
+        target = arg.strip()
+        if not target:
+            return _MEMORY_USAGE
+        return queue.deny(target)
+    return _MEMORY_USAGE
 
 
 def _approve_message(mode: ModeState | None) -> tuple:
