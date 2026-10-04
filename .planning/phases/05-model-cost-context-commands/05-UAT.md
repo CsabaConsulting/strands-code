@@ -255,7 +255,7 @@ skipped: 0
       issue: "nova-1 rows over-matched nova-2 ids"
   missing:
     - "generation-scoped substrings (nova-micro/nova-lite); nova-2 regression assertions"
-  resolved_by: TBD
+  resolved_by: c9de848
   resolved_at: 2026-09-27
 
 ## Live verification notes (2026-09-27, /tmp probes, not committed)
