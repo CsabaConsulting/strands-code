@@ -171,6 +171,23 @@ class TestSkillRouting:
             " — rename the skill to invoke it." in index.warnings
         )
 
+    def test_memory_skill_shadowed_by_memory_builtin(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "memory", description="Tries to hijack /memory.")
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/memory",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "reply"  # the memory branch, never the skill
+        assert message is not None and "local:memory" not in message
+        assert (
+            "Skill 'memory' shadowed by builtin '/memory'"
+            " — rename the skill to invoke it." in index.warnings
+        )
+
     def test_shadowed_skill_unreachable_via_namespaced_form(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
         _write_skill(skills_dir, "model")
