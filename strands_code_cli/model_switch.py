@@ -110,6 +110,53 @@ def convert_history(
     return converted
 
 
+def _looks_non_chat(name: str) -> bool:
+    """Name backstop for models whose modalities still read TEXT/TEXT.
+
+    Catches rerankers (``cohere.rerank-*``, ``amazon.rerank-*``) and any
+    embedding id the modality filter misses. Case-insensitive substring
+    match — ids are vendor-controlled, so keep the patterns tight.
+    """
+    lowered = name.lower()
+    return "embed" in lowered or "rerank" in lowered
+
+
+def _is_chat_model(entry: dict[str, Any]) -> bool:
+    """True when a foundation-model summary looks usable for chat turns.
+
+    Requires TEXT in input *and* output modalities (drops embedding, image,
+    and audio-only models) plus the rerank/embed name backstop. Missing
+    modality keys fail open — never hide a usable model on absent data.
+    """
+    model_id = entry.get("modelId")
+    if isinstance(model_id, str) and _looks_non_chat(model_id):
+        return False
+    input_mod = entry.get("inputModalities")
+    if isinstance(input_mod, list) and "TEXT" not in input_mod:
+        return False
+    output_mod = entry.get("outputModalities")
+    if isinstance(output_mod, list) and "TEXT" not in output_mod:
+        return False
+    return True
+
+
+def _profile_model_ids(entry: dict[str, Any]) -> list[str]:
+    """Model ids referenced by an inference-profile summary (best effort)."""
+    ids: list[str] = []
+    models = entry.get("models")
+    if not isinstance(models, list):
+        return ids
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        arn = model.get("modelArn")
+        if not isinstance(arn, str):
+            continue
+        marker = "foundation-model/"
+        ids.append(arn.split(marker, 1)[1] if marker in arn else arn)
+    return ids
+
+
 def discover_models(
     region: str | None = None, configured: list[str] | None = None
 ) -> tuple[list[str], bool]:
@@ -117,7 +164,10 @@ def discover_models(
 
     Lazy boto3 import (AWS-optional posture). Reads ``list_foundation_models``
     (ON_DEMAND filter) plus ``list_inference_profiles``; ids/ARNs display
-    verbatim with prefixes intact. Any failure (no creds, denied, no boto3)
+    verbatim with prefixes intact. Only chat-capable models are listed
+    (TEXT in/out modalities, rerank/embed names dropped); inference profiles
+    are dropped only when their referenced model is positively identified as
+    non-chat, otherwise kept. Any failure (no creds, denied, no boto3)
     falls back to the configured + custom entries — never escalates, never
     prompts for keys, never raises.
 
@@ -137,19 +187,30 @@ def discover_models(
             client_kwargs["region_name"] = region
         client = boto3.client("bedrock", **client_kwargs)
         summaries = client.list_foundation_models().get("modelSummaries", [])
-        options = [
-            entry["modelId"]
-            for entry in summaries
-            if "ON_DEMAND" in entry.get("inferenceTypesSupported", [])
-            and isinstance(entry.get("modelId"), str)
-        ]
+        options: list[str] = []
+        non_chat_ids: set[str] = set()
+        for entry in summaries:
+            if "ON_DEMAND" not in entry.get("inferenceTypesSupported", []):
+                continue
+            model_id = entry.get("modelId")
+            if not isinstance(model_id, str):
+                continue
+            if _is_chat_model(entry):
+                options.append(model_id)
+            else:
+                non_chat_ids.add(model_id)
         try:
             profiles = client.list_inference_profiles().get("inferenceProfileSummaries", [])
-            options.extend(
-                entry["inferenceProfileArn"]
-                for entry in profiles
-                if isinstance(entry.get("inferenceProfileArn"), str)
-            )
+            for entry in profiles:
+                arn = entry.get("inferenceProfileArn")
+                if not isinstance(arn, str):
+                    continue
+                refs = _profile_model_ids(entry)
+                if refs and all(
+                    ref in non_chat_ids or _looks_non_chat(ref) for ref in refs
+                ):
+                    continue  # every referenced model is known non-chat
+                options.append(arn)
         except Exception:
             pass  # profiles are additive; models alone still count as online
         seen: list[str] = []

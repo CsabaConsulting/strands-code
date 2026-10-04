@@ -389,6 +389,107 @@ class TestDiscoverModels:
         assert "provisioned-only" not in options  # ON_DEMAND filter
         assert any("inference-profile" in o for o in options)
 
+    def test_online_filters_non_chat_models(self, monkeypatch):
+        import sys
+        import types
+
+        fake = types.ModuleType("boto3")
+
+        def _fm(mid, in_mod, out_mod, types=("ON_DEMAND",)):
+            entry = {"modelId": mid, "inferenceTypesSupported": list(types)}
+            if in_mod is not None:
+                entry["inputModalities"] = list(in_mod)
+            if out_mod is not None:
+                entry["outputModalities"] = list(out_mod)
+            return entry
+
+        class _Client:
+            def list_foundation_models(self, **kwargs):
+                return {
+                    "modelSummaries": [
+                        _fm("chat.text", ("TEXT", "IMAGE"), ("TEXT",)),
+                        _fm("amazon.titan-embed-text-v2:0", ("TEXT",), ("EMBEDDING",)),
+                        _fm("stability.stable-image-core-v1:1", ("TEXT",), ("IMAGE",)),
+                        # Rerank reports TEXT modalities: the name backstop drops it.
+                        _fm("cohere.rerank-v3-5:0", ("TEXT",), ("TEXT",)),
+                        # Missing modalities: fail open, never hide a usable model.
+                        _fm("mystery.model-v1", None, None),
+                        _fm("provisioned-chat", ("TEXT",), ("TEXT",), ("PROVISIONED",)),
+                    ]
+                }
+
+            def list_inference_profiles(self, **kwargs):
+                return {"inferenceProfileSummaries": []}
+
+        fake.client = lambda *a, **k: _Client()  # noqa: E731
+        monkeypatch.setitem(sys.modules, "boto3", fake)
+        options, offline = discover_models(region="us-east-1")
+        assert offline is False
+        assert "chat.text" in options
+        assert "mystery.model-v1" in options
+        for dropped in (
+            "amazon.titan-embed-text-v2:0",
+            "stability.stable-image-core-v1:1",
+            "cohere.rerank-v3-5:0",
+            "provisioned-chat",
+        ):
+            assert dropped not in options
+
+    def test_profiles_drop_only_known_non_chat(self, monkeypatch):
+        import sys
+        import types
+
+        fake = types.ModuleType("boto3")
+
+        def _profile(name, model_arns):
+            entry = {
+                "inferenceProfileArn": (
+                    f"arn:aws:bedrock:us-east-1:123:inference-profile/{name}"
+                )
+            }
+            if model_arns is not None:
+                entry["models"] = [{"modelArn": arn} for arn in model_arns]
+            return entry
+
+        _embed = "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"
+        _chat = "arn:aws:bedrock:us-east-1::foundation-model/chat.text"
+
+        class _Client:
+            def list_foundation_models(self, **kwargs):
+                return {
+                    "modelSummaries": [
+                        {
+                            "modelId": "chat.text",
+                            "inferenceTypesSupported": ["ON_DEMAND"],
+                            "inputModalities": ["TEXT"],
+                            "outputModalities": ["TEXT"],
+                        },
+                        {
+                            "modelId": "amazon.titan-embed-text-v2:0",
+                            "inferenceTypesSupported": ["ON_DEMAND"],
+                            "inputModalities": ["TEXT"],
+                            "outputModalities": ["EMBEDDING"],
+                        },
+                    ]
+                }
+
+            def list_inference_profiles(self, **kwargs):
+                return {
+                    "inferenceProfileSummaries": [
+                        _profile("chat-profile", [_chat]),
+                        _profile("embed-profile", [_embed]),
+                        # No model breakdown: fail open, profiles are curated.
+                        _profile("bare-profile", None),
+                    ]
+                }
+
+        fake.client = lambda *a, **k: _Client()  # noqa: E731
+        monkeypatch.setitem(sys.modules, "boto3", fake)
+        options, _offline = discover_models(region="us-east-1")
+        assert any("chat-profile" in o for o in options)
+        assert any("bare-profile" in o for o in options)
+        assert not any("embed-profile" in o for o in options)
+
 
 # ----------------------------------------------------------------------
 # Compact-replay spike on the replay model
