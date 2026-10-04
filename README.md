@@ -35,7 +35,7 @@ uv run strands-code
 From any other directory (sessions stay local to that directory):
 
 ```bash
-uv run --project /home/csaba/repos/AWS/strands-code strands-code
+uv run --project <path-to-repo> strands-code
 ```
 
 Sessions live in `./.agent/sessions` relative to your working directory —
@@ -46,7 +46,8 @@ First run without AWS credentials stops with a Bedrock setup pointer
 (exit 2); the provider choice persists to a config file afterwards.
 
 REPL basics: type an ask, keep asking — one conversation. `/resume`,
-`/rename`, `/exit` work; unknown `/slash` shows a usage hint. Ctrl-C
+`/rename`, `/forget`, `/model`, `/cost`, `/compact`, `/clear`, `/context`,
+`/mode`, `/diff`, `/exit` work; unknown `/slash` shows a usage hint. Ctrl-C
 cancels the line, Ctrl-D exits with state saved.
 
 ## Library use
@@ -82,11 +83,13 @@ agent = CodeAgent(
 
 ## CLI status
 
-Working today (Phase 1): resumable multi-ask REPL, resume picker,
-`--session-id`, `/resume` `/rename` `/exit`, session auto-titles,
-Bedrock-or-stop first-run gate, kill-safe persistence. Coming next:
-/model /compact /clear /memory /cost /diff /review, permissions UX,
-fuzzy file picker, approval prompts.
+Working today (Phase 5 in UAT): resumable multi-ask REPL, resume picker
+with session deletion, `--session-id`, `/resume` `/rename` `/forget`
+`/exit`, `/model` switching with history conversion, `/cost` `/context`
+display, `/compact` `/clear`, Plan/Act modes (`/mode`, `/approve`), gated
+`/diff` review, `/search`, `/policy`, session auto-titles, Bedrock-or-stop
+first-run gate, kill-safe persistence. Coming next: /memory /review,
+fuzzy file picker.
 
 ## Upstream sync
 
