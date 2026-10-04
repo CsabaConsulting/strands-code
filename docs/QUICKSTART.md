@@ -36,6 +36,10 @@ or directly:
   want to work on, then launch.
 - Resume with `strands-code --session-id <uuid>`, or pick from the
   resume picker at launch (`/resume` works too, inside the REPL).
+- Delete with the picker's `Delete a session…` row (nested confirm), or
+  `/forget <id-or-prefix>` inside the REPL. Either way removes the
+  snapshots, the thinking-stash sidecar, and the index entry; the active
+  session is always refused.
 
 ## First run
 
