@@ -28,6 +28,7 @@ from strands_code_cli.diff_gate import (
 )
 from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
 from strands_code_cli.loop import run_loop
+from strands_code_cli.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.policy_gate import (
     bind_main_agent,
     bind_steering,
@@ -142,6 +143,12 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
         "callback_handler": DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
+        # Phase 6: explicit skills + memory seams — AgentSkills loads
+        # ./.agent/skills and MemoryManager runs the ./.agent/memory fact
+        # store. The dual conventions file (STRANDS.md + .agent/MEMORY.md)
+        # injects via the CLI-owned register_memory_plugin below.
+        "skills": True,
+        "memory": True,
     }
     if model is not None:
         kwargs["model"] = model
@@ -153,6 +160,9 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     # boundaries and starts in Act. Still exactly one HumanInTheLoop.
     slot = register_steering_hook(agent)
     bind_steering(slot)
+    # Phase 6: single memory injector (dual STRANDS.md + .agent/MEMORY.md
+    # auto-load, .agent wins); idempotent per agent like the hook above.
+    register_memory_plugin(agent, load_memory)
     set_mode("act")
     return agent
 
