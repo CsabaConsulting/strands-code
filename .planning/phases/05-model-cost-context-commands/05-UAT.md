@@ -8,11 +8,11 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 5
-name: /clear keeps session
+number: 6
+name: Mid-turn /model refused
 expected: |
-  /clear prints `Context cleared — session <id> kept.`, the same
-  session id stays resumable, and the model choice is kept.
+  Typing /model while a turn is running prints the refusal text and
+  the turn continues undisturbed.
 awaiting: user response
 
 ## Tests
@@ -40,7 +40,8 @@ note: Verified 2026-10-04 (8ca53ddd, Haiku): 3 tool calls made (fib, web_fetch, 
 
 ### 5. /clear keeps session
 expected: /clear prints `Context cleared — session <id> kept.`, the same session id stays resumable, and the model choice is kept.
-result: [pending]
+result: pass
+note: Verified 2026-10-04 (5f01fe51): exact reply, /context zeroed, fresh turn + model kept. Explicit exit+resume after /clear not pasted; accepted by note — every UAT run resumed successfully and /clear only wipes messages in place. Observation (out of scope): search_memory returns cross-session notes.
 
 ### 6. Mid-turn /model refused
 expected: Typing /model while a turn is running prints the refusal text and the turn continues undisturbed.
