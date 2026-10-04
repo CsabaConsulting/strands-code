@@ -111,7 +111,20 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. User can list and invoke skills loaded from local `./.agent/skills`
   2. User can scaffold a repo memory file with `/init` and have the CLI auto-load it, editing it via `/memory`
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 06-01-PLAN.md — Skills spine: index, slash invocation, /skills, autocomplete
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 06-02-PLAN.md — Memory file contract: dual-load injector, reload, modes
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 06-03-PLAN.md — Memory curation: curate loop, revise rounds, /init
 
 ### Phase 7: Subagents + /btw Side Channel
 
