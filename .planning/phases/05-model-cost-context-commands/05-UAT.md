@@ -8,20 +8,20 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 1
-name: Switch models mid-session
+number: 2
+name: Usage line and /cost
 expected: |
-  Launch the CLI, chat two turns, run /model, pick a different provider, and
-  continue — the next answer is coherent and history is intact. Repeat with a
-  custom id/ARN, including a us.-prefixed ARN.
+  After any turn a 451.27K (45%)-style usage line appears; /cost shows
+  per-turn rows plus totals, with money figures only for priced ids.
 awaiting: user response
 
 ## Tests
 
 ### 1. Switch models mid-session
 expected: Launch the CLI, chat two turns, run /model, pick a different provider, and continue — the next answer is coherent and history is intact. Repeat with a custom id/ARN, including a us.-prefixed ARN.
-result: [pending]
+result: pass
 retest_after: G-05-1g
+note: Re-tested 2026-09-27 on 8ca53ddd (Gemma relabel verified live; gaps G-05-1a..1n resolved). Llama streaming-tools remains an upstream limitation with an in-app warning, accepted.
 
 ### 2. Usage line and /cost
 expected: After any turn a 451.27K (45%)-style usage line appears; /cost shows per-turn rows plus totals, with money figures only for priced ids.
