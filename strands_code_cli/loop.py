@@ -6,7 +6,6 @@ import asyncio
 import copy
 import logging
 import os
-import re
 import signal
 import threading
 import uuid
@@ -51,7 +50,7 @@ from strands_code_cli.policy_gate import (
     set_mode as set_gate_mode,
 )
 from strands_code_cli.router import dispatch
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session_index import SessionIndex, rich_stash_path
 from strands_code_cli.steering import (
     SteeringSlot,
     SteeringState,
@@ -302,20 +301,7 @@ def _steering_slot_for(agent: Any) -> SteeringSlot:
     return register_steering_hook(agent)
 
 
-_RICH_STASH_DIRNAME = "rich_history"
 _RICH_STASH_VERSION = 1
-
-
-def rich_stash_path(index_root: Path, session_id: str) -> Path | None:
-    """Sidecar path for the persisted thinking stash (None when unsafe).
-
-    CLI-owned state next to the session index — never inside a snapshot
-    blob. Over-strict id characters fail soft (no stash) rather than
-    risking path traversal through a user-supplied session id.
-    """
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", session_id):
-        return None
-    return Path(index_root) / _RICH_STASH_DIRNAME / f"{session_id}.json"
 
 
 class RichHistory:

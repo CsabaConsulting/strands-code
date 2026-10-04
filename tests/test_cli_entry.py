@@ -126,8 +126,136 @@ class TestShowPicker:
         session_dir = tmp_path / "sessions"
         sid = index.mint()
         _with_snapshot(session_dir, sid)
-        with patch("strands_code_cli.router.typer.prompt", return_value=2):
+        # 1 = session, 2 = delete row, 3 = start new.
+        with patch("strands_code_cli.router.typer.prompt", return_value=3):
             assert show_picker(index, session_dir=session_dir) is None
+
+
+class TestForgetCommand:
+    def _backed_session(self, tmp_path, index, title="Doomed Work"):
+        session_dir = tmp_path / "sessions"
+        sid = index.mint()
+        index.rename(sid, title)
+        _with_snapshot(session_dir, sid)
+        stash = index.root / "rich_history" / f"{sid}.json"
+        stash.parent.mkdir(parents=True, exist_ok=True)
+        stash.write_text("{}", encoding="utf-8")
+        return session_dir, sid
+
+    def test_forget_exact_id_removes_everything(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        session_dir, sid = self._backed_session(tmp_path, index)
+        current = index.mint()
+        action, message = dispatch(f"/forget {sid}", session_id=current, index=index)
+        assert action == "reply"
+        assert message == f"Forgot session 'Doomed Work' [{sid[:8]}]."
+        assert not (session_dir / "session" / sid).exists()
+        assert not (index.root / "rich_history" / f"{sid}.json").exists()
+        assert sid not in {e["id"] for e in index.list_recent(limit=None)}
+
+    def test_forget_unique_prefix_resolves(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        _, sid = self._backed_session(tmp_path, index)
+        current = index.mint()
+        action, message = dispatch(f"/forget {sid[:8]}", session_id=current, index=index)
+        assert action == "reply"
+        assert sid[:8] in message
+        assert sid not in {e["id"] for e in index.list_recent(limit=None)}
+
+    def test_forget_ambiguous_prefix_lists_matches(self, tmp_path):
+        from strands_code_cli.session_index import SessionIndex
+
+        root = tmp_path / "index"
+        index = SessionIndex(root)
+        # Two ids sharing a long prefix, minted deterministically.
+        base = "abc12345"
+        first = base + "0" + "0" * 23
+        second = base + "1" + "1" * 23
+        index.ensure(first)
+        index.ensure(second)
+        current = index.mint()
+        action, message = dispatch(f"/forget {base}", session_id=current, index=index)
+        assert action == "reply"
+        assert "Ambiguous" in message
+        assert first in message and second in message
+        # Nothing deleted.
+        assert {first, second} <= {e["id"] for e in index.list_recent(limit=None)}
+
+    def test_forget_unknown_and_bare_and_current(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        _, sid = self._backed_session(tmp_path, index)
+        current = index.mint()
+        action, message = dispatch("/forget nope-nope", session_id=current, index=index)
+        assert action == "reply"
+        assert "No session matches" in message
+        action, message = dispatch("/forget", session_id=current, index=index)
+        assert message == "Usage: /forget <session-id-or-prefix>"
+        action, message = dispatch(f"/forget {current}", session_id=current, index=index)
+        assert action == "reply"
+        assert "active session" in message
+        assert current in {e["id"] for e in index.list_recent(limit=None)}
+
+    def test_forget_pure_orphan_dir(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        session_dir = tmp_path / "sessions"
+        orphan = "deadbeef-" + "2" * 27
+        _with_snapshot(session_dir, orphan)
+        current = index.mint()
+        action, message = dispatch(f"/forget {orphan}", session_id=current, index=index)
+        assert action == "reply"
+        assert orphan in message
+        assert not (session_dir / "session" / orphan).exists()
+
+    def test_forget_traversal_arg_deletes_nothing(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        session_dir, sid = self._backed_session(tmp_path, index)
+        sentinel = session_dir / "session" / "sentinel.txt"
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("keep", encoding="utf-8")
+        current = index.mint()
+        action, message = dispatch("/forget ../../..", session_id=current, index=index)
+        assert action == "reply"
+        assert "No session matches" in message
+        assert sentinel.exists()
+        assert (session_dir / "session" / sid).exists()
+
+
+class TestPickerDeleteTyped:
+    def test_delete_confirmed_loops_back(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        session_dir = tmp_path / "sessions"
+        first = index.mint()
+        index.rename(first, "First Work")
+        second = index.mint()
+        index.rename(second, "Second Work")
+        index.ensure(first)  # first is most recent: listed first
+        _with_snapshot(session_dir, first)
+        _with_snapshot(session_dir, second)
+        # 3 = delete row (2 sessions), 1 = first entry, 1 = confirm,
+        # then refreshed list (1 session): 3 = start new.
+        prompts = iter([3, 1, 1, 3])
+        with patch(
+            "strands_code_cli.router.typer.prompt", side_effect=lambda *a, **k: next(prompts)
+        ):
+            assert show_picker(index, session_dir=session_dir) is None
+        assert first not in {e["id"] for e in index.list_recent(limit=None)}
+        assert not (session_dir / "session" / first).exists()
+        assert second in {e["id"] for e in index.list_recent(limit=None)}
+        assert (session_dir / "session" / second).exists()
+
+    def test_delete_cancel_keeps_everything(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        session_dir = tmp_path / "sessions"
+        sid = index.mint()
+        _with_snapshot(session_dir, sid)
+        # 2 = delete row, 2 = cancel in the sub-list, 3 = start new.
+        prompts = iter([2, 2, 3])
+        with patch(
+            "strands_code_cli.router.typer.prompt", side_effect=lambda *a, **k: next(prompts)
+        ):
+            assert show_picker(index, session_dir=session_dir) is None
+        assert sid in {e["id"] for e in index.list_recent(limit=None)}
+        assert (session_dir / "session" / sid).exists()
 
 
 # ---------------------------------------------------------------------------

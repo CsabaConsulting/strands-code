@@ -91,6 +91,67 @@ class TestSessionPickerDialog:
         monkeypatch.setattr(choice_module, "radio_choice", lambda *a, **k: None)
         assert show_picker(self._index()) is None
 
+    def _real_index(self, tmp_path):
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        session_dir = tmp_path / "sessions"
+        first = index.mint()
+        index.rename(first, "First Work")
+        second = index.mint()
+        index.rename(second, "Second Work")
+        index.ensure(first)  # first is most recent: listed first
+        for sid in (first, second):
+            (session_dir / "session" / sid).mkdir(parents=True, exist_ok=True)
+        return index, session_dir, first, second
+
+    def _script(self, monkeypatch, replies):
+        monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+        calls = []
+
+        def _stub(title, options, **kwargs):
+            calls.append(title)
+            return replies[len(calls) - 1]
+
+        monkeypatch.setattr(choice_module, "radio_choice", _stub)
+        return calls
+
+    def test_picker_delete_confirmed(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _SESSION_DELETE, _SESSION_DELETE_CONFIRM
+
+        index, session_dir, first, second = self._real_index(tmp_path)
+        calls = self._script(
+            monkeypatch, [_SESSION_DELETE, first, _SESSION_DELETE_CONFIRM, None]
+        )
+        assert show_picker(index, session_dir=session_dir) is None
+        assert calls == [
+            "Recent sessions",
+            "Delete a session",
+            f"Delete 'First Work' [{first[:8]}]?",
+            "Recent sessions",
+        ]
+        assert first not in {e["id"] for e in index.list_recent(limit=None)}
+        assert not (session_dir / "session" / first).exists()
+        assert second in {e["id"] for e in index.list_recent(limit=None)}
+
+    def test_picker_delete_cancel_at_target(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _SESSION_DELETE
+
+        index, session_dir, first, _second = self._real_index(tmp_path)
+        self._script(monkeypatch, [_SESSION_DELETE, None, None])
+        assert show_picker(index, session_dir=session_dir) is None
+        assert first in {e["id"] for e in index.list_recent(limit=None)}
+        assert (session_dir / "session" / first).exists()
+
+    def test_picker_delete_cancel_at_confirm(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _SESSION_DELETE
+
+        index, session_dir, first, _second = self._real_index(tmp_path)
+        self._script(monkeypatch, [_SESSION_DELETE, first, None, None])
+        assert show_picker(index, session_dir=session_dir) is None
+        assert first in {e["id"] for e in index.list_recent(limit=None)}
+        assert (session_dir / "session" / first).exists()
+
 
 class TestRadioChoice:
     def test_refuses_without_tty(self):

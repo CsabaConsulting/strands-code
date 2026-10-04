@@ -731,7 +731,7 @@ class TestRichHistory:
         RichHistory().save(None)
 
     def test_stash_path_rejects_traversal(self, tmp_path):
-        from strands_code_cli.loop import rich_stash_path
+        from strands_code_cli.session_index import rich_stash_path
 
         assert rich_stash_path(tmp_path, "../../evil") is None
         assert rich_stash_path(tmp_path, "no/slash") is None

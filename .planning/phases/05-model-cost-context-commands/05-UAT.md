@@ -258,6 +258,13 @@ skipped: 0
   resolved_by: c9de848
   resolved_at: 2026-09-27
 
+## Unplanned additions (user-directed, 2026-09-27)
+
+- Session deletion: `/forget <id-or-prefix>` + picker delete row (nested
+  picker + explicit confirm, list refreshes). Shared `forget_session` core:
+  snapshot dir (traversal-guarded), stash sidecar, index entry. Refuses the
+  active session and ambiguous prefixes; pure-orphan dirs forgettable.
+
 ## Live verification notes (2026-09-27, /tmp probes, not committed)
 
 - OpenRouter (key quota restored): /models lists 466 models incl. 17 :free;

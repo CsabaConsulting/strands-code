@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,10 +15,10 @@ from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.diff_config import MODES, DiffConfig
 from strands_code_cli.diff_gate import apply_stashed, store_for
 from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
 USAGE_HINT = (
-    "Available commands: /resume, /rename <title>, "
+    "Available commands: /resume, /rename <title>, /forget <id>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost, /compact, /clear, /context, /exit"
@@ -27,6 +28,9 @@ _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
 _MODEL_CUSTOM = "custom-model-id"
 _MODEL_BACK = "back-one-level"
 _MODEL_CANCEL = "cancel-stay-with-current"
+_FORGET_USAGE = "Usage: /forget <session-id-or-prefix>"
+_SESSION_DELETE = "delete-a-session"
+_SESSION_DELETE_CONFIRM = "delete-session-confirmed"
 
 _SDK_EXTRA_HINTS = {"litellm": "litellm", "bedrock": "agentcore"}
 """Optional-extra install hints keyed by provider prefix."""
@@ -102,6 +106,8 @@ def dispatch(
         return ("reply", _resume_message(index, rest))
     if cmd == "/rename":
         return ("reply", _rename_message(index, session_id, rest))
+    if cmd == "/forget":
+        return ("reply", _forget_message(index, session_id, rest))
     if cmd == "/diff":
         return ("reply", _diff_message(session_id, rest, diff_config_path))
     if cmd == "/search":
@@ -544,8 +550,119 @@ def _rename_message(index: SessionIndex, session_id: str, rest: str) -> str:
     return f"Session renamed to '{entry['title']}'."
 
 
+def _sessions_dir_for_index(index: SessionIndex) -> Path:
+    """Sessions dir sibling of the index root (the main.py layout).
+
+    Production: ``./.agent/sessions`` next to ``./.agent/session_index``.
+    """
+    from strands_harness.defaults import DEFAULT_SESSION_DIR
+
+    return index.root.parent / Path(DEFAULT_SESSION_DIR).name
+
+
+def _snapshot_ids(session_dir: str | Path | None) -> set[str]:
+    """Snapshot dir names on disk (pure orphans included, junk excluded)."""
+    if session_dir is None:
+        return set()
+    try:
+        names = [p.name for p in Path(session_dir, "session").iterdir() if p.is_dir()]
+    except OSError:
+        return set()
+    return {n for n in names if rich_stash_path(Path("."), n) is not None}
+
+
+def _resolve_forget_target(index: SessionIndex, session_dir, target: str) -> tuple[str | None, str | None]:
+    """Resolve an id or unique prefix to a full session id.
+
+    Candidates are the union of index ids and snapshot dir names, so
+    pure-orphan dirs are forgettable too. Returns ``(id, None)`` or
+    ``(None, error-reply)``.
+    """
+    known = {e["id"] for e in index.list_recent(limit=None)} | _snapshot_ids(session_dir)
+    if target in known:
+        return (target, None)
+    matches = sorted(sid for sid in known if sid.startswith(target))
+    if not matches:
+        return (None, f"No session matches {target!r}. {_FORGET_USAGE}")
+    if len(matches) > 1:
+        lines = [f"Ambiguous prefix {target!r} — matches:"]
+        lines.extend(f"  {sid}" for sid in matches)
+        return (None, "\n".join(lines))
+    return (matches[0], None)
+
+
+def _remove_snapshot_dir(session_dir: str | Path | None, session_id: str) -> None:
+    """Delete one snapshot dir; guarded against traversal and outside roots."""
+    if session_dir is None:
+        return
+    root = Path(session_dir, "session")
+    candidate = root / session_id
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return
+    try:
+        same_parent = resolved.parent == root.resolve()
+    except OSError:
+        return
+    if not same_parent or resolved.name != session_id:
+        return  # traversal or relocated root: never delete
+    shutil.rmtree(resolved, ignore_errors=True)
+
+
+def forget_session(
+    index: SessionIndex,
+    session_dir: str | Path | None,
+    target: str,
+    *,
+    current_id: str | None = None,
+) -> tuple[bool, str]:
+    """Delete a session everywhere: snapshots, stash sidecar, index entry.
+
+    Shared core behind /forget and the picker delete flow. Refuses the
+    active session (deleting it would corrupt the running loop) and
+    ambiguous prefixes. A ``session_dir`` of None skips snapshot removal
+    (index + sidecar only). Never raises on filesystem trouble: best
+    effort per surface, one reply either way.
+    """
+    resolved, error = _resolve_forget_target(index, session_dir, target)
+    if resolved is None:
+        assert error is not None
+        return (False, error)
+    if current_id is not None and resolved == current_id:
+        return (False, "Cannot forget the active session — switch away or exit first.")
+    title = next(
+        (e.get("title", "untitled") for e in index.list_recent(limit=None) if e["id"] == resolved),
+        None,
+    )
+    _remove_snapshot_dir(session_dir, resolved)
+    stash = rich_stash_path(index.root, resolved)
+    if stash is not None:
+        try:
+            stash.unlink(missing_ok=True)
+        except OSError:
+            pass
+    index.forget(resolved)
+    label = f"'{title}' [{resolved[:8]}]" if title is not None else resolved
+    return (True, f"Forgot session {label}.")
+
+
+def _forget_message(index: SessionIndex, session_id: str, rest: str) -> str:
+    """Run /forget: typed explicit id, so no second confirmation."""
+    if not rest:
+        return _FORGET_USAGE
+    _, reply = forget_session(
+        index, _sessions_dir_for_index(index), rest.strip(), current_id=session_id
+    )
+    return reply
+
+
 def show_picker(index: SessionIndex, *, session_dir: str | Path | None = None) -> str | None:
     """Numbered resume picker over recent sessions plus start-new (D-02).
+
+    A delete row nests a second picker plus an explicit confirm (Cancel
+    is the default both times); after a deletion the list refreshes so
+    several sessions can go in one visit.
 
     Args:
         index: Sidecar title index (recency order).
@@ -556,39 +673,120 @@ def show_picker(index: SessionIndex, *, session_dir: str | Path | None = None) -
         The chosen session id, or None for start-new, empty list, or an
         aborted prompt.
     """
-    entries = index.list_recent(limit=_PICKER_LIMIT)
-    if session_dir is not None:
-        entries = [e for e in entries if _has_snapshot(session_dir, e["id"])]
-    if not entries:
-        return None
     if sys.stdin.isatty():
         # Arrow-key dialog (choice.radio_choice): same SIGINT-safe prompt
         # as the approval gate. ESC/failure means start-new (None);
         # Ctrl-C re-raises so startup cancel still works.
         from strands_code_cli.choice import radio_choice
 
+        return _picker_tty_loop(index, session_dir, radio_choice)
+    return _picker_typed_loop(index, session_dir)
+
+
+def _picker_entries(index: SessionIndex, session_dir: str | Path | None):
+    """Visible picker entries: recency order minus untrusted orphans."""
+    entries = index.list_recent(limit=_PICKER_LIMIT)
+    if session_dir is not None:
+        entries = [e for e in entries if _has_snapshot(session_dir, e["id"])]
+    return entries
+
+
+def _picker_tty_loop(index: SessionIndex, session_dir, radio_choice) -> str | None:
+    """Arrow-key resume picker with a nested delete flow."""
+    while True:
+        entries = _picker_entries(index, session_dir)
+        if not entries:
+            return None
         picked = radio_choice(
             "Recent sessions",
             [(e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]") for e in entries]
-            + [(None, "Start new session")],
-            default=len(entries),
+            + [(_SESSION_DELETE, "Delete a session…"), (None, "Start new session")],
+            default=len(entries) + 1,
         )
-        return picked if isinstance(picked, str) else None
+        if isinstance(picked, str) and picked in {e["id"] for e in entries}:
+            return picked  # real ids win over the delete sentinel
+        if picked == _SESSION_DELETE:
+            _picker_tty_delete(index, session_dir, entries, radio_choice)
+            continue
+        return None
+
+
+def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) -> None:
+    """Nested delete picker + confirm; prints the forget reply."""
     console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
-    console.print("Recent sessions:")
-    for pos, entry in enumerate(entries, 1):
-        console.print(f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]")
-    console.print(f"  {len(entries) + 1}. Start new session")
+    target = radio_choice(
+        "Delete a session",
+        [(e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]") for e in entries]
+        + [(None, "Cancel")],
+        default=len(entries),
+    )
+    if not isinstance(target, str):
+        return
+    title = next(
+        (e.get("title", "untitled") for e in entries if e["id"] == target), target
+    )
+    confirm = radio_choice(
+        f"Delete '{title}' [{target[:8]}]?",
+        [(_SESSION_DELETE_CONFIRM, "Delete permanently"), (None, "Cancel")],
+        default=1,
+    )
+    if confirm != _SESSION_DELETE_CONFIRM:
+        return
+    _, reply = forget_session(index, session_dir, target)
+    console.print(reply)
+
+
+def _picker_typed_loop(index: SessionIndex, session_dir: str | Path | None) -> str | None:
+    """Numbered resume picker with a nested delete flow (no tty)."""
+    console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
     while True:
+        entries = _picker_entries(index, session_dir)
+        if not entries:
+            return None
+        console.print("Recent sessions:")
+        for pos, entry in enumerate(entries, 1):
+            console.print(f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]")
+        delete_at = len(entries) + 1
+        console.print(f"  {delete_at}. Delete a session…")
+        console.print(f"  {delete_at + 1}. Start new session")
         try:
-            choice = typer.prompt("Select session", type=int, default=len(entries) + 1)
+            choice = typer.prompt("Select session", type=int, default=delete_at + 1)
         except (typer.Abort, EOFError):
             return None
         if 1 <= choice <= len(entries):
             return entries[choice - 1]["id"]
-        if choice == len(entries) + 1:
+        if choice == delete_at:
+            _picker_typed_delete(index, session_dir, entries, console)
+            continue
+        if choice == delete_at + 1:
             return None
-        console.print(f"Enter a number 1-{len(entries) + 1}.")
+        console.print(f"Enter a number 1-{delete_at + 1}.")
+
+
+def _picker_typed_delete(index, session_dir, entries, console) -> None:
+    """Numbered delete picker + confirm; prints the forget reply."""
+    console.print("Delete a session:")
+    for pos, entry in enumerate(entries, 1):
+        console.print(f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]")
+    console.print(f"  {len(entries) + 1}. Cancel")
+    try:
+        choice = typer.prompt("Delete which", type=int, default=len(entries) + 1)
+    except (typer.Abort, EOFError):
+        return
+    if not 1 <= choice <= len(entries):
+        return
+    target = entries[choice - 1]
+    console.print(f"Delete '{target.get('title', 'untitled')}' [{target['id'][:8]}]?")
+    console.print("  1. Delete permanently")
+    console.print("  2. Cancel")
+    try:
+        confirm = typer.prompt("Confirm", type=int, default=2)
+    except (typer.Abort, EOFError):
+        return
+    if confirm != 1:
+        return
+    _, reply = forget_session(index, session_dir, target["id"])
+    console.print(reply)
 
 
 def _has_snapshot(session_dir: str | Path, session_id: str) -> bool:

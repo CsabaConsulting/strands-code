@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,11 +17,24 @@ from typing import Any
 
 _INDEX_NAME = "index.json"
 _TITLE_MAX_CHARS = 120
+_RICH_STASH_DIRNAME = "rich_history"
 
 
 def _utcnow() -> str:
     """Current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def rich_stash_path(index_root: Path, session_id: str) -> Path | None:
+    """Sidecar path for the persisted thinking stash (None when unsafe).
+
+    CLI-owned state next to the session index — never inside a snapshot
+    blob. Over-strict id characters fail soft (no stash) rather than
+    risking path traversal through a user-supplied session id.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", session_id):
+        return None
+    return Path(index_root) / _RICH_STASH_DIRNAME / f"{session_id}.json"
 
 
 class SessionIndex:
@@ -141,6 +155,23 @@ class SessionIndex:
         if limit is not None:
             ordered = ordered[:limit]
         return [{"id": sid, **entry} for sid, entry in ordered]
+
+    def forget(self, session_id: str) -> bool:
+        """Drop a session entry entirely (the /forget core).
+
+        Removes the title/recency record and persists. Snapshot blobs and
+        sidecars live outside the index; the caller deletes those.
+
+        Returns:
+            True when an entry existed, False for unknown ids.
+        """
+        self._ensure_loaded()
+        assert self._entries is not None
+        if session_id not in self._entries:
+            return False
+        del self._entries[session_id]
+        self._save()
+        return True
 
     def rename(self, session_id: str, title: str) -> dict[str, Any]:
         """Rename a known session; marks it user-named so auto-title backs off.
