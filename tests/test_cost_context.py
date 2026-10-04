@@ -24,6 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from strands.models.model import Model
 from strands_harness import create_harness
 
@@ -31,7 +32,7 @@ from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_cli import cost_context
+from strands_code_cli import cost_context, model_capabilities
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
     SUMMARY_MARKER,
@@ -47,6 +48,12 @@ from strands_code_cli.cost_context import (
     usage_line,
     window_for,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_user_overrides(monkeypatch):
+    """Report tests assume shipped tables; a real user file must not leak in."""
+    monkeypatch.setattr(model_capabilities, "active_overrides", lambda: [])
 
 
 # ----------------------------------------------------------------------

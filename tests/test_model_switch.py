@@ -21,11 +21,11 @@ Tracer observations (recorded 2026-09-27, strands-harness 0.1.2, strands-agents
 - Window sources: harness Claude map (opus-/sonnet-/fable- 128K, haiku- 64K)
   plus 1M for Opus/Sonnet 4.6 (builder cost guide); unknown ids fall back to
   tokens-without-% and tokens-without-money (D-02/D-07).
-- Env note: only the ``bedrock`` provider's SDK deps are installed here, so
-  ``resolve_model`` for anthropic/openai/litellm/ollama ids raises ImportError
-  (missing optional package), not ValueError. Unknown *provider names* still
-  raise ValueError listing supported providers. ARN prefixes (``us.``/``eu.`` /
-  ``global.``) are preserved verbatim by ``resolve_model``.
+- Env note: the ``bedrock`` SDK deps plus the ``litellm`` extra are
+  installed here, so ``resolve_model`` for anthropic/openai/ollama ids raises
+  ImportError (missing optional package), not ValueError. Unknown *provider
+  names* still raise ValueError listing supported providers. ARN prefixes
+  (``us.``/``eu.`` / ``global.``) are preserved verbatim by ``resolve_model``.
 - Conversion table: reasoningContent{reasoningText+signature} -> {"text"} on
   non-reasoning targets (DeepSeek-drop mirror + warn); toolUse/toolResult
   blocks byte-identical; trim only at pair boundaries; image blocks become
@@ -51,13 +51,19 @@ from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_cli import model_switch
+from strands_code_cli import model_capabilities, model_switch
 from strands_code_cli.model_switch import (
     apply_switch,
     convert_history,
     discover_models,
     estimate_fit,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_user_overrides(monkeypatch):
+    """Verdict tests assume shipped tables; a real user file must not leak in."""
+    monkeypatch.setattr(model_capabilities, "active_overrides", lambda: [])
 
 
 # ----------------------------------------------------------------------
@@ -1383,7 +1389,9 @@ class TestModelPersistence:
         text = path.read_text(encoding="utf-8").lower()
         assert "api_key" not in text and "bearer" not in text and "secret" not in text
 
-    def test_model_for_config_shapes(self):
+    def test_model_for_config_shapes(self, monkeypatch):
+        import builtins
+
         from strands_code_cli.main import model_for_config
 
         assert model_for_config(None) is None
@@ -1391,7 +1399,16 @@ class TestModelPersistence:
             model_for_config("bedrock/global.anthropic.claude-sonnet-4-6")
             == "bedrock/global.anthropic.claude-sonnet-4-6"
         )
-        # openai SDK not installed here → verbatim string fallback, never a raise.
+        # Simulated missing provider SDK → verbatim string fallback, never a
+        # raise (hermetic: must not depend on which extras are installed).
+        real_import = builtins.__import__
+
+        def _no_openai(name, *args, **kwargs):
+            if name == "strands.models.openai" or name.startswith("strands.models.openai."):
+                raise ImportError(f"No module named {name!r} (test probe)")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_openai)
         assert (
             model_for_config("openai/nemotron-70b", "https://proxy.local/v1")
             == "openai/nemotron-70b"

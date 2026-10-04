@@ -61,6 +61,25 @@ export LITELLM_API_KEY="<key>"
 
 then `/model litellm/openrouter/<vendor>/<model>`.
 
+## Model capabilities (advanced)
+
+Mid-session `/model` switches convert history to what the target accepts
+(thinking blocks, media). Verdicts come from the harness first, with
+fail-closed defaults for the unknown. When a verdict is wrong for a new
+model, correct it without waiting for a release in
+`~/.config/strands-code/model-capabilities.yaml`:
+
+```yaml
+overrides:
+  - match: {provider: bedrock, vendor: amazon, family: nova}
+    reasoning: true
+  - match: {name_contains: gpt-oss}
+    media: true
+```
+
+First match wins; `/context` shows how many overrides are active. Typos
+warn-and-skip — they never break startup. Restart the CLI to reload.
+
 ## REPL basics (Phase 1)
 
 - Type an ask, get a streamed answer, keep asking — one conversation.
