@@ -28,13 +28,13 @@
 ### Session & Context
 
 - [x] **SES-01**: User can resume a session by UUID across runs (`--session-id`, `/resume`)
-- [ ] **SES-02**: User can compact, clear, and inspect context usage (`/compact`, `/clear`, `/context`)
+- [x] **SES-02**: User can compact, clear, and inspect context usage (`/compact`, `/clear`, `/context`)
 - [x] **SES-03**: Sessions flush on exit so resume never silently loses work
 
 ### Models & Cost
 
-- [ ] **MODEL-01**: User can switch providers mid-session via `/model` (Bedrock default, override-friendly)
-- [ ] **MODEL-02**: User can see cost and token usage per session and task via `/cost` (display only, no enforcement)
+- [x] **MODEL-01**: User can switch providers mid-session via `/model` (Bedrock default, override-friendly)
+- [x] **MODEL-02**: User can see cost and token usage per session and task via `/cost` (display only, no enforcement)
 - [ ] **MODEL-03**: CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override
 
 ### Skills & Memory
@@ -100,10 +100,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TOOL-03 | Phase 3 | Complete |
 | TOOL-04 | Phase 2 | Complete |
 | SES-01 | Phase 1 | Complete |
-| SES-02 | Phase 5 | Pending |
+| SES-02 | Phase 5 | Complete |
 | SES-03 | Phase 1 | Complete |
-| MODEL-01 | Phase 5 | Pending |
-| MODEL-02 | Phase 5 | Pending |
+| MODEL-01 | Phase 5 | Complete |
+| MODEL-02 | Phase 5 | Complete |
 | SKILL-01 | Phase 6 | Pending |
 | SKILL-02 | Phase 6 | Pending |
 | TOOL-07 | Phase 9 | Pending |

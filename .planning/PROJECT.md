@@ -18,6 +18,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ OKF knowledge navigation for large documents (`find`/`read`/`children`/`toc`) — existing
 - ✓ Rich terminal rendering + Bedrock token/cost metrics — existing
 - ✓ Reproducible `uv` toolchain, 177-test suite green — existing
+- ✓ Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local) — Phase 5 (idle-only swap, switch-first convert, mid-turn refusal, verbatim ARNs)
+- ✓ Cost/token display per session and task — Phase 5 (usage line, `/cost`, live price/window almanac; display-only, no enforcement)
+- ✓ Context controls `/compact`, `/clear`, `/context` + 80% auto-compact — Phase 5 (pair-atomic, tool pairs never split)
 
 ### Active
 
@@ -30,16 +33,14 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
 - [ ] Skills marketplace commands: add marketplace, install/list/invoke skills (local `./.agent/skills` loading underneath)
 - [ ] Session resume by UUID across runs
-- [ ] Cost/token display per session and task (no enforced budgets in v1)
-- [ ] Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local) — Phase 5; decision-model routing with manual override kept — Phase 8
-- [ ] Context-size visibility command
+- [ ] Decision-model routing with manual override kept — Phase 8
 - [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
 
 ### Out of Scope
 
 - Persistent semantic code index in v1 — grep-first is enough to start; index is its own later phase
 - Enforced token budgets — display only; halting on cost is deferred
-- Auto model/effort routing (thinking-budget style) — manual switching first
+- Fully automatic model routing with no override — Phase 8 routing proposes, manual switching + explicit override always win
 - AgentCore as a required path — stays an opt-in backend; defaults are local
 
 ## Context
@@ -48,7 +49,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
 - Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.57.0; both move fast and are flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers (local markdown → Hindsight → memsearch).
-- Full test suite green (`uv run pytest tests/`, 460 passed); dev group carries the data-science packages the toolkit tests execute.
+- Full test suite green (`uv run pytest tests/`, 668 passed, 5 deselected); dev group carries the data-science packages the toolkit tests execute.
 
 ## Constraints
 
@@ -65,7 +66,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 | Grep-first code understanding | Persistent index is a project of its own; agentic grep ships sooner | — Pending |
 | Plan/Act as the v1 mode | Closest to proven competitor behavior; effort presets can layer on later | — Pending |
 | Anytime-steering + subagent side questions | Matches Codex/Muse Code UX the user prefers over command-gated steering | — Pending |
-| Token display without budgets | Visibility first; enforcement is a policy decision for later | — Pending |
+| Token display without budgets | Visibility first; enforcement is a policy decision for later | ✓ Good (Phase 5: display-only + static kill-switch) |
+| Switch-first convert, mid-turn slash refusal | Convert-then-switch crashed on ARNs; mid-turn /model derailed writes — swap before convert, refuse slash mid-turn | ✓ Good |
+| Automatic most-precise-first pricing + provenance | No (a)/(b) source toggle; Price List → OpenRouter → LiteLLM layering with source line | ✓ Good |
 | Approval prompts served on main thread (ApprovalBroker) | SDK invokes ask in its event-loop worker, where stdin reads park on Ctrl-C and asyncio.run cannot nest; worker aborts via TurnCancelled | ✓ Good |
 | Denials never cover batch signatures | Deny-marked-covered let model retries execute silently in-turn (fail-open); only approvals cover, denials re-prompt | ✓ Good |
 
@@ -87,4 +90,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-09-26 after Phase 4*
+*Last updated: 2026-10-04 after Phase 5*

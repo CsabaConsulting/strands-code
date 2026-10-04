@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: File/Edit/Shell Surface + /diff** - Real agent actuation with change review (completed 2026-09-24)
 - [x] **Phase 3: Permissions Gate** - Deny-first approval before every side effect (completed 2026-09-25)
 - [x] **Phase 4: Plan/Act Modes + Steering** - Read-only plans, approval checkpoint, anytime steering, cancel (completed 2026-09-26)
-- [ ] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls
+- [x] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls (completed 2026-10-04)
 - [ ] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file
 - [ ] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task
 - [ ] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
@@ -165,7 +165,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. File/Edit/Shell Surface + /diff | 1/1 | Complete    | 2026-09-24 |
 | 3. Permissions Gate | 1/1 | Complete    | 2026-09-25 |
 | 4. Plan/Act Modes + Steering | 1/1 | Complete    | 2026-09-26 |
-| 5. Model + Cost + Context Commands | 0/TBD | Not started | - |
+| 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 0/TBD | Not started | - |
 | 7. Subagents + /btw Side Channel | 0/TBD | Not started | - |
 | 8. Model Routing with Decision Models | 0/TBD | Not started | - |
