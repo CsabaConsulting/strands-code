@@ -36,6 +36,14 @@ from strands_code_cli.memory_file import (
     render_memory_block,
     sweep_memory_files,
 )
+from strands_code_cli.memory_modes import (
+    MEMORY_MODE_CURATE_REPLY,
+    MEMORY_MODE_SILENT_REPLY,
+    MemoryModeState,
+    silent_note,
+)
+from strands_code_cli.router import USAGE_HINT, dispatch
+from strands_code_cli.session_index import SessionIndex
 
 
 def _write(path: Path, text: str) -> Path:
@@ -232,3 +240,76 @@ class TestMemoryReload:
             / "loop.py"
         ).read_text(encoding="utf-8")
         assert source.count("flush_memory(agent)") == 2
+
+
+# ----------------------------------------------------------------------
+# Modes: session-sticky curate/silent holder + /memory mode verb
+# ----------------------------------------------------------------------
+
+
+class TestMemoryModes:
+    def test_holder_defaults_to_curate(self):
+        holder = MemoryModeState()
+        assert holder.mode == "curate"
+        assert holder.announce() == MEMORY_MODE_CURATE_REPLY
+        assert "curate" in holder.announce()
+
+    def test_set_silent_announces_silent(self):
+        holder = MemoryModeState()
+        assert holder.set("silent") == MEMORY_MODE_SILENT_REPLY
+        assert holder.mode == "silent"
+        assert holder.set("curate") == MEMORY_MODE_CURATE_REPLY
+        with pytest.raises(ValueError):
+            holder.set("frobnicate")
+
+    def test_bad_initial_raises_value_error(self):
+        with pytest.raises(ValueError):
+            MemoryModeState(initial="frobnicate")
+
+    def test_memory_mode_announces_curate(self, tmp_path):
+        action, message = dispatch(
+            "/memory mode",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "index"),
+        )
+        assert action == "reply"
+        assert message is not None and "curate" in message
+
+    def test_memory_mode_silent_flips_holder(self, tmp_path):
+        holder = MemoryModeState()
+        action, message = dispatch(
+            "/memory mode silent",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "index"),
+            memory_mode=holder,
+        )
+        assert action == "reply"
+        assert holder.mode == "silent"
+        assert message == MEMORY_MODE_SILENT_REPLY
+
+    def test_unknown_memory_verb_returns_usage(self, tmp_path):
+        action, message = dispatch(
+            "/memory frobnicate",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "index"),
+        )
+        assert action == "reply"
+        assert message == "Usage: /memory [mode [curate|silent]]"
+
+    def test_bad_mode_pick_returns_mode_usage(self, tmp_path):
+        action, message = dispatch(
+            "/memory mode frobnicate",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "index"),
+        )
+        assert action == "reply"
+        assert message == "Usage: /memory mode [curate|silent]"
+
+    def test_silent_note_format(self):
+        assert (
+            silent_note("Build", "promoted")
+            == "Memory updated (silent): Build ← promoted"
+        )
+
+    def test_usage_hint_lists_memory(self):
+        assert "/memory [mode [curate|silent]]" in USAGE_HINT

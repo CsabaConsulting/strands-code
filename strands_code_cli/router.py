@@ -15,6 +15,7 @@ from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.diff_config import MODES, DiffConfig
 from strands_code_cli.diff_gate import apply_stashed, store_for
+from strands_code_cli.memory_modes import MEMORY_MODE_USAGE, MemoryModeState
 from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
@@ -26,7 +27,8 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /skills [show <name>|remove <name>], /exit"
+    "/compact, /clear, /context, /skills [show <name>|remove <name>], "
+    "/memory [mode [curate|silent]], /exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -62,6 +64,8 @@ _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
 _SKILLS_USAGE = "Usage: /skills [show <name>|remove <name>]"
 _MODE_USAGE = MODE_USAGE
+_MEMORY_USAGE = "Usage: /memory [mode [curate|silent]]"
+_MEMORY_MODE_USAGE = MEMORY_MODE_USAGE
 
 _PICKER_LIMIT = 10
 
@@ -78,6 +82,7 @@ def dispatch(
     agent=None,
     session_turns: list | None = None,
     skills: SkillIndex | None = None,
+    memory_mode: MemoryModeState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -97,6 +102,9 @@ def dispatch(
         skills: Local skill index backing /<skill> and /skills (None →
             skill branches report no skills loaded, keeping existing
             callers untouched).
+        memory_mode: Session-sticky memory-mode holder (None → curate
+            default, keeps standalone/test behaviour without a
+            loop-owned holder).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -126,6 +134,8 @@ def dispatch(
         return ("reply", _policy_message(rest))
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
+    if cmd == "/memory":
+        return ("reply", _memory_message(rest, memory_mode))
     if cmd == "/skills":
         return ("reply", _skills_message(rest, skills))
     if cmd == "/approve":
@@ -432,6 +442,31 @@ def _mode_message(rest: str, mode: ModeState | None) -> str:
     if verb in ("plan", "act"):
         return holder.set(verb)
     return _MODE_USAGE
+
+
+def _memory_mode_holder(memory_mode: MemoryModeState | None) -> MemoryModeState:
+    """Loop-owned holder when present, else a throwaway curate default."""
+    return memory_mode if memory_mode is not None else MemoryModeState()
+
+
+def _memory_message(rest: str, memory_mode: MemoryModeState | None) -> str:
+    """Handle /memory: mode verb now, curate verbs in plan 06-03 — replies only.
+
+    The ``mode`` verb mirrors ``_mode_message`` (empty announces,
+    ``curate``/``silent`` flips, anything else is mode usage); every
+    other verb returns ``_MEMORY_USAGE`` until plan 06-03 extends this
+    branch with list, approve, deny, and revise.
+    """
+    verb, _, arg = rest.partition(" ")
+    if verb.strip().lower() != "mode":
+        return _MEMORY_USAGE
+    holder = _memory_mode_holder(memory_mode)
+    pick = arg.strip().lower()
+    if not pick:
+        return holder.announce()
+    if pick in ("curate", "silent"):
+        return holder.set(pick)
+    return _MEMORY_MODE_USAGE
 
 
 def _approve_message(mode: ModeState | None) -> tuple:
