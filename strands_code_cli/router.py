@@ -144,6 +144,12 @@ def _context_message(agent, current_model: str | None, session_turns: list | Non
     return context_report(agent, current_model or "unknown-model", session_turns)
 
 
+def _model_count_label(name: str, count: int) -> str:
+    """Picker label with correct singular/plural ("moonshot (1 model)")."""
+    noun = "model" if count == 1 else "models"
+    return f"{name} ({count} {noun})"
+
+
 def _model_message(rest: str, current_model: str | None) -> tuple:
     """Handle /model: validate a selection or offer the discovered list.
 
@@ -194,7 +200,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                     items = [
                         (
                             v,
-                            f"{v} ({sum(len(m) for _, m in f)} models)",
+                            _model_count_label(v, sum(len(m) for _, m in f)),
                         )
                         for v, f in tree
                     ]
@@ -245,7 +251,10 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                     names = [name for name, _ in families]
                     picked = _ask(
                         f"Select {vendor} family",
-                        [(name, f"{name} ({len(m)} models)") for name, m in families]
+                        [
+                            (name, _model_count_label(name, len(m)))
+                            for name, m in families
+                        ]
                         + [(_MODEL_BACK, "← Back to vendors")],
                         names.index(picks[1])
                         if picks[1] in names

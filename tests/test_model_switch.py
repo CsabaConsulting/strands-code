@@ -278,6 +278,223 @@ class TestConvertHistory:
 
 
 # ----------------------------------------------------------------------
+# Capability almanac: fail-closed thinking, fail-open media (G-05-1g)
+# ----------------------------------------------------------------------
+
+
+def _reasoning_blocks(messages):
+    return [
+        block
+        for message in messages
+        for block in message.get("content", [])
+        if "reasoningContent" in block
+    ]
+
+
+class TestCapabilityAlmanac:
+    def test_gemma_target_strips_thinking(self):
+        # UAT crash repro: Haiku thinking reached Gemma verbatim and
+        # Bedrock rejected the turn. Now it converts to text.
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = convert_history(
+                _fixture_history(),
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                "google.gemma-3-27b-it",
+            )
+        assert _reasoning_blocks(out) == []
+        assert out[1]["content"][0] == {"text": "let me think"}
+        assert any("reasoning" in str(w.message).lower() for w in caught)
+
+    def test_unknown_target_strips_fail_closed(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = convert_history(
+                _fixture_history(), "bedrock/anthropic.claude-x", "bedrock/acme-future-1"
+            )
+        assert _reasoning_blocks(out) == []
+
+    def test_cross_vendor_strips_even_when_listed(self, monkeypatch):
+        import strands_code_cli.model_switch as model_switch_mod
+
+        monkeypatch.setattr(
+            model_switch_mod,
+            "_REASONING_SUPPORT",
+            (("anthropic", None, None), ("qwen", None, None)),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cross = convert_history(
+                _fixture_history(), "bedrock/anthropic.claude-x", "qwen.qwen3-32b-v1:0"
+            )
+            same = convert_history(
+                _fixture_history(), "qwen.qwen3-a", "qwen.qwen3-32b-v1:0"
+            )
+        assert _reasoning_blocks(cross) == []  # foreign signatures never cross vendors
+        assert len(_reasoning_blocks(same)) == 1
+
+    def test_same_vendor_across_id_forms(self):
+        from strands_code_cli.model_switch import same_vendor
+
+        assert same_vendor(
+            "bedrock/global.anthropic.claude-opus-5", "us.anthropic.claude-haiku-1"
+        )
+        assert same_vendor("anthropic/claude-x", "bedrock/anthropic.claude-y")
+        assert not same_vendor("bedrock/anthropic.claude-x", "qwen.qwen3-32b-v1:0")
+
+    def test_media_rules_nova_micro_less_nova_pro_ok(self):
+        from strands_code_cli.model_switch import supports_media
+
+        assert supports_media("amazon.nova-micro-v1:0") is False
+        assert supports_media("amazon.nova-lite-v1:0") is False
+        assert supports_media("amazon.nova-pro-v1:0") is True
+        assert supports_media("meta.llama3-70b-instruct-v1:0") is False
+        assert supports_media("bedrock/mystery-vision-1") is True  # fail-open
+
+
+class TestRichHistory:
+    def _agent_with_thinking(self, tmp_path):
+        import uuid
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "canned")
+        agent.messages.extend(_fixture_history())
+        return agent
+
+    def test_switch_back_restores_thinking_plus_suffix(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import RichHistory, apply_model_action
+
+        agent = self._agent_with_thinking(tmp_path)
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, first = apply_model_action(
+                agent,
+                "google.gemma-3-27b-it",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+                rich=rich,
+            )
+        assert "thinking restored" not in first
+        assert _reasoning_blocks(agent.messages) == []
+        assert rich.length == 4
+        agent.messages.append({"role": "user", "content": [{"text": "noticed?"}]})
+        agent.messages.append({"role": "assistant", "content": [{"text": "yes"}]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, second = apply_model_action(
+                agent,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="google.gemma-3-27b-it",
+                rich=rich,
+            )
+        assert "thinking restored" in second
+        assert agent.messages[1]["content"][0] == {
+            "reasoningContent": {
+                "reasoningText": {"text": "let me think", "signature": "sig-1"}
+            }
+        }
+        assert agent.messages[-2]["content"][0] == {"text": "noticed?"}
+        assert len(agent.messages) == 6
+
+    def test_trim_below_stash_disables_restore(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import RichHistory, apply_model_action
+
+        agent = self._agent_with_thinking(tmp_path)
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            apply_model_action(
+                agent,
+                "google.gemma-3-27b-it",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+                rich=rich,
+            )
+            del agent.messages[:3]  # compaction trimmed under the stash point
+            _, reply = apply_model_action(
+                agent,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="google.gemma-3-27b-it",
+                rich=rich,
+            )
+        assert "thinking restored" not in reply
+
+    def test_cross_vendor_back_does_not_restore(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import RichHistory, apply_model_action
+
+        agent = self._agent_with_thinking(tmp_path)
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            apply_model_action(
+                agent,
+                "google.gemma-3-27b-it",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+                rich=rich,
+            )
+            _, reply = apply_model_action(
+                agent,
+                "qwen.qwen3-32b-v1:0",
+                turn_running=False,
+                current_model="google.gemma-3-27b-it",
+                rich=rich,
+            )
+        assert "thinking restored" not in reply
+        assert _reasoning_blocks(agent.messages) == []
+
+
+class TestTurnGuard:
+    def test_provider_error_fails_turn_not_session(self, tmp_path, monkeypatch, capsys):
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        prompts = iter(["hello", "again"])
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration:
+                    raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+        calls = []
+
+        def _boom(agent, text, event):
+            calls.append(text)
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(loop_mod, "_invoke_agent", _boom)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "start_steering_reader",
+            lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
+        )
+        agent = SimpleNamespace(messages=[], _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        assert calls == ["hello", "again"]  # re-prompted after each failure
+        assert "Turn failed (RuntimeError): boom" in capsys.readouterr().out
+
+
+# ----------------------------------------------------------------------
 # estimate_fit spike: local estimator vs MODEL_LIMITS
 # ----------------------------------------------------------------------
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
 import signal
@@ -33,6 +34,8 @@ from strands_code_cli.model_switch import (
     apply_switch,
     convert_history,
     estimate_fit,
+    same_vendor,
+    supports_reasoning,
 )
 from strands_code_cli.output import output_context
 from strands_code_cli.policy_gate import (
@@ -294,32 +297,78 @@ def _steering_slot_for(agent: Any) -> SteeringSlot:
     return register_steering_hook(agent)
 
 
+class RichHistory:
+    """Richest-variant stash for switch-back (MODEL-01 preservation).
+
+    Single slot, loop-owned: each switch stashes the pre-conversion source
+    when it carries thinking blocks; switching to a same-vendor
+    reasoning-capable target restores the stash plus the turns made while
+    away. Bounded (one deepcopy, replaced per switch) and fail-safe
+    (restores only when the length check proves no compaction trimmed
+    underneath the stash point).
+    """
+
+    def __init__(self) -> None:
+        self.messages: list | None = None
+        self.model_id: str | None = None
+        self.length: int = 0
+
+
+def _has_thinking(messages: list) -> bool:
+    """True when any content block carries reasoningContent."""
+    return any(
+        "reasoningContent" in block
+        for message in messages
+        for block in message.get("content", [])
+    )
+
+
 def apply_model_action(
     agent: Any,
     new_id: str,
     *,
     turn_running: bool,
     current_model: str,
+    rich: RichHistory | None = None,
 ) -> tuple[str | None, str]:
     """Apply a validated /model selection (loop-owned; never the router).
 
     Idle only: a running turn gets the immediate refusal reply, never a
-    queue (D-01 fail-closed). Otherwise convert-when-fits else
-    summarize-old + keep-recent + replay-last-user-message, then the
-    tracer-winning in-place swap.
+    queue (D-01 fail-closed). Otherwise restore-then-convert (the rich
+    stash when switching back to a same-vendor thinking model),
+    convert-when-fits else summarize-old + keep-recent +
+    replay-last-user-message, then the tracer-winning in-place swap.
 
     Args:
         agent: Live session agent.
         new_id: Validated ``provider/name`` selection (verbatim).
         turn_running: True when a turn is in flight → refuse.
         current_model: Active model id string for the fit estimate.
+        rich: Loop-owned richest-variant stash (None → convert only).
 
     Returns:
         ``(resolved_id, reply)``; resolved_id is None on refusal.
     """
     if turn_running:
         return (None, MODEL_REFUSAL)
-    converted = convert_history(list(agent.messages), current_model, new_id)
+    source = list(agent.messages)
+    restored = False
+    if (
+        rich is not None
+        and rich.messages is not None
+        and rich.model_id is not None
+        and supports_reasoning(new_id)
+        and same_vendor(rich.model_id, new_id)
+        and len(source) >= rich.length
+    ):
+        source = copy.deepcopy(rich.messages) + copy.deepcopy(source[rich.length :])
+        restored = True
+    convert_from = current_model
+    if restored and rich is not None and rich.model_id is not None:
+        # Restored thinking keeps its original vendor for the same-vendor
+        # check — converting "from" the away model would re-strip it.
+        convert_from = rich.model_id
+    converted = convert_history(source, convert_from, new_id)
     fits, _pct, _tokens = estimate_fit(converted, new_id)
     if fits:
         del agent.messages[:]
@@ -332,11 +381,16 @@ def apply_model_action(
             agent, summarize=lambda old: model_summarize(agent, old)
         )
         mode_word = "compacted" if kept < len(converted) else "kept"
+    if rich is not None and _has_thinking(source):
+        rich.messages = copy.deepcopy(source)
+        rich.model_id = current_model
+        rich.length = len(source)
     _model, resolved_id = apply_switch(agent, new_id)
     count = len(agent.messages)
+    suffix = ", thinking restored" if restored else ""
     return (
         resolved_id,
-        f"Model: {new_id} — conversation continued ({count} messages {mode_word}).",
+        f"Model: {new_id} — conversation continued ({count} messages {mode_word}{suffix}).",
     )
 
 
@@ -375,6 +429,7 @@ def run_loop(
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
     session_turns: list = []
+    rich = RichHistory()
     slot = _steering_slot_for(agent)
     set_gate_mode(mode.mode)
     cancel_armed_at: float | None = None
@@ -410,7 +465,7 @@ def run_loop(
             continue
         if action == "model" and message is not None:
             resolved_id, reply = apply_model_action(
-                agent, message, turn_running=False, current_model=current_model
+                agent, message, turn_running=False, current_model=current_model, rich=rich
             )
             console.print(reply)
             if resolved_id is not None:
@@ -441,12 +496,20 @@ def run_loop(
                 set_gate_mode(mode.mode)
                 reader = start_steering_reader(steering, gate_open)
                 agent_text = message if message is not None else text
-                if mode.mode == "plan":
-                    result = _invoke_agent(
-                        agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event
-                    )
-                else:
-                    result = _invoke_agent(agent, agent_text, cancel_event)
+                try:
+                    if mode.mode == "plan":
+                        result = _invoke_agent(
+                            agent, f"{PLAN_PREFIX}\n\n{agent_text}", cancel_event
+                        )
+                    else:
+                        result = _invoke_agent(agent, agent_text, cancel_event)
+                except (KeyboardInterrupt, TurnCancelled):
+                    raise
+                except Exception as exc:
+                    # Provider/model errors (validation, throttling, ...) must
+                    # fail the turn, never the session: report and re-prompt.
+                    console.print(f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]")
+                    continue
                 usage = record_turn_metrics(result, current_model, session_turns)
                 if usage is not None:
                     console.print(f"[dim]{usage}[/dim]")
