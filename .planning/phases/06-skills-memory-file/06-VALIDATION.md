@@ -40,7 +40,15 @@ created: "2026-10-04"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| (seeded — planner fills per plan) | 01 | 1 | SKILL-01, SKILL-02 | — | N/A | unit/integration | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
+| 06-01-T1 tracer (SkillIndex + /skill slash) | 01 | 1 | SKILL-01 | T-06-02 | skill bodies quoted as untrusted | unit | `uv run pytest tests/test_skills.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-01-T2 (/skills list/show/remove) | 01 | 1 | SKILL-01 | T-06-01 | traversal-guarded remove | unit | `uv run pytest tests/test_skills.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-01-T3 (completer + loop wiring) | 01 | 1 | SKILL-01 | — | shadowed names never complete | unit | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
+| 06-02-T1 (dual loader + injector) | 02 | 2 | SKILL-02 | T-06-03, T-06-04 | untrusted markers, symlink refusal | unit | `uv run pytest tests/test_memory_file.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-02-T2 (reload + flush) | 02 | 2 | SKILL-02 | — | notes carry names only | unit | `uv run pytest tests/test_memory_file.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-02-T3 (modes + /memory mode) | 02 | 2 | SKILL-02 | — | curate default | unit | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
+| 06-03-T1 (curate queue + review) | 03 | 3 | SKILL-02 | T-06-06 | single-HITL spine, deny never writes | unit | `uv run pytest tests/test_memory_curate.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-03-T2 (revise rounds) | 03 | 3 | SKILL-02 | T-06-06 | quoted review, fail-closed default | unit | `uv run pytest tests/test_memory_curate.py -x -q` | ❌ Wave 0 (task creates) | ⬜ pending |
+| 06-03-T3 (/init scan + merge) | 03 | 3 | SKILL-02 | T-06-07 | capped scan, merge-never-clobber | unit | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
