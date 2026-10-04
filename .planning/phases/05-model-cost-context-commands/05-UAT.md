@@ -8,11 +8,11 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 6
-name: Mid-turn /model refused
+number: 7
+name: Offline /model
 expected: |
-  Typing /model while a turn is running prints the refusal text and
-  the turn continues undisturbed.
+  With no AWS credentials, /model offers the configured/custom
+  entries with no key prompt and no traceback.
 awaiting: user response
 
 ## Tests
@@ -45,7 +45,8 @@ note: Verified 2026-10-04 (5f01fe51): exact reply, /context zeroed, fresh turn +
 
 ### 6. Mid-turn /model refused
 expected: Typing /model while a turn is running prints the refusal text and the turn continues undisturbed.
-result: [pending]
+result: pass
+note: Re-tested 2026-10-04 after G-05-6a: mid-turn /model printed the idle-only refusal (twice, both mid-turn attempts), the essay turn completed with the write approved. Cosmetic: trailing `mo` on the final usage line is terminal-echo race with typing as the line printed, not a defect.
 
 ### 7. Offline /model
 expected: With no AWS credentials, /model offers the configured/custom entries with no key prompt and no traceback.
