@@ -454,10 +454,16 @@ class TestRichHistory:
 
 class TestTurnGuard:
     def test_provider_error_fails_turn_not_session(self, tmp_path, monkeypatch, capsys):
+        from contextlib import nullcontext
         from types import SimpleNamespace
 
         import strands_code_cli.loop as loop_mod
         from strands_code_cli.session_index import SessionIndex
+
+        # Isolate from the output proxy: StdoutProxy binds the global
+        # AppSession output, which earlier tests may have attached to a dead
+        # capture buffer. The guard, not the proxy, is under test here.
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
 
         prompts = iter(["hello", "again"])
 
