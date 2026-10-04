@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 5
+current_phase: 05
 current_phase_name: Model + Cost + Context Commands
-status: planning
+status: executing
 stopped_at: Phase 5 context gathered
-last_updated: "2026-09-27T02:43:17.954Z"
+last_updated: "2026-10-04T20:54:21.179Z"
 last_activity: 2026-09-26
-last_activity_desc: Phase 4 complete, transitioned to Phase 5
-state_head: 43e95a656e07df40bf996db172b4968975f54461
+last_activity_desc: Phase 05 execution started
+state_head: b0d88787f1b5b2b979bc345a262c73d08abb449f
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 4
-  total_plans: 6
-  completed_plans: 6
-  percent: 50
+  total_plans: 7
+  completed_plans: 7
+  percent: 40
 ---
 
 # Project State
@@ -23,16 +23,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 5 — Model + Cost + Context Commands
+**Current focus:** Phase 05 — Model + Cost + Context Commands
 
 ## Current Position
 
-Phase: 5 — Model + Cost + Context Commands
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-09-26 — Phase 4 complete, transitioned to Phase 5
+Phase: 05 (Model + Cost + Context Commands) — EXECUTING
+Plan: 1 of 1
+Status: Executing Phase 05
+Last activity: 2026-09-26 — Phase 05 execution started
 
-Progress: [█████░░░░░] 50%
+Progress: [████░░░░░░] 40%
 
 ## Performance Metrics
 
@@ -76,6 +76,16 @@ None yet.
 ### Blockers/Concerns
 
 - ⚠️ [Phase 5] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models (e.g. gpt-6-luna); workaround is a fresh session — durable strip-on-restore is a Phase 5 candidate.
+
+### Roadmap Evolution
+
+- Phase 07.1 inserted after Phase 7: CodeAct action interface (URGENT)
+- Phase 07.2 inserted after Phase 7: Model routing with decision models (URGENT)
+- Phase 8 inserted after Phase 7: CodeAct action interface (re-scoped from decimal 07.1 to integer 8 per user)
+- Phase 9 inserted after Phase 8: Model routing with decision models (re-scoped from decimal 07.2 to integer 9 per user); GitHub loop renumbered 8 to 10
+- Phase 8 inserted after Phase 7: Swap per user: 8 is now Model Routing, 9 is now CodeAct; CodeAct opt-in only (tool-calling default, both allowed, never mandatory)
+- Phase 10 removed: GitHub loop deferred out of v1 to a future milestone per user; GITHUB-01/02 + REVIEW-01 moved to v2 backlog, v1 = phases 1-9
+- GitHub loop dissolved (not just deferred): no dedicated phase — `gh` via general tool competence, GITHUB-01/02 marked covered/no-build, only `/review` stays a future slash; parity aim rescoped to best Bedrock-first terminal CLI, not Claude Code feature parity
 
 ## Deferred Items
 

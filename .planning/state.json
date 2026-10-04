@@ -40,14 +40,19 @@
     },
     {
       "number": "8",
-      "name": "GitHub Loop + Review + Parity",
+      "name": "Model Routing with Decision Models",
+      "status": "pending"
+    },
+    {
+      "number": "9",
+      "name": "CodeAct Action Interface",
       "status": "pending"
     }
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 5)",
-    "reason": "Phase 5 of 8 — needs a plan"
+    "label": "Advance to the next step",
+    "reason": "Phase 05 of 9 · 44% · executing"
   },
-  "updated_at": "2026-09-26T09:16:04.340Z"
+  "updated_at": "2026-10-04T20:57:16.017Z"
 }

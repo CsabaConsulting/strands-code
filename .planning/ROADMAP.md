@@ -2,7 +2,7 @@
 
 ## Overview
 
-From a bare library to a conversational coding CLI: first a resumable REPL skeleton wired to file-local sessions, then real actuation (file/shell tools plus `/diff`), gated immediately by deny-first permissions, then the Plan/Act + steering interaction model, followed by model/cost/context visibility, local skills plus the project memory file, the `/btw` subagent side channel, and finally the GitHub loop with `/review` closed against the Claude Code parity checklist. Each phase lands as whole CLI modules over composed harness defaults — prevention (budgets, truncation, flush-on-exit, provenance) ships with the capability it protects, never as later polish.
+From a bare library to a conversational coding CLI: first a resumable REPL skeleton wired to file-local sessions, then real actuation (file/shell tools plus `/diff`), gated immediately by deny-first permissions, then the Plan/Act + steering interaction model, followed by model/cost/context visibility, local skills plus the project memory file, the `/btw` subagent side channel, then decision-model routing and the opt-in CodeAct action interface as the v1 close (no GitHub loop phase: `gh` flows ride on general tool competence, as in Claude Code). Each phase lands as whole CLI modules over composed harness defaults — prevention (budgets, truncation, flush-on-exit, provenance) ships with the capability it protects, never as later polish.
 
 ## Phases
 
@@ -20,7 +20,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls
 - [ ] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file
 - [ ] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task
-- [ ] **Phase 8: GitHub Loop + Review + Parity** - Single ask from issue to open PR, reviewed against parity bar
+- [ ] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
+- [ ] **Phase 9: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
 
 ## Phase Details
 
@@ -125,25 +126,38 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Plans**: TBD
 
-### Phase 8: GitHub Loop + Review + Parity
+### Phase 8: Model Routing with Decision Models
 
-**Goal**: A single ask drives read-issue, branch, implement, test, open-PR, and the v1 bar is the parity checklist
+**Goal**: The CLI picks the right model and thinking budget per ask via a cheap decision model, with manual override kept
 **Mode:** mvp
-**Depends on**: Phase 7
-**Requirements**: GITHUB-01, GITHUB-02, REVIEW-01
+**Depends on**: Phase 7 (sequencing; uses Phase 5 almanac: capabilities, live pricing/windows)
+**Requirements**: MODEL-03
 **Success Criteria** (what must be TRUE):
 
-  1. User can go from a GitHub issue to an open PR (branch, implement, test) from a single ask
-  2. User can create issues, comment on reviews, and check CI status from the CLI
-  3. User can request a code review of pending changes via `/review`
-  4. The CLI satisfies the Claude Code parity checklist as the v1 acceptance bar
+  1. Per ask, a decision model (Jev via API; Kev/Laya self-host path evaluated) selects the model and thinking budget from almanac candidates
+  2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
+  3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
+
+**Plans**: TBD
+
+### Phase 9: CodeAct Action Interface
+
+**Goal**: Users can opt into code-generation-first actions where they beat gated tool-calling; tool-calling stays the default and CodeAct is never mandatory
+**Mode:** mvp
+**Depends on**: Phase 7 (sequencing; builds on Phase 2/3 tools)
+**Requirements**: TOOL-07
+**Success Criteria** (what must be TRUE):
+
+  1. User can choose the action interface per session or task: traditional tool-calling (default), CodeAct, or both
+  2. CodeAct executes code-first actions through the harness sandbox primitive with deny-first approvals still gating side effects (reconciled with no-prompt-inside-orchestration; Risk 9 currently disables it)
+  3. Switching interfaces mid-session keeps history and approvals coherent
 
 **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -154,4 +168,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 5. Model + Cost + Context Commands | 0/TBD | Not started | - |
 | 6. Skills + Memory File | 0/TBD | Not started | - |
 | 7. Subagents + /btw Side Channel | 0/TBD | Not started | - |
-| 8. GitHub Loop + Review + Parity | 0/TBD | Not started | - |
+| 8. Model Routing with Decision Models | 0/TBD | Not started | - |
+| 9. CodeAct Action Interface | 0/TBD | Not started | - |

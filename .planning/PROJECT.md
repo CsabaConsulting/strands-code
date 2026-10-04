@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests, and working the full GitHub loop — with the agent able to "talk" to source code and do deep research when needed.
+Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests — with the agent able to "talk" to source code and do deep research when needed. (GitHub work rides on general tool competence via `gh`, as in Claude Code — no dedicated loop.)
 
 ## Core Value
 
@@ -27,13 +27,13 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - [ ] Strip reasoningContent from restored history for non-reasoning Bedrock models (emerged Phase 4: opus history fails validation on model switch; fresh session is the workaround)
 - [ ] Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched
 - [ ] Grep-first code understanding (agentic grep/READ); persistent semantic index deferred
-- [ ] Full GitHub loop: read issues/PRs, branch, implement, test, open PRs, plus issue creation, review comments, CI checks
+- [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
 - [ ] Skills marketplace commands: add marketplace, install/list/invoke skills (local `./.agent/skills` loading underneath)
 - [ ] Session resume by UUID across runs
 - [ ] Cost/token display per session and task (no enforced budgets in v1)
-- [ ] Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local); auto routing deferred
+- [ ] Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local) — Phase 5; decision-model routing with manual override kept — Phase 8
 - [ ] Context-size visibility command
-- [ ] Parity checklist against Claude Code behavior as the v1 acceptance bar
+- [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
 
 ### Out of Scope
 

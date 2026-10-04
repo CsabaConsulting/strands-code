@@ -23,6 +23,7 @@
 - [x] **TOOL-02**: User can review pending changes in a `/diff` viewer before they apply
 - [x] **TOOL-03**: User is prompted for approval before edits, shell, and network actions per a deny-first policy file
 - [x] **TOOL-04**: Agent navigates repos with agentic grep/READ without an index to maintain
+- [ ] **TOOL-07**: User can opt into code-generation-first (CodeAct) actions reconciled with deny-first approvals; tool-calling stays the default and CodeAct is never mandatory
 
 ### Session & Context
 
@@ -34,22 +35,20 @@
 
 - [ ] **MODEL-01**: User can switch providers mid-session via `/model` (Bedrock default, override-friendly)
 - [ ] **MODEL-02**: User can see cost and token usage per session and task via `/cost` (display only, no enforcement)
+- [ ] **MODEL-03**: CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override
 
 ### Skills & Memory
 
 - [ ] **SKILL-01**: CLI loads skills from local `./.agent/skills` and the user can list and invoke them
 - [ ] **SKILL-02**: CLI auto-loads the repo memory file and the user can scaffold and edit it (`/init`, `/memory`)
 
-### GitHub
-
-- [ ] **GITHUB-01**: User can drive read-issue → branch → implement → test → open-PR from a single ask
-- [ ] **GITHUB-02**: User can create issues, comment on reviews, and check CI status from the CLI
-
-### Review
-
-- [ ] **REVIEW-01**: User can request a code review of pending changes via `/review`
-
 ## v2 Requirements
+
+### GitHub (no dedicated loop phase: Claude Code has none either — `gh` flows ride on general tool competence, verifiable today)
+
+- **GITHUB-01**: (covered, no build) User can drive read-issue → branch → implement → test → open-PR from a single ask via shell tool + `gh`
+- **GITHUB-02**: (covered, no build) User can create issues, comment on reviews, and check CI status from the CLI via shell tool + `gh`
+- **REVIEW-01**: User can request a code review of pending changes via a small future `/review` slash
 
 ### Extensibility
 
@@ -77,7 +76,7 @@
 |---------|--------|
 | Persistent semantic code index | A project of its own; grep-first suffices for v1, index gets its own later phase |
 | Enforced token budgets | Display builds trust; halting mid-task is a policy decision for later |
-| Auto model/effort routing | Opaque and provider-coupled while the harness moves fast; manual first |
+| Fully automatic model routing with no override | Opacity violates the manual-control constraint; Phase 8 keeps manual switching + explicit override, routing proposes but never silently decides |
 | AgentCore as required path | Couples the CLI to AWS control plane; breaks the offline default (AWS-optional constraint) |
 | IDE extension / browser companion | Separate product surface; terminal picker covers the need |
 | Auto-commit / auto-push | Silent mutation of shared history conflicts with deny-first posture |
@@ -107,14 +106,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MODEL-02 | Phase 5 | Pending |
 | SKILL-01 | Phase 6 | Pending |
 | SKILL-02 | Phase 6 | Pending |
-| GITHUB-01 | Phase 8 | Pending |
-| GITHUB-02 | Phase 8 | Pending |
-| REVIEW-01 | Phase 8 | Pending |
+| TOOL-07 | Phase 9 | Pending |
+| MODEL-03 | Phase 8 | Pending |
+| GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |
+| GITHUB-02 | Covered (no phase) | General tool competence + `gh`, verifiable today |
+| REVIEW-01 | Deferred (v2) | Small future `/review` slash |
 
 **Coverage:**
 
-- v1 requirements: 20 total
-- Mapped to phases: 20
+- v1 requirements: 17 total
+- Mapped to phases: 17
 - Unmapped: 0 ✓
 
 ---
