@@ -8,12 +8,9 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 7
-name: Offline /model
-expected: |
-  With no AWS credentials, /model offers the configured/custom
-  entries with no key prompt and no traceback.
-awaiting: user response
+number: none — UAT complete
+name: all manual tests passed
+awaiting: phase closeout
 
 ## Tests
 
@@ -50,7 +47,8 @@ note: Re-tested 2026-10-04 after G-05-6a: mid-turn /model printed the idle-only 
 
 ### 7. Offline /model
 expected: With no AWS credentials, /model offers the configured/custom entries with no key prompt and no traceback.
-result: [pending]
+result: pass
+note: Ruled (a) 2026-10-04: literal REPL-without-creds is unreachable by intentional D-05 design (STS preflight exits 2 on every launch). Demonstrated clean no-creds handling — exit 2 + Bedrock pointer, no traceback, no key prompt. The /model fallback picker itself is covered by automated tests (offline/bare-model fallback).
 
 ### 8. Mid-session /model switch continues the same conversation, converted or compacted
 expected: Mid-session /model switch continues the same conversation, converted or compacted
