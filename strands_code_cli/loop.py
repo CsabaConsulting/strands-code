@@ -6,6 +6,7 @@ import asyncio
 import copy
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -39,6 +40,8 @@ from strands_code_cli.memory_modes import (
     MEMORY_FACT_DIR,
     CurateQueue,
     MemoryModeState,
+    ReviseState,
+    format_revise_prompt,
     silent_note,
 )
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
@@ -63,7 +66,12 @@ from strands_code_cli.policy_gate import (
     gate_open,
     set_mode as set_gate_mode,
 )
-from strands_code_cli.router import apply_memory_proposal, dispatch
+from strands_code_cli.router import (
+    apply_memory_proposal,
+    apply_memory_section,
+    dispatch,
+    read_memory_section,
+)
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 from strands_code_cli.steering import (
     SteeringSlot,
@@ -583,8 +591,9 @@ def review_memory_queue(
     approve/deny/revise-in-words choice (fail-closed default on deny;
     typed path when stdin is not a tty). The revise choice reads one
     instruction line and hands ``(proposal, instruction)`` to
-    ``on_revise`` (None until plan task 2 wires ReviseState arming);
-    the proposal stays pending either way. Ctrl-C stops the review;
+    ``on_revise`` (None keeps the test-only noted path); a wired
+    revise arms the round and ends the review — one revise turn per
+    boundary, the rest stay pending. Ctrl-C stops the review;
     unreviewed proposals stay pending for the next turn.
     """
     lines: list[str] = []
@@ -616,9 +625,192 @@ def review_memory_queue(
                 note = on_revise(proposal, instruction)
                 if note:
                     lines.append(note)
+                break  # one revise turn per boundary; rest stay pending
         else:
             lines.append(queue.deny(proposal.id))
     return lines
+
+
+_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+"""First-fence matcher for revise/init consumer turns."""
+
+
+def _first_fence(text: str) -> tuple[str | None, str]:
+    """First fenced block plus the one-line tail summary after it.
+
+    Returns ``(None, "")`` when no fenced block is present. The block
+    keeps its content verbatim apart from the single line break
+    before the closing fence.
+    """
+    match = _FENCE_RE.search(text)
+    if match is None:
+        return None, ""
+    block = match.group(1)
+    if block.endswith("\n"):
+        block = block[:-1]
+    summary = ""
+    for line in text[match.end() :].splitlines():
+        if line.strip():
+            summary = line.strip()
+            break
+    return block, summary
+
+
+def _message_text(message: Any) -> str:
+    """Join the text blocks of one Strands message dict ("" when none)."""
+    if not isinstance(message, dict):
+        return ""
+    parts = [
+        block["text"]
+        for block in message.get("content", []) or []
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ]
+    return "\n".join(p for p in parts if p)
+
+
+def _result_text(agent: Any, result: Any) -> str:
+    """Best-effort text of one agent-turn result (revise/init consumers).
+
+    Prefers the result's own text/message payload, then the last
+    assistant text in history; empty string when nothing is found.
+    """
+    if isinstance(result, str):
+        return result
+    text = getattr(result, "text", None)
+    if isinstance(text, str) and text:
+        return text
+    found = _message_text(getattr(result, "message", None))
+    if found:
+        return found
+    history = getattr(agent, "messages", None)
+    if isinstance(history, list):
+        for entry in reversed(history):
+            if isinstance(entry, dict) and entry.get("role") == "assistant":
+                found = _message_text(entry)
+                if found:
+                    return found
+    return ""
+
+
+def _revise_answer() -> str:
+    """One accept/revert/iterate answer; anything unclear fails closed to revert."""
+    if sys.stdin.isatty():
+        from strands_code_cli.choice import radio_choice
+
+        try:
+            picked = radio_choice(
+                "Memory revision",
+                [
+                    ("accept", "Accept — apply the revision"),
+                    ("revert", "Revert — keep the previous text"),
+                    ("iterate", "Iterate — describe another change"),
+                ],
+                default=1,  # fail-closed highlight on revert
+            )
+        except RuntimeError:
+            return "revert"
+        return picked if picked in ("accept", "revert", "iterate") else "revert"
+    print("accept / revert / iterate [revert]: ", end="", flush=True)
+    typed = input().strip().lower()
+    if typed in ("accept", "a", "y", "yes"):
+        return "accept"
+    if typed in ("iterate", "i"):
+        return "iterate"
+    return "revert"  # empty and unknown fail closed
+
+
+def consume_revise_turn(
+    result_text: str,
+    revise_state: ReviseState,
+    apply_fn: Any,
+) -> str | None:
+    """Consume one armed revise round; None means iterate (still armed).
+
+    Quotes the revised block for review with its one-line summary,
+    then prompts accept/revert/iterate (fail-closed default on
+    revert; typed path when stdin is not a tty). Accept applies the
+    block verbatim; revert and a missing fence leave the files
+    untouched. Ctrl-C disarms and re-raises, so an interrupted round
+    leaves both memory files byte-identical.
+    """
+    section = revise_state.section
+    block, summary = _first_fence(result_text)
+    if block is None:
+        revise_state.disarm()
+        return f"No fenced block found — revision discarded, '{section}' unchanged."
+    try:
+        with output_context():
+            for line in block.splitlines() or [""]:
+                print(f"> {line}")
+            if summary:
+                print(f"Summary: {summary}")
+            answer = _revise_answer()
+            instruction = ""
+            if answer == "iterate":
+                print("Describe the change in words: ", end="", flush=True)
+                instruction = input().strip()
+    except KeyboardInterrupt:
+        revise_state.disarm()
+        raise
+    if answer == "accept":
+        apply_fn(section, block)
+        revise_state.disarm()
+        return f"Memory section '{section}' updated."
+    if answer == "iterate" and instruction:
+        revise_state.arm(section, revise_state.previous_text, instruction)
+        return None
+    # Revert — plus empty-instruction iterate, which fails closed
+    # instead of re-arming with a broken prompt.
+    revise_state.disarm()
+    return f"Reverted — '{section}' unchanged."
+
+
+def _drain_revise_rounds(
+    agent: Any,
+    result: Any,
+    revise_state: ReviseState,
+    cancel_event: threading.Event,
+    session_turns: list,
+    current_model: str,
+    mode: ModeState,
+    apply_fn: Any = None,
+) -> None:
+    """Consume armed revise rounds, re-invoking while the user iterates.
+
+    Prints each round's reply. Follow-up iterate turns reuse the
+    normal invocation path (plan prefix, metrics); a failed
+    follow-up disarms with a note. Ctrl-C propagates after consume
+    disarms, so the interrupt lands on the cancel path with clean
+    state.
+    """
+    writer = apply_fn if apply_fn is not None else apply_memory_section
+    text = _result_text(agent, result)
+    while revise_state.armed:
+        reply = consume_revise_turn(text, revise_state, writer)
+        if reply is not None:
+            console.print(reply)
+        if not revise_state.armed:
+            break
+        follow_up = format_revise_prompt(
+            revise_state.section,
+            revise_state.previous_text,
+            revise_state.instruction,
+        )
+        if mode.mode == "plan":
+            follow_up = f"{PLAN_PREFIX}\n\n{follow_up}"
+        try:
+            follow_result = _invoke_agent(agent, follow_up, cancel_event)
+        except (KeyboardInterrupt, TurnCancelled):
+            raise
+        except Exception as exc:
+            console.print(f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]")
+            console.print("Revise round dropped — the turn failed.")
+            revise_state.disarm()
+            break
+        usage = record_turn_metrics(follow_result, current_model, session_turns)
+        if usage is not None:
+            console.print(f"[dim]{usage}[/dim]")
+        text = _result_text(agent, follow_result)
 
 
 def run_loop(
@@ -652,7 +844,10 @@ def run_loop(
     also owns the session-sticky :class:`MemoryModeState` plus
     :class:`CurateQueue`: each turn boundary sweeps promotion
     candidates, then reviews the queue (prompting in curate mode,
-    auto-applying in silent mode).
+    auto-applying in silent mode). Armed revise rounds (``/memory
+    revise`` or the review's revise choice) run as agent turns whose
+    fenced blocks are consumed after the turn, re-invoking while the
+    user iterates.
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -683,6 +878,18 @@ def run_loop(
     memory_mode = MemoryModeState()
     curate_queue = CurateQueue()
     promotion_seen: set[str] = set()
+    revise_state = ReviseState()
+    boundary_revise: dict[str, Any] = {"template": None}
+
+    def _arm_revise_from_review(proposal: Any, instruction: str) -> str:
+        """Boundary revise choice: arm the round and stash its turn text."""
+        current = read_memory_section(proposal.section) or ""
+        revise_state.arm(proposal.section, current, instruction)
+        boundary_revise["template"] = format_revise_prompt(
+            proposal.section, current, instruction
+        )
+        return f"Revise armed for '{proposal.section}' — running."
+
     current_model = (
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
@@ -704,31 +911,45 @@ def run_loop(
             memory_snapshot = load_memory()
             for changed_path in changed:
                 console.print(MEMORY_RELOAD_NOTE.format(filename=changed_path))
+        boundary_revise["template"] = None
         curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)
         for review_line in review_memory_queue(
-            curate_queue, memory_mode, apply_memory_proposal
+            curate_queue,
+            memory_mode,
+            apply_memory_proposal,
+            on_revise=_arm_revise_from_review,
         ):
             console.print(review_line)
+        boundary_template = boundary_revise["template"]
         try:
-            text = session.prompt("> ")
+            text = (
+                boundary_template
+                if boundary_template is not None
+                else session.prompt("> ")
+            )
         except KeyboardInterrupt:
             continue  # Ctrl-C cancels the line
         except EOFError:
             break  # Ctrl-D exits
         if not text.strip():
             continue  # empty input submits nothing; re-prompt
-        action, message = dispatch(
-            text,
-            session_id=session_id,
-            index=index,
-            mode=mode,
-            current_model=current_model,
-            agent=agent,
-            session_turns=session_turns,
-            skills=skills,
-            memory_mode=memory_mode,
-            curate=curate_queue,
-        )
+        if boundary_template is not None:
+            action, message = "agent", boundary_template
+            text = f"/memory revise {revise_state.section} {revise_state.instruction}"
+        else:
+            action, message = dispatch(
+                text,
+                session_id=session_id,
+                index=index,
+                mode=mode,
+                current_model=current_model,
+                agent=agent,
+                session_turns=session_turns,
+                skills=skills,
+                memory_mode=memory_mode,
+                curate=curate_queue,
+                revise=revise_state,
+            )
         if action == "exit":
             break
         if action == "reply":
@@ -823,7 +1044,20 @@ def run_loop(
                     del history[before:]
                     logger.info("Empty turn response; retrying once.")
                 if failed:
+                    if revise_state.armed:
+                        revise_state.disarm()
+                        console.print("Revise round dropped — the turn failed.")
                     continue
+                if revise_state.armed:
+                    _drain_revise_rounds(
+                        agent,
+                        result,
+                        revise_state,
+                        cancel_event,
+                        session_turns,
+                        current_model,
+                        mode,
+                    )
                 history = getattr(agent, "messages", None)
                 if (
                     attempts == 2
@@ -840,6 +1074,9 @@ def run_loop(
                     index.ensure(session_id)
         except KeyboardInterrupt:
             cancelled = True
+            if revise_state.armed:
+                revise_state.disarm()
+                console.print("Revise round dropped — interrupted, memory unchanged.")
             cancel_armed_at = _handle_turn_cancel(
                 agent, session_id, index, cancel_event, cancel_armed_at
             )

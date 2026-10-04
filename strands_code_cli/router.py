@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import sys
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +29,8 @@ from strands_code_cli.memory_modes import (
     CurateQueue,
     MemoryModeState,
     Proposal,
+    ReviseState,
+    format_revise_prompt,
 )
 from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
@@ -54,6 +58,9 @@ _SESSION_DELETE_CONFIRM = "delete-session-confirmed"
 
 _SDK_EXTRA_HINTS = {"litellm": "litellm", "bedrock": "agentcore"}
 """Optional-extra install hints keyed by provider prefix."""
+
+_UPDATED_MARKER_RE = re.compile(r"<!--\s*updated:\s*.*?-->")
+"""Per-section freshness marker above memory headings (D-05)."""
 
 
 def _sdk_hint(selection: str) -> str:
@@ -99,6 +106,7 @@ def dispatch(
     skills: SkillIndex | None = None,
     memory_mode: MemoryModeState | None = None,
     curate: CurateQueue | None = None,
+    revise: ReviseState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -124,6 +132,9 @@ def dispatch(
         curate: Session-sticky curate queue backing /memory list,
             approve, and deny (None → throwaway empty queue, keeping
             existing callers untouched).
+        revise: Session-sticky revise-round holder armed by /memory
+            revise (None → throwaway holder, keeping existing callers
+            untouched).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -154,6 +165,8 @@ def dispatch(
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
     if cmd == "/memory":
+        if rest.partition(" ")[0].strip().lower() == "revise":
+            return _revise_action(rest, revise)
         return ("reply", _memory_message(rest, memory_mode, curate))
     if cmd == "/skills":
         return ("reply", _skills_message(rest, skills))
@@ -490,22 +503,92 @@ def apply_memory_proposal(proposal: Proposal) -> None:
     heading = f"## {proposal.section}"
     block = proposal.body if proposal.body.endswith("\n") else proposal.body + "\n"
     lines = body.splitlines(keepends=True)
-    head_idx = next(
-        (i for i, line in enumerate(lines) if line.rstrip("\n") == heading), None
-    )
+    head_idx, end = _section_span(lines, proposal.section)
     if head_idx is None:
         if lines and lines[-1].strip():
             lines.append("\n")
         lines.append(f"{heading}\n{block}")
     else:
-        end = next(
-            (i for i in range(head_idx + 1, len(lines)) if lines[i].startswith("## ")),
-            len(lines),
-        )
         insert = [block]
         if end > head_idx + 1 and lines[end - 1].strip():
             insert.insert(0, "\n")
         lines[end:end] = insert
+    dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
+
+
+def _section_span(lines: list[str], section: str) -> tuple[int | None, int]:
+    """Heading index plus end index of one ``## {section}`` span.
+
+    The end is the next ``## `` heading, a freshness marker glued to
+    one, or EOF; ``(None, len)`` when the heading is absent. The
+    marker belongs to the heading below it, never to this span.
+    """
+    heading = f"## {section}"
+    head_idx = next(
+        (i for i, line in enumerate(lines) if line.rstrip("\n") == heading), None
+    )
+    if head_idx is None:
+        return None, len(lines)
+    end = len(lines)
+    for i in range(head_idx + 1, len(lines)):
+        if lines[i].startswith("## "):
+            end = i
+            break
+        if (
+            _UPDATED_MARKER_RE.search(lines[i])
+            and i + 1 < len(lines)
+            and lines[i + 1].startswith("## ")
+        ):
+            end = i
+            break
+    return head_idx, end
+
+
+def read_memory_section(section: str) -> str | None:
+    """Current text of one .agent/MEMORY.md section (None when missing).
+
+    Trailing blank lines are stripped — an existing-but-empty section
+    reads as ``""``.
+    """
+    if not AGENT_MEMORY.exists():
+        return None
+    _frontmatter, body = parse_memory_file(AGENT_MEMORY)
+    lines = body.splitlines(keepends=True)
+    head_idx, end = _section_span(lines, section)
+    if head_idx is None:
+        return None
+    text = "".join(lines[head_idx + 1 : end])
+    if not text.strip():
+        return ""
+    return text.rstrip("\n") + "\n"
+
+
+def apply_memory_section(section: str, new_text: str) -> None:
+    """Replace one .agent/MEMORY.md section verbatim (atomic dump path).
+
+    Refreshes the section's ``<!-- updated: ... -->`` marker to today
+    (inserted when missing). A missing section is appended — revise
+    rounds arm on existing sections, but an external edit between arm
+    and accept must not crash the turn.
+    """
+    if AGENT_MEMORY.exists():
+        frontmatter, body = parse_memory_file(AGENT_MEMORY)
+    else:
+        frontmatter, body = dict(MEMORY_FRONTMATTER_DEFAULTS), ""
+    lines = body.splitlines(keepends=True)
+    head_idx, end = _section_span(lines, section)
+    block = new_text if new_text.endswith("\n") else new_text + "\n"
+    marker = f"<!-- updated: {date.today().isoformat()} -->\n"
+    if head_idx is None:
+        if lines and lines[-1].strip():
+            lines.append("\n")
+        lines.append(f"{marker}## {section}\n{block}")
+    else:
+        lines[head_idx + 1 : end] = [block]
+        if head_idx > 0 and _UPDATED_MARKER_RE.search(lines[head_idx - 1]):
+            lines[head_idx - 1] = marker
+        else:
+            lines.insert(head_idx, marker)
     dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
 
 
@@ -552,6 +635,25 @@ def _memory_message(
             return _MEMORY_USAGE
         return queue.deny(target)
     return _MEMORY_USAGE
+
+
+def _revise_action(rest: str, revise: ReviseState | None) -> tuple:
+    """Handle /memory revise: arm a revise round and start its agent turn.
+
+    Missing sections stay replies; only the armed path returns
+    ``("agent", template)``. Never prompts, never writes.
+    """
+    _verb, _, arg = rest.partition(" ")
+    section, _, instruction = arg.partition(" ")
+    section, instruction = section.strip(), instruction.strip()
+    if not section or not instruction:
+        return ("reply", _MEMORY_USAGE)
+    current = read_memory_section(section)
+    if current is None:
+        return ("reply", f"Unknown memory section {section!r}.")
+    holder = revise if revise is not None else ReviseState()
+    holder.arm(section, current, instruction)
+    return ("agent", format_revise_prompt(section, current, instruction))
 
 
 def _approve_message(mode: ModeState | None) -> tuple:

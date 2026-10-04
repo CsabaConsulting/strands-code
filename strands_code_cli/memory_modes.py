@@ -96,6 +96,47 @@ def unknown_proposal(proposal_id: str) -> str:
     return f"Unknown proposal {proposal_id!r}."
 
 
+class ReviseState:
+    """Session-sticky revise-round holder (D-08).
+
+    Armed by ``/memory revise`` (or the boundary review's revise
+    choice); the loop consumes the armed round after the agent turn.
+    In-memory like :class:`MemoryModeState` — a round never survives
+    the session.
+    """
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.section = ""
+        self.previous_text = ""
+        self.instruction = ""
+
+    def arm(self, section: str, previous_text: str, instruction: str) -> None:
+        """Arm a round for one section plus its NL instruction."""
+        self.armed = True
+        self.section = section
+        self.previous_text = previous_text
+        self.instruction = instruction
+
+    def disarm(self) -> None:
+        """Clear the round (accept, revert, abort, or missing fence)."""
+        self.armed = False
+        self.section = ""
+        self.previous_text = ""
+        self.instruction = ""
+
+
+def format_revise_prompt(section: str, current: str, instruction: str) -> str:
+    """Revise-turn prompt: quoted section plus instruction (resolved item 6)."""
+    return (
+        f"Current '{section}' section (quoted):\n{current}\n\n"
+        f"Instruction:\n{instruction}\n\n"
+        "Revise the quoted memory section per the instruction. "
+        "Reply with the FULL revised section in one fenced block, "
+        "then a one-line summary of what changed."
+    )
+
+
 class CurateQueue:
     """Pending memory proposals with session-sticky deny memory.
 

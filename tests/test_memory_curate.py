@@ -8,18 +8,36 @@ consumer functions plus source assertions, never a live REPL.
 from __future__ import annotations
 
 import sys
+import threading
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
-from strands_code_cli.loop import review_memory_queue
+import pytest
+
+from strands_code_cli.loop import (
+    _drain_revise_rounds,
+    _result_text,
+    consume_revise_turn,
+    review_memory_queue,
+)
+from strands_code_cli.memory_file import dump_memory_file
 from strands_code_cli.memory_modes import (
     MEMORY_EMPTY_QUEUE,
     CurateQueue,
     MemoryModeState,
     Proposal,
+    ReviseState,
     silent_note,
 )
-from strands_code_cli.router import USAGE_HINT, _MEMORY_USAGE, dispatch
+from strands_code_cli.mode import ModeState
+from strands_code_cli.router import (
+    USAGE_HINT,
+    _MEMORY_USAGE,
+    apply_memory_section,
+    dispatch,
+    read_memory_section,
+)
 from strands_code_cli.session_index import SessionIndex
 
 
@@ -238,6 +256,259 @@ class TestCurateLoop:
     def test_loop_boundary_wires_sweep_and_review(self):
         source = _loop_source()
         assert "curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)" in source
-        assert "review_memory_queue(\n            curate_queue, memory_mode" in source
+        assert "review_memory_queue(\n            curate_queue,\n            memory_mode" in source
         assert "memory_mode=memory_mode," in source
         assert "curate=curate_queue," in source
+
+
+def _write_memory(root: Path, body: str) -> Path:
+    """Write a tmp .agent/MEMORY.md through the atomic dump path."""
+    path = root / ".agent" / "MEMORY.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dump_memory_file(path, {"scope": "repo", "version": 1}, body)
+    return path
+
+
+def _arm(section: str = "Build", previous: str = "Run make.\n") -> ReviseState:
+    state = ReviseState()
+    state.arm(section, previous, "use uv")
+    return state
+
+
+def _non_tty(monkeypatch, *answers):
+    """Fake the typed prompt path: non-tty stdin plus scripted input."""
+    replies = iter(answers)
+    monkeypatch.setattr("builtins.input", lambda *args: next(replies))
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+
+# ----------------------------------------------------------------------
+# Revise rounds: quoted review plus accept/revert/iterate
+# ----------------------------------------------------------------------
+
+
+class TestReviseRounds:
+    def test_revise_dispatch_returns_agent_turn(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        holder = ReviseState()
+        action, message = _dispatch(
+            "/memory revise Build use uv", tmp_path, revise=holder
+        )
+        assert action == "agent"
+        assert message is not None
+        assert "Reply with the FULL revised section in one fenced block" in message
+        assert "Run make." in message  # quoted current section
+        assert holder.armed
+        assert (holder.section, holder.instruction) == ("Build", "use uv")
+
+    def test_revise_unknown_section_replies(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        holder = ReviseState()
+        action, message = _dispatch(
+            "/memory revise Nope use uv", tmp_path, revise=holder
+        )
+        assert action == "reply"
+        assert message == "Unknown memory section 'Nope'."
+        assert not holder.armed
+
+    def test_revise_needs_section_and_instruction(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        for text in ("/memory revise", "/memory revise Build"):
+            action, message = _dispatch(text, tmp_path, revise=ReviseState())
+            assert action == "reply"
+            assert message == _MEMORY_USAGE
+
+    def test_consume_accept_applies_block_verbatim(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        path = _write_memory(tmp_path, "## Build\nRun make.\n")
+        _non_tty(monkeypatch, "accept")
+        printed: list = []
+        monkeypatch.setattr(
+            "builtins.print",
+            lambda *args, **kwargs: printed.append(" ".join(str(a) for a in args)),
+        )
+        state = _arm()
+        reply = consume_revise_turn(
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            apply_memory_section,
+        )
+        assert reply == "Memory section 'Build' updated."
+        assert not state.armed
+        assert read_memory_section("Build") == "Run uv build.\n"
+        body = path.read_text(encoding="utf-8")
+        assert f"<!-- updated: {date.today().isoformat()} -->" in body
+        assert "> Run uv build." in printed  # quoted for review
+        assert "Summary: Switched to uv." in printed  # one-line summary
+
+    def test_consume_revert_leaves_file_byte_identical(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        path = _write_memory(tmp_path, "## Build\nRun make.\n")
+        before = path.read_bytes()
+        _non_tty(monkeypatch, "revert")
+        state = _arm()
+        reply = consume_revise_turn(
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            apply_memory_section,
+        )
+        assert reply == "Reverted — 'Build' unchanged."
+        assert not state.armed
+        assert path.read_bytes() == before
+
+    def test_consume_no_fence_disarms_without_prompting(self, monkeypatch):
+        def _must_not_prompt(*args):
+            raise AssertionError("no-fence path must not prompt")
+
+        monkeypatch.setattr("builtins.input", _must_not_prompt)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        state = _arm()
+        reply = consume_revise_turn("no fenced block here", state, apply_memory_section)
+        assert reply == "No fenced block found — revision discarded, 'Build' unchanged."
+        assert not state.armed
+
+    def test_consume_ctrl_c_disarms_and_reraises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        path = _write_memory(tmp_path, "## Build\nRun make.\n")
+        before = path.read_bytes()
+
+        def _cancel(*args):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", _cancel)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        state = _arm()
+        with pytest.raises(KeyboardInterrupt):
+            consume_revise_turn(
+                "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+                state,
+                apply_memory_section,
+            )
+        assert not state.armed
+        assert path.read_bytes() == before
+
+    def test_consume_iterate_rearms_with_new_instruction(self, monkeypatch):
+        _non_tty(monkeypatch, "iterate", "mention uv run")
+        state = _arm()
+        calls: list = []
+        reply = consume_revise_turn(
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            lambda section, text: calls.append((section, text)),
+        )
+        assert reply is None  # still armed: the loop re-invokes
+        assert state.armed
+        assert state.instruction == "mention uv run"
+        assert state.previous_text == "Run make.\n"
+        assert calls == []  # nothing applied yet
+
+    def test_consume_empty_iterate_instruction_fails_closed(self, monkeypatch):
+        _non_tty(monkeypatch, "iterate", "   ")
+        state = _arm()
+        reply = consume_revise_turn(
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            apply_memory_section,
+        )
+        assert reply == "Reverted — 'Build' unchanged."
+        assert not state.armed
+
+    def test_drain_iterates_with_offline_double(self, monkeypatch):
+        # No live model: a recording lambda drives the follow-up turn.
+        seen: list = []
+        canned = iter(["Again:\n```\nRun uv run build.\n```\nUses uv run."])
+
+        def _fake_agent(text):
+            seen.append(text)
+            return next(canned)
+
+        _non_tty(monkeypatch, "iterate", "use uv run", "accept")
+        state = _arm()
+        calls: list = []
+        _drain_revise_rounds(
+            _fake_agent,
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            threading.Event(),
+            [],
+            "test-model",
+            ModeState(),
+            apply_fn=lambda section, text: calls.append((section, text)),
+        )
+        assert len(seen) == 1
+        assert "use uv run" in seen[0]  # follow-up carries the new instruction
+        assert calls == [("Build", "Run uv run build.")]
+        assert not state.armed
+
+    def test_result_text_prefers_result_then_history(self):
+        assert _result_text(SimpleNamespace(), "plain") == "plain"
+        assert _result_text(SimpleNamespace(), SimpleNamespace(text="t")) == "t"
+        message = {"role": "assistant", "content": [{"text": "m"}]}
+        assert _result_text(SimpleNamespace(), SimpleNamespace(message=message)) == "m"
+        history = [
+            {"role": "user", "content": [{"text": "q"}]},
+            {"role": "assistant", "content": [{"text": "h"}]},
+        ]
+        assert _result_text(SimpleNamespace(messages=history), object()) == "h"
+        assert _result_text(SimpleNamespace(), object()) == ""
+
+    def test_apply_memory_section_replaces_and_refreshes_marker(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_memory(
+            tmp_path,
+            "<!-- updated: 2020-01-01 -->\n## Build\nRun make.\n\n## Test\nRun pytest.\n",
+        )
+        apply_memory_section("Build", "Run uv build.\n")
+        assert read_memory_section("Build") == "Run uv build.\n"
+        assert read_memory_section("Test") == "Run pytest.\n"
+        body = (tmp_path / ".agent" / "MEMORY.md").read_text(encoding="utf-8")
+        assert "2020-01-01" not in body
+        assert f"<!-- updated: {date.today().isoformat()} -->" in body
+
+    def test_apply_memory_section_appends_missing_section(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        apply_memory_section("Test", "Run pytest.\n")
+        assert read_memory_section("Test") == "Run pytest.\n"
+        assert read_memory_section("Build") == "Run make.\n"
+
+    def test_read_memory_section_missing(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert read_memory_section("Build") is None
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        assert read_memory_section("Nope") is None
+
+    def test_section_span_keeps_marker_glued_to_next_heading(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.router import apply_memory_proposal
+
+        monkeypatch.chdir(tmp_path)
+        path = _write_memory(
+            tmp_path,
+            "## Build\nRun make.\n\n<!-- updated: 2020-05-05 -->\n## Test\nRun pytest.\n",
+        )
+        assert read_memory_section("Build") == "Run make.\n"
+        apply_memory_proposal(Proposal("p1", "Build", "promoted", "Use uv run.\n"))
+        body = path.read_text(encoding="utf-8")
+        assert "<!-- updated: 2020-05-05 -->\n## Test" in body  # still glued
+        assert read_memory_section("Build") == "Run make.\n\nUse uv run.\n"
+
+    def test_loop_wires_revise_consumer(self):
+        source = _loop_source()
+        assert "revise_state = ReviseState()" in source
+        assert "revise=revise_state," in source
+        assert "on_revise=_arm_revise_from_review," in source
+        assert "_drain_revise_rounds(" in source
+        assert "consume_revise_turn(text, revise_state, writer)" in source
