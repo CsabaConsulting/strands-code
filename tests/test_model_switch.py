@@ -477,6 +477,10 @@ class TestCapabilityAlmanac:
         assert supports_media("amazon.nova-micro-v1:0") is False
         assert supports_media("amazon.nova-lite-v1:0") is False
         assert supports_media("amazon.nova-pro-v1:0") is True
+        # Nova 2 Lite takes TEXT+IMAGE+VIDEO (Bedrock modalities probe):
+        # the nova-1 rows must not swallow the nova-2 generation.
+        assert supports_media("amazon.nova-2-lite-v1:0") is True
+        assert supports_media("global.amazon.nova-2-lite-v1:0") is True
         assert supports_media("meta.llama3-70b-instruct-v1:0") is False
         assert supports_media("bedrock/mystery-vision-1") is True  # fail-open
 

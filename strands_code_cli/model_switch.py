@@ -32,6 +32,9 @@ _REASONING_SUPPORT: tuple[tuple[str | None, str | None, str | None, str | None],
     # (provider, vendor, family, name-substring); None = wildcard.
     # Fallback when the harness has no supports_thinking (version drift):
     # only anthropic thinking is verified to round-trip; all else strips.
+    # Nova 2 Lite accepts thinking blocks (live Converse probe, 2026-09-27)
+    # but our harness-invoked turns run thinking-off, so no row: the
+    # as-invoked verdict stays fail-closed until a thinking knob exists.
     (None, "anthropic", None, None),
 )
 """Fallback thinking allowlist when harness verdicts are unavailable."""
@@ -45,8 +48,11 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
     (None, "meta", None, None),
     (None, "deepseek", None, None),
     (None, "amazon", "titan", None),
-    (None, "amazon", "nova", "micro"),
-    (None, "amazon", "nova", "lite"),
+    # Nova 1 only: generation-scoped substrings. Nova 2 Lite takes
+    # TEXT+IMAGE+VIDEO (ListFoundationModels, us-west-2, 2026-09-27), so
+    # bare "micro"/"lite" would wrongly strip its media.
+    (None, "amazon", "nova", "nova-micro"),
+    (None, "amazon", "nova", "nova-lite"),
     (None, None, None, "nemotron"),
     (None, None, None, "llama"),
 )

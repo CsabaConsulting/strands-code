@@ -243,3 +243,33 @@ skipped: 0
     - "persisted sidecar stash (bytes-safe JSON, fail-soft load, traversal guard); canonical-prefix-hash restore guard; provenance-follows-thinking re-stash; TRACE_LABEL on text-ified thinking; reset on /clear + /compact"
   resolved_by: fcab5ee
   resolved_at: 2026-09-27
+- gap_id: G-05-1l
+  truth: "switching to amazon.nova-2-lite-v1:0 keeps image/video blocks (it takes TEXT+IMAGE+VIDEO)"
+  status: resolved
+  reason: "Live Bedrock modalities probe: nova-2-lite accepts IMAGE+VIDEO, but the nova-1 media-less rows matched it by substring ('lite' in 'nova-2-lite') and would placeholder-ize its media on switch"
+  severity: major
+  test: 1
+  root_cause: "Generation-unscoped name substrings in _MEDIA_LESS"
+  artifacts:
+    - path: "strands_code_cli/model_switch.py"
+      issue: "nova-1 rows over-matched nova-2 ids"
+  missing:
+    - "generation-scoped substrings (nova-micro/nova-lite); nova-2 regression assertions"
+  resolved_by: TBD
+  resolved_at: 2026-09-27
+
+## Live verification notes (2026-09-27, /tmp probes, not committed)
+
+- OpenRouter (key quota restored): /models lists 466 models incl. 17 :free;
+  live two-turn session via litellm/openrouter/qwen/qwen3.8-27b:free through
+  harness resolve + bare strands Agent succeeded. Turn 1 emitted
+  reasoningContent; turn 2 with thinking in history ACCEPTED. Our
+  fail-closed aggregator verdict (strip on switch-to) stays: one qwen model
+  does not prove all 466; per-model overrides exist for the exception.
+- Nova 2 Lite (us-west-2): ListFoundationModels modalities TEXT+IMAGE+VIDEO
+  in / TEXT out; served only via inference profile
+  (global.amazon.nova-2-lite-v1:0 answers; FM id rejects on-demand).
+  reasoningConfig enable emits native thinking; thinking-off replay of
+  those blocks ACCEPTED (no ValidationException). Almanac keeps
+  fail-closed reasoning (our turns run thinking-off) with the evidence
+  recorded in code; media rows fixed per G-05-1l.
