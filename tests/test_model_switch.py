@@ -492,6 +492,144 @@ class TestDiscoverModels:
 
 
 # ----------------------------------------------------------------------
+# Grouped picker: one model, several routes
+# ----------------------------------------------------------------------
+
+
+class TestGroupModels:
+    def test_direct_and_profiles_group_once_profiles_first(self):
+        from strands_code_cli.model_switch import group_models
+
+        direct = "anthropic.claude-haiku-4-5-20251001-v1:0"
+        us_arn = (
+            "arn:aws:bedrock:us-west-2:1:inference-profile/"
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        global_arn = (
+            "arn:aws:bedrock:us-west-2:1:inference-profile/"
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        groups = group_models([direct, us_arn, global_arn])
+        assert [base for base, _ in groups] == [direct]
+        assert groups[0][1] == [global_arn, us_arn, direct]
+
+    def test_groups_sorted_abc_custom_names_alone(self):
+        from strands_code_cli.model_switch import group_models
+
+        groups = group_models(
+            [
+                "qwen.qwen3-32b-v1:0",
+                "arn:aws:bedrock:r:1:inference-profile/my-app-profile",
+                "amazon.nova-lite-v1:0",
+            ]
+        )
+        assert [base for base, _ in groups] == [
+            "amazon.nova-lite-v1:0",
+            "my-app-profile",
+            "qwen.qwen3-32b-v1:0",
+        ]
+
+    def test_provider_name_merges_with_discovered(self):
+        from strands_code_cli.model_switch import group_models
+
+        groups = group_models(
+            [
+                "bedrock/global.anthropic.claude-opus-5",
+                "arn:aws:bedrock:r:1:inference-profile/global.anthropic.claude-opus-5",
+            ]
+        )
+        assert [base for base, _ in groups] == ["anthropic.claude-opus-5"]
+        assert len(groups[0][1]) == 2
+
+    def test_route_label_compacts_arns(self):
+        from strands_code_cli.model_switch import route_label
+
+        assert (
+            route_label("arn:aws:bedrock:us-west-2:1:inference-profile/global.foo")
+            == "profile global.foo (us-west-2)"
+        )
+        assert route_label("qwen.qwen3-32b-v1:0") == "qwen.qwen3-32b-v1:0"
+
+
+class TestTwoStepPicker:
+    _DIRECT = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    _US_ARN = (
+        "arn:aws:bedrock:us-west-2:1:inference-profile/"
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+    def _dispatch(self, monkeypatch, tmp_path, script, discovered):
+        import sys
+
+        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        calls = []
+
+        def _scripted(title, options, **kwargs):
+            calls.append(title)
+            return script[len(calls) - 1]
+
+        monkeypatch.setattr(choice_mod, "radio_choice", _scripted)
+        monkeypatch.setattr(
+            model_switch_mod, "discover_models", lambda **_: (list(discovered), False)
+        )
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model", session_id=index.mint(), index=index, current_model=None
+        )
+        return action, message, calls
+
+    def test_two_steps_confirm_full_arn(self, tmp_path, monkeypatch):
+        action, message, calls = self._dispatch(
+            monkeypatch,
+            tmp_path,
+            [self._DIRECT, self._US_ARN],
+            [self._DIRECT, self._US_ARN],
+        )
+        assert calls == ["Select model", f"Select route for {self._DIRECT}"]
+        assert (action, message) == ("model", self._US_ARN)
+
+    def test_single_route_skips_second_step(self, tmp_path, monkeypatch):
+        action, message, calls = self._dispatch(
+            monkeypatch, tmp_path, ["qwen.qwen3-32b-v1:0"], ["qwen.qwen3-32b-v1:0"]
+        )
+        assert calls == ["Select model"]
+        assert (action, message) == ("model", "qwen.qwen3-32b-v1:0")
+
+    def test_escape_at_route_step_keeps_model(self, tmp_path, monkeypatch):
+        action, message, _calls = self._dispatch(
+            monkeypatch, tmp_path, [self._DIRECT, None], [self._DIRECT, self._US_ARN]
+        )
+        assert (action, message) == ("reply", "Model unchanged.")
+
+    def test_non_tty_lists_groups_sorted(self, tmp_path, monkeypatch):
+        import sys
+
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(
+            model_switch_mod,
+            "discover_models",
+            lambda **_: (["qwen.qwen3-32b-v1:0", self._DIRECT, self._US_ARN], False),
+        )
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model", session_id=index.mint(), index=index, current_model=None
+        )
+        assert action == "reply"
+        assert f"  {self._DIRECT}:" in message  # group header
+        assert f"    {self._US_ARN}" in message  # indented full ARN
+        assert message.index("anthropic") < message.index("qwen")  # ABC order
+
+
+# ----------------------------------------------------------------------
 # Compact-replay spike on the replay model
 # ----------------------------------------------------------------------
 

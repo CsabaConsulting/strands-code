@@ -222,6 +222,60 @@ def discover_models(
         return (fallback, True)
 
 
+_ROUTE_PREFIXES = ("global.", "us.", "eu.", "apac.")
+
+
+def _base_key(entry: str) -> str:
+    """Grouping key: the model id without routing wrappers.
+
+    Strips ARN envelopes (``...inference-profile/<tail>``), ``provider/``
+    prefixes, and cross-region routing prefixes (``global.``/``us.``/``eu.``)
+    so one model invoked three ways groups once. Application profiles with
+    custom names group alone under their own tail.
+    """
+    if entry.startswith("arn:"):
+        tail = entry.rsplit("/", 1)[-1]
+    elif "/" in entry:
+        tail = entry.split("/", 1)[1]
+    else:
+        tail = entry
+    for prefix in _ROUTE_PREFIXES:
+        if tail.startswith(prefix) and "." in tail[len(prefix) :]:
+            return tail[len(prefix) :]
+    return tail
+
+
+def group_models(options: list[str]) -> list[tuple[str, list[str]]]:
+    """Group entries by base model id, ABC order, routes profiles-first.
+
+    Each group is ``(base_key, routes)`` with routes deduped; profile ARNs
+    sort before direct ids because Bedrock routes newer models through
+    profiles (a direct id may not be invokable), making the first route the
+    safest default. Order is fully deterministic.
+    """
+    groups: dict[str, list[str]] = {}
+    for entry in options:
+        groups.setdefault(_base_key(entry), []).append(entry)
+    result: list[tuple[str, list[str]]] = []
+    for base in sorted(groups):
+        routes = sorted(groups[base], key=lambda r: (not r.startswith("arn:"), r))
+        result.append((base, list(dict.fromkeys(routes))))
+    return result
+
+
+def route_label(route: str) -> str:
+    """Short picker label for a route; the value stays the verbatim string.
+
+    ``arn:aws:bedrock:us-west-2:123:inference-profile/global.foo`` becomes
+    ``profile global.foo (us-west-2)``. Non-ARN entries display verbatim.
+    """
+    if route.startswith("arn:"):
+        parts = route.split(":")
+        region = parts[3] if len(parts) > 4 else "?"
+        return f"profile {route.rsplit('/', 1)[-1]} ({region})"
+    return route
+
+
 def estimate_fit(
     messages: list[dict[str, Any]], new_id: str
 ) -> tuple[bool, float | None, int]:

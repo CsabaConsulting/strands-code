@@ -154,21 +154,36 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_harness.defaults import DEFAULT_MODEL
     from strands_harness.models import resolve_model
 
-    from strands_code_cli.model_switch import discover_models
+    from strands_code_cli.model_switch import (
+        discover_models,
+        group_models,
+        route_label,
+    )
 
     if not rest:
         configured = [current_model] if current_model else []
         options, _offline = discover_models(configured=configured)
         seen = list(dict.fromkeys(configured + options))
+        groups = group_models(seen)
         if sys.stdin.isatty():
             from strands_code_cli.choice import radio_choice
 
             try:
+                current_idx = next(
+                    (i for i, (_, routes) in enumerate(groups) if current_model in routes),
+                    0,
+                )
                 picked = radio_choice(
                     "Select model",
-                    [(entry, entry) for entry in seen]
+                    [
+                        (
+                            base,
+                            base if len(routes) == 1 else f"{base} ({len(routes)} routes)",
+                        )
+                        for base, routes in groups
+                    ]
                     + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
-                    default=0,
+                    default=current_idx,
                 )
             except RuntimeError:
                 picked = None
@@ -176,10 +191,30 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                 return ("reply", "Model unchanged.")
             if picked == _MODEL_CUSTOM:
                 return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
+            routes = next(routes for base, routes in groups if base == picked)
+            if len(routes) > 1:
+                try:
+                    picked = radio_choice(
+                        f"Select route for {picked}",
+                        [(route, route_label(route)) for route in routes],
+                        default=0,
+                    )
+                except RuntimeError:
+                    picked = None
+                if picked is None:
+                    return ("reply", "Model unchanged.")
+            else:
+                picked = routes[0]
             return ("model", picked)
         if not seen:
             return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
-        lines = ["Available models:"] + [f"  {entry}" for entry in seen]
+        lines = ["Available models:"]
+        for base, routes in groups:
+            if len(routes) == 1:
+                lines.append(f"  {routes[0]}")
+            else:
+                lines.append(f"  {base}:")
+                lines.extend(f"    {route}" for route in routes)
         lines.append(f"Custom: {_MODEL_USAGE}")
         return ("reply", "\n".join(lines))
     selection = rest.strip()
