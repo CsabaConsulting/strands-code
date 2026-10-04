@@ -225,5 +225,5 @@ skipped: 0
       issue: "apply ran switch-after-convert; model branch unguarded"
   missing:
     - "normalize_model_ref (profile ARN→tail) at router returns, direct-path validation, apply seam; switch-before-convert ordering; run_loop model-action guard"
-  resolved_by: 7838682
+  resolved_by: f429527
   resolved_at: 2026-09-27
