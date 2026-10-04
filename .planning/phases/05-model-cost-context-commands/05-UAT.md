@@ -258,6 +258,21 @@ skipped: 0
   resolved_by: c9de848
   resolved_at: 2026-09-27
 
+- gap_id: G-05-1m
+  truth: "Gemma answers on converted history with tools attached"
+  status: resolved
+  reason: "Gemma went deterministically mute (single empty text delta, ~130 billed tokens, 8/8 turns) on converted history with toolConfig. Live bisect isolated the trigger: our bracketed TRACE_LABEL pseudo-tag — not the trace content, orphans, length, or structure"
+  severity: major
+  test: 1
+  root_cause: "Label shape ([...] pseudo-tag) mutes Gemma when tools attach; verified by substitution probes (bracketed mutes 8/8, paren/colon answers 3/3)"
+  artifacts:
+    - path: "strands_code_cli/model_switch.py"
+      issue: "TRACE_LABEL shape muted Gemma"
+  missing:
+    - "relabel to paren/colon shape (live-verified); legacy label still stripped by canonical hash for pre-upgrade restore"
+  resolved_by: TBD
+  resolved_at: 2026-09-27
+
 ## Unplanned additions (user-directed, 2026-09-27)
 
 - Session deletion: `/forget <id-or-prefix>` + picker delete row (nested

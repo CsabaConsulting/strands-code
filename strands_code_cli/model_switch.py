@@ -190,10 +190,19 @@ def same_vendor(first_id: str, second_id: str) -> bool:
     return _vendor_of(first_id) == _vendor_of(second_id)
 
 
-TRACE_LABEL = (
-    "[thinking trace: internal reasoning preserved as text, not assistant speech]"
+TRACE_LABEL = "Thinking trace (internal reasoning preserved as text):"
+"""Prefix marking text-ified thinking (weak models mimic unlabeled traces).
+
+Shape is load-bearing: the retired bracketed pseudo-tag muted Gemma
+deterministically whenever tools were attached (single empty text delta,
+~130 billed tokens — live bisect, 2026-09-27). This paren/colon shape
+answers 3/3 on the same history.
+"""
+
+_LEGACY_TRACE_LABELS = (
+    "[thinking trace: internal reasoning preserved as text, not assistant speech]",
 )
-"""Prefix marking text-ified thinking (weak models mimic unlabeled traces)."""
+"""Retired labels still stripped by the canonical hash (pre-upgrade sessions)."""
 
 _MEDIA_PLACEHOLDER_RE = re.compile(r"\[(?:image|video): [^,\]]*, \d+ bytes\]")
 """Matches the media placeholders convert_history emits (kept in sync)."""
@@ -244,7 +253,7 @@ def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
                 continue
             text = block.get("text")
             if isinstance(text, str) and (
-                text.startswith(TRACE_LABEL)
+                text.startswith((TRACE_LABEL,) + _LEGACY_TRACE_LABELS)
                 or _MEDIA_PLACEHOLDER_RE.fullmatch(text) is not None
             ):
                 continue

@@ -262,6 +262,37 @@ class TestCanonicalPrefixHash:
         edited[0]["content"][0]["text"] = "run something else"
         assert canonical_prefix_hash(edited) != canonical_prefix_hash(fixture)
 
+    def test_legacy_label_still_stripped(self):
+        import copy
+        import warnings
+
+        from strands_code_cli.model_switch import (
+            _LEGACY_TRACE_LABELS,
+            TRACE_LABEL,
+            canonical_prefix_hash,
+        )
+
+        fixture = _fixture_history()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            converted = convert_history(
+                fixture, "bedrock/global.anthropic.claude-sonnet-4-6", "openai/nemotron-70b"
+            )
+        # Rewrite new labels to the retired bracketed shape: pre-upgrade
+        # sessions must keep matching the stash.
+        legacy = copy.deepcopy(converted)
+        for message in legacy:
+            for block in message.get("content", []):
+                text = block.get("text", "")
+                if text.startswith(TRACE_LABEL):
+                    block["text"] = _LEGACY_TRACE_LABELS[0] + text[len(TRACE_LABEL):]
+        assert any(
+            block.get("text", "").startswith(_LEGACY_TRACE_LABELS[0])
+            for message in legacy
+            for block in message.get("content", [])
+        )
+        assert canonical_prefix_hash(legacy) == canonical_prefix_hash(fixture)
+
 
 # ----------------------------------------------------------------------
 # Swap-seam spike: in-place assignment wins, rebuild path deleted
