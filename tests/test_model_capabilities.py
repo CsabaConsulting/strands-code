@@ -38,6 +38,17 @@ class TestLoader:
             CapabilityOverride(name_contains="gpt-oss", media=True),
         ]
 
+    def test_streaming_tools_field_parses(self, tmp_path):
+        path = _write(
+            tmp_path / "caps.yaml",
+            "overrides:\n"
+            "  - match: {vendor: meta}\n"
+            "    streaming_tools: false\n",
+        )
+        assert load_capability_overrides(path) == [
+            CapabilityOverride(vendor="meta", streaming_tools=False)
+        ]
+
     def test_missing_file_is_empty(self, tmp_path):
         assert load_capability_overrides(tmp_path / "nope.yaml") == []
 

@@ -39,6 +39,7 @@ from strands_code_cli.model_switch import (
     normalize_model_ref,
     same_vendor,
     supports_reasoning,
+    supports_streaming_tools,
     to_stash_json,
 )
 from strands_code_cli.output import output_context
@@ -476,9 +477,15 @@ def apply_model_action(
         rich.prefix_hash = canonical_prefix_hash(source)
     count = len(agent.messages)
     suffix = ", thinking restored" if restored else ""
+    tools_note = (
+        " Warning: this model rejects tool use in streaming mode — turns "
+        "will fail until a non-streaming fallback lands upstream (/model to switch back)."
+        if not supports_streaming_tools(new_id)
+        else ""
+    )
     return (
         resolved_id,
-        f"Model: {new_id} — conversation continued ({count} messages {mode_word}{suffix}).",
+        f"Model: {new_id} — conversation continued ({count} messages {mode_word}{suffix}).{tools_note}",
     )
 
 
@@ -516,6 +523,11 @@ def run_loop(
     current_model = (
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
+    if not supports_streaming_tools(current_model):
+        console.print(
+            f"[yellow]Warning: {current_model} rejects tool use in streaming "
+            "mode — turns will fail; /model to switch.[/yellow]"
+        )
     session_turns: list = []
     stash_path = rich_stash_path(index.root, session_id)
     rich = RichHistory.load(stash_path)
@@ -605,6 +617,11 @@ def run_loop(
                     # Provider/model errors (validation, throttling, ...) must
                     # fail the turn, never the session: report and re-prompt.
                     console.print(f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]")
+                    if "tool use in streaming mode" in str(exc):
+                        console.print(
+                            "[red]This model needs non-streaming tool use — "
+                            "/model to switch to a supported model.[/red]"
+                        )
                     continue
                 usage = record_turn_metrics(result, current_model, session_turns)
                 if usage is not None:

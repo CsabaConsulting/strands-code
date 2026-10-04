@@ -58,6 +58,17 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
 )
 """Model ids without native media blocks (placeholder-text precedent)."""
 
+_NO_STREAMING_TOOLS: tuple[tuple[str | None, str | None, str | None, str | None], ...] = (
+    # FAIL-OPEN: only verified rows warn. Bedrock rejects toolConfig on
+    # streaming Converse for Llama (ValidationException "doesn't support
+    # tool use in streaming mode"; non-streaming accepts — live probe on
+    # us.meta.llama4-scout-17b and us.meta.llama3-3-70b, us-west-2,
+    # 2026-09-27). Family-wide: the restriction is Bedrock-side config.
+    (None, "meta", "llama3", None),
+    (None, "meta", "llama4", None),
+)
+"""Model ids that reject tool use in streaming mode (warn, don't convert)."""
+
 _CONVERT_FITS_PCT = 70.0
 """Convert-when-fits threshold: convert below this % of the new window."""
 
@@ -159,6 +170,19 @@ def supports_media(model_id: str) -> bool:
     if hit is not None:
         return hit
     return not any(_rule_matches(rule, model_id) for rule in _MEDIA_LESS)
+
+
+def supports_streaming_tools(model_id: str) -> bool:
+    """True unless the id is verified to reject streaming tool use.
+
+    Fail-open: unlisted ids are assumed fine (only verified rows warn).
+    User overrides win first. Advisory only — it gates warnings, never
+    conversion: a warning cannot brick a model the verdict got wrong.
+    """
+    hit = _override_verdict(model_id, "streaming_tools")
+    if hit is not None:
+        return hit
+    return not any(_rule_matches(rule, model_id) for rule in _NO_STREAMING_TOOLS)
 
 
 def same_vendor(first_id: str, second_id: str) -> bool:

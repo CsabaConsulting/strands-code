@@ -528,6 +528,38 @@ class TestAggregatorIds:
         assert len(families["qwen3"]) == 2  # bedrock id + aggregator route
 
 
+class TestStreamingTools:
+    def test_llama_families_warn_rest_fail_open(self):
+        from strands_code_cli.model_switch import supports_streaming_tools
+
+        assert supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is False
+        assert supports_streaming_tools("meta.llama4-maverick-17b-instruct-v1:0") is False
+        assert supports_streaming_tools("us.meta.llama3-3-70b-instruct-v1:0") is False
+        assert (
+            supports_streaming_tools("us.anthropic.claude-haiku-4-5-20251001-v1:0")
+            is True
+        )
+        assert supports_streaming_tools("bedrock/mystery-model-1") is True
+
+    def test_override_beats_shipped_rows(self, monkeypatch):
+        import strands_code_cli.model_capabilities as caps
+        from strands_code_cli.model_capabilities import CapabilityOverride
+        from strands_code_cli.model_switch import supports_streaming_tools
+
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [CapabilityOverride(vendor="meta", streaming_tools=True)],
+        )
+        assert supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is True
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [CapabilityOverride(vendor="qwen", streaming_tools=False)],
+        )
+        assert supports_streaming_tools("qwen.qwen3-32b-v1:0") is False
+
+
 class TestRichHistory:
     def _agent_with_thinking(self, tmp_path):
         import uuid
@@ -826,6 +858,90 @@ class TestTurnGuard:
         index = SessionIndex(tmp_path / "index")
         loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
         assert "Model switch failed (boom); session unchanged." in capsys.readouterr().out
+
+    def test_streaming_tool_error_hints_model_switch(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+        prompts = iter(["hello"])
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration:
+                    raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+
+        def _boom(agent, text, event):
+            raise RuntimeError(
+                "An error occurred (ValidationException) when calling the "
+                "ConverseStream operation: This model doesn't support tool "
+                "use in streaming mode."
+            )
+
+        monkeypatch.setattr(loop_mod, "_invoke_agent", _boom)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "start_steering_reader",
+            lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
+        )
+        agent = SimpleNamespace(messages=[], _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(
+            agent,
+            session_id=index.mint(),
+            index=index,
+            model_id="us.meta.llama4-scout-17b-instruct-v1:0",
+        )
+        out = capsys.readouterr().out
+        assert "Turn failed (RuntimeError)" in out
+        assert "needs non-streaming tool use" in out
+
+    def test_startup_on_llama_warns_once(self, tmp_path, monkeypatch, capsys):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        agent = SimpleNamespace(messages=[], _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(
+            agent,
+            session_id=index.mint(),
+            index=index,
+            model_id="us.meta.llama4-scout-17b-instruct-v1:0",
+        )
+        out = capsys.readouterr().out
+        # Rich wraps the console line; the reply-string test pins the full text.
+        assert out.count("rejects tool use in streaming") == 1
 
 
 # ----------------------------------------------------------------------
@@ -1622,6 +1738,36 @@ class TestIdleOnlySwap:
         assert resolved is None
         assert reply == "Model switches apply at the idle prompt — wait for the turn to finish."
         assert agent.model is before
+
+    def test_switch_to_llama_warns_in_reply(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import apply_model_action
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
+        agent("first ask")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            resolved, reply = apply_model_action(
+                agent,
+                "us.meta.llama4-scout-17b-instruct-v1:0",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+            )
+        assert resolved is not None
+        assert "rejects tool use in streaming mode" in reply
+
+        agent2 = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
+        agent2("first ask")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, reply2 = apply_model_action(
+                agent2,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+            )
+        assert "rejects tool use in streaming mode" not in reply2
 
     def test_bad_selection_leaves_session_untouched(self, tmp_path):
         import copy

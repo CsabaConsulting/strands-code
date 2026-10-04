@@ -31,7 +31,7 @@ _CONFIG_DIR_NAME = "strands-code"
 _CAPABILITIES_FILE_NAME = "model-capabilities.yaml"
 
 _MATCH_KEYS = {"provider", "vendor", "family", "name_contains"}
-_ENTRY_KEYS = {"match", "reasoning", "media"}
+_ENTRY_KEYS = {"match", "reasoning", "media", "streaming_tools"}
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,7 @@ class CapabilityOverride:
     name_contains: str | None = None
     reasoning: bool | None = None
     media: bool | None = None
+    streaming_tools: bool | None = None
 
 
 def default_capabilities_path() -> Path:
@@ -107,7 +108,7 @@ def _parse_entry(entry: object, pos: int) -> CapabilityOverride | None:
             return None
         normalized[key] = value.lower()
     effects: dict[str, bool] = {}
-    for field in ("reasoning", "media"):
+    for field in ("reasoning", "media", "streaming_tools"):
         value = entry.get(field)
         if value is not None and not isinstance(value, bool):
             logger.warning(
@@ -123,6 +124,7 @@ def _parse_entry(entry: object, pos: int) -> CapabilityOverride | None:
         name_contains=normalized.get("name_contains"),
         reasoning=effects.get("reasoning"),
         media=effects.get("media"),
+        streaming_tools=effects.get("streaming_tools"),
     )
 
 

@@ -264,6 +264,12 @@ skipped: 0
   picker + explicit confirm, list refreshes). Shared `forget_session` core:
   snapshot dir (traversal-guarded), stash sidecar, index entry. Refuses the
   active session and ambiguous prefixes; pure-orphan dirs forgettable.
+- Streaming-tool forewarning: almanac `supports_streaming_tools` (fail-open,
+  overrideable `streaming_tools` field; llama3/llama4 rows from live
+  probes). Warns in the `/model` reply, at startup on a known-bad
+  persisted model, and hints `/model` on the matching turn failure.
+  Advisory only — never gates conversion. Functional fix (non-streaming
+  fallback) is upstream.
 
 ## Live verification notes (2026-09-27, /tmp probes, not committed)
 
