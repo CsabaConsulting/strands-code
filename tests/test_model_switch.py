@@ -1116,6 +1116,31 @@ class TestCascadePicker:
         assert action == "reply"
         assert "Unknown model" in message
 
+    def test_missing_sdk_names_the_extra(self, tmp_path, monkeypatch):
+        import strands_harness.models as harness_models
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        def _boom(selection, default):
+            raise ImportError("No module named 'litellm'")
+
+        monkeypatch.setattr(harness_models, "resolve_model", _boom)
+        index = SessionIndex(tmp_path / "index")
+        _, litellm_msg = dispatch(
+            "/model litellm/openrouter/qwen/qwen3-32b",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert "strands-code-agent[litellm]" in litellm_msg
+        _, bedrock_msg = dispatch(
+            "/model some-bare-id", session_id=index.mint(), index=index
+        )
+        assert "strands-code-agent[agentcore]" in bedrock_msg
+        _, other_msg = dispatch(
+            "/model ollama/llama3", session_id=index.mint(), index=index
+        )
+        assert "provider SDK not installed" in other_msg
+
 
 # ----------------------------------------------------------------------
 # Compact-replay spike on the replay model

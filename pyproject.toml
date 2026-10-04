@@ -38,6 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 agentcore = ["boto3>=1.35.0"]
+litellm = ["litellm>=1.104"]
 
 [project.scripts]
 strands-code = "strands_code_cli.main:main"

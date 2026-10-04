@@ -43,6 +43,24 @@ Without AWS credentials the CLI stops with a Bedrock setup pointer (exit 2).
 With credentials it uses Bedrock; the provider choice persists to a config
 file for later `/model` switching (Phase 5).
 
+## Optional providers
+
+Base install covers Bedrock and direct-provider ids. Two opt-in extras:
+
+```bash
+uv sync --extra agentcore   # Bedrock model discovery + AgentCore sandbox (boto3)
+uv sync --extra litellm     # OpenRouter / exotic providers via litellm/ ids
+```
+
+OpenRouter-style endpoints need two env vars (never stored in the repo):
+
+```bash
+export LITELLM_BASE_URL="https://openrouter.ai/api/v1"
+export LITELLM_API_KEY="<key>"
+```
+
+then `/model litellm/openrouter/<vendor>/<model>`.
+
 ## REPL basics (Phase 1)
 
 - Type an ask, get a streamed answer, keep asking — one conversation.

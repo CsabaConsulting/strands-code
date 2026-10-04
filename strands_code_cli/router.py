@@ -28,6 +28,26 @@ _MODEL_CUSTOM = "custom-model-id"
 _MODEL_BACK = "back-one-level"
 _MODEL_CANCEL = "cancel-stay-with-current"
 
+_SDK_EXTRA_HINTS = {"litellm": "litellm", "bedrock": "agentcore"}
+"""Optional-extra install hints keyed by provider prefix."""
+
+
+def _sdk_hint(selection: str) -> str:
+    """Install hint for a missing provider SDK (ImportError path).
+
+    Bare ids and ARNs resolve through Bedrock (boto3, ``agentcore``
+    extra); ``litellm/`` ids need the ``litellm`` extra. Anything else
+    keeps the generic pointer.
+    """
+    if selection.startswith("arn:") or "/" not in selection:
+        provider = "bedrock"
+    else:
+        provider = selection.split("/", 1)[0].lower()
+    extra = _SDK_EXTRA_HINTS.get(provider)
+    if extra is None:
+        return " (provider SDK not installed)"
+    return f" (install the '{extra}' extra: pip install strands-code-agent[{extra}])"
+
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
@@ -347,7 +367,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     except ValueError as exc:
         return ("reply", f"Unknown model {selection!r}: {exc}")
     except ImportError as exc:
-        return ("reply", f"Cannot use model {selection!r}: {exc} (provider SDK not installed)")
+        return ("reply", f"Cannot use model {selection!r}: {exc}{_sdk_hint(selection)}")
     return ("model", selection)
 
 
