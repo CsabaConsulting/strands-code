@@ -8,11 +8,11 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 2
-name: Usage line and /cost
+number: 3
+name: /context report
 expected: |
-  After any turn a 451.27K (45%)-style usage line appears; /cost shows
-  per-turn rows plus totals, with money figures only for priced ids.
+  /context shows tokens, percentage, message/tool counts, and
+  provider/model name, all present.
 awaiting: user response
 
 ## Tests
@@ -25,7 +25,8 @@ note: Re-tested 2026-09-27 on 8ca53ddd (Gemma relabel verified live; gaps G-05-1
 
 ### 2. Usage line and /cost
 expected: After any turn a 451.27K (45%)-style usage line appears; /cost shows per-turn rows plus totals, with money figures only for priced ids.
-result: [pending]
+result: pass
+note: Verified 2026-10-04 on Gemma-3-27b (8ca53ddd): post-turn lines `12.66K (10%) $0.00` / `25.58K (20%) $0.01`; /cost rows + totals + `Prices: Bedrock live …` + footer. Kill-switch run showed tokens-only with `Prices: unknown.` Observation (not a gap): Gemma first answered a stale question (Belgium for Netherlands) in the 50+ message session, then self-corrected — model confusion, plus known plan-shape mimicry.
 
 ### 3. /context report
 expected: /context shows tokens, percentage, message/tool counts, and provider/model name, all present.
