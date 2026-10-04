@@ -241,5 +241,5 @@ skipped: 0
       issue: "unlabeled trace text; no canonical prefix fingerprint"
   missing:
     - "persisted sidecar stash (bytes-safe JSON, fail-soft load, traversal guard); canonical-prefix-hash restore guard; provenance-follows-thinking re-stash; TRACE_LABEL on text-ified thinking; reset on /clear + /compact"
-  resolved_by: TBD
+  resolved_by: fcab5ee
   resolved_at: 2026-09-27
