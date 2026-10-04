@@ -34,6 +34,7 @@ from strands_code_cli.model_switch import (
     apply_switch,
     convert_history,
     estimate_fit,
+    normalize_model_ref,
     same_vendor,
     supports_reasoning,
 )
@@ -341,7 +342,9 @@ def apply_model_action(
 
     Args:
         agent: Live session agent.
-        new_id: Validated ``provider/name`` selection (verbatim).
+        new_id: Validated ``provider/name`` selection (verbatim; profile
+            ARNs are normalized to tails, and the switch resolves before
+            any history mutation so failures leave the session untouched).
         turn_running: True when a turn is in flight → refuse.
         current_model: Active model id string for the fit estimate.
         rich: Loop-owned richest-variant stash (None → convert only).
@@ -351,6 +354,10 @@ def apply_model_action(
     """
     if turn_running:
         return (None, MODEL_REFUSAL)
+    new_id = normalize_model_ref(new_id)
+    # Switch first: resolve raises before any history mutation, so a bad
+    # selection leaves the session (model AND messages) untouched.
+    _model, resolved_id = apply_switch(agent, new_id)
     source = list(agent.messages)
     restored = False
     if (
@@ -385,7 +392,6 @@ def apply_model_action(
         rich.messages = copy.deepcopy(source)
         rich.model_id = current_model
         rich.length = len(source)
-    _model, resolved_id = apply_switch(agent, new_id)
     count = len(agent.messages)
     suffix = ", thinking restored" if restored else ""
     return (
@@ -464,9 +470,13 @@ def run_loop(
                 index.ensure(session_id)
             continue
         if action == "model" and message is not None:
-            resolved_id, reply = apply_model_action(
-                agent, message, turn_running=False, current_model=current_model, rich=rich
-            )
+            try:
+                resolved_id, reply = apply_model_action(
+                    agent, message, turn_running=False, current_model=current_model, rich=rich
+                )
+            except Exception as exc:  # noqa: BLE001 — a failed switch must not kill the session
+                console.print(f"Model switch failed ({exc}); session unchanged.")
+                continue
             console.print(reply)
             if resolved_id is not None:
                 current_model = message  # verbatim selection string persists

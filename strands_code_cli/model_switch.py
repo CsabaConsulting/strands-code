@@ -479,6 +479,25 @@ def model_id_of(model: Any, fallback: str) -> str:
     return fallback
 
 
+def normalize_model_ref(selection: str) -> str:
+    """Map a display selection to its harness-resolvable model reference.
+
+    Discovery keeps inference-profile ARNs verbatim (prefixes intact), but
+    the harness provider splitter chokes on full ARNs — the profile-id tail
+    (``us.anthropic....``) is the valid Bedrock Converse identifier and the
+    form configs use. Anything else passes through untouched.
+
+    Args:
+        selection: Picker route or ``/model`` argument, verbatim.
+
+    Returns:
+        The tail profile id for ``:inference-profile/`` ARNs, else selection.
+    """
+    if selection.startswith("arn:") and ":inference-profile/" in selection:
+        return selection.rsplit("/", 1)[-1]
+    return selection
+
+
 def apply_switch(agent: Any, new_string: str, default: str | None = None) -> tuple[Any, str]:
     """Resolve and in-place swap the agent's model (tracer-winning seam).
 
@@ -496,6 +515,7 @@ def apply_switch(agent: Any, new_string: str, default: str | None = None) -> tup
     """
     from strands_harness.models import resolve_model
 
+    new_string = normalize_model_ref(new_string)
     model = resolve_model(new_string, default or new_string)
     agent.model = model
     return (model, model_id_of(model, new_string))

@@ -193,6 +193,47 @@ class TestResolveSpike:
         assert model is not None
 
 
+class TestNormalizeModelRef:
+    _ARN = (
+        "arn:aws:bedrock:us-west-2:1:inference-profile/"
+        "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+    def test_profile_arn_maps_to_tail(self):
+        from strands_code_cli.model_switch import normalize_model_ref
+
+        assert (
+            normalize_model_ref(self._ARN)
+            == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+    @pytest.mark.parametrize(
+        "selection",
+        [
+            "us.anthropic.claude-sonnet-4-6",
+            "anthropic.claude-sonnet-4-6",
+            "bedrock/global.anthropic.claude-opus-5",
+            "litellm/openrouter/x",
+            "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-v2",
+            "",
+        ],
+    )
+    def test_everything_else_passes_through(self, selection):
+        from strands_code_cli.model_switch import normalize_model_ref
+
+        assert normalize_model_ref(selection) == selection
+
+    def test_apply_switch_accepts_full_profile_arn(self):
+        from types import SimpleNamespace
+
+        from strands_code_cli.model_switch import apply_switch
+
+        agent = SimpleNamespace(model="old", messages=[])
+        _model, resolved = apply_switch(agent, self._ARN)
+        assert type(agent.model).__name__ == "BedrockModel"
+        assert resolved == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
 # ----------------------------------------------------------------------
 # Swap-seam spike: in-place assignment wins, rebuild path deleted
 # ----------------------------------------------------------------------
@@ -600,6 +641,47 @@ class TestTurnGuard:
         assert calls == ["hello", "again"]  # re-prompted after each failure
         assert "Turn failed (RuntimeError): boom" in capsys.readouterr().out
 
+    def test_model_action_error_fails_switch_not_session(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        from strands_code_cli.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+        prompts = iter(["/model bedrock/x"])
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration:
+                    raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+
+        def _boom(agent, message, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(loop_mod, "apply_model_action", _boom)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "start_steering_reader",
+            lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
+        )
+        agent = SimpleNamespace(messages=[], model="bedrock/x", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        assert "Model switch failed (boom); session unchanged." in capsys.readouterr().out
+
 
 # ----------------------------------------------------------------------
 # estimate_fit spike: local estimator vs MODEL_LIMITS
@@ -944,8 +1026,10 @@ class TestCascadePicker:
         )
         return action, message, calls
 
-    def test_full_cascade_confirms_full_arn(self, tmp_path, monkeypatch):
+    def test_full_cascade_normalizes_profile_arn_to_tail(self, tmp_path, monkeypatch):
         # Single vendor/family/model auto-advance; only vendor + route ask.
+        # Full profile ARNs resolve nowhere (the harness provider splitter
+        # rejects them), so the loop receives the Converse-valid tail.
         action, message, calls = self._dispatch(
             monkeypatch,
             tmp_path,
@@ -953,7 +1037,10 @@ class TestCascadePicker:
             [self._DIRECT, self._US_ARN],
         )
         assert calls == ["Select vendor", f"Select route for {self._DIRECT}"]
-        assert (action, message) == ("model", self._US_ARN)
+        assert (action, message) == (
+            "model",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
 
     def test_four_levels_when_tree_branches(self, tmp_path, monkeypatch):
         action, message, calls = self._dispatch(
@@ -974,7 +1061,10 @@ class TestCascadePicker:
             "Select anthropic claude model",
             f"Select route for {self._DIRECT}",
         ]
-        assert (action, message) == ("model", self._US_ARN)
+        assert (action, message) == (
+            "model",
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        )
 
     def test_single_route_skips_deeper_steps(self, tmp_path, monkeypatch):
         action, message, calls = self._dispatch(
@@ -1264,6 +1354,19 @@ class TestModelRouterBranch:
         )
         assert (action, message) == ("model", "us.anthropic.claude-sonnet-4-6")
 
+    def test_full_profile_arn_direct_maps_to_tail(self, tmp_path):
+        from strands_code_cli.router import dispatch
+        from strands_code_cli.session_index import SessionIndex
+
+        index = SessionIndex(tmp_path / "index")
+        action, message = dispatch(
+            "/model arn:aws:bedrock:us-west-2:1:inference-profile/"
+            "us.anthropic.claude-sonnet-4-6",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert (action, message) == ("model", "us.anthropic.claude-sonnet-4-6")
+
     def test_bare_model_offline_lists_configured(self, tmp_path, monkeypatch):
         import sys
 
@@ -1374,6 +1477,27 @@ class TestIdleOnlySwap:
         assert resolved is None
         assert reply == "Model switches apply at the idle prompt — wait for the turn to finish."
         assert agent.model is before
+
+    def test_bad_selection_leaves_session_untouched(self, tmp_path):
+        import copy
+
+        from strands_code_cli.loop import apply_model_action
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
+        agent("first ask")
+        before_model = agent.model
+        before_messages = copy.deepcopy(agent.messages)
+        with pytest.raises(ValueError, match="Unknown model provider"):
+            apply_model_action(
+                agent,
+                "bogus/xyz",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+            )
+        # The switch resolves before any history mutation: model AND
+        # messages are exactly as they were.
+        assert agent.model is before_model
+        assert agent.messages == before_messages
 
 
 class TestModelPersistence:

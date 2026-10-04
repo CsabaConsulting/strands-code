@@ -185,6 +185,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_code_cli.model_switch import (
         build_model_tree,
         discover_models,
+        normalize_model_ref,
         route_label,
     )
 
@@ -332,7 +333,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                     models = next(m for name, m in families if name == family)
                     routes = next(r for b, r in models if b == picks[2])
                     if len(routes) == 1:
-                        return ("model", routes[0])
+                        return ("model", normalize_model_ref(routes[0]))
                     picked = _ask(
                         f"Select route for {picks[2]}",
                         [(route, route_label(route)) for route in routes]
@@ -345,7 +346,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                         backing = True
                         stage = 2
                         continue
-                    return ("model", picked)
+                    return ("model", normalize_model_ref(picked))
         if not seen:
             return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
         lines = ["Available models:"]
@@ -363,12 +364,12 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         return ("reply", "\n".join(lines))
     selection = rest.strip()
     try:
-        resolve_model(selection, DEFAULT_MODEL)
+        resolve_model(normalize_model_ref(selection), DEFAULT_MODEL)
     except ValueError as exc:
         return ("reply", f"Unknown model {selection!r}: {exc}")
     except ImportError as exc:
         return ("reply", f"Cannot use model {selection!r}: {exc}{_sdk_hint(selection)}")
-    return ("model", selection)
+    return ("model", normalize_model_ref(selection))
 
 
 def _mode_holder(mode: ModeState | None) -> ModeState:
