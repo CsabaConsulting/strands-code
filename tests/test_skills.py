@@ -10,10 +10,13 @@ network is touched here; fixtures are tmp_path-built skill trees.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from prompt_toolkit.completion import CompleteEvent, DynamicCompleter
 from prompt_toolkit.document import Document
+from prompt_toolkit.history import InMemoryHistory
 
+import strands_code_cli.loop as loop_module
 from strands_code_cli.completer import SlashCompleter, build_completer
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
@@ -423,3 +426,33 @@ class TestSkillCompleter:
             / "loop.py"
         ).read_text(encoding="utf-8")
         assert loop_source.count("completer=build_completer") == 1
+
+    def test_run_loop_startup_prints_shadow_warnings_once(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "model")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(loop_module, "_history", lambda: InMemoryHistory())
+
+        seen: dict = {}
+
+        class _FakeSession:
+            def __init__(self, history=None, completer=None):
+                seen["history"] = history
+                seen["completer"] = completer
+
+            def prompt(self, *args, **kwargs):
+                raise EOFError
+
+        monkeypatch.setattr(loop_module, "PromptSession", _FakeSession)
+        agent = SimpleNamespace(messages=[], add_hook=lambda *a, **k: None)
+        loop_module.run_loop(
+            agent,
+            session_id="startup-warn",
+            index=SessionIndex(tmp_path / "index"),
+            model_id="test-model",
+        )
+        out = capsys.readouterr().out
+        assert out.count("Skill 'model' shadowed by builtin '/model'") == 1
+        assert isinstance(seen["completer"], DynamicCompleter)
