@@ -335,3 +335,32 @@ skipped: 0
   `context_window_limit not set` console line is the harness's own
   separate estimate, not ours. Almanac extension (documented windows /
   prices per Bedrock family) offered, scope pending.
+
+## Live price/window almanac (2026-10-04, option (a) + OpenRouter)
+
+- New `strands_code_cli/live_pricing.py`: layered display-only
+  resolution. Prices: Bedrock Price List (24h disk cache, standard
+  on-demand tier only) -> OpenRouter /models (24h cache, routed ids
+  only) -> LiteLLM bundled model_cost (when installed) -> static
+  table. Windows: OpenRouter context_length -> LiteLLM
+  max_input_tokens -> static (no AWS API exposes windows).
+- Price List findings (live): Bedrock model APIs carry no
+  window/price fields; `AmazonBedrock` Price List records do, keyed by
+  parsing `usagetype` (region prefix + `-(input|output)-tokens` +
+  tier). `inferenceType`/`feature` are unreliable tier signals
+  (priority records claim On-demand; batch shares Input tokens), so
+  the usagetype suffix (exactly `-tokens` or `-tokens-standard`) is
+  the arbiter. Routed ids (`us.*`) deliberately miss live (they pay
+  cross-region prices) and fall to LiteLLM/static.
+- OpenRouter `/models` verified public (no key): per-token USD +
+  context_length for 466 models; only consulted for openrouter-routed
+  ids (the billing party prices the call).
+- `/cost` gains a `Prices: <provenance>.` line; every layer fails
+  soft; stale cache serves during outages with 10-min cooldown;
+  `STRANDS_CODE_NO_LIVE_PRICING=1` forces static-only (suite-wide
+  hermetic default via tests/conftest.py).
+- Live cross-check us-west-2: Mistral Large 3 $0.50/$1.50, Gemma 27B
+  $0.23/$0.38, Qwen3 32B $0.15/$0.60 (all match LiteLLM to the cent);
+  us.Haiku 4-5 falls to LiteLLM $1.10/$5.50 (routed form). No
+  user-facing source toggle: automatic layering already yields the
+  most precise available number, provenance shows what won.
