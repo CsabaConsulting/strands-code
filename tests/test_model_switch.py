@@ -665,6 +665,56 @@ class TestCascadePicker:
         )
         assert (action, message) == ("reply", "Model unchanged.")
 
+    def test_back_from_family_returns_to_vendor(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _MODEL_BACK
+
+        action, message, calls = self._dispatch(
+            monkeypatch,
+            tmp_path,
+            ["anthropic", _MODEL_BACK, "qwen"],
+            ["anthropic.fable-5", self._DIRECT, "qwen.qwen3-32b-v1:0"],
+        )
+        assert calls == ["Select vendor", "Select anthropic family", "Select vendor"]
+        assert (action, message) == ("model", "qwen.qwen3-32b-v1:0")
+
+    def test_back_from_route_returns_to_model(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _MODEL_BACK
+
+        opus = "anthropic.claude-opus-5"
+        action, message, calls = self._dispatch(
+            monkeypatch,
+            tmp_path,
+            ["anthropic", "claude", self._DIRECT, _MODEL_BACK, opus],
+            ["anthropic.fable-5", opus, self._DIRECT, self._US_ARN],
+        )
+        assert calls == [
+            "Select vendor",
+            "Select anthropic family",
+            "Select anthropic claude model",
+            f"Select route for {self._DIRECT}",
+            "Select anthropic claude model",
+        ]
+        assert (action, message) == ("model", opus)
+
+    def test_back_skips_auto_advance_levels(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import _MODEL_BACK
+
+        # One vendor, one family: Back from the model step lands on the
+        # vendor step, not on the auto-advanced family level.
+        action, message, calls = self._dispatch(
+            monkeypatch,
+            tmp_path,
+            ["amazon", _MODEL_BACK, "amazon", "amazon.nova-pro-v1:0"],
+            ["amazon.nova-lite-v1:0", "amazon.nova-pro-v1:0"],
+        )
+        assert calls == [
+            "Select vendor",
+            "Select amazon nova model",
+            "Select vendor",
+            "Select amazon nova model",
+        ]
+        assert (action, message) == ("model", "amazon.nova-pro-v1:0")
+
     def test_non_tty_lists_tree_sorted(self, tmp_path, monkeypatch):
         import sys
 

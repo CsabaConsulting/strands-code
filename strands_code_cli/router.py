@@ -25,6 +25,7 @@ USAGE_HINT = (
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
 _MODEL_CUSTOM = "custom-model-id"
+_MODEL_BACK = "back-one-level"
 
 _DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
@@ -180,71 +181,134 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
             def _unchanged():
                 return ("reply", "Model unchanged.")
 
-            picked = _ask(
-                "Select vendor",
-                [
-                    (
-                        vendor,
-                        f"{vendor} ({sum(len(models) for _, models in families)} models)",
+            # Cascade loop: each non-top level offers Back; going back
+            # re-shows the previous level with the earlier pick preselected.
+            # picks[0..2] = vendor/family/base; deeper picks clear on change.
+            picks: list = [None, None, None]
+            stage = 0
+            backing = False
+            vendor = family = ""
+            while True:
+                if stage == 0:
+                    items = [
+                        (
+                            v,
+                            f"{v} ({sum(len(m) for _, m in f)} models)",
+                        )
+                        for v, f in tree
+                    ]
+                    values = [v for v, _ in items]
+                    default = (
+                        values.index(picks[0])
+                        if picks[0] in values
+                        else _default_index(
+                            tree,
+                            lambda vf: any(
+                                current_model in routes
+                                for _, models in vf[1]
+                                for _, routes in models
+                            ),
+                        )
                     )
-                    for vendor, families in tree
-                ]
-                + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
-                _default_index(
-                    tree,
-                    lambda vf: any(
-                        current_model in routes
-                        for _, models in vf[1]
-                        for _, routes in models
-                    ),
-                ),
-            )
-            if picked is None:
-                return _unchanged()
-            if picked == _MODEL_CUSTOM:
-                return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
-            families = next(fams for vendor, fams in tree if vendor == picked)
-            if len(families) == 1:
-                picked_family = families[0][0]
-            else:
-                picked_family = _ask(
-                    f"Select {picked} family",
-                    [
-                        (family, f"{family} ({len(models)} models)")
-                        for family, models in families
-                    ],
-                    _default_index(
-                        families,
-                        lambda fm: any(current_model in routes for _, routes in fm[1]),
-                    ),
-                )
-                if picked_family is None:
-                    return _unchanged()
-            models = next(m for family, m in families if family == picked_family)
-            if len(models) == 1:
-                base, routes = models[0]
-            else:
-                base = _ask(
-                    f"Select {picked} {picked_family} model",
-                    [
-                        (b, b if len(r) == 1 else f"{b} ({len(r)} routes)")
-                        for b, r in models
-                    ],
-                    _default_index(models, lambda br: current_model in br[1]),
-                )
-                if base is None:
-                    return _unchanged()
-                routes = next(r for b, r in models if b == base)
-            if len(routes) > 1:
-                picked_route = _ask(
-                    f"Select route for {base}",
-                    [(route, route_label(route)) for route in routes],
-                    0,
-                )
-                if picked_route is None:
-                    return _unchanged()
-                return ("model", picked_route)
-            return ("model", routes[0])
+                    picked = _ask(
+                        "Select vendor",
+                        items + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")],
+                        default,
+                    )
+                    if picked is None:
+                        return _unchanged()
+                    if picked == _MODEL_CUSTOM:
+                        return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
+                    vendor = picked
+                    picks = [vendor, None, None]
+                    backing = False
+                    stage = 1
+                elif stage == 1:
+                    families = next(f for v, f in tree if v == vendor)
+                    if len(families) == 1:
+                        if backing:
+                            stage = 0
+                            continue
+                        family = families[0][0]
+                        picks[1] = family
+                        stage = 2
+                        continue
+                    backing = False
+                    names = [name for name, _ in families]
+                    picked = _ask(
+                        f"Select {vendor} family",
+                        [(name, f"{name} ({len(m)} models)") for name, m in families]
+                        + [(_MODEL_BACK, "← Back to vendors")],
+                        names.index(picks[1])
+                        if picks[1] in names
+                        else _default_index(
+                            families,
+                            lambda fm: any(
+                                current_model in routes for _, routes in fm[1]
+                            ),
+                        ),
+                    )
+                    if picked is None:
+                        return _unchanged()
+                    if picked == _MODEL_BACK:
+                        backing = True
+                        stage = 0
+                        continue
+                    family = picked
+                    picks[1:] = [family, None]
+                    stage = 2
+                elif stage == 2:
+                    families = next(f for v, f in tree if v == vendor)
+                    models = next(m for name, m in families if name == family)
+                    if len(models) == 1:
+                        if backing:
+                            stage = 1
+                            continue
+                        picks[2] = models[0][0]
+                        stage = 3
+                        continue
+                    backing = False
+                    bases = [b for b, _ in models]
+                    picked = _ask(
+                        f"Select {vendor} {family} model",
+                        [
+                            (b, b if len(r) == 1 else f"{b} ({len(r)} routes)")
+                            for b, r in models
+                        ]
+                        + [(_MODEL_BACK, "← Back to families")],
+                        bases.index(picks[2])
+                        if picks[2] in bases
+                        else _default_index(
+                            models, lambda br: current_model in br[1]
+                        ),
+                    )
+                    if picked is None:
+                        return _unchanged()
+                    if picked == _MODEL_BACK:
+                        backing = True
+                        stage = 1
+                        continue
+                    picks[2] = picked
+                    stage = 3
+                else:
+                    families = next(f for v, f in tree if v == vendor)
+                    models = next(m for name, m in families if name == family)
+                    routes = next(r for b, r in models if b == picks[2])
+                    if len(routes) == 1:
+                        return ("model", routes[0])
+                    picked = _ask(
+                        f"Select route for {picks[2]}",
+                        [(route, route_label(route)) for route in routes]
+                        + [(_MODEL_BACK, "← Back to models")],
+                        0,
+                    )
+                    if picked is None:
+                        return _unchanged()
+                    if picked == _MODEL_BACK:
+                        backing = True
+                        stage = 2
+                        continue
+                    return ("model", picked)
         if not seen:
             return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
         lines = ["Available models:"]
