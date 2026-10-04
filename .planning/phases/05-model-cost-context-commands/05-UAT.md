@@ -270,7 +270,7 @@ skipped: 0
       issue: "TRACE_LABEL shape muted Gemma"
   missing:
     - "relabel to paren/colon shape (live-verified); legacy label still stripped by canonical hash for pre-upgrade restore"
-  resolved_by: TBD
+  resolved_by: 71d261c
   resolved_at: 2026-09-27
 
 ## Unplanned additions (user-directed, 2026-09-27)
