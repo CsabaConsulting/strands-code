@@ -408,3 +408,18 @@ skipped: 0
     - "per-row turn model with report-model fallback; per-row pricing; mixed provenance label"
   resolved_by: b24b188
   resolved_at: 2026-10-04
+
+- gap_id: G-05-6a
+  truth: "/model typed mid-turn prints the idle-only refusal and leaves the turn undisturbed"
+  status: resolved
+  reason: "Test 6 attempt: mid-turn /model was captured as steering ('Steering noted'), cancelled the next write with a nonsense redirect, and derailed the turn — no refusal anywhere"
+  severity: major
+  test: 6
+  root_cause: "Steering reader armed every mid-turn line with no slash awareness"
+  artifacts:
+    - path: "strands_code_cli/steering.py"
+      issue: "no slash interception in the reader path"
+  missing:
+    - "mid_turn_slash_reply (/model reuses MODEL_REFUSAL verbatim, others generic idle-only); reader refuses via on_refusal without arming"
+  resolved_by: pending-commit
+  resolved_at: 2026-10-04

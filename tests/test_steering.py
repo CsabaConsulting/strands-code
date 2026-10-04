@@ -29,6 +29,7 @@ from strands_code_cli.steering import (
     SteeringState,
     _default_on_line,
     make_steering_hook,
+    mid_turn_slash_reply,
     start_steering_reader,
 )
 
@@ -153,6 +154,79 @@ class TestSteeringReader:
         finally:
             os.close(write_fd)
             os.close(read_fd)
+
+    def test_model_mid_turn_refused_never_armed(self):
+        from strands_code_cli.model_switch import MODEL_REFUSAL
+
+        steered: list[str] = []
+        refused: list[tuple[str, str]] = []
+        state = SteeringState()
+        gate = threading.Event()
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state,
+                gate,
+                stdin=_PipeStdin(read_fd),
+                on_line=steered.append,
+                on_refusal=lambda line, reply: refused.append((line, reply)),
+            )
+            os.write(write_fd, b"/model\n")
+            assert _wait_for(lambda: len(refused) == 1)
+            assert refused == [("/model", MODEL_REFUSAL)]
+            assert not state.has_pending()
+            assert steered == []
+            reader.stop()
+            assert not reader.alive
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+    def test_other_slash_refused_prose_still_steers(self):
+        steered: list[str] = []
+        refused: list[tuple[str, str]] = []
+        state = SteeringState()
+        gate = threading.Event()
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state,
+                gate,
+                stdin=_PipeStdin(read_fd),
+                on_line=steered.append,
+                on_refusal=lambda line, reply: refused.append((line, reply)),
+            )
+            os.write(write_fd, b"/cost\nuse poetry instead\n")
+            assert _wait_for(lambda: len(refused) == 1 and state.has_pending())
+            assert refused[0][0] == "/cost"
+            assert "idle prompt" in refused[0][1]
+            assert state.take() == "use poetry instead"
+            assert steered == ["use poetry instead"]
+            reader.stop()
+            assert not reader.alive
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+
+class TestMidTurnSlashReply:
+    def test_model_forms_reuse_loop_refusal(self):
+        from strands_code_cli.model_switch import MODEL_REFUSAL
+
+        for text in ("/model", "/models", "  /model us.x  ", "/MODEL"):
+            assert mid_turn_slash_reply(text) == MODEL_REFUSAL
+
+    def test_other_commands_generic_idle_only(self):
+        assert mid_turn_slash_reply("/cost") == (
+            "/cost applies at the idle prompt — wait for the turn to finish."
+        )
+        assert mid_turn_slash_reply("/frobnicate now").startswith("/frobnicate ")
+
+    def test_prose_and_blank_are_not_commands(self):
+        assert mid_turn_slash_reply("use poetry instead") is None
+        assert mid_turn_slash_reply("") is None
+        assert mid_turn_slash_reply("   ") is None
+        assert mid_turn_slash_reply("a/b test") is None
 
     def test_gate_open_buffers_without_arming(self):
         received: list[str] = []

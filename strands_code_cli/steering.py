@@ -4,7 +4,8 @@ Machinery: a turn-owned reader thread (select+read on the stdin fd,
 whose mode is never changed — select guarantees data so reads return
 immediately and the 50 ms poll keeps the turn-end join prompt) captures
 anything typed while a turn runs (D-12) into an explicit per-turn
-:class:`SteeringState`; a ``BeforeToolCallEvent`` hook registered at
+:class:`SteeringState`, except ``/slash`` lines, which are refused
+idle-only and never arm steering; a ``BeforeToolCallEvent`` hook registered at
 ``HookOrder.SDK_FIRST`` (runs before the HITL intervention dispatcher at
 ``INTERVENTION_INPUT``) cancels the *next* tool call with a redirect
 message. The in-flight call always finishes first (D-10) — there is no
@@ -59,6 +60,26 @@ STEERING_REDIRECT_TEMPLATE = (
     "Steering redirected by user: {text} — continue toward the revised "
     "goal from the next step; the skipped call was not executed."
 )
+
+
+def mid_turn_slash_reply(text: str) -> str | None:
+    """Idle-only refusal for slash commands typed mid-turn, else None.
+
+    Steering is prose: a ``/command`` line can never be a revised goal,
+    and arming it would cancel the next tool call with a nonsense
+    redirect (observed: ``/model`` mid-turn skipped a write). Slash
+    lines are refused with the turn left undisturbed; ``/model`` reuses
+    the loop's refusal verbatim so both paths speak identically.
+    """
+    cleaned = text.strip()
+    if not cleaned.startswith("/"):
+        return None
+    head = cleaned.split()[0].lower()
+    if head in ("/model", "/models"):
+        from strands_code_cli.model_switch import MODEL_REFUSAL
+
+        return MODEL_REFUSAL
+    return f"{head} applies at the idle prompt — wait for the turn to finish."
 
 
 class SteeringState:
@@ -173,6 +194,12 @@ def _default_on_line(line: str) -> None:
     print(f"> {line}")
 
 
+def _default_on_refusal(line: str, reply: str) -> None:
+    """Echo a refused slash line plus the refusal (transcript order)."""
+    print(f"> {line}")
+    print(reply)
+
+
 STEERING_HOOK_ORDER = -100
 """Hook priority for the steering hook (mirrors ``HookOrder.SDK_FIRST``).
 
@@ -235,13 +262,15 @@ def start_steering_reader(
     *,
     stdin: Any | None = None,
     on_line: Callable[[str], None] | None = None,
+    on_refusal: Callable[[str, str], None] | None = None,
     poll_interval: float = 0.05,
 ) -> SteeringReader:
     """Start the turn-owned raw-readline reader (daemon + explicit stop).
 
     While ``gate_open`` is set the reader never consumes stdin, so an
     open approval prompt owns the terminal exclusively; buffered lines
-    are picked up as steering once the prompt closes.
+    are picked up as steering once the prompt closes. Slash-command
+    lines are refused idle-only (never armed as steering).
 
     Args:
         state: Per-turn mailbox armed by captured lines.
@@ -249,6 +278,8 @@ def start_steering_reader(
         stdin: Stream to read (default: current ``sys.stdin``); tests
             pass a pipe. Must provide ``readline``.
         on_line: Capture callback (default: transcript echo).
+        on_refusal: Slash-refusal callback (line, reply); default
+            prints both to the transcript.
         poll_interval: Sleep/select quantum between checks.
 
     Returns:
@@ -257,6 +288,7 @@ def start_steering_reader(
     """
     stream = stdin if stdin is not None else sys.stdin
     emit = on_line if on_line is not None else _default_on_line
+    refuse = on_refusal if on_refusal is not None else _default_on_refusal
     shutdown = threading.Event()
 
     try:
@@ -265,6 +297,13 @@ def start_steering_reader(
         fileno = None
 
     def _emit(line: str) -> None:
+        refusal = mid_turn_slash_reply(line)
+        if refusal is not None:
+            try:
+                refuse(line.strip(), refusal)
+            except Exception:
+                pass  # refusal must never kill the turn
+            return
         if state.note(line):
             try:
                 emit(line.strip())
