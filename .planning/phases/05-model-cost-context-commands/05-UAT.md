@@ -8,11 +8,11 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 3
-name: /context report
+number: 4
+name: /compact continuity
 expected: |
-  /context shows tokens, percentage, message/tool counts, and
-  provider/model name, all present.
+  /compact runs, the conversation continues, recent tool results are
+  still referenced, and the last ask is re-grounded.
 awaiting: user response
 
 ## Tests
@@ -30,7 +30,8 @@ note: Verified 2026-10-04 on Gemma-3-27b (8ca53ddd): post-turn lines `12.66K (10
 
 ### 3. /context report
 expected: /context shows tokens, percentage, message/tool counts, and provider/model name, all present.
-result: [pending]
+result: pass
+note: Verified 2026-10-04 (8ca53ddd, Gemma): header + `7.97K (6% of 128.00K)`, 63 messages, 0 tool calls, per-task 38.83K — all fields present.
 
 ### 4. /compact continuity
 expected: /compact runs, the conversation continues, recent tool results are still referenced, and the last ask is re-grounded.
