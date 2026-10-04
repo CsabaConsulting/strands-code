@@ -112,6 +112,39 @@ class TestRadioChoice:
             assert text.count("(*)") == 1
             assert not text.endswith("\n")
 
+    def test_window_renders_visible_slice_only(self):
+        # Long lists (Bedrock discovery returns 50+ models) render only the
+        # visible window so the frame fits the terminal; the highlight must
+        # sit on the selected row inside the window.
+        values = [(f"v{i}", f"Model-{i:02d}") for i in range(10)]
+        text = "".join(
+            chunk
+            for _, chunk in choice_module._choice_fragments(
+                values, 7, top=5, visible=4
+            )
+        )
+        assert "Model-07" in text
+        assert text.count("(*)") == 1
+        marked = [line for line in text.split("\n") if "(*)" in line]
+        assert marked == [" (*) Model-07"]
+        for label in ("Model-00", "Model-04", "Model-09"):
+            assert label not in text
+        assert not text.endswith("\n")
+
+    def test_window_clamps_to_available_options(self):
+        values = [(f"v{i}", f"Model-{i:02d}") for i in range(3)]
+        text = "".join(
+            chunk
+            for _, chunk in choice_module._choice_fragments(
+                values, 2, top=0, visible=10
+            )
+        )
+        assert text.count("(*)") == 1
+        for label in ("Model-00", "Model-01", "Model-02"):
+            assert label in text
+        marked = [line for line in text.split("\n") if "(*)" in line]
+        assert marked == [" (*) Model-02"]
+
 
 class TestHeadlessDialog:
     """Drive the real prompt_toolkit app with piped keys (no tty needed).
@@ -160,3 +193,28 @@ class TestHeadlessDialog:
 
     def test_ctrl_c_returns_cancel_sentinel(self):
         assert self._run_keys(self.CTRL_C) is choice_module.CANCELLED
+
+    def test_selection_moves_past_first_window(self):
+        # With a 5-row window over 30 options, 12 downs must land on and
+        # confirm option 12 — the window follows the highlight.
+        from prompt_toolkit.input.defaults import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        values = [(f"v{i}", f"Model-{i:02d}") for i in range(30)]
+        with create_pipe_input() as inp:
+            inp.send_text(self.DOWN * 12 + self.ENTER)
+            app = choice_module._build_app(
+                "Pick?",
+                values,
+                0,
+                input=inp,
+                output=DummyOutput(),
+                visible_rows=5,
+            )
+            assert app.run() == "v12"
+            # The rendered window followed: 5 rows with the marker on Model-12.
+            control = app.layout.current_control
+            rendered = "".join(chunk for _, chunk in control.text())
+            assert rendered.count("(*)") == 1
+            assert " (*) Model-12" in rendered.split("\n")
+            assert len(rendered.split("\n")) == 5

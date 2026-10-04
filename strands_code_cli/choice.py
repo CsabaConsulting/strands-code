@@ -21,6 +21,7 @@ input fakes keep working unchanged.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from typing import Any, Sequence
 
@@ -29,15 +30,25 @@ CANCELLED = object()
 
 
 def _choice_fragments(
-    values: Sequence[tuple[Any, str]], selected: int
+    values: Sequence[tuple[Any, str]],
+    selected: int,
+    *,
+    top: int = 0,
+    visible: int | None = None,
 ) -> list[tuple[str, str]]:
-    """Render all options with the highlight; no trailing newline."""
+    """Render the visible window with the highlight; no trailing newline.
+
+    Long lists render only ``values[top:top + visible]`` so the frame fits
+    the terminal; the highlight always sits on ``selected`` inside it.
+    """
+    window = values[top:] if visible is None else values[top : top + visible]
     parts: list[tuple[str, str]] = []
-    for pos, (_, label) in enumerate(values):
+    for pos, (_, label) in enumerate(window, start=top):
         mark = "(*)" if pos == selected else "( )"
         parts.append(("", f" {mark} {label}"))
         parts.append(("", "\n"))
-    parts.pop()
+    if parts:
+        parts.pop()
     return parts
 
 
@@ -48,6 +59,7 @@ def _build_app(
     *,
     input: Any = None,
     output: Any = None,
+    visible_rows: int | None = None,
 ) -> Any:
     """Build the choice application (seam for headless tests).
 
@@ -57,6 +69,10 @@ def _build_app(
     and ESC hanging. Every key here is owned at control level, so no
     inherited binding can intercept: arrows move, Enter/Space confirms,
     ESC denies, Ctrl-C exits with :data:`CANCELLED`.
+
+    Lists longer than the terminal scroll: only ``visible_rows`` options
+    render and the window follows the highlight, so the marker can never
+    disappear below the frame.
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.key_binding import KeyBindings
@@ -66,23 +82,35 @@ def _build_app(
     from prompt_toolkit.output import create_output
     from prompt_toolkit.widgets import Frame
 
-    state = {"selected": min(default, len(values) - 1)}
+    count = len(values)
+    if visible_rows is None:
+        # Frame borders plus margin; never fewer than 3 rows.
+        visible_rows = max(3, shutil.get_terminal_size().lines - 4)
+    visible = max(1, min(visible_rows, count))
+    selected = min(default, count - 1)
+    state = {"selected": selected, "top": max(0, selected - visible + 1)}
 
     def _fragments() -> list[tuple[str, str]]:
         # Newlines are separate fragments: popping the trailing one must
         # never drop the last option (observed: "Start new session" and
         # "Never" silently missing from the rendered list).
-        return _choice_fragments(values, state["selected"])
+        return _choice_fragments(
+            values, state["selected"], top=state["top"], visible=visible
+        )
 
     bindings = KeyBindings()
 
     @bindings.add("up")
     def _up(event: Any) -> None:
         state["selected"] = max(0, state["selected"] - 1)
+        if state["selected"] < state["top"]:
+            state["top"] = state["selected"]
 
     @bindings.add("down")
     def _down(event: Any) -> None:
-        state["selected"] = min(len(values) - 1, state["selected"] + 1)
+        state["selected"] = min(count - 1, state["selected"] + 1)
+        if state["selected"] >= state["top"] + visible:
+            state["top"] = state["selected"] - visible + 1
 
     @bindings.add("enter")
     @bindings.add(" ")
