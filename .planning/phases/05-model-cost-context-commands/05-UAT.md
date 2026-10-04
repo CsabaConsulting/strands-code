@@ -374,3 +374,16 @@ skipped: 0
   the network (40 rows/section cap, filter narrows). Usage:
   `/cost [refresh|table [filter]]`. Live: 99 Bedrock + 466 OpenRouter
   rows in us-west-2.
+
+## GPT-on-Bedrock pricing gap (2026-10-04)
+
+- Why `/cost table openai` shows only gpt-oss: AWS publishes no Price
+  List records for Bedrock-hosted GPT models — 800 OpenAI records
+  scanned across all regions, zero non-oss, and the public pricing
+  page's per-region tables list gpt-oss only. The GPT models are
+  INFERENCE_PROFILE-only and new; not our tier filter (unfiltered
+  scan; profile-only nova2.0lite IS present in the cache).
+- Mitigation: LiteLLM prices them under `bedrock_mantle/` keys (31
+  keys, 7 vendors), which our lookup now tries. `openai.gpt-5.4`
+  resolves $2.75/$16.50 @ 1.05M via LiteLLM bundled; refreshes pick
+  up live AWS records automatically if/when published.

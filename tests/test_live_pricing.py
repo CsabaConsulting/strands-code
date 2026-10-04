@@ -345,6 +345,23 @@ class TestLiteLLMEntry:
         monkeypatch.setitem(sys.modules, "litellm", None)
         assert live_pricing.litellm_entry("anything") is None
 
+    def test_bedrock_mantle_variant(self, monkeypatch):
+        _fake_litellm(
+            monkeypatch,
+            {
+                "bedrock_mantle/openai.gpt-5.4": {
+                    "input_cost_per_token": 2.75e-6,
+                    "output_cost_per_token": 1.65e-5,
+                    "max_input_tokens": 1050000,
+                }
+            },
+        )
+        entry = live_pricing.litellm_entry("openai.gpt-5.4")
+        assert entry is not None
+        assert entry["in"] == pytest.approx(2.75)
+        assert entry["out"] == pytest.approx(16.50)
+        assert entry["window"] == 1050000
+
 
 # ----------------------------------------------------------------------
 # Resolution order through cost_context
@@ -425,6 +442,26 @@ class TestResolutionOrder:
             == "unknown"
         )
         assert cost_context.price_for("mystery/acme-1", region="us-west-2") is None
+
+    def test_gpt_on_bedrock_falls_to_mantle_litellm(self, monkeypatch):
+        _fake_fetch(monkeypatch, rows=[])  # Price List has no GPT records
+        _fake_litellm(
+            monkeypatch,
+            {
+                "bedrock_mantle/openai.gpt-5.4": {
+                    "input_cost_per_token": 2.75e-6,
+                    "output_cost_per_token": 1.65e-5,
+                    "max_input_tokens": 1050000,
+                }
+            },
+        )
+        price = cost_context.price_for("openai.gpt-5.4", region="us-west-2")
+        assert price is not None and price[0] == pytest.approx(2.75)
+        assert (
+            cost_context.price_provenance("openai.gpt-5.4", region="us-west-2")
+            == "LiteLLM bundled"
+        )
+        assert cost_context.window_for("openai.gpt-5.4") == 1050000
 
     def test_kill_switch_restores_static_only(self, monkeypatch):
         monkeypatch.setenv("STRANDS_CODE_NO_LIVE_PRICING", "1")

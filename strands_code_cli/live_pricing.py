@@ -451,7 +451,11 @@ def litellm_entry(model_id: str) -> dict[str, float] | None:
     table = getattr(litellm, "model_cost", None)
     if not isinstance(table, dict):
         return None
-    keys = [model_id, f"bedrock/{model_id}"]
+    # bedrock_mantle/ is LiteLLM's prefix for Bedrock-hosted third-party
+    # models (31 keys across 7 vendors: openai, qwen, google, deepseek,
+    # anthropic, moonshotai, xai) — the only layer pricing GPT-on-Bedrock.
+    tail = model_id.rsplit("/", 1)[-1]
+    keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
     target = _openrouter_id(model_id)
     if target is not None:
         keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])
