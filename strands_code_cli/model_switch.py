@@ -9,7 +9,11 @@ adapter owns the wire format; never hand-roll vendor JSON.
 
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
+import json
+import re
 import warnings
 from typing import Any
 
@@ -156,6 +160,69 @@ def same_vendor(first_id: str, second_id: str) -> bool:
     return _vendor_of(first_id) == _vendor_of(second_id)
 
 
+TRACE_LABEL = (
+    "[thinking trace: internal reasoning preserved as text, not assistant speech]"
+)
+"""Prefix marking text-ified thinking (weak models mimic unlabeled traces)."""
+
+_MEDIA_PLACEHOLDER_RE = re.compile(r"\[(?:image|video): [^,\]]*, \d+ bytes\]")
+"""Matches the media placeholders convert_history emits (kept in sync)."""
+
+
+def to_stash_json(obj: Any) -> str:
+    """Serialize stash payloads; image/video bytes survive as base64."""
+
+    def _default(value: Any) -> Any:
+        if isinstance(value, bytes):
+            return {"__bytes_b64__": base64.b64encode(value).decode("ascii")}
+        raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+    return json.dumps(obj, sort_keys=True, default=_default)
+
+
+def from_stash_json(raw: str) -> Any:
+    """Inverse of :func:`to_stash_json`; raises ValueError on bad input."""
+
+    def _hook(value: Any) -> Any:
+        if isinstance(value, dict) and set(value) == {"__bytes_b64__"}:
+            return base64.b64decode(value["__bytes_b64__"])
+        return value
+
+    try:
+        return json.loads(raw, object_hook=_hook)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise ValueError(f"Invalid stash JSON: {exc}") from exc
+
+
+def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
+    """Stable fingerprint of a history prefix across thinking conversions.
+
+    Canonical form drops reasoningContent blocks, labeled trace texts,
+    and media blocks/placeholders (every direction of the block
+    conversions), so a stash taken before a switch still matches after
+    text-ification round-trips — while a compaction summary, /clear, or
+    any real edit breaks the match. The restore path uses this instead
+    of trusting message count alone.
+    """
+    canonical = []
+    for message in messages:
+        blocks = []
+        for block in message.get("content", []):
+            if not isinstance(block, dict):
+                continue
+            if "reasoningContent" in block or "image" in block or "video" in block:
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and (
+                text.startswith(TRACE_LABEL)
+                or _MEDIA_PLACEHOLDER_RE.fullmatch(text) is not None
+            ):
+                continue
+            blocks.append(block)
+        canonical.append({"role": message.get("role"), "content": blocks})
+    return hashlib.sha256(to_stash_json(canonical).encode("utf-8")).hexdigest()
+
+
 def convert_history(
     messages: list[dict[str, Any]], old_id: str, new_id: str
 ) -> list[dict[str, Any]]:
@@ -163,8 +230,10 @@ def convert_history(
 
     - reasoningContent round-trips only for harness-verified thinking
       targets sharing the source vendor AND carrying a signature (or
-      redactedContent); everything else becomes ``{"text": <text>}``
-      (warn), with empty traces dropped (LiteLLM #9063 precedent).
+      redactedContent); everything else becomes labeled trace text
+      (``TRACE_LABEL`` + original; warn), with empty traces dropped
+      (LiteLLM #9063 precedent). The label keeps weak models from
+      mimicking internal reasoning as assistant speech.
     - toolUse/toolResult blocks stay byte-identical (adapter layer owns them).
     - Image/video blocks → placeholder text on media-less targets.
     - Never trims: trimming happens at pair boundaries in compaction only.
@@ -203,7 +272,7 @@ def convert_history(
                     stacklevel=2,
                 )
                 if text.strip():
-                    new_message["content"].append({"text": text})
+                    new_message["content"].append({"text": f"{TRACE_LABEL}\n{text}"})
                 continue
             elif ("image" in block or "video" in block) and not media_ok:
                 kind = "image" if "image" in block else "video"

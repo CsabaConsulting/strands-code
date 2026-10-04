@@ -227,3 +227,19 @@ skipped: 0
     - "normalize_model_ref (profile ARN→tail) at router returns, direct-path validation, apply seam; switch-before-convert ordering; run_loop model-action guard"
   resolved_by: f429527
   resolved_at: 2026-09-27
+- gap_id: G-05-1k
+  truth: "switching back to a thinking model after resume restores its native thinking instead of stripping it"
+  status: resolved
+  reason: "Gemma→Haiku after resume warned 'Dropping reasoningContent' and text-ified Haiku's OWN thinking: the rich stash was in-memory only, so the same-vendor rule keyed provenance off the away model"
+  severity: major
+  test: 1
+  root_cause: "RichHistory never persisted; restore guard trusted message count alone; text-ified traces were unlabeled (weak models mimicked them — Gemma plan-mode confabulation)"
+  artifacts:
+    - path: "strands_code_cli/loop.py"
+      issue: "stash lost on resume; re-stash blamed the away model"
+    - path: "strands_code_cli/model_switch.py"
+      issue: "unlabeled trace text; no canonical prefix fingerprint"
+  missing:
+    - "persisted sidecar stash (bytes-safe JSON, fail-soft load, traversal guard); canonical-prefix-hash restore guard; provenance-follows-thinking re-stash; TRACE_LABEL on text-ified thinking; reset on /clear + /compact"
+  resolved_by: TBD
+  resolved_at: 2026-09-27

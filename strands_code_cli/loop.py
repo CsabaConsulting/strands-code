@@ -6,6 +6,7 @@ import asyncio
 import copy
 import logging
 import os
+import re
 import signal
 import threading
 import uuid
@@ -32,11 +33,14 @@ from strands_code_cli.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.model_switch import (
     MODEL_REFUSAL,
     apply_switch,
+    canonical_prefix_hash,
     convert_history,
     estimate_fit,
+    from_stash_json,
     normalize_model_ref,
     same_vendor,
     supports_reasoning,
+    to_stash_json,
 )
 from strands_code_cli.output import output_context
 from strands_code_cli.policy_gate import (
@@ -298,6 +302,22 @@ def _steering_slot_for(agent: Any) -> SteeringSlot:
     return register_steering_hook(agent)
 
 
+_RICH_STASH_DIRNAME = "rich_history"
+_RICH_STASH_VERSION = 1
+
+
+def rich_stash_path(index_root: Path, session_id: str) -> Path | None:
+    """Sidecar path for the persisted thinking stash (None when unsafe).
+
+    CLI-owned state next to the session index — never inside a snapshot
+    blob. Over-strict id characters fail soft (no stash) rather than
+    risking path traversal through a user-supplied session id.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", session_id):
+        return None
+    return Path(index_root) / _RICH_STASH_DIRNAME / f"{session_id}.json"
+
+
 class RichHistory:
     """Richest-variant stash for switch-back (MODEL-01 preservation).
 
@@ -305,14 +325,85 @@ class RichHistory:
     when it carries thinking blocks; switching to a same-vendor
     reasoning-capable target restores the stash plus the turns made while
     away. Bounded (one deepcopy, replaced per switch) and fail-safe
-    (restores only when the length check proves no compaction trimmed
-    underneath the stash point).
+    (restores only when the canonical prefix hash proves no compaction,
+    clear, or edit trimmed underneath the stash point).
+
+    The stash persists to a sidecar file per session, so a switch-back
+    after resume restores native thinking instead of re-stripping it.
     """
 
     def __init__(self) -> None:
         self.messages: list | None = None
         self.model_id: str | None = None
         self.length: int = 0
+        self.prefix_hash: str | None = None
+
+    def reset(self) -> None:
+        """Drop the stash (history was cleared or compacted underneath)."""
+        self.messages = None
+        self.model_id = None
+        self.length = 0
+        self.prefix_hash = None
+
+    def save(self, path: Path | None) -> None:
+        """Persist the stash; an empty stash removes any stale file.
+
+        Fail-soft: filesystem errors are logged, never raised.
+        """
+        if path is None:
+            return
+        if self.messages is None or self.model_id is None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Rich stash cleanup failed: %s", exc)
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                to_stash_json(
+                    {
+                        "version": _RICH_STASH_VERSION,
+                        "model_id": self.model_id,
+                        "length": self.length,
+                        "prefix_hash": self.prefix_hash,
+                        "messages": self.messages,
+                    }
+                ),
+                encoding="utf-8",
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            logger.warning("Rich stash save failed: %s", exc)
+
+    @classmethod
+    def load(cls, path: Path | None) -> RichHistory:
+        """Load a persisted stash; missing or corrupt files load empty."""
+        rich = cls()
+        if path is None:
+            return rich
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            return rich
+        try:
+            data = from_stash_json(raw)
+        except ValueError:
+            return rich
+        if (
+            not isinstance(data, dict)
+            or data.get("version") != _RICH_STASH_VERSION
+            or not isinstance(data.get("model_id"), str)
+            or not isinstance(data.get("length"), int)
+            or not isinstance(data.get("prefix_hash"), str)
+            or not isinstance(data.get("messages"), list)
+            or not all(isinstance(m, dict) for m in data["messages"])
+        ):
+            return rich
+        rich.messages = data["messages"]
+        rich.model_id = data["model_id"]
+        rich.length = data["length"]
+        rich.prefix_hash = data["prefix_hash"]
+        return rich
 
 
 def _has_thinking(messages: list) -> bool:
@@ -364,9 +455,11 @@ def apply_model_action(
         rich is not None
         and rich.messages is not None
         and rich.model_id is not None
+        and rich.prefix_hash is not None
         and supports_reasoning(new_id)
         and same_vendor(rich.model_id, new_id)
         and len(source) >= rich.length
+        and canonical_prefix_hash(source[: rich.length]) == rich.prefix_hash
     ):
         source = copy.deepcopy(rich.messages) + copy.deepcopy(source[rich.length :])
         restored = True
@@ -390,8 +483,11 @@ def apply_model_action(
         mode_word = "compacted" if kept < len(converted) else "kept"
     if rich is not None and _has_thinking(source):
         rich.messages = copy.deepcopy(source)
-        rich.model_id = current_model
+        # Provenance follows the thinking, not the away model: after a
+        # restore the stashed blocks are the ORIGINAL vendor's.
+        rich.model_id = convert_from
         rich.length = len(source)
+        rich.prefix_hash = canonical_prefix_hash(source)
     count = len(agent.messages)
     suffix = ", thinking restored" if restored else ""
     return (
@@ -435,7 +531,8 @@ def run_loop(
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
     session_turns: list = []
-    rich = RichHistory()
+    stash_path = rich_stash_path(index.root, session_id)
+    rich = RichHistory.load(stash_path)
     slot = _steering_slot_for(agent)
     set_gate_mode(mode.mode)
     cancel_armed_at: float | None = None
@@ -468,6 +565,8 @@ def run_loop(
             if head in ("/compact", "/clear"):
                 explicit_save(agent)  # history mutated: flush immediately
                 index.ensure(session_id)
+                rich.reset()
+                rich.save(stash_path)  # empty stash removes the sidecar
             continue
         if action == "model" and message is not None:
             try:
@@ -486,6 +585,7 @@ def run_loop(
                     logger.warning("Model choice not persisted: %s", exc)
                 explicit_save(agent)
                 index.ensure(session_id)
+                rich.save(stash_path)
             continue
         steering = SteeringState()
         turn_id = f"{session_id}:{uuid.uuid4().hex}"

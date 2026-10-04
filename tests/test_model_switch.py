@@ -53,6 +53,7 @@ from strands_code_agent.python_environments.local_sandboxed import (
 )
 from strands_code_cli import model_capabilities, model_switch
 from strands_code_cli.model_switch import (
+    TRACE_LABEL,
     apply_switch,
     convert_history,
     discover_models,
@@ -234,6 +235,34 @@ class TestNormalizeModelRef:
         assert resolved == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
+class TestCanonicalPrefixHash:
+    def test_stable_across_thinking_and_media_conversion(self):
+        import warnings
+
+        from strands_code_cli.model_switch import canonical_prefix_hash
+
+        fixture = _fixture_history()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # Nemotron strips BOTH thinking and media: the canonical form
+            # must survive the full round-trip.
+            converted = convert_history(
+                fixture, "bedrock/global.anthropic.claude-sonnet-4-6", "openai/nemotron-70b"
+            )
+        assert _reasoning_blocks(converted) == []
+        assert canonical_prefix_hash(converted) == canonical_prefix_hash(fixture)
+
+    def test_breaks_on_real_edit(self):
+        import copy
+
+        from strands_code_cli.model_switch import canonical_prefix_hash
+
+        fixture = _fixture_history()
+        edited = copy.deepcopy(fixture)
+        edited[0]["content"][0]["text"] = "run something else"
+        assert canonical_prefix_hash(edited) != canonical_prefix_hash(fixture)
+
+
 # ----------------------------------------------------------------------
 # Swap-seam spike: in-place assignment wins, rebuild path deleted
 # ----------------------------------------------------------------------
@@ -288,8 +317,9 @@ class TestConvertHistory:
         assert any("reasoning" in str(w.message).lower() for w in caught)
         assistant_blocks = out[1]["content"]
         assert all("reasoningContent" not in block for block in assistant_blocks)
-        texts = [block.get("text", "") for block in assistant_blocks]
-        assert "let me think" in texts  # trace preserved as text, signature dropped
+        # Trace preserved as LABELED text (signature dropped): weak models
+        # mimic unlabeled traces as assistant speech.
+        assert out[1]["content"][0] == {"text": f"{TRACE_LABEL}\nlet me think"}
 
     def test_reasoning_kept_verbatim_on_reasoning_target(self):
         out = convert_history(
@@ -350,7 +380,7 @@ class TestCapabilityAlmanac:
                 "google.gemma-3-27b-it",
             )
         assert _reasoning_blocks(out) == []
-        assert out[1]["content"][0] == {"text": "let me think"}
+        assert out[1]["content"][0] == {"text": f"{TRACE_LABEL}\nlet me think"}
         assert any("reasoning" in str(w.message).lower() for w in caught)
 
     def test_unknown_target_strips_fail_closed(self):
@@ -410,7 +440,7 @@ class TestCapabilityAlmanac:
                 "bedrock/anthropic.claude-sonnet-4-6",
             )
         assert _reasoning_blocks(out) == []
-        assert out[1]["content"][0] == {"text": "hmm"}
+        assert out[1]["content"][0] == {"text": f"{TRACE_LABEL}\nhmm"}
 
     def test_redacted_thinking_round_trips_and_drops_cleanly(self):
         src = [
@@ -592,6 +622,117 @@ class TestRichHistory:
             )
         assert "thinking restored" not in reply
         assert _reasoning_blocks(agent.messages) == []
+
+    def test_stash_survives_resume_restores_thinking(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import RichHistory, apply_model_action
+
+        agent = self._agent_with_thinking(tmp_path)
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            apply_model_action(
+                agent,
+                "google.gemma-3-27b-it",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+                rich=rich,
+            )
+        path = tmp_path / "rich_history" / "session-1.json"
+        rich.save(path)
+        assert path.exists()
+
+        # Resume: fresh stash from disk, converted history + away turns.
+        resumed = RichHistory.load(path)
+        assert resumed.model_id == "bedrock/global.anthropic.claude-opus-5"
+        agent.messages.append({"role": "user", "content": [{"text": "noticed?"}]})
+        agent.messages.append({"role": "assistant", "content": [{"text": "yes"}]})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _, reply = apply_model_action(
+                agent,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="google.gemma-3-27b-it",
+                rich=resumed,
+            )
+        assert "thinking restored" in reply
+        assert not [w for w in caught if "dropping reasoningcontent" in str(w.message).lower()]
+        assert agent.messages[1]["content"][0] == {
+            "reasoningContent": {
+                "reasoningText": {"text": "let me think", "signature": "sig-1"}
+            }
+        }
+        # Image bytes survived the sidecar round-trip losslessly.
+        images = [
+            block["image"]["source"]["bytes"]
+            for message in agent.messages
+            for block in message.get("content", [])
+            if "image" in block
+        ]
+        assert images == [b"0123456789"]
+
+    def test_compact_summary_breaks_restore(self, tmp_path):
+        import warnings
+
+        from strands_code_cli.loop import RichHistory, apply_model_action
+
+        agent = self._agent_with_thinking(tmp_path)
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            apply_model_action(
+                agent,
+                "google.gemma-3-27b-it",
+                turn_running=False,
+                current_model="bedrock/global.anthropic.claude-opus-5",
+                rich=rich,
+            )
+            # Same message COUNT as the stash point (length check passes)
+            # but a compaction summary replaced the prefix: no restore.
+            agent.messages[:] = [
+                {"role": "user", "content": [{"text": "[summary] old stuff"}]},
+                {"role": "assistant", "content": [{"text": "ack"}]},
+                {"role": "user", "content": [{"text": "q"}]},
+                {"role": "assistant", "content": [{"text": "a"}]},
+            ]
+            _, reply = apply_model_action(
+                agent,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="google.gemma-3-27b-it",
+                rich=rich,
+            )
+        assert "thinking restored" not in reply
+
+    def test_missing_and_corrupt_stash_load_empty(self, tmp_path):
+        from strands_code_cli.loop import RichHistory
+
+        assert RichHistory.load(None).messages is None
+        assert RichHistory.load(tmp_path / "nope.json").messages is None
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        assert RichHistory.load(bad).messages is None
+        bad.write_text('{"version": 1}', encoding="utf-8")
+        assert RichHistory.load(bad).messages is None
+
+    def test_empty_save_removes_stale_file(self, tmp_path):
+        from strands_code_cli.loop import RichHistory
+
+        path = tmp_path / "s.json"
+        path.write_text("{}", encoding="utf-8")
+        RichHistory().save(path)  # /clear + /compact path: no raise, file gone
+        assert not path.exists()
+        RichHistory().save(None)
+
+    def test_stash_path_rejects_traversal(self, tmp_path):
+        from strands_code_cli.loop import rich_stash_path
+
+        assert rich_stash_path(tmp_path, "../../evil") is None
+        assert rich_stash_path(tmp_path, "no/slash") is None
+        ok = rich_stash_path(tmp_path, "91190877-b0cb-4521-b561-cb797c40ce58")
+        assert ok == tmp_path / "rich_history" / "91190877-b0cb-4521-b561-cb797c40ce58.json"
 
 
 class TestTurnGuard:
