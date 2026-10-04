@@ -269,8 +269,8 @@ skipped: 0
     - path: "strands_code_cli/model_switch.py"
       issue: "TRACE_LABEL shape muted Gemma"
   missing:
-    - "relabel to paren/colon shape (live-verified); legacy label still stripped by canonical hash for pre-upgrade restore"
-  resolved_by: 71d261c
+    - "relabel to paren/colon shape (live-verified); legacy label still stripped by canonical hash for pre-upgrade restore; retired labels migrate on convert"
+  resolved_by: 71d261c+ed01b11
   resolved_at: 2026-09-27
 
 ## Unplanned additions (user-directed, 2026-09-27)
