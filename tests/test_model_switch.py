@@ -314,14 +314,9 @@ class TestCapabilityAlmanac:
             )
         assert _reasoning_blocks(out) == []
 
-    def test_cross_vendor_strips_even_when_listed(self, monkeypatch):
-        import strands_code_cli.model_switch as model_switch_mod
-
-        monkeypatch.setattr(
-            model_switch_mod,
-            "_REASONING_SUPPORT",
-            (("anthropic", None, None), ("qwen", None, None)),
-        )
+    def test_cross_vendor_strips_even_when_harness_listed(self):
+        # qwen carries harness thinking levels, yet anthropic thinking must
+        # not cross vendors (foreign signatures); qwen-to-qwen round-trips.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             cross = convert_history(
@@ -332,6 +327,63 @@ class TestCapabilityAlmanac:
             )
         assert _reasoning_blocks(cross) == []  # foreign signatures never cross vendors
         assert len(_reasoning_blocks(same)) == 1
+
+    def test_fallback_allowlist_without_harness(self, monkeypatch):
+        import strands_code_cli.model_switch as model_switch_mod
+        from strands_code_cli.model_switch import supports_reasoning
+
+        monkeypatch.setattr(model_switch_mod, "_harness_supports_thinking", None)
+        assert supports_reasoning("bedrock/anthropic.claude-opus-5") is True
+        assert supports_reasoning("qwen.qwen3-32b-v1:0") is False  # fail-closed
+
+    def test_harness_verdicts_for_bedrock_families(self):
+        from strands_code_cli.model_switch import supports_reasoning
+
+        assert supports_reasoning("bedrock/anthropic.claude-opus-5") is True
+        assert supports_reasoning("qwen.qwen3-32b-v1:0") is True
+        assert supports_reasoning("bedrock/openai.gpt-oss-120b-1:0") is True
+        assert supports_reasoning("google.gemma-3-27b-it") is False
+        assert supports_reasoning("bedrock/deepseek.r1-v1:0") is False
+        assert supports_reasoning("openai/gpt-4o") is False  # adapter path unverified
+        assert supports_reasoning("litellm/openrouter/qwen/qwen3-32b") is False
+
+    def test_unsigned_thinking_becomes_text_even_when_capable(self):
+        src = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [{"reasoningContent": {"reasoningText": {"text": "hmm"}}}],
+            },
+        ]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            out = convert_history(
+                src,
+                "bedrock/anthropic.claude-opus-5",
+                "bedrock/anthropic.claude-sonnet-4-6",
+            )
+        assert _reasoning_blocks(out) == []
+        assert out[1]["content"][0] == {"text": "hmm"}
+
+    def test_redacted_thinking_round_trips_and_drops_cleanly(self):
+        src = [
+            {
+                "role": "assistant",
+                "content": [{"reasoningContent": {"redactedContent": "enc"}}],
+            },
+        ]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            kept = convert_history(
+                src,
+                "bedrock/anthropic.claude-opus-5",
+                "bedrock/anthropic.claude-sonnet-4-6",
+            )
+            dropped = convert_history(
+                src, "bedrock/anthropic.claude-opus-5", "google.gemma-3-27b-it"
+            )
+        assert kept[0]["content"][0] == src[0]["content"][0]
+        assert dropped[0]["content"] == []  # no blank text block emitted
 
     def test_same_vendor_across_id_forms(self):
         from strands_code_cli.model_switch import same_vendor
@@ -350,6 +402,49 @@ class TestCapabilityAlmanac:
         assert supports_media("amazon.nova-pro-v1:0") is True
         assert supports_media("meta.llama3-70b-instruct-v1:0") is False
         assert supports_media("bedrock/mystery-vision-1") is True  # fail-open
+
+    def test_media_bedrock_openai_less_direct_openai_ok(self):
+        from strands_code_cli.model_switch import supports_media
+
+        # Harness-verified: OpenAI-family Converse models reject image
+        # fields; direct OpenAI vision models are unaffected.
+        assert supports_media("bedrock/openai.gpt-oss-120b-1:0") is False
+        assert supports_media("openai.gpt-oss-120b-1:0") is False  # bare = bedrock
+        assert supports_media("openai/gpt-4o") is True
+
+
+class TestAggregatorIds:
+    def test_true_vendor_and_family_parsing(self):
+        from strands_code_cli.model_switch import _base_key, _vendor_family, _vendor_of
+
+        entry = "litellm/openrouter/qwen/qwen3-32b"
+        assert _base_key(entry) == "qwen/qwen3-32b"
+        assert _vendor_of(entry) == "qwen"
+        assert _vendor_family("qwen/qwen3-32b") == ("qwen", "qwen3")
+
+    def test_reasoning_fail_closed_for_aggregators(self):
+        from strands_code_cli.model_switch import supports_reasoning
+
+        # Even true-vendor anthropic via an aggregator strips: adapter
+        # translation of thinking blocks is unverified there.
+        assert supports_reasoning("litellm/openrouter/anthropic/claude-x") is False
+
+    def test_media_rules_see_true_vendor(self):
+        from strands_code_cli.model_switch import supports_media
+
+        assert supports_media("litellm/openrouter/meta/llama-x") is False
+        assert supports_media("litellm/openrouter/qwen/qwen3-32b") is True
+
+    def test_cascade_groups_aggregator_under_true_vendor(self):
+        from strands_code_cli.model_switch import build_model_tree
+
+        tree = build_model_tree(
+            ["qwen.qwen3-32b-v1:0", "litellm/openrouter/qwen/qwen3-32b"]
+        )
+        assert [vendor for vendor, _ in tree] == ["qwen"]
+        families = dict(tree[0][1])
+        assert sorted(families) == ["qwen3"]
+        assert len(families["qwen3"]) == 2  # bedrock id + aggregator route
 
 
 class TestRichHistory:
