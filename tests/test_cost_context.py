@@ -252,6 +252,29 @@ class TestCostReport:
         assert "$" not in report
         assert "Display only" in report
 
+    def test_rows_keep_own_turn_model_rates(self):
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1_000_000,
+                "output_tokens": 1_000_000,
+                "model": "anthropic.claude-3-haiku-20240307-v1:0",
+            },
+            {
+                "turn": 2,
+                "input_tokens": 1_000_000,
+                "output_tokens": 1_000_000,
+                "model": "amazon.nova-micro-v1:0",
+            },
+            # Legacy row without a model falls back to the report model.
+            {"turn": 3, "input_tokens": 1_000_000, "output_tokens": 0},
+        ]
+        report = cost_report(turns, "anthropic.claude-3-haiku-20240307-v1:0")
+        assert "turn 1: in 1.00M, out 1.00M, $1.5000" in report
+        assert "turn 2: in 1.00M, out 1.00M, $0.1750" in report
+        assert "turn 3: in 1.00M, out 0, $0.2500" in report
+        assert "Total: in 3.00M, out 2.00M, $1.9250" in report
+
 
 # ----------------------------------------------------------------------
 # /context + compact + clear spike on the replay model
@@ -462,7 +485,14 @@ class TestLoopUsageWiring:
             turns,
         )
         assert line is not None and "451.27K (45%)" in line and "$" in line
-        assert turns == [{"turn": 1, "input_tokens": 451270, "output_tokens": 1000}]
+        assert turns == [
+            {
+                "turn": 1,
+                "input_tokens": 451270,
+                "output_tokens": 1000,
+                "model": "bedrock/global.anthropic.claude-sonnet-4-6",
+            }
+        ]
 
     def test_record_turn_metrics_without_metrics_returns_none(self):
         from strands_code_cli.loop import record_turn_metrics

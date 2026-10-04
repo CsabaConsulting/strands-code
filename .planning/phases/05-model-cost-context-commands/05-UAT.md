@@ -8,11 +8,11 @@ updated: 2026-09-27T12:00:00Z
 
 ## Current Test
 
-number: 4
-name: /compact continuity
+number: 5
+name: /clear keeps session
 expected: |
-  /compact runs, the conversation continues, recent tool results are
-  still referenced, and the last ask is re-grounded.
+  /clear prints `Context cleared — session <id> kept.`, the same
+  session id stays resumable, and the model choice is kept.
 awaiting: user response
 
 ## Tests
@@ -35,7 +35,8 @@ note: Verified 2026-10-04 (8ca53ddd, Gemma): header + `7.97K (6% of 128.00K)`, 6
 
 ### 4. /compact continuity
 expected: /compact runs, the conversation continues, recent tool results are still referenced, and the last ask is re-grounded.
-result: [pending]
+result: pass
+note: Verified 2026-10-04 (8ca53ddd, Haiku): 3 tool calls made (fib, web_fetch, pi), `/compact` kept 11, Fibonacci 15th=377 and pi follow-ups correct post-compact, 16 messages + 3 tool calls after. Found G-05-4a (fixed same session).
 
 ### 5. /clear keeps session
 expected: /clear prints `Context cleared — session <id> kept.`, the same session id stays resumable, and the model choice is kept.
@@ -389,3 +390,20 @@ skipped: 0
   keys, 7 vendors), which our lookup now tries. `openai.gpt-5.4`
   resolves $2.75/$16.50 @ 1.05M via LiteLLM bundled; refreshes pick
   up live AWS records automatically if/when published.
+
+- gap_id: G-05-4a
+  truth: "/cost prices each turn at its own turn model after mid-session switches"
+  status: resolved
+  reason: "Spotted in Test 4 transcript: Gemma turns ($0.0030/$0.0060) repriced to $0.0152/$0.0301 after switching to Haiku — rows stored tokens only, report priced everything at the active model"
+  severity: major
+  test: 4
+  root_cause: "record_turn_metrics stored no model; cost_report priced all rows at the report model_id"
+  artifacts:
+    - path: "strands_code_cli/loop.py"
+      issue: "turn rows lacked the turn model"
+    - path: "strands_code_cli/cost_context.py"
+      issue: "single-model pricing + provenance for mixed-model rows"
+  missing:
+    - "per-row turn model with report-model fallback; per-row pricing; mixed provenance label"
+  resolved_by: pending-commit
+  resolved_at: 2026-10-04

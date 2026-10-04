@@ -168,7 +168,12 @@ def record_turn_metrics(
     except (TypeError, ValueError):
         return None
     session_turns.append(
-        {"turn": len(session_turns) + 1, "input_tokens": in_tok, "output_tokens": out_tok}
+        {
+            "turn": len(session_turns) + 1,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "model": current_model,
+        }
     )
     return usage_line(in_tok, out_tok, current_model)
 

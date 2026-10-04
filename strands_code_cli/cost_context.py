@@ -175,31 +175,47 @@ def usage_line(input_tokens: int, output_tokens: int, model_id: str) -> str:
 def cost_report(session_turns: list[dict[str, Any]], model_id: str) -> str:
     """Per-turn rows plus session totals; display only, never enforcement.
 
+    Each row prices at its own turn model (mid-session switches keep
+    their own rates); rows without a model fall back to the report
+    model. Provenance names the single source, or mixed per-turn.
+
     Args:
-        session_turns: One row per agent turn: turn #, input/output tokens.
-        model_id: Active model id string for the price lookup.
+        session_turns: One row per agent turn: turn #, input/output
+            tokens, turn model.
+        model_id: Active model id string (header + row fallback).
     """
     lines = [f"Cost — {model_id}"]
     total_in = total_out = 0
     total_cost = 0.0
-    priced = price_for(model_id) is not None
+    any_priced = False
+    provenances: list[str] = []
     for row in session_turns:
         turn = row.get("turn", "?")
         in_tok = int(row.get("input_tokens", 0))
         out_tok = int(row.get("output_tokens", 0))
+        row_model = row.get("model", model_id)
         total_in += in_tok
         total_out += out_tok
         cell = f"  turn {turn}: in {format_tokens(in_tok)}, out {format_tokens(out_tok)}"
-        if priced:
-            turn_cost = cost_for(in_tok, out_tok, model_id) or 0.0
+        turn_cost = cost_for(in_tok, out_tok, row_model)
+        if turn_cost is not None:
+            any_priced = True
             total_cost += turn_cost
             cell += f", ${turn_cost:.4f}"
+            provenance = price_provenance(row_model)
+            if provenance not in provenances:
+                provenances.append(provenance)
         lines.append(cell)
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"
-    if priced:
+    if any_priced:
         total += f", ${total_cost:.4f}"
     lines.append(total)
-    lines.append(f"Prices: {price_provenance(model_id)}.")
+    if len(provenances) > 1:
+        lines.append("Prices: mixed (per-turn model).")
+    elif provenances:
+        lines.append(f"Prices: {provenances[0]}.")
+    else:
+        lines.append(f"Prices: {price_provenance(model_id)}.")
     lines.append("Display only — no budgets or enforcement.")
     return "\n".join(lines)
 

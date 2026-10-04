@@ -493,6 +493,36 @@ class TestResolutionOrder:
         )
         assert "Prices: static table." in report
 
+    def test_cost_report_mixed_provenance(self, monkeypatch):
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        _fake_fetch(
+            monkeypatch,
+            [
+                ("USW2-Claude3Haiku-input-tokens", "0.0009990000"),
+                ("USW2-Claude3Haiku-output-tokens", "0.0099990000"),
+            ],
+        )
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 1000,
+                "model": "anthropic.claude-3-haiku-20240307-v1:0",
+            },
+            {
+                "turn": 2,
+                "input_tokens": 1000,
+                "output_tokens": 1000,
+                "model": "amazon.nova-micro-v1:0",
+            },
+        ]
+        report = cost_context.cost_report(
+            turns, "anthropic.claude-3-haiku-20240307-v1:0"
+        )
+        assert "turn 1: in 1.00K, out 1.00K, $0.0110" in report
+        assert "turn 2: in 1.00K, out 1.00K, $0.0002" in report
+        assert "Prices: mixed (per-turn model)." in report
+
 
 # ----------------------------------------------------------------------
 # /cost refresh + table
