@@ -8,6 +8,8 @@ enforcement, nothing here can deny, redirect, or cut short a turn.
 from __future__ import annotations
 
 import re
+import time
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from strands_code_cli import live_pricing, model_capabilities
@@ -199,6 +201,113 @@ def cost_report(session_turns: list[dict[str, Any]], model_id: str) -> str:
     lines.append(total)
     lines.append(f"Prices: {price_provenance(model_id)}.")
     lines.append("Display only — no budgets or enforcement.")
+    return "\n".join(lines)
+
+
+TABLE_ROW_CAP = 40
+"""Max rows printed per price-table section before the narrow hint."""
+
+
+def _fetched_day(payload: dict[str, Any]) -> str:
+    """UTC day of a cache payload's fetch, or ``?`` when missing."""
+    try:
+        stamp = float(payload.get("fetched_at", 0))
+    except (TypeError, ValueError):
+        return "?"
+    if stamp <= 0:
+        return "?"
+    return datetime.fromtimestamp(stamp, tz=timezone.utc).date().isoformat()
+
+
+def refresh_report(summary: dict[str, Any]) -> str:
+    """Render a /cost refresh summary (display only, failures inline)."""
+    if summary.get("disabled"):
+        return "Live pricing is disabled (STRANDS_CODE_NO_LIVE_PRICING=1)."
+    lines = []
+    bedrock = summary.get("bedrock", {})
+    if "error" in bedrock:
+        lines.append(f"Bedrock {bedrock.get('region') or '?'}: {bedrock['error']}.")
+    else:
+        lines.append(
+            f"Bedrock {bedrock.get('region')}: {bedrock.get('models', 0)} models, "
+            f"publication {bedrock.get('publication') or '?'}."
+        )
+    providers = summary.get("openrouter", {})
+    if "error" in providers:
+        lines.append(f"OpenRouter: {providers['error']}.")
+    else:
+        lines.append(f"OpenRouter: {providers.get('models', 0)} models.")
+    return "\n".join(lines)
+
+
+def price_table(word_filter: str | None = None, region: str | None = None) -> str:
+    """Render cached live prices plus the static fallback (no network).
+
+    Args:
+        word_filter: Optional case-insensitive substring narrowing rows.
+        region: Bedrock region cache to read (None → default chain).
+    """
+    tables = live_pricing.cached_tables(region)
+    needle = word_filter.lower() if word_filter else None
+    lines: list[str] = []
+
+    def _row(name: str, price_in: float, price_out: float) -> str:
+        return f"  {name}  in ${price_in:.4g}/1M, out ${price_out:.4g}/1M"
+
+    def _section(rows: list[str], header: str) -> None:
+        lines.append(header)
+        if needle is not None:
+            rows = [row for row in rows if needle in row.lower()]
+        if not rows:
+            lines.append("  (no rows)" if needle else "  (empty)")
+            return
+        lines.extend(rows[:TABLE_ROW_CAP])
+        if len(rows) > TABLE_ROW_CAP:
+            lines.append(
+                f"  …and {len(rows) - TABLE_ROW_CAP} more "
+                "(narrow with /cost table <filter>)"
+            )
+
+    bedrock = tables.get("bedrock")
+    if bedrock is None:
+        lines.append("Bedrock: no cached data — /cost refresh to fetch.")
+    else:
+        prices = bedrock.get("prices", {})
+        rows = [
+            _row(slot.get("name", key), slot["in"], slot["out"])
+            for key, slot in sorted(prices.items())
+            if isinstance(slot, dict) and "in" in slot and "out" in slot
+        ]
+        stale = (
+            " (stale)"
+            if time.time() - float(bedrock.get("fetched_at", 0) or 0)
+            > live_pricing.CACHE_TTL_SECONDS
+            else ""
+        )
+        _section(
+            rows,
+            f"Bedrock {tables.get('region')} "
+            f"(pub {bedrock.get('publication') or '?'}, "
+            f"fetched {_fetched_day(bedrock)}{stale}):",
+        )
+    providers = tables.get("openrouter")
+    if providers is None:
+        lines.append("OpenRouter: no cached data — /cost refresh to fetch.")
+    else:
+        models = providers.get("models", {})
+        rows = [
+            _row(key, entry["in"], entry["out"])
+            for key, entry in sorted(models.items())
+            if isinstance(entry, dict) and "in" in entry and "out" in entry
+        ]
+        _section(rows, f"OpenRouter (fetched {_fetched_day(providers)}):")
+    lines.append("Static fallback:")
+    static = [
+        _row(key, pair[0], pair[1]) for key, pair in MODEL_PRICING.items()
+    ]
+    if needle is not None:
+        static = [row for row in static if needle in row.lower()]
+    lines.extend(static if static else ["  (no rows)"])
     return "\n".join(lines)
 
 

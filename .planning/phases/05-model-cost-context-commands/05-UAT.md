@@ -364,3 +364,13 @@ skipped: 0
   us.Haiku 4-5 falls to LiteLLM $1.10/$5.50 (routed form). No
   user-facing source toggle: automatic layering already yields the
   most precise available number, provenance shows what won.
+
+## /cost refresh + table (2026-10-04)
+
+- `/cost refresh` force-refetches both live sources (bypasses TTL +
+  cooldown, failures reported inline, stale kept); `/cost table
+  [filter]` lists cached Bedrock rows (readable record names now
+  stored) + OpenRouter rows + the static fallback without touching
+  the network (40 rows/section cap, filter narrows). Usage:
+  `/cost [refresh|table [filter]]`. Live: 99 Bedrock + 466 OpenRouter
+  rows in us-west-2.

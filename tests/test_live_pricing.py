@@ -130,7 +130,7 @@ class TestParsePriceRecord:
         )
         assert direction == "input"
         assert per_1m == pytest.approx(0.50)
-        assert core == live_pricing.normalize("Mistral-Large-3-675b-Instruct")
+        assert core == "mistral-large-3-675b-instruct"
 
     def test_batch_record_rejected_despite_input_tokens_shape(self):
         assert (
@@ -455,3 +455,107 @@ class TestResolutionOrder:
             "anthropic.claude-3-haiku-20240307-v1:0",
         )
         assert "Prices: static table." in report
+
+
+# ----------------------------------------------------------------------
+# /cost refresh + table
+# ----------------------------------------------------------------------
+
+
+def _fake_openrouter(monkeypatch, models=_OR_MODELS):
+    """Serve a /models payload for the OpenRouter fetch; count calls."""
+    calls = []
+
+    def _fetch():
+        calls.append(True)
+        return [dict(model) for model in models]
+
+    monkeypatch.setattr(live_pricing, "fetch_openrouter_models", _fetch)
+    return calls
+
+
+class TestRefreshCaches:
+    def test_refresh_stores_and_reports(self, monkeypatch):
+        _fake_fetch(monkeypatch)
+        _fake_openrouter(monkeypatch)
+        summary = live_pricing.refresh_caches(region="us-west-2")
+        assert summary["bedrock"]["models"] == 7
+        assert summary["bedrock"]["publication"] == "2026-10-03T00:11:38Z"
+        assert summary["openrouter"]["models"] == 2
+        report = cost_context.refresh_report(summary)
+        assert "us-west-2" in report and "7 models" in report
+        assert "OpenRouter: 2 models." in report
+
+    def test_refresh_bypasses_cooldown(self, monkeypatch):
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _r: None)
+        assert live_pricing.bedrock_live_price("x", "us-west-2") is None
+        calls = _fake_fetch(monkeypatch)
+        _fake_openrouter(monkeypatch)
+        summary = live_pricing.refresh_caches(region="us-west-2")
+        assert calls == ["us-west-2"]
+        assert summary["bedrock"]["models"] == 7
+
+    def test_refresh_failure_reports_and_keeps_stale(self, monkeypatch):
+        _fake_fetch(monkeypatch)
+        live_pricing.bedrock_live_price("mistral.mistral-large-3", "us-west-2")
+        path = live_pricing._cache_dir() / "bedrock-pricing-us-west-2.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["fetched_at"] = 0
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _r: None)
+        monkeypatch.setattr(live_pricing, "fetch_openrouter_models", lambda: None)
+        summary = live_pricing.refresh_caches(region="us-west-2")
+        assert "error" in summary["bedrock"]
+        assert "error" in summary["openrouter"]
+        assert "fetch failed" in cost_context.refresh_report(summary)
+        stale = live_pricing.bedrock_live_price(
+            "mistral.mistral-large-3-675b-instruct", "us-west-2"
+        )
+        assert stale is not None and stale[0] == pytest.approx(0.50)
+
+    def test_refresh_disabled(self, monkeypatch):
+        monkeypatch.setenv("STRANDS_CODE_NO_LIVE_PRICING", "1")
+        assert live_pricing.refresh_caches(region="us-west-2") == {"disabled": True}
+        assert "disabled" in cost_context.refresh_report({"disabled": True})
+
+
+class TestPriceTable:
+    def _prime(self, monkeypatch):
+        _fake_fetch(monkeypatch)
+        _fake_openrouter(monkeypatch)
+        live_pricing.refresh_caches(region="us-west-2")
+
+    def test_rows_from_caches_plus_static(self, monkeypatch):
+        self._prime(monkeypatch)
+        table = cost_context.price_table(region="us-west-2")
+        assert "mistral-large-3-675b-instruct" in table
+        assert "in $0.5/1M, out $1.5/1M" in table
+        assert "qwen/qwen3-32b" in table
+        assert "Static fallback:" in table
+        assert "claude-haiku-" in table
+
+    def test_filter_narrows(self, monkeypatch):
+        self._prime(monkeypatch)
+        table = cost_context.price_table("mistral", region="us-west-2")
+        assert "mistral-large-3" in table
+        assert "qwen/qwen3-32b" not in table
+        assert "claude3haiku" not in table
+
+    def test_missing_caches_hint_without_fetch(self, monkeypatch):
+        def _boom(*_a, **_k):
+            raise AssertionError("table must not fetch")
+
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", _boom)
+        monkeypatch.setattr(live_pricing, "fetch_openrouter_models", _boom)
+        table = cost_context.price_table(region="us-west-2")
+        assert "/cost refresh to fetch" in table
+        assert "Static fallback:" in table
+
+    def test_row_cap(self, monkeypatch):
+        rows = [(f"USW2-Model{i:02d}-input-tokens", "0.0010000000") for i in range(45)]
+        rows += [(f"USW2-Model{i:02d}-output-tokens", "0.0020000000") for i in range(45)]
+        _fake_fetch(monkeypatch, rows)
+        _fake_openrouter(monkeypatch, models=[])
+        live_pricing.refresh_caches(region="us-west-2")
+        table = cost_context.price_table(region="us-west-2")
+        assert "…and 5 more" in table

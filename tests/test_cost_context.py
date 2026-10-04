@@ -361,6 +361,41 @@ class TestCostRouterBranches:
         assert "$" in message
         assert "Display only — no budgets or enforcement." in message
 
+    def test_cost_refresh_dispatch(self, tmp_path, monkeypatch):
+        from strands_code_cli import live_pricing
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _r: [])
+        monkeypatch.setattr(live_pricing, "fetch_openrouter_models", lambda: [])
+        live_pricing._reset_cooldowns()
+        action, message = self._dispatch(tmp_path, "/cost refresh")
+        assert action == "reply"
+        assert "Bedrock us-west-2: 0 models" in message
+        assert "OpenRouter: 0 models." in message
+
+    def test_cost_table_dispatch_reads_cache_only(self, tmp_path, monkeypatch):
+        from strands_code_cli import live_pricing
+
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path / "cache"))
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+
+        def _boom(*_a, **_k):
+            raise AssertionError("table must not fetch")
+
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", _boom)
+        monkeypatch.setattr(live_pricing, "fetch_openrouter_models", _boom)
+        action, message = self._dispatch(tmp_path, "/cost table claude")
+        assert action == "reply"
+        assert "no cached data" in message
+        assert "Static fallback:" in message
+
+    def test_cost_unknown_subcommand(self, tmp_path):
+        action, message = self._dispatch(tmp_path, "/cost frobnicate")
+        assert action == "reply"
+        assert message == "Usage: /cost [refresh|table [filter]]"
+
     def test_context_exact_fields(self, tmp_path):
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         agent.messages.extend(_pair_history())

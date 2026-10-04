@@ -21,7 +21,8 @@ USAGE_HINT = (
     "Available commands: /resume, /rename <title>, /forget <id>, "
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
-    "/model|/models [provider/name|id|ARN], /cost, /compact, /clear, /context, /exit"
+    "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
+    "/compact, /clear, /context, /exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -121,7 +122,7 @@ def dispatch(
     if cmd in ("/model", "/models"):
         return _model_message(rest, current_model)
     if cmd == "/cost":
-        return ("reply", _cost_message(session_turns, current_model))
+        return ("reply", _cost_message(session_turns, current_model, rest))
     if cmd == "/compact":
         return ("reply", _compact_message(agent))
     if cmd == "/clear":
@@ -131,11 +132,25 @@ def dispatch(
     return ("reply", f"Unknown command {head!r}. {USAGE_HINT}")
 
 
-def _cost_message(session_turns: list | None, current_model: str | None) -> str:
-    """Render /cost: per-turn rows plus session totals, display only."""
-    from strands_code_cli.cost_context import cost_report
+_COST_USAGE = "Usage: /cost [refresh|table [filter]]"
 
-    return cost_report(list(session_turns or []), current_model or "unknown-model")
+
+def _cost_message(
+    session_turns: list | None, current_model: str | None, rest: str = ""
+) -> str:
+    """Run /cost: session report, live-price refresh, or table listing."""
+    from strands_code_cli.cost_context import cost_report, price_table, refresh_report
+    from strands_code_cli.live_pricing import refresh_caches
+
+    head, _, arg = rest.partition(" ")
+    word = head.strip().lower()
+    if not word:
+        return cost_report(list(session_turns or []), current_model or "unknown-model")
+    if word == "refresh":
+        return refresh_report(refresh_caches())
+    if word == "table":
+        return price_table(arg.strip() or None)
+    return _COST_USAGE
 
 
 def _compact_message(agent) -> str:

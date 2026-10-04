@@ -178,10 +178,11 @@ def _unit_to_per_1m(unit: str) -> float | None:
 
 
 def parse_price_record(item: dict[str, Any]) -> tuple[str, str, float] | None:
-    """Reduce one Price List item to (core_norm, direction, per-1M USD).
+    """Reduce one Price List item to (core, direction, per-1M USD).
 
-    Returns None for non-standard tiers, non-token units, and malformed
-    items — the caller keeps scanning.
+    The core keeps its raw (lowercased) shape for display; callers
+    normalize for matching. Returns None for non-standard tiers,
+    non-token units, and malformed items — the caller keeps scanning.
     """
     attributes = item.get("product", {}).get("attributes", {})
     if not isinstance(attributes, dict):
@@ -208,7 +209,7 @@ def parse_price_record(item: dict[str, Any]) -> tuple[str, str, float] | None:
             if scale is None:
                 continue
             try:
-                return (normalize(core), direction, float(amount) * scale)
+                return (core, direction, float(amount) * scale)
             except (TypeError, ValueError):
                 continue
     return None
@@ -271,6 +272,23 @@ def fetch_bedrock_records(region: str) -> list[dict[str, Any]] | None:
         return None
 
 
+def _store_bedrock(region: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse records into the region cache payload and persist it."""
+    prices: dict[str, dict[str, Any]] = {}
+    publication: str | None = None
+    for item in items:
+        parsed = parse_price_record(item)
+        if parsed is None:
+            continue
+        core, direction, per_1m = parsed
+        slot = prices.setdefault(normalize(core), {"name": core})
+        slot["in" if direction == "input" else "out"] = per_1m
+        publication = publication or item.get("publicationDate")
+    payload = {"fetched_at": time.time(), "publication": publication, "prices": prices}
+    _write_cache(_cache_dir() / f"bedrock-pricing-{region}.json", payload)
+    return payload
+
+
 def _bedrock_cache(region: str) -> dict[str, Any] | None:
     """Parsed core map for a region: fresh cache, refresh, or stale cache."""
     if _live_disabled():
@@ -286,19 +304,7 @@ def _bedrock_cache(region: str) -> dict[str, Any] | None:
     if items is None:
         _note_failure(key)
         return payload
-    prices: dict[str, dict[str, float]] = {}
-    publication: str | None = None
-    for item in items:
-        parsed = parse_price_record(item)
-        if parsed is None:
-            continue
-        core, direction, per_1m = parsed
-        slot = prices.setdefault(core, {})
-        slot["in" if direction == "input" else "out"] = per_1m
-        publication = publication or item.get("publicationDate")
-    fresh = {"fetched_at": time.time(), "publication": publication, "prices": prices}
-    _write_cache(path, fresh)
-    return fresh
+    return _store_bedrock(region, items)
 
 
 def bedrock_live_price(
@@ -373,21 +379,8 @@ def fetch_openrouter_models() -> list[dict[str, Any]] | None:
         return None
 
 
-def _openrouter_cache() -> dict[str, Any] | None:
-    """Parsed id map: fresh cache, refresh, or stale cache."""
-    if _live_disabled():
-        return None
-    key = "openrouter"
-    path = _cache_dir() / "openrouter-models.json"
-    payload = _read_cache(path)
-    if payload is not None and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS:
-        return payload
-    if _in_cooldown(key):
-        return payload
-    models = fetch_openrouter_models()
-    if models is None:
-        _note_failure(key)
-        return payload
+def _store_openrouter(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse a /models payload into the cache payload and persist it."""
     entries: dict[str, dict[str, float]] = {}
     for model in models:
         if not isinstance(model, dict):
@@ -407,9 +400,27 @@ def _openrouter_cache() -> dict[str, Any] | None:
         if isinstance(window, (int, float)) and window > 0:
             entry["window"] = float(window)
         entries[model_key] = entry
-    fresh = {"fetched_at": time.time(), "models": entries}
-    _write_cache(path, fresh)
-    return fresh
+    payload = {"fetched_at": time.time(), "models": entries}
+    _write_cache(_cache_dir() / "openrouter-models.json", payload)
+    return payload
+
+
+def _openrouter_cache() -> dict[str, Any] | None:
+    """Parsed id map: fresh cache, refresh, or stale cache."""
+    if _live_disabled():
+        return None
+    key = "openrouter"
+    path = _cache_dir() / "openrouter-models.json"
+    payload = _read_cache(path)
+    if payload is not None and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS:
+        return payload
+    if _in_cooldown(key):
+        return payload
+    models = fetch_openrouter_models()
+    if models is None:
+        _note_failure(key)
+        return payload
+    return _store_openrouter(models)
 
 
 def openrouter_entry(model_id: str) -> dict[str, float] | None:
@@ -462,3 +473,54 @@ def litellm_entry(model_id: str) -> dict[str, float] | None:
         if entry:
             return entry
     return None
+
+
+def refresh_caches(region: str | None = None) -> dict[str, Any]:
+    """Force-refetch both live sources, bypassing TTL and cooldown.
+
+    Explicit user action (``/cost refresh``): failures are reported in
+    the summary, never raised, and previously cached data is kept.
+    """
+    summary: dict[str, Any] = {}
+    if _live_disabled():
+        return {"disabled": True}
+    resolved = region or resolve_region()
+    if resolved is None:
+        summary["bedrock"] = {"region": None, "error": "no region resolved"}
+    else:
+        items = fetch_bedrock_records(resolved)
+        if items is None:
+            summary["bedrock"] = {
+                "region": resolved,
+                "error": "fetch failed (no creds, denied, or unreachable)",
+            }
+        else:
+            payload = _store_bedrock(resolved, items)
+            _cooldown_until.pop(f"bedrock:{resolved}", None)
+            summary["bedrock"] = {
+                "region": resolved,
+                "models": len(payload.get("prices", {})),
+                "publication": payload.get("publication"),
+            }
+    models = fetch_openrouter_models()
+    if models is None:
+        summary["openrouter"] = {"error": "fetch failed (unreachable)"}
+    else:
+        payload = _store_openrouter(models)
+        _cooldown_until.pop("openrouter", None)
+        summary["openrouter"] = {"models": len(payload.get("models", {}))}
+    return summary
+
+
+def cached_tables(region: str | None = None) -> dict[str, Any]:
+    """Cached payloads for inspection (no network, failures read as None)."""
+    resolved = region or resolve_region()
+    bedrock = None
+    if resolved is not None:
+        payload = _read_cache(_cache_dir() / f"bedrock-pricing-{resolved}.json")
+        if isinstance(payload, dict):
+            bedrock = payload
+    openrouter = _read_cache(_cache_dir() / "openrouter-models.json")
+    if not isinstance(openrouter, dict):
+        openrouter = None
+    return {"region": resolved, "bedrock": bedrock, "openrouter": openrouter}
