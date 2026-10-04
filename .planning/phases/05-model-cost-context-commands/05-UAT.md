@@ -421,5 +421,5 @@ skipped: 0
       issue: "no slash interception in the reader path"
   missing:
     - "mid_turn_slash_reply (/model reuses MODEL_REFUSAL verbatim, others generic idle-only); reader refuses via on_refusal without arming"
-  resolved_by: pending-commit
+  resolved_by: ed0fee1
   resolved_at: 2026-10-04
