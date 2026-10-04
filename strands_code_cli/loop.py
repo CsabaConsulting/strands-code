@@ -39,6 +39,7 @@ from strands_code_cli.memory_file import (
 from strands_code_cli.memory_modes import (
     MEMORY_FACT_DIR,
     CurateQueue,
+    InitState,
     MemoryModeState,
     ReviseState,
     format_revise_prompt,
@@ -67,7 +68,7 @@ from strands_code_cli.policy_gate import (
     set_mode as set_gate_mode,
 )
 from strands_code_cli.router import (
-    apply_memory_proposal,
+    apply_approved_proposal,
     apply_memory_section,
     dispatch,
     read_memory_section,
@@ -813,6 +814,41 @@ def _drain_revise_rounds(
         text = _result_text(agent, follow_result)
 
 
+_INIT_FENCE_RE = re.compile(r"```proposed:(?P<label>[^\n]*)\n(?P<body>.*?)```", re.DOTALL)
+"""Labeled-draft matcher for init consumer turns."""
+
+
+def consume_init_turn(
+    result_text: str,
+    init_state: InitState,
+    queue: CurateQueue,
+) -> str:
+    """Queue one labeled fenced block per stale section; always disarms.
+
+    Only blocks labeled with a stale section queue (merge-scan:
+    only missing or stale sections become proposals); repeats after
+    the first block per section are ignored, as are unlabeled
+    fences. Nothing is written — drafts enter the curate queue for
+    approval.
+    """
+    depth = init_state.depth
+    stale = set(init_state.stale_sections)
+    queued_sections: set[str] = set()
+    count = 0
+    for match in _INIT_FENCE_RE.finditer(result_text):
+        label = match.group("label").strip()
+        if label not in stale or label in queued_sections:
+            continue
+        body = match.group("body")
+        if body.endswith("\n"):
+            body = body[:-1]
+        queue.propose(label, f"init-{depth}", body)
+        queued_sections.add(label)
+        count += 1
+    init_state.disarm()
+    return f"Drafted {count} sections from {depth} scan — review with /memory."
+
+
 def run_loop(
     agent: Any,
     *,
@@ -847,7 +883,8 @@ def run_loop(
     auto-applying in silent mode). Armed revise rounds (``/memory
     revise`` or the review's revise choice) run as agent turns whose
     fenced blocks are consumed after the turn, re-invoking while the
-    user iterates.
+    user iterates. Armed ``/init`` drafts run one agent turn whose
+    labeled blocks queue as proposals for curate approval.
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -879,6 +916,7 @@ def run_loop(
     curate_queue = CurateQueue()
     promotion_seen: set[str] = set()
     revise_state = ReviseState()
+    init_state = InitState()
     boundary_revise: dict[str, Any] = {"template": None}
 
     def _arm_revise_from_review(proposal: Any, instruction: str) -> str:
@@ -916,7 +954,7 @@ def run_loop(
         for review_line in review_memory_queue(
             curate_queue,
             memory_mode,
-            apply_memory_proposal,
+            apply_approved_proposal,
             on_revise=_arm_revise_from_review,
         ):
             console.print(review_line)
@@ -949,6 +987,7 @@ def run_loop(
                 memory_mode=memory_mode,
                 curate=curate_queue,
                 revise=revise_state,
+                init=init_state,
             )
         if action == "exit":
             break
@@ -1047,6 +1086,9 @@ def run_loop(
                     if revise_state.armed:
                         revise_state.disarm()
                         console.print("Revise round dropped — the turn failed.")
+                    if init_state.armed:
+                        init_state.disarm()
+                        console.print("Init draft dropped — the turn failed.")
                     continue
                 if revise_state.armed:
                     _drain_revise_rounds(
@@ -1058,6 +1100,11 @@ def run_loop(
                         current_model,
                         mode,
                     )
+                if init_state.armed:
+                    init_reply = consume_init_turn(
+                        _result_text(agent, result), init_state, curate_queue
+                    )
+                    console.print(init_reply)
                 history = getattr(agent, "messages", None)
                 if (
                     attempts == 2
@@ -1077,6 +1124,9 @@ def run_loop(
             if revise_state.armed:
                 revise_state.disarm()
                 console.print("Revise round dropped — interrupted, memory unchanged.")
+            if init_state.armed:
+                init_state.disarm()
+                console.print("Init draft dropped — interrupted, memory unchanged.")
             cancel_armed_at = _handle_turn_cancel(
                 agent, session_id, index, cancel_event, cancel_armed_at
             )

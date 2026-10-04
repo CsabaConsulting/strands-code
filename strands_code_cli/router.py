@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shutil
 import sys
-from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,16 +18,25 @@ from strands_code_cli.diff_gate import apply_stashed, store_for
 from strands_code_cli.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
+    UPDATED_MARKER_RE,
+    apply_init_proposal,
+    diff_sections,
     dump_memory_file,
+    fresh_marker,
+    load_memory,
     parse_memory_file,
+    scan_repo,
+    section_span,
 )
 from strands_code_cli.memory_modes import (
     MEMORY_EMPTY_QUEUE,
     MEMORY_MODE_USAGE,
     CurateQueue,
+    InitState,
     MemoryModeState,
     Proposal,
     ReviseState,
+    format_init_prompt,
     format_revise_prompt,
 )
 from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
@@ -45,7 +52,7 @@ USAGE_HINT = (
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
     "/compact, /clear, /context, /skills [show <name>|remove <name>], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>], "
-    "/exit"
+    "/init [deeper], /exit"
 )
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
@@ -58,9 +65,6 @@ _SESSION_DELETE_CONFIRM = "delete-session-confirmed"
 
 _SDK_EXTRA_HINTS = {"litellm": "litellm", "bedrock": "agentcore"}
 """Optional-extra install hints keyed by provider prefix."""
-
-_UPDATED_MARKER_RE = re.compile(r"<!--\s*updated:\s*.*?-->")
-"""Per-section freshness marker above memory headings (D-05)."""
 
 
 def _sdk_hint(selection: str) -> str:
@@ -87,6 +91,7 @@ _MODE_USAGE = MODE_USAGE
 _MEMORY_USAGE = (
     "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
 )
+_INIT_USAGE = "Usage: /init [deeper]"
 _MEMORY_MODE_USAGE = MEMORY_MODE_USAGE
 
 _PICKER_LIMIT = 10
@@ -107,6 +112,7 @@ def dispatch(
     memory_mode: MemoryModeState | None = None,
     curate: CurateQueue | None = None,
     revise: ReviseState | None = None,
+    init: InitState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -135,6 +141,8 @@ def dispatch(
         revise: Session-sticky revise-round holder armed by /memory
             revise (None → throwaway holder, keeping existing callers
             untouched).
+        init: Session-sticky init-draft holder armed by /init (None →
+            throwaway holder, keeping existing callers untouched).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -168,6 +176,8 @@ def dispatch(
         if rest.partition(" ")[0].strip().lower() == "revise":
             return _revise_action(rest, revise)
         return ("reply", _memory_message(rest, memory_mode, curate))
+    if cmd == "/init":
+        return _init_action(rest, cwd if cwd is not None else os.getcwd(), init)
     if cmd == "/skills":
         return ("reply", _skills_message(rest, skills))
     if cmd == "/approve":
@@ -503,7 +513,7 @@ def apply_memory_proposal(proposal: Proposal) -> None:
     heading = f"## {proposal.section}"
     block = proposal.body if proposal.body.endswith("\n") else proposal.body + "\n"
     lines = body.splitlines(keepends=True)
-    head_idx, end = _section_span(lines, proposal.section)
+    head_idx, end = section_span(lines, proposal.section)
     if head_idx is None:
         if lines and lines[-1].strip():
             lines.append("\n")
@@ -516,34 +526,6 @@ def apply_memory_proposal(proposal: Proposal) -> None:
     dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
 
 
-def _section_span(lines: list[str], section: str) -> tuple[int | None, int]:
-    """Heading index plus end index of one ``## {section}`` span.
-
-    The end is the next ``## `` heading, a freshness marker glued to
-    one, or EOF; ``(None, len)`` when the heading is absent. The
-    marker belongs to the heading below it, never to this span.
-    """
-    heading = f"## {section}"
-    head_idx = next(
-        (i for i, line in enumerate(lines) if line.rstrip("\n") == heading), None
-    )
-    if head_idx is None:
-        return None, len(lines)
-    end = len(lines)
-    for i in range(head_idx + 1, len(lines)):
-        if lines[i].startswith("## "):
-            end = i
-            break
-        if (
-            _UPDATED_MARKER_RE.search(lines[i])
-            and i + 1 < len(lines)
-            and lines[i + 1].startswith("## ")
-        ):
-            end = i
-            break
-    return head_idx, end
-
-
 def read_memory_section(section: str) -> str | None:
     """Current text of one .agent/MEMORY.md section (None when missing).
 
@@ -554,7 +536,7 @@ def read_memory_section(section: str) -> str | None:
         return None
     _frontmatter, body = parse_memory_file(AGENT_MEMORY)
     lines = body.splitlines(keepends=True)
-    head_idx, end = _section_span(lines, section)
+    head_idx, end = section_span(lines, section)
     if head_idx is None:
         return None
     text = "".join(lines[head_idx + 1 : end])
@@ -576,20 +558,34 @@ def apply_memory_section(section: str, new_text: str) -> None:
     else:
         frontmatter, body = dict(MEMORY_FRONTMATTER_DEFAULTS), ""
     lines = body.splitlines(keepends=True)
-    head_idx, end = _section_span(lines, section)
+    head_idx, end = section_span(lines, section)
     block = new_text if new_text.endswith("\n") else new_text + "\n"
-    marker = f"<!-- updated: {date.today().isoformat()} -->\n"
+    marker = fresh_marker() + "\n"
     if head_idx is None:
         if lines and lines[-1].strip():
             lines.append("\n")
         lines.append(f"{marker}## {section}\n{block}")
     else:
         lines[head_idx + 1 : end] = [block]
-        if head_idx > 0 and _UPDATED_MARKER_RE.search(lines[head_idx - 1]):
+        if head_idx > 0 and UPDATED_MARKER_RE.search(lines[head_idx - 1]):
             lines[head_idx - 1] = marker
         else:
             lines.insert(head_idx, marker)
     dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
+
+
+def apply_approved_proposal(proposal: Proposal) -> None:
+    """Route one approved proposal to its writer (init vs curate).
+
+    Init-sourced proposals replace-or-append the full section plus
+    upsert the root pointer (merge-never-clobber, D-10/D-11); every
+    other source appends to its section. Module-global so tests can
+    monkeypatch the writer.
+    """
+    if proposal.source in ("init-shallow", "init-deep"):
+        apply_init_proposal(proposal, load_memory())
+    else:
+        apply_memory_proposal(proposal)
 
 
 def _memory_message(
@@ -628,7 +624,7 @@ def _memory_message(
         target = arg.strip()
         if not target:
             return _MEMORY_USAGE
-        return queue.approve(target, apply_memory_proposal)
+        return queue.approve(target, apply_approved_proposal)
     if verb == "deny":
         target = arg.strip()
         if not target:
@@ -654,6 +650,31 @@ def _revise_action(rest: str, revise: ReviseState | None) -> tuple:
     holder = revise if revise is not None else ReviseState()
     holder.arm(section, current, instruction)
     return ("agent", format_revise_prompt(section, current, instruction))
+
+
+def _init_action(
+    rest: str, root: str | Path, init: InitState | None
+) -> tuple:
+    """Handle /init: scan the repo and draft stale sections through curate.
+
+    Bare ``/init`` runs the shallow scan, ``/init deeper`` the deep
+    one; all-fresh memory stays a reply. Only the armed path returns
+    ``("agent", draft prompt)`` — nothing is written before curate
+    approval. Never prompts, never writes.
+    """
+    word = rest.strip().lower()
+    if word and word != "deeper":
+        return ("reply", _INIT_USAGE)
+    depth = "deep" if word == "deeper" else "shallow"
+    base = Path(root)
+    report = scan_repo(base, depth)
+    snapshot = load_memory(base / "STRANDS.md", base / ".agent" / "MEMORY.md")
+    stale = diff_sections(snapshot)
+    if not stale:
+        return ("reply", "Memory is fresh — no sections to draft.")
+    holder = init if init is not None else InitState()
+    holder.arm(depth, report, stale)
+    return ("agent", format_init_prompt(report, stale))
 
 
 def _approve_message(mode: ModeState | None) -> tuple:

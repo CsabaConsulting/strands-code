@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 MEMORY_MODE_CURATE_REPLY = "Memory mode: curate — every proposal prompts approve/deny."
 MEMORY_MODE_SILENT_REPLY = "Memory mode: silent — proposals auto-apply, writes logged."
@@ -134,6 +134,54 @@ def format_revise_prompt(section: str, current: str, instruction: str) -> str:
         "Revise the quoted memory section per the instruction. "
         "Reply with the FULL revised section in one fenced block, "
         "then a one-line summary of what changed."
+    )
+
+
+class InitState:
+    """Session-sticky /init draft holder (D-09).
+
+    Armed by ``/init`` with the scan report plus the stale section
+    list; the loop consumes the armed draft after the agent turn.
+    In-memory like :class:`MemoryModeState`. ``report`` is
+    ScanReport-shaped (kept untyped: memory_file owns that type and
+    importing it here would cycle).
+    """
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.depth = "shallow"
+        self.report: Any = None
+        self.stale_sections: list[str] = []
+
+    def arm(self, depth: str, report: Any, stale_sections: list[str]) -> None:
+        """Arm a draft round for one scan depth plus its stale sections."""
+        self.armed = True
+        self.depth = depth
+        self.report = report
+        self.stale_sections = list(stale_sections)
+
+    def disarm(self) -> None:
+        """Clear the draft round (consumed, fresh, or aborted)."""
+        self.armed = False
+        self.depth = "shallow"
+        self.report = None
+        self.stale_sections = []
+
+
+def format_init_prompt(report: Any, stale_sections: list[str]) -> str:
+    """Init-draft prompt: scan outline plus the stale-only section list.
+
+    Names ONLY the stale sections and requires one labeled fenced
+    block per section; drafts stay labeled proposed until approved.
+    """
+    names = ", ".join(stale_sections)
+    return (
+        f"Repo scan ({report.depth}):\n{report.outline}\n\n"
+        f"Draft ONLY these memory sections: {names}.\n"
+        "Reply with one fenced block per section. Each block MUST open with "
+        "```proposed: <Section> on its own line, hold the FULL section body, "
+        "and close with ```. Keep every draft labeled proposed — never "
+        "present unapproved drafts as established repo fact."
     )
 
 

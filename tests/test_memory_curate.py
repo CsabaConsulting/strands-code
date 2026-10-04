@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,13 +18,24 @@ import pytest
 from strands_code_cli.loop import (
     _drain_revise_rounds,
     _result_text,
+    consume_init_turn,
     consume_revise_turn,
     review_memory_queue,
 )
-from strands_code_cli.memory_file import dump_memory_file
+from strands_code_cli.memory_file import (
+    MAX_SCAN_BYTES,
+    MAX_SCAN_FILES,
+    apply_init_proposal,
+    diff_sections,
+    dump_memory_file,
+    load_memory,
+    parse_memory_file,
+    scan_repo,
+)
 from strands_code_cli.memory_modes import (
     MEMORY_EMPTY_QUEUE,
     CurateQueue,
+    InitState,
     MemoryModeState,
     Proposal,
     ReviseState,
@@ -147,7 +158,7 @@ class TestCurateLoop:
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
         calls: list = []
-        monkeypatch.setattr(router_mod, "apply_memory_proposal", calls.append)
+        monkeypatch.setattr(router_mod, "apply_approved_proposal", calls.append)
         action, message = _dispatch("/memory approve p1", tmp_path, curate=queue)
         assert action == "reply"
         assert message == "Approved p1 → Build."
@@ -162,7 +173,7 @@ class TestCurateLoop:
         def _must_not_write(proposal):
             raise AssertionError("deny must never write")
 
-        monkeypatch.setattr(router_mod, "apply_memory_proposal", _must_not_write)
+        monkeypatch.setattr(router_mod, "apply_approved_proposal", _must_not_write)
         action, message = _dispatch("/memory deny p1", tmp_path, curate=queue)
         assert action == "reply"
         assert message == "Denied p1 — skipped, will not re-ask this session."
@@ -257,6 +268,7 @@ class TestCurateLoop:
         source = _loop_source()
         assert "curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)" in source
         assert "review_memory_queue(\n            curate_queue,\n            memory_mode" in source
+        assert "apply_approved_proposal," in source
         assert "memory_mode=memory_mode," in source
         assert "curate=curate_queue," in source
 
@@ -512,3 +524,263 @@ class TestReviseRounds:
         assert "on_revise=_arm_revise_from_review," in source
         assert "_drain_revise_rounds(" in source
         assert "consume_revise_turn(text, revise_state, writer)" in source
+
+
+def _write_repo(root: Path) -> None:
+    """Tmp fixture repo: README, manifest, docs, policy, sources, sessions."""
+    (root / "README.md").write_text("# Demo\nA demo repo.\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\ndependencies = ["requests>=2", "click"]\n'
+        "[tool.pytest.ini_options]\naddopts = '-q'\n",
+        encoding="utf-8",
+    )
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text("Guide body here.\n", encoding="utf-8")
+    (root / ".agent").mkdir()
+    (root / ".agent" / "policy.toml").write_text(
+        "[allow]\ntools = ['read']\n", encoding="utf-8"
+    )
+    (root / ".agent" / "sessions").mkdir()
+    (root / ".agent" / "sessions" / "s1.md").write_text(
+        "SESSION-SECRET-STUFF\n", encoding="utf-8"
+    )
+    (root / "pkg").mkdir()
+    (root / "pkg" / "core.py").write_text(
+        '"""Core module."""\nimport os\n\ndef run():\n    """Run it."""\n    return 42\n',
+        encoding="utf-8",
+    )
+    (root / "api_keys.py").write_text("KEY = 'SECRET-KEY-STUFF'\n", encoding="utf-8")
+    (root / "tests").mkdir()
+    (root / "tests" / "test_x.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8"
+    )
+
+
+def _arm_init(depth: str = "shallow", stale: list | None = None) -> InitState:
+    state = InitState()
+    state.arm(depth, SimpleNamespace(depth=depth, outline="outline"), stale or [])
+    return state
+
+
+# ----------------------------------------------------------------------
+# Init scan: repo scan plus draft-through-curate plus merge-never-clobber
+# ----------------------------------------------------------------------
+
+
+class TestInitScan:
+    def test_scan_shallow_reads_only_listed_sources(self, tmp_path):
+        _write_repo(tmp_path)
+        report = scan_repo(tmp_path, "shallow")
+        assert report.depth == "shallow"
+        assert set(report.sources_read) == {
+            "README.md",
+            "pyproject.toml",
+            ".agent/policy.toml",
+        }
+        total = sum(
+            (tmp_path / name).stat().st_size for name in report.sources_read
+        )
+        assert len(report.sources_read) <= MAX_SCAN_FILES
+        assert total <= MAX_SCAN_BYTES
+        assert "SESSION-SECRET-STUFF" not in report.outline
+        assert ".agent/sessions/ (contents skipped)" in report.outline
+        assert "A demo repo." in report.outline  # README content
+        assert "guide.md" in report.outline  # docs filenames…
+        assert "Guide body here." not in report.outline  # …only
+        assert "tools = ['read']" in report.outline  # policy posture
+
+    def test_scan_deep_adds_sources_deps_tests(self, tmp_path):
+        _write_repo(tmp_path)
+        report = scan_repo(tmp_path, "deep")
+        assert "pkg/core.py" in report.sources_read
+        assert "tests/test_x.py" in report.sources_read
+        assert "api_keys.py" not in report.sources_read  # key-shaped: never read
+        assert "SECRET-KEY-STUFF" not in report.outline
+        assert "import os" in report.outline
+        assert "def run: Run it." in report.outline
+        assert "return 42" not in report.outline  # bodies excluded
+        assert "requests" in report.outline and "click" in report.outline
+        assert "tests/test_x.py" in report.outline
+        assert "addopts" in report.outline  # runner config
+
+    def test_scan_samples_at_most_ten_sources(self, tmp_path):
+        for pos in range(12):
+            (tmp_path / f"mod_{pos:02d}.py").write_text(
+                f"VALUE = {pos}\n", encoding="utf-8"
+            )
+        report = scan_repo(tmp_path, "deep")
+        assert report.outline.count("Source (mod_") == 10
+
+    def test_scan_respects_file_and_byte_caps(self, tmp_path):
+        for pos in range(30):
+            (tmp_path / f"README.{pos}").write_text("x\n", encoding="utf-8")
+        report = scan_repo(tmp_path, "shallow")
+        assert len(report.sources_read) == MAX_SCAN_FILES == 25
+        assert "(scan capped at 25 files / 50000 bytes" in report.outline
+
+    def test_scan_single_file_over_byte_cap_is_skipped(self, tmp_path):
+        (tmp_path / "README.md").write_text("y" * (MAX_SCAN_BYTES + 1), encoding="utf-8")
+        report = scan_repo(tmp_path, "shallow")
+        assert report.sources_read == []
+        assert "(scan capped at 25 files / 50000 bytes" in report.outline
+
+    def test_scan_rejects_unknown_depth(self, tmp_path):
+        with pytest.raises(ValueError):
+            scan_repo(tmp_path, "sideways")
+
+    def test_diff_sections_flags_missing_unmarked_and_stale(self):
+        from strands_code_cli.memory_file import MemorySnapshot
+
+        old = (date.today() - timedelta(days=91)).isoformat()
+        fresh = date.today().isoformat()
+        body = (
+            "## Build\nUnmarked body.\n"
+            f"<!-- updated: {old} -->\n## Test\nOld body.\n"
+            f"<!-- updated: {fresh} -->\n## Conventions\nFresh body.\n"
+        )
+        snapshot = MemorySnapshot(root_text="", agent_text=body)
+        assert diff_sections(snapshot) == ["Build", "Test", "Layout", "Gotchas"]
+
+    def test_consume_init_turn_queues_stale_labeled_blocks(self):
+        queue = CurateQueue()
+        state = _arm_init("shallow", ["Build", "Test"])
+        reply = consume_init_turn(
+            "Intro.\n"
+            "```proposed: Build\nRun uv build.\n```\n"
+            "```proposed: Test\nRun pytest.\n```\n"
+            "```proposed: Layout\nShould not queue.\n```\n"
+            "```\nUnlabeled fence.\n```\n",
+            state,
+            queue,
+        )
+        assert reply == "Drafted 2 sections from shallow scan — review with /memory."
+        assert not state.armed
+        pending = queue.list_pending()
+        assert [(p.section, p.source) for p in pending] == [
+            ("Build", "init-shallow"),
+            ("Test", "init-shallow"),
+        ]
+        assert [p.body for p in pending] == ["Run uv build.", "Run pytest."]
+
+    def test_consume_init_turn_ignores_repeats_and_empty(self):
+        queue = CurateQueue()
+        state = _arm_init("deep", ["Build"])
+        reply = consume_init_turn(
+            "```proposed: Build\nFirst.\n```\n```proposed: Build\nSecond.\n```\n",
+            state,
+            queue,
+        )
+        assert reply == "Drafted 1 sections from deep scan — review with /memory."
+        assert [p.body for p in queue.list_pending()] == ["First."]
+        assert consume_init_turn("no blocks", _arm_init("deep", ["Build"]), queue) == (
+            "Drafted 0 sections from deep scan — review with /memory."
+        )
+
+    def test_apply_init_proposal_merges_without_clobbering(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        fresh = date.today().isoformat()
+        approved_span = f"<!-- updated: {fresh} -->\n## Build\nApproved line.\n"
+        _write_memory(tmp_path, approved_span)
+        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
+        apply_init_proposal(
+            Proposal("p1", "Test", "init-shallow", "Run pytest.\nSecond line here.\n"),
+            snapshot,
+        )
+        _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
+        assert approved_span in body  # pre-approved span byte-identical
+        assert "## Test\nRun pytest.\nSecond line here.\n" in body
+        _root_frontmatter, root_body = parse_memory_file(tmp_path / "STRANDS.md")
+        assert "Details live in .agent/MEMORY.md" in root_body
+        assert "- Test: Run pytest." in root_body
+        assert "Second line here." not in root_body  # thin lines only
+
+    def test_apply_init_proposal_upserts_root_pointer(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
+        apply_init_proposal(Proposal("p1", "Build", "init-shallow", "Run uv.\n"), snapshot)
+        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
+        apply_init_proposal(Proposal("p2", "Test", "init-shallow", "Run pytest.\n"), snapshot)
+        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
+        apply_init_proposal(Proposal("p3", "Build", "init-deep", "Run uv run.\n"), snapshot)
+        _frontmatter, root_body = parse_memory_file(tmp_path / "STRANDS.md")
+        assert root_body.count("## Memory") == 1
+        assert root_body.count("- Build:") == 1
+        assert "- Build: Run uv run." in root_body  # latest wins
+        assert "- Test: Run pytest." in root_body
+        first = root_body.split("## Memory")[1].strip().splitlines()[0]
+        assert first == "Details live in .agent/MEMORY.md — see that file for full conventions."
+
+    def test_init_dispatch_arms_and_names_only_stale(self, tmp_path):
+        _write_repo(tmp_path)
+        fresh = date.today().isoformat()
+        _write_memory(tmp_path, f"<!-- updated: {fresh} -->\n## Conventions\nFresh.\n")
+        holder = InitState()
+        action, message = _dispatch("/init", tmp_path, init=holder, cwd=tmp_path)
+        assert action == "agent"
+        assert message is not None
+        assert (
+            "Draft ONLY these memory sections: Build, Test, Layout, Gotchas."
+            in message
+        )
+        assert "Conventions" not in message.split("Draft ONLY")[1]
+        assert holder.armed and holder.depth == "shallow"
+        assert holder.stale_sections == ["Build", "Test", "Layout", "Gotchas"]
+        assert not (tmp_path / "STRANDS.md").exists()  # nothing written pre-approval
+
+    def test_init_deeper_selects_deep_scan(self, tmp_path):
+        _write_repo(tmp_path)
+        holder = InitState()
+        action, message = _dispatch("/init deeper", tmp_path, init=holder, cwd=tmp_path)
+        assert action == "agent"
+        assert message is not None and "Repo scan (deep)" in message
+        assert holder.depth == "deep"
+
+    def test_init_unknown_arg_returns_usage(self, tmp_path):
+        _write_repo(tmp_path)
+        action, message = _dispatch("/init sideways", tmp_path, cwd=tmp_path)
+        assert action == "reply"
+        assert message == "Usage: /init [deeper]"
+
+    def test_init_all_fresh_replies(self, tmp_path):
+        _write_repo(tmp_path)
+        fresh = date.today().isoformat()
+        sections = "".join(
+            f"<!-- updated: {fresh} -->\n## {name}\nBody.\n"
+            for name in ("Build", "Test", "Conventions", "Layout", "Gotchas")
+        )
+        _write_memory(tmp_path, sections)
+        holder = InitState()
+        action, message = _dispatch("/init", tmp_path, init=holder, cwd=tmp_path)
+        assert action == "reply"
+        assert message == "Memory is fresh — no sections to draft."
+        assert not holder.armed
+
+    def test_approve_routes_init_proposal_to_init_writer(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        queue = CurateQueue()
+        queue.propose("Build", "init-shallow", "Run uv build.\n", proposal_id="p1")
+        queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
+        action, message = _dispatch("/memory approve p1", tmp_path, curate=queue)
+        assert action == "reply" and message == "Approved p1 → Build."
+        _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
+        assert "## Build\nRun uv build.\n" in body
+        _root_frontmatter, root_body = parse_memory_file(tmp_path / "STRANDS.md")
+        assert "Details live in .agent/MEMORY.md" in root_body
+        action, message = _dispatch("/memory approve p2", tmp_path, curate=queue)
+        assert message == "Approved p2 → Test."
+        _root_frontmatter, root_body = parse_memory_file(tmp_path / "STRANDS.md")
+        assert "pytest" not in root_body  # promoted path leaves root alone
+
+    def test_usage_hint_contains_init(self):
+        assert "/init [deeper]" in USAGE_HINT
+
+    def test_loop_wires_init_consumer(self):
+        source = _loop_source()
+        assert "init_state = InitState()" in source
+        assert "init=init_state," in source
+        assert "consume_init_turn(" in source
+        assert "_result_text(agent, result), init_state, curate_queue" in source

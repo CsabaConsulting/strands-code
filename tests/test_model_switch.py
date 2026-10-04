@@ -826,6 +826,14 @@ class TestRichHistory:
 
 
 class TestTurnGuard:
+    @pytest.fixture(autouse=True)
+    def _hermetic_fact_dir(self, tmp_path, monkeypatch):
+        # Hermetic curate boundary: ambient harness fact files must not
+        # queue promotion proposals (and prompt on stdin) during runs.
+        import strands_code_cli.loop as loop_mod
+
+        monkeypatch.setattr(loop_mod, "MEMORY_FACT_DIR", tmp_path / "memory")
+
     def test_provider_error_fails_turn_not_session(self, tmp_path, monkeypatch, capsys):
         from contextlib import nullcontext
         from types import SimpleNamespace

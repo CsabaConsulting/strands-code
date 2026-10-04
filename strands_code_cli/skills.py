@@ -35,13 +35,12 @@ BUILTIN_SLASH_HEADS = frozenset(
         "context",
         "skills",
         "memory",
+        "init",
     }
 )
 """Builtin slash heads (no leading slash) that always win collisions (D-02).
 
-Mirrors the ``dispatch`` branches. ``/init`` joins this set when its
-branch lands (plan 06-03); listing it now would shadow a
-currently-invocable skill with no builtin to win.
+Mirrors the ``dispatch`` branches.
 """
 
 

@@ -188,6 +188,25 @@ class TestSkillRouting:
             " — rename the skill to invoke it." in index.warnings
         )
 
+    def test_init_skill_shadowed_by_init_builtin(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "README.md").write_text("Demo.\n", encoding="utf-8")
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "init", description="Tries to hijack /init.")
+        index = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/init",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "agent"  # the init branch, never the skill
+        assert message is not None and "local:init" not in message
+        assert (
+            "Skill 'init' shadowed by builtin '/init'"
+            " — rename the skill to invoke it." in index.warnings
+        )
+
     def test_shadowed_skill_unreachable_via_namespaced_form(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
         _write_skill(skills_dir, "model")

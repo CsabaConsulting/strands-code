@@ -82,6 +82,9 @@ def _run_script(script: list[Any], tmp_path, agent=None, monotonic=None, monkeyp
     agent = agent if agent is not None else _LoopAgent()
     monkeypatch.setattr(loop_module, "PromptSession", lambda **k: _ScriptSession(script))
     monkeypatch.setattr(loop_module, "_history", lambda: InMemoryHistory())
+    # Hermetic curate boundary: ambient harness fact files must not queue
+    # promotion proposals (and prompt on stdin) during scripted loop runs.
+    monkeypatch.setattr(loop_module, "MEMORY_FACT_DIR", tmp_path / "memory")
     if monotonic is not None:
         monkeypatch.setattr(loop_module, "monotonic", monotonic)
     index = SessionIndex(tmp_path / "index")
