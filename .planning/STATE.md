@@ -3,16 +3,16 @@ gsd_state_version: "1.0"
 current_phase: 6
 current_phase_name: Skills + Memory File
 status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-10-04T22:03:03.639Z"
+stopped_at: Completed 06-03-PLAN.md
+last_updated: "2026-10-05T00:38:32.963Z"
 last_activity: 2026-10-04
-last_activity_desc: Phase 5 complete, transitioned to Phase 6
-state_head: 2f417b9854fff42ea6d42b97ce668d30e40d98a2
+last_activity_desc: Completed 06-01-PLAN.md (SKILL-01 skills spine)
+state_head: 376a89dd03f26be6eab82e2d079a7046e036b5e1
 progress:
   total_phases: 9
   completed_phases: 5
-  total_plans: 10
-  completed_plans: 7
+  total_plans: 11
+  completed_plans: 10
   percent: 56
 ---
 
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-04)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 06 — Skills + Memory File
+**Current focus:** Phase 6 — Skills + Memory File
 
 ## Current Position
 
 Phase: 6 (Skills + Memory File) — READY TO EXECUTE
-Plan: Not started
+Plan: 3 of 3
 Status: Ready to execute
-Last activity: 2026-10-04 — Phase 5 complete, transitioned to Phase 6
+Last activity: 2026-10-04 — Completed 06-01-PLAN.md
 
 Progress: [██████░░░░] 56%
 
@@ -38,7 +38,7 @@ Progress: [██████░░░░] 56%
 
 **Velocity:**
 
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: -
 - Total execution time: -
 
@@ -51,6 +51,7 @@ Progress: [██████░░░░] 56%
 | 3 | 1 | - | - |
 | 4 | 1 | - | - |
 | 5 | 1 | - | - |
+| 6 | 1 | - | - |
 
 **Recent Trend:**
 
@@ -58,6 +59,12 @@ Progress: [██████░░░░] 56%
 - Trend: -
 
 *Updated after each plan completion*
+**Per-Plan Metrics:**
+
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 6 P02 | 8min | 3 tasks | 7 files |
+| Phase 6 P03 | 18min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -71,6 +78,10 @@ Recent decisions affecting current work:
 - Choice dialogs use a bespoke owned-keys control, not stock RadioList (Phase 4).
 - Switch-first convert + mid-turn slash refusal for /model (Phase 5).
 - Display-only cost with automatic most-precise-first pricing + provenance line (Phase 5).
+- Local skills: builtin slash heads always win collisions with shadow warnings; BUILTIN_SLASH_HEADS single-sourced in skills.py; loop passes its SkillIndex to dispatch (Phase 6-01).
+- [Phase 6]: Memory injector: corrupt frontmatter keeps full body plus transcript note; empty dual load renders no block; /memory joins BUILTIN_SLASH_HEADS (Phase 6-02) — Defaults-plus-note satisfies never-crash without content loss; shadow entry fulfills the D-02 collision contract recorded in 06-01
+- [Phase 6]: Curate approve routing: init-sourced proposals replace-or-append the full section plus upsert the root pointer (merge-never-clobber); every other source appends (Phase 6-03) — Without routing, init approvals would duplicate stale sections and never touch root; the D-10 split requires the approve verb to dispatch by proposal source
+- [Phase 6]: Revise/init rounds ride session-sticky in-memory holders; router returns (agent, text) with armed state and the loop consumes fenced blocks post-turn, never the router (Phase 6-03) — Keeps the reply-only router contract while giving revise iterate loops and init one-shot drafts a clean turn-boundary owner; interrupts disarm first so files stay byte-identical
 
 ### Pending Todos
 
@@ -100,6 +111,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-04T21:44:15.193Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-skills-memory-file/06-CONTEXT.md
+Last session: 2026-10-04T23:16:07.608Z
+Stopped at: Completed 06-03-PLAN.md
+Resume file: None
