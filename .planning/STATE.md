@@ -23,7 +23,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-04)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 6 — Skills + Memory File
+**Current focus:** Phase 07 — Subagents + /btw Side Channel
 
 ## Current Position
 
@@ -93,7 +93,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phase 5).
+- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–6).
+- ⚠️ [Phase 6] WR-06 residual: skill-match echo prints unescaped descriptions through Rich markup (garble + crash path on hostile input) — verifier-accepted residual, fix queued as Active requirement.
 
 ### Roadmap Evolution
 
@@ -115,6 +116,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-05T00:58:26.050Z
+Last session: 2026-10-05T01:15:00Z
 Stopped at: Phase 6 complete, ready to plan Phase 7
 Resume file: None
