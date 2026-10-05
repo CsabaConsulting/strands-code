@@ -248,6 +248,73 @@ class TestCurateLoop:
         assert lines == []  # callback returned nothing; proposal stays pending
         assert [p.id for p in queue.list_pending()] == ["p1"]
 
+    def test_review_eof_at_prompt_keeps_proposal_pending(self, monkeypatch):
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+
+        def _eof(*args):
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _eof)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        assert review_memory_queue(queue, MemoryModeState(), lambda p: None) == []
+        assert [p.id for p in queue.list_pending()] == ["p1"]
+
+    def test_review_eof_at_revise_instruction_keeps_proposal_pending(
+        self, monkeypatch
+    ):
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        prompted: list = []
+
+        def _scripted(*args):
+            if not prompted:
+                prompted.append(True)
+                return "revise"
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _scripted)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+
+        def _must_not_arm(proposal, instruction):
+            raise AssertionError("EOF must not arm a revise round")
+
+        lines = review_memory_queue(
+            queue, MemoryModeState(), lambda p: None, on_revise=_must_not_arm
+        )
+        assert lines == []
+        assert [p.id for p in queue.list_pending()] == ["p1"]
+
+    def test_review_silent_mode_propagates_write_failure_to_caller(self):
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+
+        def _failing(proposal):
+            raise OSError("disk full")
+
+        with pytest.raises(OSError, match="disk full"):
+            review_memory_queue(queue, MemoryModeState("silent"), _failing)
+
+    def test_memory_approve_reports_write_failure_as_reply(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        agent_dir = tmp_path / ".agent"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / "real.md"
+        outside.write_text("---\nscope: repo\n---\n## Build\n", encoding="utf-8")
+        (agent_dir / "MEMORY.md").symlink_to(outside)
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        action, message = _dispatch("/memory approve p1", tmp_path, curate=queue)
+        assert action == "reply"
+        assert message is not None
+        assert message.startswith("Memory write failed — proposal p1 kept pending:")
+        # NOTE (06-04 task interaction): the "kept pending" half of this
+        # criterion lands with task 3's apply-first approve ordering —
+        # pop-first approve (WR-03) drops p1 before the write raises.
+        # Task 3 extends this test with the pending assertion.
+
     def test_usage_hint_contains_curate_verbs(self):
         assert "approve <id>|deny <id>" in USAGE_HINT
 
@@ -267,8 +334,10 @@ class TestCurateLoop:
     def test_loop_boundary_wires_sweep_and_review(self):
         source = _loop_source()
         assert "curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)" in source
-        assert "review_memory_queue(\n            curate_queue,\n            memory_mode" in source
+        assert "review_memory_queue(\n                curate_queue,\n                memory_mode" in source
         assert "apply_approved_proposal," in source
+        assert "except (OSError, ValueError) as exc:" in source
+        assert "Memory review skipped — write failed:" in source
         assert "memory_mode=memory_mode," in source
         assert "curate=curate_queue," in source
 
@@ -403,6 +472,26 @@ class TestReviseRounds:
                 state,
                 apply_memory_section,
             )
+        assert not state.armed
+        assert path.read_bytes() == before
+
+    def test_consume_eof_disarms_with_revert_note(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        path = _write_memory(tmp_path, "## Build\nRun make.\n")
+        before = path.read_bytes()
+
+        def _eof(*args):
+            raise EOFError
+
+        monkeypatch.setattr("builtins.input", _eof)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        state = _arm()
+        reply = consume_revise_turn(
+            "Here:\n```\nRun uv build.\n```\nSwitched to uv.",
+            state,
+            apply_memory_section,
+        )
+        assert reply == "Reverted — 'Build' unchanged."
         assert not state.armed
         assert path.read_bytes() == before
 

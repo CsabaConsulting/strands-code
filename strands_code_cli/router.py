@@ -624,7 +624,10 @@ def _memory_message(
         target = arg.strip()
         if not target:
             return _MEMORY_USAGE
-        return queue.approve(target, apply_approved_proposal)
+        try:
+            return queue.approve(target, apply_approved_proposal)
+        except (OSError, ValueError) as exc:
+            return f"Memory write failed — proposal {target} kept pending: {exc}"
     if verb == "deny":
         target = arg.strip()
         if not target:

@@ -594,8 +594,8 @@ def review_memory_queue(
     instruction line and hands ``(proposal, instruction)`` to
     ``on_revise`` (None keeps the test-only noted path); a wired
     revise arms the round and ends the review — one revise turn per
-    boundary, the rest stay pending. Ctrl-C stops the review;
-    unreviewed proposals stay pending for the next turn.
+    boundary, the rest stay pending. Ctrl-C or Ctrl-D stops the
+    review; unreviewed proposals stay pending for the next turn.
     """
     lines: list[str] = []
     pending = queue.list_pending()
@@ -617,6 +617,8 @@ def review_memory_queue(
                     instruction = input().strip()
         except KeyboardInterrupt:
             break
+        except EOFError:
+            break  # Ctrl-D fails closed: proposals stay pending
         if answer == "approve":
             lines.append(queue.approve(proposal.id, apply_fn))
         elif answer == "revise":
@@ -732,7 +734,8 @@ def consume_revise_turn(
     revert; typed path when stdin is not a tty). Accept applies the
     block verbatim; revert and a missing fence leave the files
     untouched. Ctrl-C disarms and re-raises, so an interrupted round
-    leaves both memory files byte-identical.
+    leaves both memory files byte-identical. Ctrl-D disarms and
+    returns the revert note instead of raising.
     """
     section = revise_state.section
     block, summary = _first_fence(result_text)
@@ -753,6 +756,9 @@ def consume_revise_turn(
     except KeyboardInterrupt:
         revise_state.disarm()
         raise
+    except EOFError:
+        revise_state.disarm()
+        return f"Reverted — '{section}' unchanged."
     if answer == "accept":
         apply_fn(section, block)
         revise_state.disarm()
@@ -976,12 +982,16 @@ def run_loop(
                 console.print(MEMORY_RELOAD_NOTE.format(filename=changed_path))
         boundary_revise["template"] = None
         curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)
-        for review_line in review_memory_queue(
-            curate_queue,
-            memory_mode,
-            apply_approved_proposal,
-            on_revise=_arm_revise_from_review,
-        ):
+        try:
+            review_lines = review_memory_queue(
+                curate_queue,
+                memory_mode,
+                apply_approved_proposal,
+                on_revise=_arm_revise_from_review,
+            )
+        except (OSError, ValueError) as exc:
+            review_lines = [f"Memory review skipped — write failed: {exc}"]
+        for review_line in review_lines:
             console.print(review_line)
         boundary_template = boundary_revise["template"]
         try:
