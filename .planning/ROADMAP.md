@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Permissions Gate** - Deny-first approval before every side effect (completed 2026-09-25)
 - [x] **Phase 4: Plan/Act Modes + Steering** - Read-only plans, approval checkpoint, anytime steering, cancel (completed 2026-09-26)
 - [x] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls (completed 2026-10-04)
-- [ ] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file
+- [x] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file (completed 2026-10-04)
 - [ ] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task
 - [ ] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
 - [ ] **Phase 9: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
@@ -182,7 +182,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Permissions Gate | 1/1 | Complete    | 2026-09-25 |
 | 4. Plan/Act Modes + Steering | 1/1 | Complete    | 2026-09-26 |
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
-| 6. Skills + Memory File | 4/4 | In Progress|  |
+| 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 0/TBD | Not started | - |
 | 8. Model Routing with Decision Models | 0/TBD | Not started | - |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
