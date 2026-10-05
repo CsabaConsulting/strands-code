@@ -105,6 +105,21 @@ class TestCurateLoop:
         assert calls == [proposal]
         assert queue.list_pending() == []
 
+    def test_approve_failed_write_stays_pending_for_retry(self):
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+
+        def _failing(proposal):
+            raise OSError("disk full")
+
+        with pytest.raises(OSError, match="disk full"):
+            queue.approve("p1", _failing)
+        assert [p.id for p in queue.list_pending()] == ["p1"]
+        calls: list = []
+        assert queue.approve("p1", calls.append) == "Approved p1 → Build."
+        assert [p.id for p in calls] == ["p1"]
+        assert queue.list_pending() == []
+
     def test_deny_records_without_writing(self):
         queue = CurateQueue()
         queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
@@ -310,10 +325,7 @@ class TestCurateLoop:
         assert action == "reply"
         assert message is not None
         assert message.startswith("Memory write failed — proposal p1 kept pending:")
-        # NOTE (06-04 task interaction): the "kept pending" half of this
-        # criterion lands with task 3's apply-first approve ordering —
-        # pop-first approve (WR-03) drops p1 before the write raises.
-        # Task 3 extends this test with the pending assertion.
+        assert [p.id for p in queue.list_pending()] == ["p1"]
 
     def test_usage_hint_contains_curate_verbs(self):
         assert "approve <id>|deny <id>" in USAGE_HINT
@@ -330,6 +342,55 @@ class TestCurateLoop:
         _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
         assert body.count("## Build") == 1
         assert "Use uv run." in body
+
+    def test_apply_memory_proposal_stamps_freshness_marker(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.router import apply_memory_proposal
+
+        monkeypatch.chdir(tmp_path)
+        apply_memory_proposal(Proposal("p1", "Build", "promoted", "Run uv build.\n"))
+        _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
+        marker = f"<!-- updated: {date.today().isoformat()} -->"
+        assert f"{marker}\n## Build\nRun uv build.\n" in body
+
+    def test_apply_memory_proposal_marks_existing_section_only(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.router import apply_memory_proposal
+
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n\n## Test\nRun pytest.\n")
+        apply_memory_proposal(Proposal("p1", "Build", "promoted", "Use uv run.\n"))
+        _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
+        marker = f"<!-- updated: {date.today().isoformat()} -->"
+        assert f"{marker}\n## Build\n" in body
+        assert "Use uv run." in body
+        assert body.count(marker) == 1
+        assert "## Test\nRun pytest.\n" in body
+
+    def test_apply_memory_proposal_refreshes_stale_marker(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.router import apply_memory_proposal
+
+        monkeypatch.chdir(tmp_path)
+        old = (date.today() - timedelta(days=91)).isoformat()
+        _write_memory(tmp_path, f"<!-- updated: {old} -->\n## Build\nRun make.\n")
+        apply_memory_proposal(Proposal("p1", "Build", "promoted", "Use uv run.\n"))
+        _frontmatter, body = parse_memory_file(tmp_path / ".agent" / "MEMORY.md")
+        fresh = f"<!-- updated: {date.today().isoformat()} -->"
+        assert old not in body
+        assert body.count(fresh) == 1
+        assert f"{fresh}\n## Build\n" in body
+
+    def test_approved_section_reads_fresh_to_diff(self, tmp_path, monkeypatch):
+        from strands_code_cli.router import apply_memory_proposal
+
+        monkeypatch.chdir(tmp_path)
+        apply_memory_proposal(Proposal("p1", "Build", "promoted", "Run uv build.\n"))
+        snapshot = load_memory()
+        assert "Build" not in diff_sections(snapshot)
 
     def test_loop_boundary_wires_sweep_and_review(self):
         source = _loop_source()

@@ -504,7 +504,9 @@ def apply_memory_proposal(proposal: Proposal) -> None:
 
     Section-scoped: when a ``## {section}`` heading already exists the
     body lands at the end of that section, otherwise a new section is
-    appended. Module-global so tests can monkeypatch the writer.
+    appended. Stamps (or refreshes) the section's freshness marker so
+    the next ``/init`` merge-scan reads it as fresh. Module-global so
+    tests can monkeypatch the writer.
     """
     if AGENT_MEMORY.exists():
         frontmatter, body = parse_memory_file(AGENT_MEMORY)
@@ -514,15 +516,20 @@ def apply_memory_proposal(proposal: Proposal) -> None:
     block = proposal.body if proposal.body.endswith("\n") else proposal.body + "\n"
     lines = body.splitlines(keepends=True)
     head_idx, end = section_span(lines, proposal.section)
+    marker = fresh_marker() + "\n"
     if head_idx is None:
         if lines and lines[-1].strip():
             lines.append("\n")
-        lines.append(f"{heading}\n{block}")
+        lines.append(f"{marker}{heading}\n{block}")
     else:
         insert = [block]
         if end > head_idx + 1 and lines[end - 1].strip():
             insert.insert(0, "\n")
         lines[end:end] = insert
+        if head_idx > 0 and UPDATED_MARKER_RE.search(lines[head_idx - 1]):
+            lines[head_idx - 1] = marker
+        else:
+            lines.insert(head_idx, marker)
     dump_memory_file(AGENT_MEMORY, frontmatter, "".join(lines))
 
 

@@ -242,11 +242,16 @@ class CurateQueue:
         return list(self._pending.values())
 
     def approve(self, proposal_id: str, apply_fn: Callable[[Proposal], None]) -> str:
-        """Apply one proposal through the file write; marks it approved."""
-        proposal = self._pending.pop(proposal_id, None)
+        """Apply one proposal through the file write; marks it approved.
+
+        The write runs before any queue mutation: a raising write
+        leaves the entry pending for retry or the next turn.
+        """
+        proposal = self._pending.get(proposal_id)
         if proposal is None:
             return unknown_proposal(proposal_id)
         apply_fn(proposal)
+        del self._pending[proposal_id]
         self._approved.add(proposal_id)
         return f"Approved {proposal_id} → {proposal.section}."
 
