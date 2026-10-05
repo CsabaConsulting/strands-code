@@ -17,7 +17,8 @@ class SlashCompleter(Completer):
     Fires only while the line is a bare slash head (starts with ``/``,
     no space yet). Matching is a bare-name prefix filter; the outer
     :class:`FuzzyCompleter` adds fuzzy narrowing. Skill displays use
-    the full ``local:<name>`` form (D-02); shadowed skills never reach
+    the ``/local:<name>`` completion form (D-02) so the accepted line
+    re-enters dispatch as a slash; shadowed skills never reach
     the word list (built by the caller from unshadowed entries).
 
     Args:

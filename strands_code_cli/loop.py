@@ -849,6 +849,31 @@ def consume_init_turn(
     return f"Drafted {count} sections from {depth} scan — review with /memory."
 
 
+def skill_match_note(skills: Any, text: str) -> str | None:
+    """Echo line confirming a typed slash head matched a loaded skill.
+
+    Mirrors the dispatch head split (strip, slash head before the
+    first space); typos, unknown names, shadowed entries, and
+    non-slash lines stay silent (D-13 accept-echo).
+
+    Args:
+        skills: Loop-owned skill index, or None when skills are off.
+        text: Raw input line already routed to an agent turn.
+
+    Returns:
+        ``"Matched skill '<namespaced>' — <description>"`` on a
+        match, else None.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("/") or skills is None:
+        return None
+    head = stripped.partition(" ")[0]
+    entry = skills.resolve(head[1:])
+    if entry is None or entry.shadowed:
+        return None
+    return f"Matched skill '{entry.namespaced}' — {entry.description}"
+
+
 def run_loop(
     agent: Any,
     *,
@@ -902,7 +927,7 @@ def run_loop(
     def _skill_words() -> list[tuple[str, str]]:
         words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
         words.extend(
-            (entry.name, entry.namespaced)
+            (entry.name, f"/{entry.namespaced}")
             for entry in skills.list_entries()
             if not entry.shadowed
         )
@@ -989,6 +1014,10 @@ def run_loop(
                 revise=revise_state,
                 init=init_state,
             )
+        if action == "agent":
+            match_note = skill_match_note(skills, text)
+            if match_note is not None:
+                console.print(match_note)
         if action == "exit":
             break
         if action == "reply":

@@ -381,7 +381,7 @@ def _loop_style_words(index: SkillIndex) -> list[tuple[str, str]]:
     """Word callable mirroring the loop: builtins plus unshadowed skills."""
     words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
     words.extend(
-        (entry.name, entry.namespaced)
+        (entry.name, f"/{entry.namespaced}")
         for entry in index.list_entries()
         if not entry.shadowed
     )
@@ -402,7 +402,7 @@ class TestSkillCompleter:
         completions = list(
             completer.get_completions(Document("/pd"), CompleteEvent())
         )
-        assert any(c.text == "local:pdf-tools" for c in completions)
+        assert any(c.text == "/local:pdf-tools" for c in completions)
 
     def test_shadowed_skill_never_completes_builtin_head_intact(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
@@ -414,7 +414,7 @@ class TestSkillCompleter:
             completer.get_completions(Document("/model"), CompleteEvent())
         )
         assert any(c.text == "/model" for c in completions)
-        assert all(not c.text.startswith("local:") for c in completions)
+        assert all(not c.text.startswith("/local:") for c in completions)
 
     def test_removed_skill_stops_completing(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
@@ -422,7 +422,7 @@ class TestSkillCompleter:
         index = SkillIndex(skills_dir=skills_dir)
         completer = SlashCompleter(lambda: _loop_style_words(index))
         assert any(
-            c.text == "local:pdf-tools"
+            c.text == "/local:pdf-tools"
             for c in completer.get_completions(Document("/pd"), CompleteEvent())
         )
         assert index.remove("pdf-tools") is True
@@ -451,9 +451,31 @@ class TestSkillCompleter:
         completions = list(
             completer.get_completions(Document("/pd"), CompleteEvent())
         )
-        match = [c for c in completions if c.text == "local:pdf-tools"]
+        match = [c for c in completions if c.text == "/local:pdf-tools"]
         assert len(match) == 1
         assert match[0].start_position == -len("/pd")
+
+    def test_accepted_completion_dispatches_to_skill_branch(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+        completions = list(
+            completer.get_completions(Document("/pd"), CompleteEvent())
+        )
+        completed = next(
+            c.text for c in completions if c.text == "/local:pdf-tools"
+        )
+        action, message = dispatch(
+            completed + " extract p3",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert action == "agent"
+        assert message is not None
+        assert "Skill 'local:pdf-tools' instructions:" in message
+        assert "extract p3" in message
 
     def test_loop_wires_completer_exactly_once(self):
         loop_source = (
@@ -492,3 +514,39 @@ class TestSkillCompleter:
         out = capsys.readouterr().out
         assert out.count("Skill 'model' shadowed by builtin '/model'") == 1
         assert isinstance(seen["completer"], DynamicCompleter)
+
+
+# ----------------------------------------------------------------------
+# Typed-name match echo (D-13)
+# ----------------------------------------------------------------------
+
+
+class TestSkillMatchNote:
+    def test_bare_typed_name_echoes_match(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        assert loop_module.skill_match_note(index, "/pdf-tools") == (
+            "Matched skill 'local:pdf-tools' — Does something useful."
+        )
+
+    def test_namespaced_form_with_trailing_text_echoes_match(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        index = SkillIndex(skills_dir=skills_dir)
+        assert loop_module.skill_match_note(index, "/local:pdf-tools hi") == (
+            "Matched skill 'local:pdf-tools' — Does something useful."
+        )
+
+    def test_typo_unknown_shadowed_nonslash_stay_silent(self, tmp_path):
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "pdf-tools")
+        _write_skill(skills_dir, "model")
+        index = SkillIndex(skills_dir=skills_dir)
+        assert loop_module.skill_match_note(index, "/pdff") is None
+        assert loop_module.skill_match_note(index, "/nope") is None
+        assert loop_module.skill_match_note(index, "/model") is None
+        assert loop_module.skill_match_note(index, "plain turn") is None
+
+    def test_none_index_stays_silent(self):
+        assert loop_module.skill_match_note(None, "/pdf-tools") is None
