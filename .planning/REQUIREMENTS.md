@@ -39,8 +39,8 @@
 
 ### Skills & Memory
 
-- [ ] **SKILL-01**: CLI loads skills from local `./.agent/skills` and the user can list and invoke them
-- [ ] **SKILL-02**: CLI auto-loads the repo memory file and the user can scaffold and edit it (`/init`, `/memory`)
+- [x] **SKILL-01**: CLI loads skills from local `./.agent/skills` and the user can list and invoke them
+- [x] **SKILL-02**: CLI auto-loads the repo memory file and the user can scaffold and edit it (`/init`, `/memory`)
 
 ## v2 Requirements
 
@@ -104,8 +104,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SES-03 | Phase 1 | Complete |
 | MODEL-01 | Phase 5 | Complete |
 | MODEL-02 | Phase 5 | Complete |
-| SKILL-01 | Phase 6 | Pending |
-| SKILL-02 | Phase 6 | Pending |
+| SKILL-01 | Phase 6 | Complete |
+| SKILL-02 | Phase 6 | Complete |
 | TOOL-07 | Phase 9 | Pending |
 | MODEL-03 | Phase 8 | Pending |
 | GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |

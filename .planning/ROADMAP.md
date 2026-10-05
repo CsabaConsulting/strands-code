@@ -111,9 +111,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. User can list and invoke skills loaded from local `./.agent/skills`
   2. User can scaffold a repo memory file with `/init` and have the CLI auto-load it, editing it via `/memory`
 
-**Plans**: 3/3 plans executed
+**Plans**: 4/4 plans executed
 
 Plans:
+
+- [x] 06-04-PLAN.md
+
 **Wave 1**
 
 - [x] 06-01-PLAN.md — Skills spine: index, slash invocation, /skills, autocomplete
@@ -179,7 +182,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Permissions Gate | 1/1 | Complete    | 2026-09-25 |
 | 4. Plan/Act Modes + Steering | 1/1 | Complete    | 2026-09-26 |
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
-| 6. Skills + Memory File | 3/3 | In Progress|  |
+| 6. Skills + Memory File | 4/4 | In Progress|  |
 | 7. Subagents + /btw Side Channel | 0/TBD | Not started | - |
 | 8. Model Routing with Decision Models | 0/TBD | Not started | - |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
