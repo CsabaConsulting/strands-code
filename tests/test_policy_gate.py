@@ -320,3 +320,139 @@ class TestBindHelpers:
 
     def test_bind_main_agent_noop_without_crash(self):
         bind_main_agent(object())
+
+
+# ---------------------------------------------------------------------------
+# 07-02 task 1: agent-tagged prompts, race-free ask context, namespaced batch
+# ---------------------------------------------------------------------------
+
+
+class TestAgentTaggedGate:
+    def test_tag_for_identity(self):
+        from strands_code_cli.policy_gate import tag_for
+
+        main = _FakeAgent()
+        assert tag_for(None, main) == "main"
+        assert tag_for(None, None) == "main"
+        assert tag_for(main, main) == "main"
+        assert tag_for(_FakeAgent(), main) == "btw"
+
+    def test_is_covered_tag_keyword_defaults_main(self):
+        batch = BatchState()
+        batch.bind_turn("t-1")
+        sig = ("prompt", "shell", "Shell command: make test")
+        assert batch.is_covered(sig) is False
+        batch.mark(sig, "[main] approved shell: Shell command: make test")
+        assert batch.is_covered(sig) is True
+        assert batch.is_covered(sig, tag="main") is True
+        assert batch.is_covered(sig, tag="btw") is False
+
+    def test_interleaved_asks_keep_own_context(self, monkeypatch):
+        # Classify main, then btw, then ask in reverse order (btw first):
+        # each worker thread's ask must render its own tool detail under
+        # its own tag — never swapped (T-07-04). Prints are collected via
+        # a patched builtins.print (same-file precedent): the ask's
+        # StdoutProxy binds prompt_toolkit's memoized app output, which
+        # escapes per-test capsys once an earlier test touches it.
+        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        classifier.bind_main_agent(main_agent)
+        it = iter(["y", "y"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(it))
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        import threading
+
+        main_classified = threading.Event()
+        btw_asked = threading.Event()
+        box: dict[str, str] = {}
+
+        def main_worker():
+            classifier(_event("shell", {"command": "main-cmd --main"}, main_agent, "m1"))
+            main_classified.set()
+            assert btw_asked.wait(5)
+            box["main"] = classifier.ask("Approve?")
+
+        def btw_worker():
+            assert main_classified.wait(5)
+            classifier(_event("shell", {"command": "btw-cmd --btw"}, btw_agent, "b1"))
+            box["btw"] = classifier.ask("Approve?")
+            btw_asked.set()
+
+        threads = [threading.Thread(target=main_worker), threading.Thread(target=btw_worker)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        assert not any(thread.is_alive() for thread in threads)
+        assert box == {"main": "y", "btw": "y"}
+        for tag, command in (("main", "main-cmd --main"), ("btw", "btw-cmd --btw")):
+            head = next(
+                i for i, line in enumerate(shown)
+                if line == f"Approval needed: [{tag}] shell"
+            )
+            assert shown[head + 1].startswith("  Detail: ")
+            assert command in shown[head + 1]
+
+    def test_batch_coverage_namespaced_per_agent(self, monkeypatch):
+        # A main approval never silences an identical btw call (T-07-05);
+        # each side's record carries its own tag.
+        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        classifier.bind_main_agent(main_agent)
+        handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        it = iter(["y", "y"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(it))
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "make test"}, main_agent, "m1")),
+            Confirm,
+        )
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b1")),
+            Confirm,
+        )
+        assert classifier.batch.covered() == [
+            "[main] approved shell: Shell command: make test",
+            "[btw] approved shell: Shell command: make test",
+        ]
+
+    def test_btw_deny_reprompts(self, monkeypatch):
+        # Denials never cover on either side: a denied btw call re-prompts.
+        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        classifier.bind_main_agent(main_agent)
+        handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        it = iter(["n", "n"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(it))
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b1")),
+            Confirm,
+        )
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b2")),
+            Confirm,
+        )
+
+    def test_trust_delegated_btw_prints_transcript_note(self, monkeypatch, capsys):
+        # btw auto-trust is announced via print_plain (never builtins.print).
+        def _raise(*args, **kwargs):
+            raise AssertionError("trust note must use print_plain, not print")
+
+        monkeypatch.setattr("builtins.print", _raise)
+        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
+        classifier = PolicyClassifier(
+            policy_loader=lambda: PolicyConfig(
+                options=PolicyOptions(trust_delegated=True)
+            )
+        )
+        classifier.bind_main_agent(main_agent)
+        result = classifier(_event("shell", {"command": "make test"}, btw_agent, "b1"))
+        assert result.requires_human_in_the_loop is False
+        assert result.reason == "delegated-trusted"
+        assert "Auto-trusted delegated call (shell)" in capsys.readouterr().out

@@ -35,10 +35,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
 
+from rich.console import Console
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
 
-from strands_code_cli.output import output_context
+from strands_code_cli.btw import RENDER_LOCK
+from strands_code_cli.output import output_context, print_plain
 from strands_code_cli.policy import (
     Allow,
     Deny,
@@ -50,6 +52,7 @@ from strands_code_cli.policy import (
 )
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 _ASK_OPTIONS = "Approve? [y/n/always/never]"
 _ASK_SUFFIX = _ASK_OPTIONS + " "
@@ -76,6 +79,27 @@ PLAN_DENY_TEMPLATE = "Plan mode is read-only — {tool} skipped, continuing."
 """Mode-vocabulary denial (never a policy-rule or diff-mode word)."""
 
 
+def tag_for(agent: Any, main_agent: Any) -> str:
+    """Agent tag for approval prompts: ``"main"`` or ``"btw"`` (LOOP-03, D-06).
+
+    Identity comes from the event's agent object, never mutable turn
+    state: ``None`` (unknown) or the bound main agent is ``"main"``;
+    any other agent object (the btw side agent) is ``"btw"``.
+    """
+    if agent is None or agent is main_agent:
+        return "main"
+    return "btw"
+
+
+_ASK_TAG = threading.local()
+"""Ask-time agent tag, set by ``__call__`` on the classifying worker thread.
+
+The ask runs on the same worker thread as its classify, so the
+thread-local routes each ask to its own context even when main and btw
+classify concurrently (a shared single slot would swap them). Unset
+(tests, direct calls) reads back as ``"main"``."""
+
+
 class BatchState:
     """Turn-scoped approval cache keyed by matched-rule signature (D-04).
 
@@ -91,7 +115,7 @@ class BatchState:
 
     def __init__(self) -> None:
         self._turn: str | None = None
-        self._covered: set[tuple[str, ...]] = set()
+        self._covered: set[tuple[str, tuple[str, ...]]] = set()
         self._log: list[str] = []
 
     def bind_turn(self, turn_id: str) -> None:
@@ -99,13 +123,17 @@ class BatchState:
         self._turn = turn_id
         self._covered = set()
 
-    def is_covered(self, signature: tuple[str, ...]) -> bool:
-        """True when this signature already prompted this turn."""
-        return signature in self._covered
+    def is_covered(self, signature: tuple[str, ...], tag: str = "main") -> bool:
+        """True when this signature already prompted this turn for ``tag``.
 
-    def mark(self, signature: tuple[str, ...], description: str) -> None:
+        Coverage is namespaced per agent (LOOP-03, D-06): a main
+        approval never silences an identical btw call and vice versa.
+        """
+        return (tag, signature) in self._covered
+
+    def mark(self, signature: tuple[str, ...], description: str, tag: str = "main") -> None:
         """Record a covered signature plus its human-readable description."""
-        self._covered.add(signature)
+        self._covered.add((tag, signature))
         self._log.append(description)
 
     def covered(self) -> list[str]:
@@ -255,7 +283,8 @@ class PolicyClassifier:
 
     Reads ``event.tool_use`` name + input, honours D-12
     ``trust_delegated`` (unbound/unknown agent → prompt, fail-closed),
-    and stashes the last decision as the ask layer's context.
+    and stashes the last decision per agent tag as the ask layer's
+    context (LOOP-03: interleaved main/btw pipelines never swap).
     """
 
     def __init__(
@@ -269,7 +298,7 @@ class PolicyClassifier:
         self._append_path = append_path
         self._main_agent: Any = None
         self._main_bound = False
-        self._last: dict[str, Any] | None = None
+        self._last_by_tag: dict[str, dict[str, Any]] = {}
         self._mode = "act"
         self._steering: Any = None
 
@@ -309,6 +338,12 @@ class PolicyClassifier:
             logger.warning("Policy load failed; prompting for everything: %s", exc)
             return PolicyConfig()
 
+    def _tag_for_event(self, event: Any) -> str:
+        """Agent tag for this event; an unbound main defaults to ``"main"``."""
+        agent = getattr(event, "agent", None)
+        main = self._main_agent if self._main_bound else agent
+        return tag_for(agent, main)
+
     def __call__(self, event: Any, **kwargs: Any) -> ClassifierResult | Awaitable[ClassifierResult]:
         tool_use = event.tool_use or {}
         tool_name = tool_use.get("name", "")
@@ -335,12 +370,14 @@ class PolicyClassifier:
             reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
             verdict = Deny(reason=reason)
             signature = _signature(tool_name, verdict)
-            self._last = {
+            tag = self._tag_for_event(event)
+            self._last_by_tag[tag] = {
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "verdict": verdict,
                 "signature": signature,
             }
+            _ASK_TAG.tag = tag
             return ClassifierResult(requires_human_in_the_loop=True, reason=f"DENY:{reason}")
         policy = self._current_policy()
         agent = getattr(event, "agent", None)
@@ -350,19 +387,28 @@ class PolicyClassifier:
             and agent is not None
             and agent is not self._main_agent
         ):
+            # btw counts as delegated: auto-trust, but announced — the
+            # transcript always names the call (LOOP-03 transparency).
+            with RENDER_LOCK:
+                print_plain(
+                    console,
+                    f"Auto-trusted delegated call ({tool_name}) — trust_delegated is on.",
+                )
             return ClassifierResult(requires_human_in_the_loop=False, reason="delegated-trusted")
         verdict = decide(tool_name, tool_input, policy)
         if isinstance(verdict, Allow):
             return ClassifierResult(requires_human_in_the_loop=False)
         signature = _signature(tool_name, verdict)
-        if self._batch.is_covered(signature):
+        tag = self._tag_for_event(event)
+        if self._batch.is_covered(signature, tag=tag):
             return ClassifierResult(requires_human_in_the_loop=False, reason="batch-covered")
-        self._last = {
+        self._last_by_tag[tag] = {
             "tool_name": tool_name,
             "tool_input": tool_input,
             "verdict": verdict,
             "signature": signature,
         }
+        _ASK_TAG.tag = tag
         if isinstance(verdict, Deny):
             rule_text = verdict.rule.describe() if verdict.rule is not None else verdict.reason
             return ClassifierResult(
@@ -377,7 +423,8 @@ class PolicyClassifier:
         Errors anywhere return ``"n"`` — a callback raise would abort the
         run, so the gate fails to skip-and-continue instead.
         """
-        ctx = self._last
+        tag = getattr(_ASK_TAG, "tag", "main")
+        ctx = self._last_by_tag.get(tag)
         try:
             with output_context():
                 if ctx is None:
@@ -392,13 +439,13 @@ class PolicyClassifier:
                         # Plan denial: mode vocabulary only, never the
                         # policy-rule wrapper (vocabulary lock, T-04-10).
                         print(rule_text)
-                        self._batch.record(f"plan-mode denied {tool_name}")
+                        self._batch.record(f"[{tag}] plan-mode denied {tool_name}")
                         return "n"
                     print(f"Denied by policy rule [deny {rule_text}] — skipped, continuing.")
-                    self._batch.record(f"denied {tool_name} [{rule_text}]")
+                    self._batch.record(f"[{tag}] denied {tool_name} [{rule_text}]")
                     return "n"
                 assert isinstance(verdict, Prompt)
-                print(f"Approval needed: {tool_name}")
+                print(f"Approval needed: [{tag}] {tool_name}")
                 print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
                 def read_answer() -> str:
@@ -428,7 +475,7 @@ class PolicyClassifier:
                         answer = read_answer()
                 finally:
                     gate_open.clear()
-                return self._apply_answer(answer, ctx)
+                return self._apply_answer(answer, ctx, tag)
         except TurnCancelled:
             raise  # worker abort on cancel: must reach the SDK, never deny
         except Exception as exc:  # never leak a raise into the HITL run
@@ -453,13 +500,13 @@ class PolicyClassifier:
             return "n"
         return str(picked)
 
-    def _apply_answer(self, answer: str, ctx: dict[str, Any]) -> str:
+    def _apply_answer(self, answer: str, ctx: dict[str, Any], tag: str = "main") -> str:
         """Shared verdict handling for the dialog and typed answers."""
         verdict = ctx["verdict"]
         tool_name = ctx["tool_name"]
         signature = ctx["signature"]
         if answer in ("y", "yes"):
-            self._batch.mark(signature, f"approved {tool_name}: {verdict.reason}")
+            self._batch.mark(signature, f"[{tag}] approved {tool_name}: {verdict.reason}", tag=tag)
             return "y"
         if answer in ("always", "never"):
             derived = _derive_rule(tool_name, ctx["tool_input"])
@@ -467,9 +514,9 @@ class PolicyClassifier:
                 print("Cannot derive a narrow rule here; one-shot answer only.")
                 single = "y" if answer == "always" else "n"
                 if single == "y":
-                    self._batch.mark(signature, f"{single}-once {tool_name}: {verdict.reason}")
+                    self._batch.mark(signature, f"[{tag}] {single}-once {tool_name}: {verdict.reason}", tag=tag)
                 else:
-                    self._batch.record(f"{single}-once {tool_name}: {verdict.reason}")
+                    self._batch.record(f"[{tag}] {single}-once {tool_name}: {verdict.reason}")
                 return single
             kind = "allow" if answer == "always" else "deny"
             try:
@@ -482,11 +529,11 @@ class PolicyClassifier:
                 return "n" if answer == "never" else "y"
             print(f"Appended standing rule [{kind} {derived.describe()}].")
             if answer == "always":
-                self._batch.mark(signature, f"{answer} {tool_name} [{derived.describe()}]")
+                self._batch.mark(signature, f"[{tag}] {answer} {tool_name} [{derived.describe()}]", tag=tag)
             else:
-                self._batch.record(f"{answer} {tool_name} [{derived.describe()}]")
+                self._batch.record(f"[{tag}] {answer} {tool_name} [{derived.describe()}]")
             return "y" if answer == "always" else "n"
-        self._batch.record(f"denied {tool_name}: {verdict.reason}")
+        self._batch.record(f"[{tag}] denied {tool_name}: {verdict.reason}")
         return "n"
 
 
