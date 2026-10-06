@@ -88,6 +88,40 @@ class TestBrokerHandoff:
             thread.join(timeout=5)
         assert box.get("aborted") is True
 
+    def test_cancelled_waiter_discards_orphaned_request(self):
+        # A waiter aborted before the pump polled must not leave its
+        # request queued: the next turn's pump would serve the dead
+        # worker's request as a phantom prompt.
+        broker = ApprovalBroker()
+        cancel = threading.Event()
+        cancel.set()
+        box: dict[str, Any] = {}
+        with broker.pump(cancel):
+            def worker():
+                try:
+                    broker.request(lambda: "unserved")
+                except TurnCancelled:
+                    box["aborted"] = True
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(timeout=5)
+        assert box.get("aborted") is True
+        assert broker.has_pending is False
+        assert broker.poll(timeout=0.01) is None
+
+    def test_discard_of_polled_request_is_noop(self):
+        # Discard races the pump poll: an already-polled request has
+        # nothing orphaned, and discarding a foreign request never raises.
+        broker = ApprovalBroker()
+        foreign = pg._ApprovalRequest(lambda: "x")
+        broker.discard(foreign)  # never queued: no-op, no raise
+        req = pg._ApprovalRequest(lambda: "y")
+        broker._queue.put(req)
+        assert broker.poll(timeout=0.5) is req
+        broker.discard(req)  # already polled: no-op, no raise
+        assert broker.has_pending is False
+
     def test_pump_death_without_answer_is_cancel_not_assert(self):
         # Ctrl-C inside the dialog raises in the pump thread while
         # prompt_toolkit owns SIGINT, so the turn handler never sets

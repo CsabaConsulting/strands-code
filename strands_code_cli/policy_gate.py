@@ -262,13 +262,33 @@ class ApprovalBroker:
 
         ``cancel`` is the waiter's own event; None falls back to the
         pump cancel, so every existing single-arg call site behaves
-        identically.
+        identically. An aborted waiter discards its own request so a
+        never-polled orphan cannot resurface as a phantom prompt on
+        the next turn.
         """
         if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
             return prompt()
         req = _ApprovalRequest(prompt)
         self._queue.put(req)
-        return req.wait_answer(cancel if cancel is not None else self._cancel)
+        try:
+            return req.wait_answer(cancel if cancel is not None else self._cancel)
+        except TurnCancelled:
+            self.discard(req)
+            raise
+
+    def discard(self, req: "_ApprovalRequest") -> None:
+        """Drop a request orphaned by cancel (best-effort).
+
+        Only the aborted waiter calls this: the pump may have stopped
+        polling (cancel chooser) or the turn may be over. Already
+        polled means nothing orphaned. No ``task_done`` bookkeeping —
+        nothing calls ``join()`` on this queue.
+        """
+        with self._queue.mutex:
+            try:
+                self._queue.queue.remove(req)
+            except ValueError:
+                pass  # already polled; nothing orphaned
 
     def poll(self, timeout: float = 0.05) -> _ApprovalRequest | None:
         """Pump side: next pending prompt, or None on timeout."""
