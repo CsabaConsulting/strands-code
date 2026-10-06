@@ -49,6 +49,12 @@ BTW_QUESTION_CHARS = 60
 BTW_USAGE = "Usage: /btw <side question>"
 """Idle usage text; also the mid-turn reply for a bare ``/btw`` line."""
 
+BTW_NOTED = "Side question noted — answering in parallel."
+"""Submit echo when no side answer runs (idle-side submit)."""
+
+BTW_QUEUED_TEMPLATE = "Side question queued (#{depth} in line) — answering in parallel."
+"""Submit echo when a side answer runs (``{depth}`` is the post-put depth)."""
+
 BTW_FRAMING = (
     "Side task: answer the trailing btw question directly and concisely; "
     "the main task continues in parallel and your answer lands as a fenced side block."
@@ -193,25 +199,94 @@ def unregister_btw_cancel(broker: Any) -> None:
         broker.unregister_cancel("btw")
 
 
+class BtwQueue:
+    """Unbounded FIFO of side questions with depth-returning submit (D-10).
+
+    Backed by :class:`queue.Queue`: no cap, no eviction, no silent
+    loss — the pump spawns one side agent at a time in submit order
+    and the depth echo is the attention control. Only stripped
+    non-empty question strings are held; blank submits raise rather
+    than enqueue a no-op side run.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue[str] = queue.Queue()
+
+    def put(self, question: str) -> int:
+        """Enqueue one question; return the post-put depth (1-based).
+
+        Raises:
+            ValueError: When the question is blank after stripping.
+        """
+        cleaned = question.strip()
+        if not cleaned:
+            raise ValueError("btw question must not be blank")
+        self._queue.put(cleaned)
+        return self._queue.qsize()
+
+    def get_nowait(self) -> str:
+        """Next queued question (FIFO); raises ``queue.Empty`` when idle."""
+        return self._queue.get_nowait()
+
+    def empty(self) -> bool:
+        """True when no question waits."""
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        """Current queued depth (approximate under concurrency)."""
+        return self._queue.qsize()
+
+    @property
+    def depth(self) -> int:
+        """Alias for :meth:`qsize` (readable submit-site spelling)."""
+        return self._queue.qsize()
+
+
 @dataclass
 class BtwContext:
     """Per-turn side-channel state (loop-owned, main-thread driven).
 
-    The reader thread only puts questions into :attr:`spawn_queue`;
-    the pump builds, submits, and reaps side agents. Completed turns
-    wait in :attr:`pending` as ``(question, answer, result)`` tuples
-    for the boundary flush; :attr:`done` flips once a side answer
-    lands. :attr:`cancel_targets` records the chooser answer (D-08)
-    when a turn unwinds through the cancel path, so the loop can run
-    the two-press machine per named target.
+    The reader thread only submits questions into :attr:`spawn_queue`
+    via :meth:`submit` (never spawns inline); the pump builds,
+    submits, and reaps side agents. Completed turns wait in
+    :attr:`pending` as ``(question, answer, result)`` tuples for the
+    boundary flush; :attr:`done` flips once a side answer lands.
+    :attr:`running` mirrors the side worker's lifetime for the submit
+    echo (set while a side agent runs, cleared once drained).
+    :attr:`cancel_targets` records the chooser answer (D-08) when a
+    turn unwinds through the cancel path, so the loop can run the
+    two-press machine per named target.
     """
 
-    spawn_queue: queue.Queue
+    spawn_queue: BtwQueue
     build: Callable[[str], tuple[Any, list]]
     cancel_event: threading.Event
     pending: list = field(default_factory=list)
     done: bool = False
     cancel_targets: tuple = ()
+    running: threading.Event = field(default_factory=threading.Event)
+
+    def submit(self, question: str) -> int:
+        """Enqueue one side question with its visible echo (D-10).
+
+        Reader-thread entry: enqueues, then prints the ``> /btw``
+        receipt plus the noted/queued status line — both under
+        :data:`RENDER_LOCK` so the echo lands atomically against
+        streaming output. A submit while a side answer runs reports
+        its queue depth; an idle-side submit reports noted.
+
+        Returns:
+            The post-put queue depth (1-based).
+        """
+        depth = self.spawn_queue.put(question)
+        cleaned = question.strip()
+        with RENDER_LOCK:
+            print_plain(console, f"> /btw {cleaned}")
+            if self.running.is_set():
+                print_plain(console, BTW_QUEUED_TEMPLATE.format(depth=depth))
+            else:
+                print_plain(console, BTW_NOTED)
+        return depth
 
 
 def build_btw_agent(

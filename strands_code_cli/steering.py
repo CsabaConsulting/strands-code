@@ -296,8 +296,11 @@ def start_steering_reader(
         on_btw: Side-question callback receiving the stripped ``/btw``
             tail (None → ``/btw`` falls through to the refusal path,
             keeping pre-side-channel callers untouched). The callback
-            must never spawn inline — enqueue and return; the pump
-            builds the side agent on the main thread.
+            owns the queued-submit echo (``> /btw`` receipt plus the
+            noted/queued status line) and returns the queue depth; the
+            reader ignores the return. The callback must never spawn
+            inline — enqueue and return; the pump builds the side agent
+            on the main thread.
         poll_interval: Sleep/select quantum between checks.
 
     Returns:

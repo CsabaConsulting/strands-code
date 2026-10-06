@@ -13,10 +13,13 @@ import threading
 import time
 from types import SimpleNamespace
 
+import pytest
+
 import strands_code_cli.policy_gate as pg
 from strands_code_cli.btw import (
     BTW_FRAMING,
     BtwContext,
+    BtwQueue,
     FencedBtwHandler,
     LockedHandler,
     append_btw_turn,
@@ -518,3 +521,198 @@ class TestBuildBtwAgent:
             "why slow?",
         )
         assert created["memory"] is False
+
+
+def _idle_btw(**overrides):
+    """BtwContext double with a real BtwQueue (submit/echo tests)."""
+    fields = {
+        "spawn_queue": BtwQueue(),
+        "build": _fenced_build(),
+        "cancel_event": threading.Event(),
+    }
+    fields.update(overrides)
+    return BtwContext(**fields)
+
+
+class TestBtwQueue:
+    def test_put_returns_depth_and_holds_fifo_order(self):
+        pending = BtwQueue()
+        assert pending.empty()
+        assert pending.put("q1") == 1
+        assert pending.put("  q2  ") == 2
+        assert pending.put("q3") == 3
+        assert not pending.empty()
+        assert pending.qsize() == 3
+        assert pending.depth == 3
+        assert pending.get_nowait() == "q1"
+        assert pending.get_nowait() == "q2"  # stripped on the way in
+        assert pending.get_nowait() == "q3"
+        assert pending.empty()
+        with pytest.raises(queue.Empty):
+            pending.get_nowait()
+
+    def test_put_rejects_blank_questions(self):
+        pending = BtwQueue()
+        with pytest.raises(ValueError):
+            pending.put("   ")
+        assert pending.empty()
+
+    def test_submit_echoes_noted_when_side_idle(self, capsys):
+        btw = _idle_btw()
+        assert btw.submit("why slow?") == 1
+        out = capsys.readouterr().out
+        assert "> /btw why slow?" in out
+        assert "Side question noted — answering in parallel." in out
+        assert "queued" not in out
+        assert btw.spawn_queue.get_nowait() == "why slow?"
+
+    def test_submit_echoes_queued_depth_when_side_runs(self, capsys):
+        btw = _idle_btw()
+        btw.running.set()  # a side double runs
+        assert btw.submit("q1") == 1
+        assert btw.submit("q2") == 2
+        assert btw.submit("q3") == 3
+        out = capsys.readouterr().out
+        assert "> /btw q2" in out
+        assert "Side question queued (#1 in line)" in out
+        assert "Side question queued (#2 in line)" in out
+        assert "Side question queued (#3 in line)" in out
+        assert "noted" not in out
+
+    def test_submit_rejects_blank_with_no_echo(self, capsys):
+        btw = _idle_btw()
+        with pytest.raises(ValueError):
+            btw.submit("  ")
+        assert capsys.readouterr().out == ""
+        assert btw.spawn_queue.empty()
+
+
+class _CountingSideBuild:
+    """Build double recording start order and max concurrent live runs."""
+
+    def __init__(self, delay: float = 0.15) -> None:
+        self.starts: list[str] = []
+        self.live_max = 0
+        self._live = 0
+        self._lock = threading.Lock()
+        self._delay = delay
+
+    def __call__(self, question: str):
+        parent = self
+
+        class _Side:
+            def __call__(self, prompt, **kwargs):
+                with parent._lock:
+                    parent._live += 1
+                    parent.live_max = max(parent.live_max, parent._live)
+                    parent.starts.append(question)
+                try:
+                    time.sleep(parent._delay)
+                finally:
+                    with parent._lock:
+                        parent._live -= 1
+                return f"answer-{question}"
+
+        return _Side(), [{"role": "user", "content": [{"text": question}]}]
+
+
+class TestBtwFifoDrain:
+    def test_queued_questions_run_in_order_one_at_a_time(self, monkeypatch, capsys):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble(delay=0.4)
+        spawn = BtwQueue()
+        assert spawn.put("q1") == 1
+        assert spawn.put("q2") == 2
+        assert spawn.put("q3") == 3
+        sides = _CountingSideBuild(delay=0.15)
+        btw = BtwContext(
+            spawn_queue=spawn,
+            build=sides,
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        start = time.monotonic()
+        result = _invoke_agent(main, "do the thing", threading.Event(), btw=btw)
+        elapsed = time.monotonic() - start
+        assert result == "main-result"
+        assert sides.starts == ["q1", "q2", "q3"]
+        assert sides.live_max == 1
+        assert btw.done is True
+        assert main.messages == [
+            {"role": "user", "content": [{"text": "/btw q1"}]},
+            {"role": "assistant", "content": [{"text": "answer-q1"}]},
+            {"role": "user", "content": [{"text": "/btw q2"}]},
+            {"role": "assistant", "content": [{"text": "answer-q2"}]},
+            {"role": "user", "content": [{"text": "/btw q3"}]},
+            {"role": "assistant", "content": [{"text": "answer-q3"}]},
+        ]
+        # Main finished first (0.4s) but the boundary held until the
+        # queue drained (3 x 0.15s sequential sides): drain-before-exit.
+        assert elapsed >= 0.4
+        # ...while still overlapping main (sequential would cost 0.85s).
+        assert elapsed < 0.85
+
+
+class TestSteeringDuringBacklog:
+    def test_plain_text_still_steers_main_while_btw_runs(self):
+        state = SteeringState()
+        gate = threading.Event()
+        btw = _idle_btw()
+        btw.running.set()  # backlog: a side answer runs
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state, gate, stdin=_PipeStdin(read_fd), on_btw=btw.submit
+            )
+            os.write(write_fd, b"steer text\n")
+            assert _wait_for(state.has_pending)
+            assert state.take() == "steer text"
+            assert btw.spawn_queue.empty()  # steering never enqueues
+            reader.stop()
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+    def test_btw_submit_through_reader_echoes_receipt_and_status(self, capsys):
+        state = SteeringState()
+        gate = threading.Event()
+        btw = _idle_btw()
+        btw.running.set()  # backlog: a side answer runs
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state, gate, stdin=_PipeStdin(read_fd), on_btw=btw.submit
+            )
+            os.write(write_fd, b"/btw queued question\n")
+            assert _wait_for(lambda: btw.spawn_queue.qsize() == 1)
+            out = capsys.readouterr().out
+            assert "> /btw queued question" in out
+            assert "Side question queued (#1 in line)" in out
+            assert not state.has_pending()
+            reader.stop()
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+
+class TestGateOpenBtw:
+    def test_btw_typed_during_open_prompt_waits_for_close(self):
+        state = SteeringState()
+        gate = threading.Event()
+        gate.set()  # approval prompt open: the reader must not consume
+        spawned: list[str] = []
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state, gate, stdin=_PipeStdin(read_fd), on_btw=spawned.append
+            )
+            os.write(write_fd, b"/btw q\n")
+            time.sleep(0.2)
+            assert spawned == []
+            gate.clear()
+            assert _wait_for(lambda: spawned == ["q"])
+            reader.stop()
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)

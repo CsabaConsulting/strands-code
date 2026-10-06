@@ -25,6 +25,7 @@ from rich.console import Console
 
 from strands_code_cli.btw import (
     BtwContext,
+    BtwQueue,
     append_btw_turn,
     build_btw_agent,
     register_btw_cancel,
@@ -363,7 +364,10 @@ def _invoke_parallel(
                         try:
                             question = btw.spawn_queue.get_nowait()
                         except queue.Empty:
-                            pass
+                            # No side live, nothing queued: idle-side.
+                            # Cleared only here (never at reap) so a submit
+                            # landing mid-respawn still reads running.
+                            btw.running.clear()
                         else:
                             try:
                                 btw_agent, prompt = btw.build(question)
@@ -379,6 +383,7 @@ def _invoke_parallel(
                                 btw_future = pool.submit(btw_agent, prompt, **btw_kwargs)
                                 register_btw_cancel(broker, btw)
                                 btw_question = question
+                                btw.running.set()
                                 if both_running is not None:
                                     both_running.set()
                     if broker is not None:
@@ -472,7 +477,7 @@ def _btw_context_for(agent: Any) -> BtwContext:
         return build_btw_agent(parent_kwargs, list(history), question)
 
     return BtwContext(
-        spawn_queue=queue.Queue(),
+        spawn_queue=BtwQueue(),
         build=_build,
         cancel_event=threading.Event(),
         pending=[],
@@ -1399,7 +1404,7 @@ def run_loop(
                 set_gate_mode(mode.mode)
                 btw = _btw_context_for(agent)
                 reader = start_steering_reader(
-                    steering, gate_open, on_btw=btw.spawn_queue.put
+                    steering, gate_open, on_btw=btw.submit
                 )
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
