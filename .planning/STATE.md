@@ -4,15 +4,15 @@ current_phase: 07
 current_phase_name: Subagents + /btw Side Channel
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-10-06T07:26:00.000Z"
+last_updated: "2026-10-06T07:50:00.000Z"
 last_activity: 2026-10-06
-last_activity_desc: Phase 07 plan 1 complete (btw tracer)
-state_head: 7882cd725fddee0e38fddc85fcbacc576e3ce949
+last_activity_desc: Phase 07 plan 2 complete (shared-gate parallel correctness)
+state_head: 5778d9bbf3ddce38755c37da6d7338c0b5546fd8
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
   percent: 67
 ---
 
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-04)
 ## Current Position
 
 Phase: 07 (Subagents + /btw Side Channel) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Executing Phase 07
-Last activity: 2026-10-06 — Phase 07 plan 1 complete (btw tracer)
+Last activity: 2026-10-06 — Phase 07 plan 2 complete (shared-gate parallel correctness)
 
 Progress: [███████░░░] 67%
 
@@ -67,6 +67,7 @@ Progress: [███████░░░] 67%
 | Phase 6 P03 | 18min | 3 tasks | 10 files |
 | Phase 6 P04 | 6min | 3 tasks | 6 files |
 | Phase 7 P01 | 6min | 3 tasks | 10 files |
+| Phase 7 P02 | 14min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Recent decisions affecting current work:
 - [Phase 6 UAT]: Explicit invocation frames skill trust (follow as the task, no skills-tool re-check); distrust scoped to embedded third-party directives; deny-first gate stays the hard control (live-verified)
 - [Phase 7]: Side agent built via create_harness factory rebuild over stashed parent kwargs with the live resolved model; forked history passes as the invocation prompt, never pre-seeded (avoids double user turn)
 - [Phase 7]: Tracer join holds the turn boundary until side work completes; boundary flush (history) on success path only — failed main turns keep the live-rendered side answer transcript-only
+- [Phase 7]: Tagged `[main]`/`[btw]` approvals from event.agent identity with tag-keyed ask stash plus thread-local tag; batch coverage namespaced per agent with denials never covering; trust_delegated btw auto-trust prints a transcript note naming the tool
+- [Phase 7]: Per-request broker cancel registry (main/btw events); shared PendingStore audited not-proven-safe and lock-guarded across load-mutate-save
+- [Phase 7]: Cancel chooser runs inside the dual pump on the main thread (executor shutdown would park on uncancelled workers otherwise); Ctrl-C in the chooser escalates to both; main-only pick drains the side answer through the served pump; tagged cancel lines via print_plain (markup off, WR-06)
 
 ### Pending Todos
 
@@ -122,6 +126,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-06T07:26:00.000Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-10-06T07:50:00.000Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None

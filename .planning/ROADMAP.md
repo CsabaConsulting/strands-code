@@ -149,7 +149,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 07-02-PLAN.md — Shared-gate parallel correctness: tagged prompts, namespaced batch, per-request cancel, Ctrl-C chooser
+- [x] 07-02-PLAN.md — Shared-gate parallel correctness: tagged prompts, namespaced batch, per-request cancel, Ctrl-C chooser
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
