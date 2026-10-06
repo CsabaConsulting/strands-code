@@ -6,13 +6,15 @@ import asyncio
 import copy
 import logging
 import os
+import queue
 import re
 import signal
 import sys
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from time import monotonic
+from contextlib import nullcontext
+from time import monotonic, sleep
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,12 @@ from prompt_toolkit.history import FileHistory, History
 
 from rich.console import Console
 
+from strands_code_cli.btw import (
+    BtwContext,
+    append_btw_turn,
+    build_btw_agent,
+    render_btw_error,
+)
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
     MODEL_PRICING,
@@ -235,7 +243,140 @@ def maybe_auto_compact(agent: Any, current_model: str) -> str | None:
     return f"Context at {pct:.0f}% — auto-compacted, {kept} recent messages kept."
 
 
-def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> Any:
+def _finish_btw_turn(
+    btw: BtwContext, btw_agent: Any, future: Any, question: str
+) -> None:
+    """Reap one side turn: hold its Q&A for the boundary flush.
+
+    Main-thread only. A side failure renders fenced and never raises
+    into the main turn; ``agent.messages`` is untouched here — the
+    boundary flush owns history.
+    """
+    try:
+        result = future.result()
+    except Exception as exc:  # noqa: BLE001 — side failure must never fail the main turn
+        render_btw_error(question, exc)
+        return
+    btw.pending.append((question, _result_text(btw_agent, result), result))
+    btw.done = True
+
+
+def _invoke_parallel(
+    agent: Any,
+    text: str,
+    kwargs: dict,
+    btw: BtwContext,
+    broker: Any,
+    cancel_event: threading.Event,
+) -> Any:
+    """Run one main turn with a parallel /btw side channel (LOOP-03).
+
+    One pool (two workers), one broker pump, all driven from this
+    (main) thread: submits the main turn, drains the spawn queue (at
+    most one side agent at a time — further questions wait their
+    turn), serves approvals for both workers, and — tracer join —
+    holds the turn boundary until a running side agent completes.
+    Completed Q&A flushes to history on the main thread before
+    returning. Exactly one pump serves both futures; this never nests
+    ``broker.pump`` and never calls :func:`_invoke_agent` recursively.
+    """
+    pump = broker.pump(cancel_event) if broker is not None else nullcontext()
+    with pump:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            try:
+                main_future = pool.submit(agent, text, **kwargs)
+                btw_future = None
+                btw_question: str | None = None
+                btw_agent: Any = None
+                while True:
+                    if (
+                        main_future.done()
+                        and btw_future is None
+                        and btw.spawn_queue.empty()
+                    ):
+                        break
+                    if btw_future is not None and btw_future.done():
+                        _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
+                        btw_future = None
+                        btw_question = None
+                        btw_agent = None
+                    if btw_future is None:
+                        try:
+                            question = btw.spawn_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        else:
+                            try:
+                                btw_agent, prompt = btw.build(question)
+                            except Exception as exc:  # noqa: BLE001 — a failed spawn must never fail the main turn
+                                render_btw_error(question, exc)
+                                btw_agent = None
+                            else:
+                                btw_kwargs = (
+                                    {"cancel_signal": btw.cancel_event}
+                                    if hasattr(btw_agent, "cancel_signal")
+                                    else {}
+                                )
+                                btw_future = pool.submit(btw_agent, prompt, **btw_kwargs)
+                                btw_question = question
+                    if broker is not None:
+                        req = broker.poll()
+                        if req is not None:
+                            req.run_prompt()
+                    else:
+                        sleep(0.005)
+                try:
+                    result = main_future.result()
+                except TurnCancelled:
+                    # Worker aborted on cancel without a main-thread
+                    # KeyboardInterrupt reaching us: same cancel path.
+                    raise KeyboardInterrupt from None
+            except KeyboardInterrupt:
+                # Inside the executor context so the side worker sees
+                # its cancel before shutdown waits on it (no parked
+                # worker hanging Ctrl-C); the main event is already set
+                # by the turn SIGINT handler.
+                btw.cancel_event.set()
+                raise
+    history = getattr(agent, "messages", None)
+    if isinstance(history, list):
+        for question, answer, _ in btw.pending:
+            append_btw_turn(history, question, answer)
+    return result
+
+
+def _btw_context_for(agent: Any) -> BtwContext:
+    """Per-turn side-channel state closing over the parent factory kwargs.
+
+    The build closure replays the ``create_harness`` kwargs stashed by
+    ``build_agent`` with the live resolved model (D-07: the SAME model
+    object, never a re-resolved one) and a fresh history snapshot per
+    spawn.
+    """
+    parent_kwargs = dict(getattr(agent, "_harness_kwargs", {}) or {})
+    live_model = getattr(agent, "model", None)
+    if live_model is not None:
+        parent_kwargs["model"] = live_model
+
+    def _build(question: str) -> tuple[Any, list]:
+        history = getattr(agent, "messages", None) or []
+        return build_btw_agent(parent_kwargs, list(history), question)
+
+    return BtwContext(
+        spawn_queue=queue.Queue(),
+        build=_build,
+        cancel_event=threading.Event(),
+        pending=[],
+    )
+
+
+def _invoke_agent(
+    agent: Any,
+    text: str,
+    cancel_event: threading.Event,
+    *,
+    btw: BtwContext | None = None,
+) -> Any:
     """Run one turn, handing the caller-owned cancel event to SDK agents.
 
     Real agents expose ``cancel_signal`` and accept a per-invocation
@@ -250,13 +391,21 @@ def _invoke_agent(agent: Any, text: str, cancel_event: threading.Event) -> Any:
     behave; a KeyboardInterrupt propagates with the cancel event already
     set, so the worker aborts instead of parking. No broker (tests,
     direct calls) → legacy direct call.
+
+    With ``btw`` set, the turn runs on the dual-future pump
+    (:func:`_invoke_parallel`): the main turn plus at most one side
+    agent under the single broker pump, with the tracer join holding
+    the boundary until side work completes.
     """
     broker = _active_broker()
-    if broker is None:
+    if broker is None and btw is None:
         if hasattr(agent, "cancel_signal"):
             return agent(text, cancel_signal=cancel_event)
         return agent(text)
     kwargs = {"cancel_signal": cancel_event} if hasattr(agent, "cancel_signal") else {}
+    if btw is not None:
+        return _invoke_parallel(agent, text, kwargs, btw, broker, cancel_event)
+    assert broker is not None
     with broker.pump(cancel_event):
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(agent, text, **kwargs)
@@ -1109,7 +1258,10 @@ def run_loop(
                 steering.bind_turn(turn_id)
                 slot.state = steering
                 set_gate_mode(mode.mode)
-                reader = start_steering_reader(steering, gate_open)
+                btw = _btw_context_for(agent)
+                reader = start_steering_reader(
+                    steering, gate_open, on_btw=btw.spawn_queue.put
+                )
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
                     agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
@@ -1121,7 +1273,7 @@ def run_loop(
                 while True:
                     attempts += 1
                     try:
-                        result = _invoke_agent(agent, agent_text, cancel_event)
+                        result = _invoke_agent(agent, agent_text, cancel_event, btw=btw)
                     except (KeyboardInterrupt, TurnCancelled):
                         raise
                     except Exception as exc:

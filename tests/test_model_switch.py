@@ -861,7 +861,7 @@ class TestTurnGuard:
         monkeypatch.setattr(loop_mod, "PromptSession", _Session)
         calls = []
 
-        def _boom(agent, text, event):
+        def _boom(agent, text, event, **kwargs):
             calls.append(text)
             raise RuntimeError("boom")
 
@@ -945,7 +945,7 @@ class TestTurnGuard:
 
         monkeypatch.setattr(loop_mod, "PromptSession", _Session)
 
-        def _boom(agent, text, event):
+        def _boom(agent, text, event, **kwargs):
             raise RuntimeError(
                 "An error occurred (ValidationException) when calling the "
                 "ConverseStream operation: This model doesn't support tool "
@@ -996,7 +996,7 @@ class TestTurnGuard:
         monkeypatch.setattr(loop_mod, "PromptSession", _Session)
         calls = []
 
-        def _flake_then_answer(agent, text, event):
+        def _flake_then_answer(agent, text, event, **kwargs):
             calls.append(text)
             agent.messages.append({"role": "user", "content": [{"text": text}]})
             if len(calls) == 1:
@@ -1048,7 +1048,7 @@ class TestTurnGuard:
         monkeypatch.setattr(loop_mod, "PromptSession", _Session)
         calls = []
 
-        def _always_empty(agent, text, event):
+        def _always_empty(agent, text, event, **kwargs):
             calls.append(text)
             agent.messages.append({"role": "user", "content": [{"text": text}]})
             agent.messages.append({"role": "assistant", "content": []})

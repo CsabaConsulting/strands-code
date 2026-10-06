@@ -21,6 +21,7 @@ from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
 from strands_code_agent.search_tool import search as search_tool
+from strands_code_cli.btw import LockedHandler
 from strands_code_cli.diff_gate import (
     PendingStore,
     bind_session,
@@ -150,7 +151,9 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         "interventions": build_interventions(),
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
-        "callback_handler": DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
+        # Render-locked proxy (LOOP-03): main message blocks stay
+        # contiguous against fenced /btw side blocks on RENDER_LOCK.
+        "callback_handler": LockedHandler(DEFAULT_CODE_AGENT_CALLBACK_HANDLER),
         # Phase 6: explicit skills + memory seams — the owned
         # AgentSkills loads ./.agent/skills and MemoryManager runs the
         # ./.agent/memory fact store. The dual conventions file
@@ -162,6 +165,10 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     if model is not None:
         kwargs["model"] = model
     agent = create_harness(**kwargs)
+    # Stash the factory kwargs for /btw side-agent rebuilds (LOOP-03):
+    # the loop replays this dict through create_harness with the
+    # delegate overrides, so the child is built the way the parent was.
+    agent._harness_kwargs = kwargs
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
     bind_main_agent(agent)  # D-12 delegated-turn detection
     # Phase 4: single steering hook (BeforeToolCallEvent at SDK_FIRST, so

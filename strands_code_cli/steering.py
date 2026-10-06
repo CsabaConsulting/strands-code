@@ -62,6 +62,18 @@ STEERING_REDIRECT_TEMPLATE = (
 )
 
 
+def is_btw_line(text: str) -> bool:
+    """True for a mid-turn ``/btw`` escape (case-insensitive head, any tail).
+
+    Only this head escapes steering mid-turn (LOOP-03, D-02); every
+    other slash keeps the idle-only refusal below.
+    """
+    cleaned = text.strip()
+    if not cleaned.startswith("/"):
+        return False
+    return cleaned.split()[0].lower() == "/btw"
+
+
 def mid_turn_slash_reply(text: str) -> str | None:
     """Idle-only refusal for slash commands typed mid-turn, else None.
 
@@ -263,6 +275,7 @@ def start_steering_reader(
     stdin: Any | None = None,
     on_line: Callable[[str], None] | None = None,
     on_refusal: Callable[[str, str], None] | None = None,
+    on_btw: Callable[[str], None] | None = None,
     poll_interval: float = 0.05,
 ) -> SteeringReader:
     """Start the turn-owned raw-readline reader (daemon + explicit stop).
@@ -280,6 +293,11 @@ def start_steering_reader(
         on_line: Capture callback (default: transcript echo).
         on_refusal: Slash-refusal callback (line, reply); default
             prints both to the transcript.
+        on_btw: Side-question callback receiving the stripped ``/btw``
+            tail (None → ``/btw`` falls through to the refusal path,
+            keeping pre-side-channel callers untouched). The callback
+            must never spawn inline — enqueue and return; the pump
+            builds the side agent on the main thread.
         poll_interval: Sleep/select quantum between checks.
 
     Returns:
@@ -297,6 +315,20 @@ def start_steering_reader(
         fileno = None
 
     def _emit(line: str) -> None:
+        if on_btw is not None and is_btw_line(line):
+            question = line.strip().split(None, 1)
+            tail = question[1].strip() if len(question) > 1 else ""
+            if not tail:
+                try:
+                    refuse(line.strip(), "Usage: /btw <side question>")
+                except Exception:
+                    pass  # usage must never kill the turn
+                return
+            try:
+                on_btw(tail)
+            except Exception:
+                pass  # spawn handoff must never kill the turn
+            return
         refusal = mid_turn_slash_reply(line)
         if refusal is not None:
             try:
