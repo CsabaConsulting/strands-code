@@ -1371,16 +1371,25 @@ def run_loop(
         )
         return words
 
-    def _refresh_harness_skills() -> None:
+    def _refresh_harness_skills() -> str | None:
         """Rescan the harness skills registry (no-op without the plugin).
 
         Reads the handle ``build_agent`` stashed; test doubles without
-        one simply skip the refresh.
+        one simply skip the refresh. Defers while a side run is live:
+        the side agent shares this plugin object, so a mid-turn rescan
+        would mutate the registry concurrently with its use.
+
+        Returns:
+            A deferral note for the reload reply, or None when the
+            refresh ran (or there was no plugin to refresh).
         """
         plugin = getattr(agent, "_skills_plugin", None)
         if plugin is None:
-            return
+            return None
+        if btw_session.has_live:
+            return "model registry refresh deferred — side answer running"
         plugin.set_available_skills([str(skills.skills_dir)])
+        return None
 
     session: PromptSession = PromptSession(
         history=_history(), completer=build_completer(_skill_words)

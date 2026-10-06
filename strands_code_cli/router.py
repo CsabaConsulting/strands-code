@@ -139,7 +139,8 @@ def dispatch(
             callers untouched).
         harness_skills_refresh: Zero-arg callable rescanning the
             harness skills registry on reload (None → CLI index only,
-            keeping standalone/test callers untouched).
+            keeping standalone/test callers untouched). A truthy return
+            is a deferral note appended to the reload reply.
         memory_mode: Session-sticky memory-mode holder (None → curate
             default, keeps standalone/test behaviour without a
             loop-owned holder).
@@ -764,7 +765,9 @@ def _skills_message(
     this reply through print_plain (markup off), so Rich markup chars
     can never garble or crash the transcript. Reload refreshes the
     harness registry first, then the CLI index, so a failed refresh
-    leaves both stale instead of disagreeing.
+    leaves both stale instead of disagreeing. A refresh that returns a
+    deferral note (side answer running) still reloads the CLI index and
+    appends the note to the reply.
     """
     entries = skills.list_entries() if skills is not None else []
     if not rest:
@@ -798,13 +801,17 @@ def _skills_message(
     if verb in ("reload", "refresh"):
         if skills is None:
             return "No skills loaded (./.agent/skills missing or empty)."
+        deferred_note = None
         if harness_refresh is not None:
             try:
-                harness_refresh()
+                deferred_note = harness_refresh()
             except Exception as exc:
                 return f"Skills reload failed to refresh the model registry: {exc}"
         count = skills.reload()
-        return f"Reloaded {count} skill{'s' if count != 1 else ''}."
+        reply = f"Reloaded {count} skill{'s' if count != 1 else ''}."
+        if deferred_note:
+            reply += f" ({deferred_note}.)"
+        return reply
     if verb == "remove":
         entry = skills.resolve(name) if skills is not None else None
         if entry is None:

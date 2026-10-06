@@ -641,6 +641,24 @@ class TestSkillGapRound:
         assert message is not None and "failed to refresh" in message
         assert index.resolve("beta") is None  # both stale, never disagreeing
 
+    def test_deferred_harness_refresh_reloads_index_with_note(self, tmp_path):
+        # A live side run shares the harness plugin, so the loop defers
+        # the registry rescan — the CLI index still reloads and the
+        # reply carries the deferral note.
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "alpha")
+        index = SkillIndex(skills_dir=skills_dir)
+        _write_skill(skills_dir, "beta")
+        _, message = dispatch(
+            "/skills reload",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+            harness_skills_refresh=lambda: "model registry refresh deferred",
+        )
+        assert message == "Reloaded 2 skills. (model registry refresh deferred.)"
+        assert index.resolve("beta") is not None
+
     def test_harness_registry_refresh_seam_shape(self, tmp_path):
         from strands.vended_plugins.skills import AgentSkills
         from strands_harness.agent import _skills_plugin
