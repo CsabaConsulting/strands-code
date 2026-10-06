@@ -215,6 +215,30 @@ class TestFencedRender:
             assert lines[head + 1].startswith("side-body-")
             assert lines[head + 2] == "--- end btw ---"
 
+    def test_production_nesting_reenters_without_deadlock(self, capsys):
+        # Production wiring wraps the shared LockedHandler, so __call__
+        # re-enters RENDER_LOCK on the same thread — a plain Lock wedges
+        # here on the first side content message. Timeout-guarded so a
+        # regression fails instead of hanging the suite.
+        body = _Body("side")
+        fenced = FencedBtwHandler(LockedHandler(body), "why slow?")
+        box: dict = {}
+
+        def run() -> None:
+            box["result"] = fenced(
+                message={"role": "assistant", "content": [{"text": "s"}]}
+            )
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+        assert box["result"] is None
+        assert body.count == 1
+        out = capsys.readouterr().out
+        assert "--- btw: why slow? ---" in out
+        assert "--- end btw ---" in out
+
     def test_contentless_message_prints_no_fence(self, capsys):
         fenced = FencedBtwHandler(_Body("side"), "why slow?")
         assert fenced() is None

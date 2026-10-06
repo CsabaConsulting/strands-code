@@ -33,12 +33,14 @@ from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_cli.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.output import print_plain
 
-RENDER_LOCK = threading.Lock()
+RENDER_LOCK = threading.RLock()
 """Serializes whole message blocks across the main and btw handlers.
 
 Rich serializes single ``print`` calls internally, but a fenced side
 block is a header+body+footer sequence — only this shared lock keeps
-it contiguous against main output.
+it contiguous against main output. Reentrant: ``FencedBtwHandler``
+holds it while delegating to the shared ``LockedHandler`` inner on
+the same thread.
 """
 
 console = Console()
