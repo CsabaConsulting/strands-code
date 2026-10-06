@@ -201,7 +201,9 @@ class BtwContext:
     the pump builds, submits, and reaps side agents. Completed turns
     wait in :attr:`pending` as ``(question, answer, result)`` tuples
     for the boundary flush; :attr:`done` flips once a side answer
-    lands.
+    lands. :attr:`cancel_targets` records the chooser answer (D-08)
+    when a turn unwinds through the cancel path, so the loop can run
+    the two-press machine per named target.
     """
 
     spawn_queue: queue.Queue
@@ -209,6 +211,7 @@ class BtwContext:
     cancel_event: threading.Event
     pending: list = field(default_factory=list)
     done: bool = False
+    cancel_targets: tuple = ()
 
 
 def build_btw_agent(

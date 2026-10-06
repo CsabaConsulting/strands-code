@@ -31,6 +31,7 @@ from strands_code_cli.btw import (
     render_btw_error,
     unregister_btw_cancel,
 )
+from strands_code_cli.choice import radio_choice
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
     MODEL_PRICING,
@@ -197,6 +198,50 @@ CANCEL_CONFIRMED = "Cancel confirmed — partial work kept."
 CANCEL_STILL = "Still cancelling — graceful stop already requested; the current step finishes first."
 
 
+def resolve_cancel_targets(choice: str | None) -> tuple[str, ...]:
+    """Map a cancel-chooser answer to the cancel events to set (D-08).
+
+    Unknown answers (None/ESC, anything unexpected) map to the empty
+    tuple: fail closed, cancel nothing, the turn continues.
+    """
+    if choice == "main":
+        return ("main",)
+    if choice == "btw":
+        return ("btw",)
+    if choice == "both":
+        return ("main", "btw")
+    return ()
+
+
+def ask_cancel_target() -> str | None:
+    """Ask which worker to cancel; None fails closed (cancel nothing).
+
+    No tty (tests, pipes) denies the prompt with None instead of
+    crashing the turn. Ctrl-C inside the chooser propagates as
+    KeyboardInterrupt — the caller escalates that to cancelling both.
+    """
+    try:
+        return radio_choice(
+            "Cancel which?",
+            (("main", "Main task"), ("btw", "Side answer"), ("both", "Both")),
+        )
+    except RuntimeError:
+        return None  # no tty: fail closed, the turn continues
+
+
+def _choose_cancel_targets() -> tuple[str, ...]:
+    """Run the chooser; Ctrl-C inside escalates to both.
+
+    The executor shutdown below the pump waits for both workers, so an
+    interrupt that carries no answer must still name targets —
+    returning empty there would park shutdown on uncancelled workers.
+    """
+    try:
+        return resolve_cancel_targets(ask_cancel_target())
+    except KeyboardInterrupt:
+        return ("main", "btw")
+
+
 def record_turn_metrics(
     result: Any, current_model: str, session_turns: list
 ) -> str | None:
@@ -270,6 +315,7 @@ def _invoke_parallel(
     btw: BtwContext,
     broker: Any,
     cancel_event: threading.Event,
+    both_running: threading.Event | None = None,
 ) -> Any:
     """Run one main turn with a parallel /btw side channel (LOOP-03).
 
@@ -281,16 +327,24 @@ def _invoke_parallel(
     Completed Q&A flushes to history on the main thread before
     returning. Exactly one pump serves both futures; this never nests
     ``broker.pump`` and never calls :func:`_invoke_agent` recursively.
+
+    ``both_running`` mirrors the side worker's lifetime for the turn
+    SIGINT handler: set while a btw future runs, cleared otherwise.
+    A Ctrl-C arriving with the side worker running opens the cancel
+    chooser on this (main) thread — it must run here, inside the
+    executor context, because unwinding first would park executor
+    shutdown on still-uncancelled workers (and a no-choice answer
+    resumes the pump, which is only possible before unwinding).
     """
     pump = broker.pump(cancel_event) if broker is not None else nullcontext()
     with pump:
         with ThreadPoolExecutor(max_workers=2) as pool:
-            try:
-                main_future = pool.submit(agent, text, **kwargs)
-                btw_future = None
-                btw_question: str | None = None
-                btw_agent: Any = None
-                while True:
+            main_future = pool.submit(agent, text, **kwargs)
+            btw_future = None
+            btw_question: str | None = None
+            btw_agent: Any = None
+            while True:
+                try:
                     if (
                         main_future.done()
                         and btw_future is None
@@ -303,6 +357,8 @@ def _invoke_parallel(
                         btw_future = None
                         btw_question = None
                         btw_agent = None
+                        if both_running is not None:
+                            both_running.clear()
                     if btw_future is None:
                         try:
                             question = btw.spawn_queue.get_nowait()
@@ -323,26 +379,74 @@ def _invoke_parallel(
                                 btw_future = pool.submit(btw_agent, prompt, **btw_kwargs)
                                 register_btw_cancel(broker, btw)
                                 btw_question = question
+                                if both_running is not None:
+                                    both_running.set()
                     if broker is not None:
                         req = broker.poll()
                         if req is not None:
                             req.run_prompt()
                     else:
                         sleep(0.005)
-                try:
-                    result = main_future.result()
-                except TurnCancelled:
-                    # Worker aborted on cancel without a main-thread
-                    # KeyboardInterrupt reaching us: same cancel path.
-                    raise KeyboardInterrupt from None
-            except KeyboardInterrupt:
-                # Inside the executor context so the side worker sees
-                # its cancel before shutdown waits on it (no parked
-                # worker hanging Ctrl-C); the main event is already set
-                # by the turn SIGINT handler.
+                except KeyboardInterrupt:
+                    if btw_future is None or btw_future.done():
+                        # Single worker (or side already reaped):
+                        # legacy path, the main event is already set
+                        # by the turn SIGINT handler.
+                        btw.cancel_event.set()
+                        unregister_btw_cancel(broker)
+                        raise
+                    targets = _choose_cancel_targets()
+                    if not targets:
+                        continue  # no choice: cancel nothing, turn continues
+                    btw.cancel_targets = targets
+                    if "main" in targets:
+                        cancel_event.set()
+                    if "btw" in targets:
+                        btw.cancel_event.set()
+                        unregister_btw_cancel(broker)
+                    if "main" not in targets:
+                        continue  # side aborts, main continues
+                    if "btw" not in targets:
+                        # Main aborts; hold the pump until the side
+                        # answer lands (tracer join — and the pump must
+                        # keep serving approvals so shutdown below
+                        # never parks on a gated side worker), then
+                        # unwind for the cancel UX.
+                        try:
+                            while btw_future is not None and not btw_future.done():
+                                if broker is not None:
+                                    req = broker.poll()
+                                    if req is not None:
+                                        req.run_prompt()
+                                else:
+                                    sleep(0.005)
+                        except KeyboardInterrupt:
+                            # Second interrupt while draining: stop
+                            # everything rather than park shutdown.
+                            btw.cancel_targets = ("main", "btw")
+                            btw.cancel_event.set()
+                            unregister_btw_cancel(broker)
+                            if both_running is not None:
+                                both_running.clear()
+                            raise
+                        _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
+                        unregister_btw_cancel(broker)
+                        btw_future = None
+                        btw_question = None
+                        btw_agent = None
+                        if both_running is not None:
+                            both_running.clear()
+                    elif both_running is not None:
+                        both_running.clear()
+                    raise
+            try:
+                result = main_future.result()
+            except TurnCancelled:
+                # Worker aborted on cancel without a main-thread
+                # KeyboardInterrupt reaching us: same cancel path.
                 btw.cancel_event.set()
                 unregister_btw_cancel(broker)
-                raise
+                raise KeyboardInterrupt from None
     history = getattr(agent, "messages", None)
     if isinstance(history, list):
         for question, answer, _ in btw.pending:
@@ -381,6 +485,7 @@ def _invoke_agent(
     cancel_event: threading.Event,
     *,
     btw: BtwContext | None = None,
+    both_running: threading.Event | None = None,
 ) -> Any:
     """Run one turn, handing the caller-owned cancel event to SDK agents.
 
@@ -412,7 +517,9 @@ def _invoke_agent(
         broker.register_cancel("main", cancel_event)
     try:
         if btw is not None:
-            return _invoke_parallel(agent, text, kwargs, btw, broker, cancel_event)
+            return _invoke_parallel(
+                agent, text, kwargs, btw, broker, cancel_event, both_running
+            )
         assert broker is not None
         with broker.pump(cancel_event):
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -440,6 +547,8 @@ def _handle_turn_cancel(
     index: SessionIndex,
     cancel_event: threading.Event,
     armed_at: float | None,
+    *,
+    target: str = "main",
 ) -> float | None:
     """Two-press cancel state machine (LOOP-04, D-13/D-15/D-16).
 
@@ -450,27 +559,35 @@ def _handle_turn_cancel(
     window lapses re-states the honest position: no un-cancel exists,
     the remainder is dropped, the mode is unchanged.
 
+    ``target`` names the cancelled worker for the chooser path (D-08);
+    anything but ``"main"`` prefixes the line with ``[<target>]``. The
+    ``"main"`` copy is byte-identical to the legacy single-worker UX.
+
     Returns:
         The updated arm timestamp (None when disarmed by confirm).
     """
     cancel_event.set()
     now = monotonic()
-    if armed_at is not None and (now - armed_at) <= CANCEL_WINDOW_S:
-        console.print(f"[yellow]{CANCEL_CONFIRMED}[/yellow]")
-        explicit_save(agent)
-        index.ensure(session_id)
-        return None
-    if armed_at is not None:
-        console.print(f"[yellow]{CANCEL_STILL}[/yellow]")
+    confirmed = armed_at is not None and (now - armed_at) <= CANCEL_WINDOW_S
+    if confirmed:
+        line = CANCEL_CONFIRMED
+    elif armed_at is not None:
+        line = CANCEL_STILL
     else:
-        console.print(f"[yellow]{CANCEL_FIRST_PRESS}[/yellow]")
+        line = CANCEL_FIRST_PRESS
+    if target != "main":
+        line = f"[{target}] {line}"
+    print_plain(console, line, style="yellow")
     explicit_save(agent)
     index.ensure(session_id)
-    return now
+    return None if confirmed else now
 
 
 def _make_turn_sigint_handler(
-    cancel_event: threading.Event, prev: Any
+    cancel_event: threading.Event,
+    prev: Any,
+    *,
+    both_running: threading.Event | None = None,
 ) -> Any:
     """SIGINT handler for the duration of one turn (LOOP-04).
 
@@ -483,6 +600,11 @@ def _make_turn_sigint_handler(
     at its next checkpoint and stops after the current step (D-10/D-13),
     even when no KeyboardInterrupt ever reaches the loop.
 
+    While ``both_running`` is set (a side worker runs beside the main
+    turn), the handler sets no event at all — the cancel chooser (D-08)
+    names the targets instead. Otherwise the exact legacy set-main
+    behavior is kept.
+
     The previous disposition is always chained (default re-raises
     KeyboardInterrupt), so the two-press UX is preserved whenever the
     exception does propagate. The handler itself stays side-effect-free
@@ -490,7 +612,8 @@ def _make_turn_sigint_handler(
     """
 
     def _handler(signum: Any, frame: Any) -> None:
-        cancel_event.set()
+        if both_running is None or not both_running.is_set():
+            cancel_event.set()
         if callable(prev):
             prev(signum, frame)
         elif prev == signal.SIG_DFL:
@@ -1255,13 +1378,18 @@ def run_loop(
         steering = SteeringState()
         turn_id = f"{session_id}:{uuid.uuid4().hex}"
         cancel_event = threading.Event()
+        both_running = threading.Event()
+        btw: BtwContext | None = None
         reader = None
         cancelled = False
         prev_sigint: Any = None
         if threading.current_thread() is threading.main_thread():
             prev_sigint = signal.getsignal(signal.SIGINT)
             signal.signal(
-                signal.SIGINT, _make_turn_sigint_handler(cancel_event, prev_sigint)
+                signal.SIGINT,
+                _make_turn_sigint_handler(
+                    cancel_event, prev_sigint, both_running=both_running
+                ),
             )
         try:
             with output_context():
@@ -1284,7 +1412,13 @@ def run_loop(
                 while True:
                     attempts += 1
                     try:
-                        result = _invoke_agent(agent, agent_text, cancel_event, btw=btw)
+                        result = _invoke_agent(
+                            agent,
+                            agent_text,
+                            cancel_event,
+                            btw=btw,
+                            both_running=both_running,
+                        )
                     except (KeyboardInterrupt, TurnCancelled):
                         raise
                     except Exception as exc:
@@ -1373,9 +1507,18 @@ def run_loop(
             if init_state.armed:
                 init_state.disarm()
                 console.print("Init draft dropped — interrupted, memory unchanged.")
-            cancel_armed_at = _handle_turn_cancel(
-                agent, session_id, index, cancel_event, cancel_armed_at
-            )
+            # Chooser path (D-08): the pump records the named targets on
+            # the turn context; each gets its own two-press line against
+            # its own event, all judged against the same arm snapshot so
+            # a first-press "both" reads first-press for both. No record
+            # means the legacy single-worker path.
+            targets = getattr(btw, "cancel_targets", None) or ("main",)
+            armed_snapshot = cancel_armed_at
+            for target in targets:
+                event = btw.cancel_event if target == "btw" else cancel_event
+                cancel_armed_at = _handle_turn_cancel(
+                    agent, session_id, index, event, armed_snapshot, target=target
+                )
         finally:
             if prev_sigint is not None:
                 signal.signal(signal.SIGINT, prev_sigint)

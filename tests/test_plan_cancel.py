@@ -31,6 +31,11 @@ from strands_code_cli.loop import (
     CANCEL_CONFIRMED,
     CANCEL_FIRST_PRESS,
     CANCEL_STILL,
+    _choose_cancel_targets,
+    _handle_turn_cancel,
+    _make_turn_sigint_handler,
+    ask_cancel_target,
+    resolve_cancel_targets,
     run_loop,
 )
 from strands_code_cli.mode import APPROVE_EMPTY, MODE_PLAN_REPLY, PLAN_PREFIX
@@ -265,4 +270,186 @@ class TestTurnSigintHandler:
         agent = _LoopAgent(behavior=behavior)
         _run_script(["hello", "/exit"], tmp_path, agent, monkeypatch=monkeypatch)
         assert seen == ["wrapped"]
+
+
+class TestResolveCancelTargets:
+    """Chooser answer → named cancel events (D-08). Unknown fails closed."""
+
+    def test_maps_every_answer(self):
+        assert resolve_cancel_targets("main") == ("main",)
+        assert resolve_cancel_targets("btw") == ("btw",)
+        assert resolve_cancel_targets("both") == ("main", "btw")
+        assert resolve_cancel_targets(None) == ()
+        assert resolve_cancel_targets("bogus") == ()
+
+
+class TestAskCancelTarget:
+    """Chooser dialog contract: picked value or None, never a crash."""
+
+    def test_returns_picked_value(self, monkeypatch):
+        monkeypatch.setattr(loop_module, "radio_choice", lambda *a, **k: "btw")
+        assert ask_cancel_target() == "btw"
+
+    def test_esc_returns_none(self, monkeypatch):
+        monkeypatch.setattr(loop_module, "radio_choice", lambda *a, **k: None)
+        assert ask_cancel_target() is None
+
+    def test_no_tty_fails_closed(self, monkeypatch):
+        def _raise(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("radio_choice needs a tty")
+
+        monkeypatch.setattr(loop_module, "radio_choice", _raise)
+        assert ask_cancel_target() is None
+
+    def test_ctrl_c_propagates(self, monkeypatch):
+        def _raise(*args: Any, **kwargs: Any) -> Any:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(loop_module, "radio_choice", _raise)
+        try:
+            ask_cancel_target()
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("Ctrl-C in the chooser must propagate")
+
+    def test_chooser_title_and_items(self, monkeypatch):
+        seen: dict[str, Any] = {}
+
+        def _fake(title: str, options: Any, **kwargs: Any) -> Any:
+            seen["title"] = title
+            seen["options"] = tuple(options)
+            return "main"
+
+        monkeypatch.setattr(loop_module, "radio_choice", _fake)
+        assert ask_cancel_target() == "main"
+        assert seen["title"] == "Cancel which?"
+        assert seen["options"] == (
+            ("main", "Main task"),
+            ("btw", "Side answer"),
+            ("both", "Both"),
+        )
+
+
+class TestChooseCancelTargets:
+    """Pump-level choice: empty passes through, in-chooser Ctrl-C names both."""
+
+    def test_empty_answer_passes_through(self, monkeypatch):
+        monkeypatch.setattr(loop_module, "ask_cancel_target", lambda: None)
+        assert _choose_cancel_targets() == ()
+
+    def test_ctrl_c_inside_escalates_to_both(self, monkeypatch):
+        def _raise() -> Any:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(loop_module, "ask_cancel_target", _raise)
+        assert _choose_cancel_targets() == ("main", "btw")
+
+
+class TestBothRunningHandler:
+    """Turn SIGINT handler with the both_running flag (D-08).
+
+    While both workers run the handler sets no event — the chooser
+    names the targets — and still chains the previous disposition.
+    """
+
+    def test_set_flag_chains_default_without_setting_either_event(self):
+        import signal
+        import threading
+
+        event = threading.Event()
+        bystander = threading.Event()
+        both_running = threading.Event()
+        both_running.set()
+        handler = _make_turn_sigint_handler(
+            event, signal.SIG_DFL, both_running=both_running
+        )
+        try:
+            handler(signal.SIGINT, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("default disposition must re-raise")
+        assert not event.is_set()
+        assert not bystander.is_set()
+
+    def test_set_flag_chains_callable_prev_without_setting(self):
+        import signal
+        import threading
+
+        event = threading.Event()
+        both_running = threading.Event()
+        both_running.set()
+        seen: list[str] = []
+        handler = _make_turn_sigint_handler(
+            event, lambda s, f: seen.append("prev"), both_running=both_running
+        )
+        handler(signal.SIGINT, None)
+        assert not event.is_set()
+        assert seen == ["prev"]
+
+    def test_unset_flag_keeps_legacy_set_event_behavior(self):
+        import signal
+        import threading
+
+        event = threading.Event()
+        both_running = threading.Event()  # clear: single worker
+        handler = _make_turn_sigint_handler(
+            event, signal.SIG_DFL, both_running=both_running
+        )
+        try:
+            handler(signal.SIGINT, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("default disposition must re-raise")
+        assert event.is_set()
+
+
+class TestHandleTurnCancelTarget:
+    """Per-target two-press copy: main byte-identical, others tagged."""
+
+    def test_btw_first_press_names_target(self, tmp_path, capsys):
+        import threading
+
+        agent = _LoopAgent()
+        index = SessionIndex(tmp_path / "index")
+        session_id = index.mint()
+        event = threading.Event()
+        armed = _handle_turn_cancel(agent, session_id, index, event, None, target="btw")
+        out = _flat(capsys.readouterr().out)
+        assert CANCEL_FIRST_PRESS in out
+        assert "[btw]" in out
+        assert event.is_set()
+        assert armed is not None
+
+    def test_btw_second_press_confirms(self, tmp_path, capsys):
+        import threading
+
+        agent = _LoopAgent()
+        index = SessionIndex(tmp_path / "index")
+        session_id = index.mint()
+        event = threading.Event()
+        armed = _handle_turn_cancel(agent, session_id, index, event, None, target="btw")
+        capsys.readouterr()
+        assert armed is not None
+        confirmed = _handle_turn_cancel(
+            agent, session_id, index, event, armed, target="btw"
+        )
+        out = _flat(capsys.readouterr().out)
+        assert CANCEL_CONFIRMED in out
+        assert "[btw]" in out
+        assert confirmed is None
+
+    def test_main_target_keeps_legacy_copy(self, tmp_path, capsys):
+        import threading
+
+        agent = _LoopAgent()
+        index = SessionIndex(tmp_path / "index")
+        session_id = index.mint()
+        event = threading.Event()
+        _handle_turn_cancel(agent, session_id, index, event, None, target="main")
+        out = _flat(capsys.readouterr().out)
+        assert CANCEL_FIRST_PRESS in out
+        assert "[main]" not in out
 
