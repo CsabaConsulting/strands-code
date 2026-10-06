@@ -39,6 +39,7 @@ from strands_code_cli.memory_file import (
 from strands_code_cli.memory_modes import (
     MEMORY_MODE_CURATE_REPLY,
     MEMORY_MODE_SILENT_REPLY,
+    MemoryModeConfig,
     MemoryModeState,
     silent_note,
 )
@@ -282,6 +283,7 @@ class TestMemoryModes:
             session_id="s1",
             index=SessionIndex(tmp_path / "index"),
             memory_mode=holder,
+            memory_mode_path=tmp_path / "memory.yaml",
         )
         assert action == "reply"
         assert holder.mode == "silent"
@@ -296,7 +298,7 @@ class TestMemoryModes:
         assert action == "reply"
         assert (
             message
-            == "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
+            == "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>]"
         )
 
     def test_bad_mode_pick_returns_mode_usage(self, tmp_path):
@@ -316,6 +318,40 @@ class TestMemoryModes:
 
     def test_usage_hint_lists_memory(self):
         assert (
-            "/memory [mode [curate|silent]|list|approve <id>|deny <id>|revise <section> <instruction>]"
+            "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>]"
             in USAGE_HINT
         )
+
+    def test_mode_switch_persists_to_config(self, tmp_path):
+        holder = MemoryModeState()
+        config_path = tmp_path / "memory.yaml"
+        action, _ = dispatch(
+            "/memory mode silent",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "index"),
+            memory_mode=holder,
+            memory_mode_path=config_path,
+        )
+        assert action == "reply"
+        assert MemoryModeConfig.load(config_path).mode == "silent"
+
+    def test_mode_config_missing_and_corrupt_yield_curate(self, tmp_path):
+        missing = tmp_path / "absent.yaml"
+        assert MemoryModeConfig.load(missing).mode == "curate"
+        corrupt = tmp_path / "corrupt.yaml"
+        corrupt.write_text("mode: [unclosed\n", encoding="utf-8")
+        assert MemoryModeConfig.load(corrupt).mode == "curate"
+        bogus = tmp_path / "bogus.yaml"
+        bogus.write_text("mode: frobnicate\n", encoding="utf-8")
+        assert MemoryModeConfig.load(bogus).mode == "curate"
+
+    def test_mode_config_round_trip_and_symlink_refusal(self, tmp_path):
+        config_path = tmp_path / "memory.yaml"
+        MemoryModeConfig(mode="silent").save(config_path)
+        assert MemoryModeConfig.load(config_path).mode == "silent"
+        link = tmp_path / "link.yaml"
+        link.symlink_to(config_path)
+        with pytest.raises(ValueError):
+            MemoryModeConfig.load(link)
+        with pytest.raises(ValueError):
+            MemoryModeConfig(mode="silent").save(link)

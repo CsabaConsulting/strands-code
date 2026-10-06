@@ -1,10 +1,12 @@
-"""Session-sticky memory modes: curate vs silent (SKILL-02, D-07).
+"""Session memory modes: curate vs silent (SKILL-02, D-07).
 
-Session-sticky, in-memory only: new sessions default to ``curate``
-(every proposal prompts approve/deny — the deny-first posture),
-``/memory mode silent`` opts into auto-apply with one transcript line
-per applied write. Mirrors :class:`ModeState` exactly; no disk
-persistence.
+New sessions open in the persisted mode (``curate`` when no choice
+was ever saved): curate prompts approve/deny per proposal — the
+deny-first posture — while ``/memory mode silent`` opts into
+auto-apply with one transcript line per applied write. The holder
+mirrors :class:`ModeState`; the choice persists via
+:class:`MemoryModeConfig` (DiffConfig shape: fail-soft load, atomic
+save, platformdirs home, never repo-relative).
 
 The curate surface rides :class:`CurateQueue`: promotion sweeps of
 the harness fact store queue :class:`Proposal` records, ``/memory``
@@ -16,9 +18,85 @@ ids are remembered for the session and never re-queued unprompted.
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+import platformdirs
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_CONFIG_DIR_NAME = "strands-code"
+_MEMORY_MODE_FILE_NAME = "memory.yaml"
+
+_KNOWN_KEYS = {"mode"}
+
+
+def default_memory_mode_config_path() -> Path:
+    """User memory-mode config path (platformdirs home, never repo-relative)."""
+    return Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _MEMORY_MODE_FILE_NAME
+
+
+@dataclass
+class MemoryModeConfig:
+    """Persisted memory mode: curate (prompt) or silent (auto-apply)."""
+
+    mode: str = "curate"
+
+    @classmethod
+    def load(cls, path: str | Path | None = None) -> MemoryModeConfig:
+        """Load fail-soft: missing, corrupt, or bogus-mode files yield curate.
+
+        Raises:
+            ValueError: On symlinked paths or unknown keys.
+        """
+        resolved = Path(path) if path is not None else default_memory_mode_config_path()
+        if resolved.is_symlink():
+            raise ValueError(f"Memory mode config must not be a symlink: {resolved}")
+        if not resolved.exists():
+            return cls()
+        try:
+            data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
+        except (OSError, ValueError, yaml.YAMLError) as exc:
+            logger.warning("Ignoring unreadable memory mode config: %s", exc)
+            return cls()
+        if data is None:
+            return cls()
+        if not isinstance(data, dict):
+            logger.warning("Ignoring malformed memory mode config (not a mapping)")
+            return cls()
+        unknown = set(data) - _KNOWN_KEYS
+        if unknown:
+            raise ValueError(f"Unknown memory mode config keys: {sorted(unknown)}")
+        mode = data.get("mode", "curate")
+        if mode not in ("curate", "silent"):
+            logger.warning("Ignoring memory mode config with unknown mode %r", mode)
+            return cls()
+        return cls(mode=mode)
+
+    def save(self, path: str | Path | None = None) -> Path:
+        """Persist the memory mode; creates the config home when needed.
+
+        Args:
+            path: Override for tests; defaults to the platformdirs home.
+
+        Returns:
+            The path written.
+        """
+        if self.mode not in ("curate", "silent"):
+            raise ValueError(f"Memory mode must be curate|silent, got {self.mode!r}")
+        resolved = Path(path) if path is not None else default_memory_mode_config_path()
+        if resolved.is_symlink():
+            raise ValueError(f"Memory mode config must not be a symlink: {resolved}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(resolved.parent, 0o700)
+        tmp = resolved.with_suffix(".yaml.tmp")
+        tmp.write_text(yaml.safe_dump({"mode": self.mode}), encoding="utf-8")
+        os.replace(tmp, resolved)
+        return resolved
 
 MEMORY_MODE_CURATE_REPLY = "Memory mode: curate — every proposal prompts approve/deny."
 MEMORY_MODE_SILENT_REPLY = "Memory mode: silent — proposals auto-apply, writes logged."
@@ -74,6 +152,24 @@ class MemoryModeState:
 def silent_note(section: str, source: str) -> str:
     """One transcript line per silent-mode applied write."""
     return f"Memory updated (silent): {section} ← {source}"
+
+
+def seed_promotion_seen(memory_dir: str | Path) -> set[str]:
+    """Fact filenames already in the store at launch — never surface as new.
+
+    The loop seeds its sweep set with this once at startup so only
+    facts extracted *during* the session queue as proposals; stale
+    files from past sessions stay quiet instead of flooding curate
+    on every launch. Missing dirs and symlinks yield nothing.
+    """
+    try:
+        return {
+            p.name
+            for p in Path(memory_dir).glob("*.md")
+            if p.is_file() and not p.is_symlink()
+        }
+    except OSError:
+        return set()
 
 
 @dataclass
@@ -178,6 +274,9 @@ def format_init_prompt(report: Any, stale_sections: list[str]) -> str:
     return (
         f"Repo scan ({report.depth}):\n{report.outline}\n\n"
         f"Draft ONLY these memory sections: {names}.\n"
+        "Do not read .agent/sessions, session snapshots, or the session "
+        "index — draft from the scan outline above, no tool exploration "
+        "of agent internals.\n"
         "Reply with one fenced block per section. Each block MUST open with "
         "```proposed: <Section> on its own line, hold the FULL section body, "
         "and close with ```. Keep every draft labeled proposed — never "
@@ -272,14 +371,17 @@ class CurateQueue:
         memory_dir: str | Path,
         seen: set[str],
         limit: int = PROMOTION_SWEEP_LIMIT,
+        skip_sections: set[str] | None = None,
     ) -> list[Proposal]:
         """Queue promoted proposals for new fact files, capped per sweep.
 
         Diffs the ``.md`` filename set under ``memory_dir`` against
         ``seen``, which is mutated in place with exactly the files
-        queued — the remainder surface on later sweeps. Fact files are
-        read, never deleted; a missing dir, symlinks, and unreadable
-        files yield nothing.
+        queued — the remainder surface on later sweeps. Files whose
+        stem already lives in ``skip_sections`` (sections memorialized
+        in ``.agent/MEMORY.md``) are marked seen but never queued.
+        Fact files are read, never deleted; a missing dir, symlinks,
+        and unreadable files yield nothing.
         """
         try:
             names = sorted(
@@ -289,11 +391,15 @@ class CurateQueue:
             )
         except OSError:
             return []
+        skip = skip_sections or set()
         queued: list[Proposal] = []
         for name in names:
             if len(queued) >= limit:
                 break
             if name in seen:
+                continue
+            if Path(name).stem in skip:
+                seen.add(name)
                 continue
             try:
                 body = (Path(memory_dir) / name).read_text(encoding="utf-8")

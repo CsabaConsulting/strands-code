@@ -26,6 +26,8 @@ from typing import Any, Callable
 import yaml
 from rich.console import Console
 
+from strands_code_cli.output import print_plain
+
 console = Console()
 
 ROOT_MEMORY = Path("STRANDS.md")
@@ -125,6 +127,15 @@ def section_span(lines: list[str], section: str) -> tuple[int | None, int]:
     return head_idx, end
 
 
+def memory_section_names(body: str) -> set[str]:
+    """``## `` heading names in one memory body (promotion dedup base)."""
+    return {
+        line[3:].strip()
+        for line in body.splitlines()
+        if line.startswith("## ") and line[3:].strip()
+    }
+
+
 def _parse_text(text: str) -> tuple[dict[str, Any], str, bool]:
     """Split frontmatter + body; corrupt YAML falls back, never raises.
 
@@ -213,7 +224,9 @@ def load_memory(
         # Frontmatter is stripped before injection; round-trip lives with the saver.
         _frontmatter, body, corrupt = _parse_text(_read_text(path))
         if corrupt:
-            console.print(f"Memory file {path} has corrupt frontmatter — using defaults.")
+            print_plain(
+                console, f"Memory file {path} has corrupt frontmatter — using defaults."
+            )
         texts[path] = body
         try:
             mtimes[path] = path.stat().st_mtime

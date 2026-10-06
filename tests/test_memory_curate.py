@@ -29,6 +29,7 @@ from strands_code_cli.memory_file import (
     diff_sections,
     dump_memory_file,
     load_memory,
+    memory_section_names,
     parse_memory_file,
     scan_repo,
 )
@@ -39,6 +40,8 @@ from strands_code_cli.memory_modes import (
     MemoryModeState,
     Proposal,
     ReviseState,
+    format_init_prompt,
+    seed_promotion_seen,
     silent_note,
 )
 from strands_code_cli.mode import ModeState
@@ -394,7 +397,10 @@ class TestCurateLoop:
 
     def test_loop_boundary_wires_sweep_and_review(self):
         source = _loop_source()
-        assert "curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)" in source
+        assert "curate_queue.sweep_promotions(" in source
+        assert "MEMORY_FACT_DIR," in source
+        assert "skip_sections=memory_section_names(memory_snapshot.agent_text)" in source
+        assert "promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)" in source
         assert "review_memory_queue(\n                curate_queue,\n                memory_mode" in source
         assert "apply_approved_proposal," in source
         assert "except (OSError, ValueError) as exc:" in source
@@ -934,3 +940,85 @@ class TestInitScan:
         assert "init=init_state," in source
         assert "consume_init_turn(" in source
         assert "_result_text(agent, result), init_state, curate_queue" in source
+
+
+# ----------------------------------------------------------------------
+# UAT gap round: promotion quieting, batch verbs, init guard
+# ----------------------------------------------------------------------
+
+
+class TestMemoryGapRound:
+    def test_seed_collects_preexisting_facts(self, tmp_path):
+        fact_dir = tmp_path / ".agent" / "memory"
+        fact_dir.mkdir(parents=True)
+        (fact_dir / "old.md").write_text("Old fact.\n", encoding="utf-8")
+        (fact_dir / "notes.txt").write_text("Not a fact.\n", encoding="utf-8")
+        assert seed_promotion_seen(fact_dir) == {"old.md"}
+        assert seed_promotion_seen(tmp_path / ".agent" / "absent") == set()
+
+    def test_seeded_sweep_surfaces_only_new_facts(self, tmp_path):
+        fact_dir = tmp_path / ".agent" / "memory"
+        fact_dir.mkdir(parents=True)
+        (fact_dir / "old.md").write_text("Old fact.\n", encoding="utf-8")
+        queue, seen = CurateQueue(), seed_promotion_seen(fact_dir)
+        assert queue.sweep_promotions(fact_dir, seen) == []
+        (fact_dir / "new.md").write_text("New fact.\n", encoding="utf-8")
+        queued = queue.sweep_promotions(fact_dir, seen)
+        assert [p.section for p in queued] == ["new"]
+
+    def test_sweep_skips_memorialized_sections(self, tmp_path):
+        fact_dir = tmp_path / ".agent" / "memory"
+        fact_dir.mkdir(parents=True)
+        (fact_dir / "Build.md").write_text("Run uv build.\n", encoding="utf-8")
+        (fact_dir / "Fresh.md").write_text("Fresh fact.\n", encoding="utf-8")
+        skip = memory_section_names("<!-- updated: 2026-01-01 -->\n## Build\nRun uv build.\n")
+        queue, seen = CurateQueue(), set()
+        queued = queue.sweep_promotions(fact_dir, seen, skip_sections=skip)
+        assert [p.section for p in queued] == ["Fresh"]
+        assert seen == {"Build.md", "Fresh.md"}
+        assert queue.sweep_promotions(fact_dir, seen, skip_sections=skip) == []
+
+    def test_approve_all_applies_each_pending(self, tmp_path, monkeypatch):
+        import strands_code_cli.router as router_mod
+
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
+        calls: list = []
+        monkeypatch.setattr(router_mod, "apply_approved_proposal", calls.append)
+        action, message = _dispatch("/memory approve-all", tmp_path, curate=queue)
+        assert action == "reply"
+        assert message == "Approved 2 proposals."
+        assert [p.id for p in calls] == ["p1", "p2"]
+        assert queue.list_pending() == []
+
+    def test_deny_all_skips_each_without_writing(self, tmp_path, monkeypatch):
+        import strands_code_cli.router as router_mod
+
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
+
+        def _must_not_write(proposal):
+            raise AssertionError("deny-all must never write")
+
+        monkeypatch.setattr(router_mod, "apply_approved_proposal", _must_not_write)
+        action, message = _dispatch("/memory deny-all", tmp_path, curate=queue)
+        assert action == "reply"
+        assert message == "Denied 2 proposals — will not re-ask this session."
+        assert queue.list_pending() == []
+        assert queue.denied_ids == {"p1", "p2"}
+
+    def test_batch_verbs_empty_queue_replies(self, tmp_path):
+        queue = CurateQueue()
+        for text in ("/memory approve-all", "/memory deny-all"):
+            action, message = _dispatch(text, tmp_path, curate=queue)
+            assert action == "reply"
+            assert message == MEMORY_EMPTY_QUEUE
+
+    def test_init_prompt_guards_agent_internals(self):
+        report = SimpleNamespace(depth="shallow", outline="Layout:\n  .agent/\n")
+        prompt = format_init_prompt(report, ["Build"])
+        assert ".agent/sessions" in prompt
+        assert "session index" in prompt
+        assert "Draft ONLY these memory sections: Build." in prompt

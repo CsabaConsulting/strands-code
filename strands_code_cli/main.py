@@ -8,9 +8,10 @@ from typing import Any
 
 import typer
 from strands_harness import create_harness
-from strands_harness.defaults import DEFAULT_SESSION_DIR
+from strands_harness.defaults import DEFAULT_SESSION_DIR, DEFAULT_SKILLS_DIR
 from strands.session.snapshot_session_manager import validate_identifier
 from strands._identifier import Identifier
+from strands.vended_plugins.skills import AgentSkills
 
 from strands_code_agent.code_agent import (
     CODE_AGENT_INSTRUCTIONS,
@@ -118,6 +119,13 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     cwd = os.getcwd()
     store = PendingStore(session_path)
     bind_session(session_id, store)
+    # Owned skills plugin (G-6-R2-6): the harness passes AgentSkills
+    # instances through verbatim, so this handle lets /skills reload
+    # refresh the model's registry via set_available_skills instead of
+    # leaving it stale behind the CLI index. Always constructed (even
+    # when the dir is missing — the tool then reports no skills, and a
+    # later reload picks up the created dir).
+    skills_plugin = AgentSkills(skills=[DEFAULT_SKILLS_DIR])
     kwargs: dict[str, Any] = {
         "tools": [
             interpreter.get_tool(),
@@ -143,16 +151,18 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
         "callback_handler": DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
-        # Phase 6: explicit skills + memory seams — AgentSkills loads
-        # ./.agent/skills and MemoryManager runs the ./.agent/memory fact
-        # store. The dual conventions file (STRANDS.md + .agent/MEMORY.md)
-        # injects via the CLI-owned register_memory_plugin below.
-        "skills": True,
+        # Phase 6: explicit skills + memory seams — the owned
+        # AgentSkills loads ./.agent/skills and MemoryManager runs the
+        # ./.agent/memory fact store. The dual conventions file
+        # (STRANDS.md + .agent/MEMORY.md) injects via the CLI-owned
+        # register_memory_plugin below.
+        "skills": skills_plugin,
         "memory": True,
     }
     if model is not None:
         kwargs["model"] = model
     agent = create_harness(**kwargs)
+    agent._skills_plugin = skills_plugin  # owned handle for /skills reload
     bind_main_agent(agent)  # D-12 delegated-turn detection
     # Phase 4: single steering hook (BeforeToolCallEvent at SDK_FIRST, so
     # it runs before the HITL approval prompt) closed over a session slot

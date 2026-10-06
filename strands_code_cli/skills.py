@@ -34,6 +34,7 @@ BUILTIN_SLASH_HEADS = frozenset(
         "clear",
         "context",
         "skills",
+        "skill",
         "memory",
         "init",
     }
@@ -148,6 +149,18 @@ class SkillIndex:
             for entry in self.list_entries()
             if entry.shadowed
         ]
+
+    def reload(self) -> int:
+        """Drop the cache and rescan the skills dir; returns live entry count.
+
+        New skill dirs appear without a CLI restart; deleted ones
+        drop out. A missing dir reloads as empty (fail-soft, same as
+        the first load).
+        """
+        self._entries = None
+        self._ensure_loaded()
+        assert self._entries is not None
+        return len(self._entries)
 
     def remove(self, name: str) -> bool:
         """Delete one skill by bare name; evict it from the index on success.

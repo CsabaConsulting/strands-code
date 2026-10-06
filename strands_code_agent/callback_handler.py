@@ -94,7 +94,14 @@ class CodeAgentCallbackHandler:
         for content_item in  message['content']:
             if 'text' in content_item:
                 self.console.print(f"\n[{role.title()}]", end=" ")
-                self.console.print(self.format_text(content_item['text'].strip()), end="\n\n")
+                # markup=False: model text may hold [...] that must render
+                # literally, never raise MarkupError (G-6-R2-3). Rich objects
+                # from format_text are unaffected by the kwarg.
+                self.console.print(
+                    self.format_text(content_item['text'].strip()),
+                    end="\n\n",
+                    markup=False,
+                )
 
             if 'toolUse' in content_item:
                 tool_use = content_item['toolUse']
@@ -107,10 +114,12 @@ class CodeAgentCallbackHandler:
                 elif name in DIFF_TOOLS:
                     self.console.print(format_diff_use(name, tool_use['input']))
                 elif name in SEARCH_TOOLS:
-                    self.console.print(format_search_use(tool_use['input']))
+                    self.console.print(
+                        format_search_use(tool_use['input']), markup=False
+                    )
                 else:
                     for var, value in tool_use['input'].items():
-                        self.console.print(f"\t- {var}: {value}")
+                        self.console.print(f"\t- {var}: {value}", markup=False)
             
             if 'toolResult' in content_item:
                 tool_result = content_item['toolResult']
@@ -121,6 +130,8 @@ class CodeAgentCallbackHandler:
                         if text.startswith(self.output_prefix):
                             body = text.removeprefix(self.output_prefix).strip()
                             self.console.print(self.output_prefix)
-                            self.console.print(self.format_text(body))
+                            self.console.print(
+                                self.format_text(body), markup=False
+                            )
                         else:
-                            self.console.print(text)
+                            self.console.print(text, markup=False)

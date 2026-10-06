@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from prompt_toolkit.patch_stdout import StdoutProxy
+from rich.console import Console
 
 
 @contextmanager
@@ -28,3 +29,14 @@ def output_context() -> Iterator[StdoutProxy]:
             yield proxy
         finally:
             sys.stdout, sys.stderr = original_stdout, original_stderr
+
+
+def print_plain(console: Console, text: str, *, style: str | None = None) -> None:
+    """Print dynamic text with Rich markup parsing off.
+
+    Static styling rides the ``style`` kwarg; the content itself is
+    never parsed, so repo/model/exception text containing ``[...]``
+    can neither garble nor raise ``MarkupError`` (G-6-R2-3). All
+    transcript prints of non-constant strings route through here.
+    """
+    console.print(text, style=style, markup=False)

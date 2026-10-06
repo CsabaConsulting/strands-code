@@ -34,15 +34,18 @@ from strands_code_cli.memory_file import (
     MEMORY_RELOAD_NOTE,
     load_memory,
     memory_banner,
+    memory_section_names,
     sweep_memory_files,
 )
 from strands_code_cli.memory_modes import (
     MEMORY_FACT_DIR,
     CurateQueue,
     InitState,
+    MemoryModeConfig,
     MemoryModeState,
     ReviseState,
     format_revise_prompt,
+    seed_promotion_seen,
     silent_note,
 )
 from strands_code_cli.mode import PLAN_PREFIX, ModeState
@@ -59,7 +62,7 @@ from strands_code_cli.model_switch import (
     supports_streaming_tools,
     to_stash_json,
 )
-from strands_code_cli.output import output_context
+from strands_code_cli.output import output_context, print_plain
 from strands_code_cli.policy_gate import (
     TurnCancelled,
     _active_broker,
@@ -795,7 +798,7 @@ def _drain_revise_rounds(
     while revise_state.armed:
         reply = consume_revise_turn(text, revise_state, writer)
         if reply is not None:
-            console.print(reply)
+            print_plain(console, reply)
         if not revise_state.armed:
             break
         follow_up = format_revise_prompt(
@@ -810,13 +813,15 @@ def _drain_revise_rounds(
         except (KeyboardInterrupt, TurnCancelled):
             raise
         except Exception as exc:
-            console.print(f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]")
+            print_plain(
+                console, f"Turn failed ({type(exc).__name__}): {exc}", style="red"
+            )
             console.print("Revise round dropped — the turn failed.")
             revise_state.disarm()
             break
         usage = record_turn_metrics(follow_result, current_model, session_turns)
         if usage is not None:
-            console.print(f"[dim]{usage}[/dim]")
+            print_plain(console, usage, style="dim")
         text = _result_text(agent, follow_result)
 
 
@@ -908,10 +913,11 @@ def run_loop(
     (first-load banner, per-turn mtime reload sweep with one transcript
     note per changed file) and flushes pending harness extractions via
     ``flush_memory`` on exit and after ``/compact``/``/clear``. The loop
-    also owns the session-sticky :class:`MemoryModeState` plus
-    :class:`CurateQueue`: each turn boundary sweeps promotion
-    candidates, then reviews the queue (prompting in curate mode,
-    auto-applying in silent mode). Armed revise rounds (``/memory
+    also owns the session-sticky :class:`MemoryModeState` (opening in
+    the persisted home choice) plus :class:`CurateQueue`: each turn
+    boundary sweeps promotion candidates — facts predating the launch
+    and already-memorialized sections stay quiet — then reviews the
+    queue (prompting in curate mode, auto-applying in silent mode). Armed revise rounds (``/memory
     revise`` or the review's revise choice) run as agent turns whose
     fenced blocks are consumed after the turn, re-invoking while the
     user iterates. Armed ``/init`` drafts run one agent turn whose
@@ -926,9 +932,9 @@ def run_loop(
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
     skills = SkillIndex()
     for warning in skills.warnings:
-        console.print(f"[yellow]{warning}[/yellow]")
+        print_plain(console, warning, style="yellow")
     memory_snapshot = load_memory()
-    console.print(memory_banner(memory_snapshot))
+    print_plain(console, memory_banner(memory_snapshot))
 
     def _skill_words() -> list[tuple[str, str]]:
         words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
@@ -939,13 +945,29 @@ def run_loop(
         )
         return words
 
+    def _refresh_harness_skills() -> None:
+        """Rescan the harness skills registry (no-op without the plugin).
+
+        Reads the handle ``build_agent`` stashed; test doubles without
+        one simply skip the refresh.
+        """
+        plugin = getattr(agent, "_skills_plugin", None)
+        if plugin is None:
+            return
+        plugin.set_available_skills([str(skills.skills_dir)])
+
     session: PromptSession = PromptSession(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
-    memory_mode = MemoryModeState()
+    try:
+        initial_mode = MemoryModeConfig.load().mode
+    except ValueError:
+        logger.warning("Ignoring tampered memory mode config; starting in curate.")
+        initial_mode = "curate"
+    memory_mode = MemoryModeState(initial=initial_mode)
     curate_queue = CurateQueue()
-    promotion_seen: set[str] = set()
+    promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)
     revise_state = ReviseState()
     init_state = InitState()
     boundary_revise: dict[str, Any] = {"template": None}
@@ -963,9 +985,11 @@ def run_loop(
         model_id or ProviderConfig.load().model or DEFAULT_MODEL
     )
     if not supports_streaming_tools(current_model):
-        console.print(
-            f"[yellow]Warning: {current_model} rejects tool use in streaming "
-            "mode — turns will fail; /model to switch.[/yellow]"
+        print_plain(
+            console,
+            f"Warning: {current_model} rejects tool use in streaming "
+            "mode — turns will fail; /model to switch.",
+            style="yellow",
         )
     session_turns: list = []
     stash_path = rich_stash_path(index.root, session_id)
@@ -979,9 +1003,15 @@ def run_loop(
         if changed:
             memory_snapshot = load_memory()
             for changed_path in changed:
-                console.print(MEMORY_RELOAD_NOTE.format(filename=changed_path))
+                print_plain(
+                    console, MEMORY_RELOAD_NOTE.format(filename=changed_path)
+                )
         boundary_revise["template"] = None
-        curate_queue.sweep_promotions(MEMORY_FACT_DIR, promotion_seen)
+        curate_queue.sweep_promotions(
+            MEMORY_FACT_DIR,
+            promotion_seen,
+            skip_sections=memory_section_names(memory_snapshot.agent_text),
+        )
         try:
             review_lines = review_memory_queue(
                 curate_queue,
@@ -992,7 +1022,7 @@ def run_loop(
         except (OSError, ValueError) as exc:
             review_lines = [f"Memory review skipped — write failed: {exc}"]
         for review_line in review_lines:
-            console.print(review_line)
+            print_plain(console, review_line)
         boundary_template = boundary_revise["template"]
         try:
             text = (
@@ -1019,6 +1049,7 @@ def run_loop(
                 agent=agent,
                 session_turns=session_turns,
                 skills=skills,
+                harness_skills_refresh=_refresh_harness_skills,
                 memory_mode=memory_mode,
                 curate=curate_queue,
                 revise=revise_state,
@@ -1027,12 +1058,12 @@ def run_loop(
         if action == "agent":
             match_note = skill_match_note(skills, text)
             if match_note is not None:
-                console.print(match_note)
+                print_plain(console, match_note)
         if action == "exit":
             break
         if action == "reply":
             if message:
-                console.print(message)
+                print_plain(console, message)
             set_gate_mode(mode.mode)  # /mode or /approve may have flipped
             head = text.strip().partition(" ")[0].lower()
             if head in ("/compact", "/clear"):
@@ -1048,9 +1079,9 @@ def run_loop(
                     agent, message, turn_running=False, current_model=current_model, rich=rich
                 )
             except Exception as exc:  # noqa: BLE001 — a failed switch must not kill the session
-                console.print(f"Model switch failed ({exc}); session unchanged.")
+                print_plain(console, f"Model switch failed ({exc}); session unchanged.")
                 continue
-            console.print(reply)
+            print_plain(console, reply)
             if resolved_id is not None:
                 current_model = message  # verbatim selection string persists
                 try:
@@ -1097,8 +1128,10 @@ def run_loop(
                         # Provider/model errors (validation, throttling, ...)
                         # must fail the turn, never the session: report and
                         # re-prompt. Errors never retry — only empty success.
-                        console.print(
-                            f"[red]Turn failed ({type(exc).__name__}): {exc}[/red]"
+                        print_plain(
+                            console,
+                            f"Turn failed ({type(exc).__name__}): {exc}",
+                            style="red",
                         )
                         if "tool use in streaming mode" in str(exc):
                             console.print(
@@ -1109,7 +1142,7 @@ def run_loop(
                         break
                     usage = record_turn_metrics(result, current_model, session_turns)
                     if usage is not None:
-                        console.print(f"[dim]{usage}[/dim]")
+                        print_plain(console, usage, style="dim")
                     history = getattr(agent, "messages", None)
                     if (
                         attempts >= 2

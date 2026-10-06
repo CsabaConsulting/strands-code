@@ -7,6 +7,8 @@ from collections.abc import Callable, Iterable
 from prompt_toolkit.completion import Completer, Completion, DynamicCompleter, FuzzyCompleter
 from prompt_toolkit.document import Document
 
+from strands_code_cli.skills import SKILLS_SOURCE
+
 WordList = list[tuple[str, str]]
 """``(bare, display)`` pairs: bare names match, display text completes."""
 
@@ -20,6 +22,9 @@ class SlashCompleter(Completer):
     the ``/local:<name>`` completion form (D-02) so the accepted line
     re-enters dispatch as a slash; shadowed skills never reach
     the word list (built by the caller from unshadowed entries).
+    A ``/<source>:`` prefix narrows to that namespace: ``/local:``
+    offers every local skill, ``/local:gr`` filters by the tail.
+    Unknown namespaces offer nothing.
 
     Args:
         get_words: Zero-arg callable returning fresh ``(bare, display)``
@@ -36,7 +41,15 @@ class SlashCompleter(Completer):
         if not text.startswith("/") or " " in text:
             return
         query = text[1:]
+        namespaced = ":" in query
+        if namespaced:
+            head, _, tail = query.partition(":")
+            if head != SKILLS_SOURCE:
+                return
+            query = tail
         for bare, display in self._get_words():
+            if namespaced and not display.startswith(f"/{SKILLS_SOURCE}:"):
+                continue
             if bare.startswith(query):
                 yield Completion(display, start_position=-len(text))
 
