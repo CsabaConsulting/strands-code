@@ -277,6 +277,16 @@ class ApprovalBroker:
         except queue.Empty:
             return None
 
+    @property
+    def has_pending(self) -> bool:
+        """True when a prompt waits unserved (peek — never consumes).
+
+        Idle-drain entry for the D-11 bounded-wait notice: the drain
+        must detect a waiting side approval without dequeuing it, so
+        the next turn's pump still serves the request itself.
+        """
+        return not self._queue.empty()
+
 
 def _signature(tool_name: str, verdict: Prompt | Deny) -> tuple[str, ...]:
     """Cache key: identical actions share it, distinct ones do not."""

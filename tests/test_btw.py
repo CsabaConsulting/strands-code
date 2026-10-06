@@ -18,6 +18,7 @@ import pytest
 import strands_code_cli.policy_gate as pg
 from strands_code_cli.btw import (
     BTW_FRAMING,
+    BTW_IDLE_APPROVAL,
     BtwContext,
     BtwQueue,
     FencedBtwHandler,
@@ -27,7 +28,7 @@ from strands_code_cli.btw import (
     fork_btw_history,
     render_btw_error,
 )
-from strands_code_cli.loop import _invoke_agent
+from strands_code_cli.loop import _drain_idle_btw, _invoke_agent
 from strands_code_cli.policy_gate import ApprovalBroker
 from strands_code_cli.steering import (
     SteeringState,
@@ -344,6 +345,63 @@ class _MainDouble:
 SENTINEL = "side-answer-sentinel"
 
 
+def _settle_live_btw(btw: BtwContext, timeout: float = 5.0):
+    """Block until the attached side run completes (None when nothing live).
+
+    Worker failures return None here — they surface via the drain's
+    fenced render, never via this wait.
+    """
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    future = btw.live_future
+    if future is None:
+        return None
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeoutError:
+        raise
+    except Exception:
+        return None
+
+
+class _MeteredResult:
+    """Side-result double: answer text plus a metrics summary (spend row)."""
+
+    def __init__(self, text: str, in_tok: int = 10, out_tok: int = 20) -> None:
+        self.text = text
+        summary = {
+            "accumulated_usage": {"inputTokens": in_tok, "outputTokens": out_tok},
+            "total_cycles": 1,
+            "total_duration": 0.5,
+        }
+
+        class _Metrics:
+            def get_summary(self):
+                return summary
+
+        self.metrics = _Metrics()
+
+
+def _metered_build(answer: str = "metered-side-answer", delay: float = 0.0):
+    """Build double: streams one fenced block, then a metered result."""
+
+    def build(question: str):
+        fenced = FencedBtwHandler(_Body("side"), question)
+
+        class _BtwDouble:
+            def __call__(self, prompt, **kwargs):
+                if delay:
+                    time.sleep(delay)
+                fenced(
+                    message={"role": "assistant", "content": [{"text": SENTINEL}]}
+                )
+                return _MeteredResult(answer)
+
+        return _BtwDouble(), [{"role": "user", "content": [{"text": question}]}]
+
+    return build
+
+
 def _fenced_build(inner_tag: str = "side", delay: float = 0.0, fail: bool = False):
     """Build callable double: streams one fenced block, then answers (or fails)."""
 
@@ -368,13 +426,13 @@ def _fenced_build(inner_tag: str = "side", delay: float = 0.0, fail: bool = Fals
 
 
 class TestParallelTurn:
-    def test_btw_answers_in_parallel_while_main_continues(
+    def test_btw_answers_in_parallel_then_outlives_main(
         self, monkeypatch, capsys
     ):
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
-        main = _MainDouble(delay=0.4)
-        spawn: queue.Queue = queue.Queue()
+        main = _MainDouble(delay=0.1)
+        spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(
             spawn_queue=spawn,
@@ -387,20 +445,29 @@ class TestParallelTurn:
         elapsed = time.monotonic() - start
         assert result == "main-result"
         assert main.calls == ["do the thing"]
-        assert "--- btw: " in capsys.readouterr().out
+        # No join: the turn returns on main completion, not side completion.
+        assert elapsed < 0.4
+        assert btw.has_live
+        assert not btw.live_future.done()
+        assert not btw.cancel_event.is_set()  # not cut, not cancelled
+        assert main.messages == []  # nothing reaped yet
+        _settle_live_btw(btw)
+        _drain_idle_btw(main, btw, broker, "test-model", [])
+        out = capsys.readouterr().out
+        assert "--- btw: " in out
+        assert "side-body-1" in out
         assert main.messages == [
             {"role": "user", "content": [{"text": "/btw why is this slow?"}]},
             {"role": "assistant", "content": [{"text": SENTINEL}]},
         ]
         assert btw.done is True
-        # Sequential would cost 0.4 + 0.4 = 0.8s; parallel overlaps them.
-        assert elapsed < 0.8
+        assert not btw.has_live
 
     def test_btw_failure_renders_fenced_and_main_continues(self, monkeypatch, capsys):
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
-        spawn: queue.Queue = queue.Queue()
+        spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(
             spawn_queue=spawn,
@@ -410,6 +477,8 @@ class TestParallelTurn:
         )
         result = _invoke_agent(main, "do the thing", threading.Event(), btw=btw)
         assert result == "main-result"
+        _settle_live_btw(btw)
+        _drain_idle_btw(main, btw, broker, "test-model", [])
         out = capsys.readouterr().out
         assert "btw failed (ValueError)" in out
         assert "--- end btw ---" in out
@@ -636,6 +705,13 @@ class TestBtwFifoDrain:
         result = _invoke_agent(main, "do the thing", threading.Event(), btw=btw)
         elapsed = time.monotonic() - start
         assert result == "main-result"
+        # Main finished first (0.4s); whether q3 was still running
+        # or just completed at the boundary is scheduling luck — either
+        # way nothing joins (sequential would cost 0.85s) and the idle
+        # drain lands whatever the pump did not reap.
+        assert elapsed < 0.85
+        _settle_live_btw(btw)
+        _drain_idle_btw(main, btw, broker, "test-model", [])
         assert sides.starts == ["q1", "q2", "q3"]
         assert sides.live_max == 1
         assert btw.done is True
@@ -647,11 +723,7 @@ class TestBtwFifoDrain:
             {"role": "user", "content": [{"text": "/btw q3"}]},
             {"role": "assistant", "content": [{"text": "answer-q3"}]},
         ]
-        # Main finished first (0.4s) but the boundary held until the
-        # queue drained (3 x 0.15s sequential sides): drain-before-exit.
-        assert elapsed >= 0.4
-        # ...while still overlapping main (sequential would cost 0.85s).
-        assert elapsed < 0.85
+        assert not btw.has_live
 
 
 class TestSteeringDuringBacklog:
@@ -716,3 +788,218 @@ class TestGateOpenBtw:
         finally:
             os.close(write_fd)
             os.close(read_fd)
+
+
+def _done_future():
+    """Future double already completed."""
+    from concurrent.futures import Future
+
+    future: Future = Future()
+    future.set_result("side-result")
+    return future
+
+
+def _pending_future():
+    """Future double that never completes on its own."""
+    from concurrent.futures import Future
+
+    return Future()
+
+
+class TestLiveHandle:
+    def test_attach_detach_round_trip(self):
+        btw = _idle_btw()
+        assert not btw.has_live
+        assert btw.detach_live() is None
+        future = _pending_future()
+        agent = object()
+        btw.attach_live(agent, future, "q1")
+        assert btw.has_live
+        assert btw.detach_live() == (agent, future, "q1")
+        assert not btw.has_live
+        assert btw.detach_live() is None
+
+    def test_take_done_live_reaps_only_completed(self):
+        btw = _idle_btw()
+        assert btw.take_done_live() is None
+        running_future = _pending_future()
+        btw.attach_live(object(), running_future, "q1")
+        assert btw.take_done_live() is None  # still running: stays attached
+        assert btw.has_live
+        done_future = _done_future()
+        btw.attach_live(object(), done_future, "q2")
+        taken = btw.take_done_live()
+        assert taken is not None
+        assert taken[1] is done_future
+        assert taken[2] == "q2"
+        assert not btw.has_live
+
+    def test_take_done_live_clears_running_only_when_queue_empty(self):
+        btw = _idle_btw()
+        btw.running.set()
+        btw.attach_live(object(), _done_future(), "q1")
+        assert btw.take_done_live() is not None
+        assert not btw.running.is_set()  # drained fully: idle-side again
+        btw.running.set()
+        btw.spawn_queue.put("q2")  # backlog waits for the next pump
+        btw.attach_live(object(), _done_future(), "q1")
+        assert btw.take_done_live() is not None
+        assert btw.running.is_set()  # backlog: submits still read queued
+
+
+class TestOutlivingMain:
+    def test_side_lands_fenced_with_history_and_metrics_at_idle(
+        self, monkeypatch, capsys
+    ):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        spawn = BtwQueue()
+        spawn.put("why is this slow?")
+        btw = BtwContext(
+            spawn_queue=spawn,
+            build=_metered_build(delay=0.3),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        start = time.monotonic()
+        result = _invoke_agent(main, "do the thing", threading.Event(), btw=btw)
+        elapsed = time.monotonic() - start
+        assert result == "main-result"
+        assert elapsed < 0.3  # the side (0.3s) outlived the instant main
+        assert btw.has_live
+        assert not btw.cancel_event.is_set()
+        _settle_live_btw(btw)
+        session_turns: list = []
+        _drain_idle_btw(main, btw, broker, "test-model", session_turns)
+        out = capsys.readouterr().out
+        assert "--- btw: " in out
+        assert main.messages == [
+            {"role": "user", "content": [{"text": "/btw why is this slow?"}]},
+            {"role": "assistant", "content": [{"text": "metered-side-answer"}]},
+        ]
+        assert len(session_turns) == 1
+        assert session_turns[0]["input_tokens"] == 10
+        assert session_turns[0]["output_tokens"] == 20
+        assert btw.done is True
+        assert not btw.has_live
+        assert btw.pending == []  # delivered, never double-recorded
+
+    def test_new_turn_adopts_live_side_without_respawn(
+        self, monkeypatch, capsys
+    ):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        spawn = BtwQueue()
+        spawn.put("why is this slow?")
+        sides = _CountingSideBuild(delay=0.4)
+        btw = BtwContext(
+            spawn_queue=spawn,
+            build=sides,
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        first = _MainDouble()
+        assert _invoke_agent(first, "turn one", threading.Event(), btw=btw)
+        assert btw.has_live  # the side outlived turn one
+        assert sides.starts == ["why is this slow?"]
+        second = _MainDouble(delay=0.6)
+        both_running = threading.Event()
+        result = _invoke_agent(
+            second, "turn two", threading.Event(), btw=btw, both_running=both_running
+        )
+        assert result == "main-result"
+        # Turn two re-entered the pump with the live side adopted: the
+        # side completed mid-turn and flushed there — no rebuild, no
+        # restart, no second spawn.
+        assert sides.starts == ["why is this slow?"]
+        assert sides.live_max == 1
+        assert second.messages == [
+            {"role": "user", "content": [{"text": "/btw why is this slow?"}]},
+            {
+                "role": "assistant",
+                "content": [{"text": "answer-why is this slow?"}],
+            },
+        ]
+        assert btw.done is True
+        assert not btw.has_live
+        capsys.readouterr()  # counting sides print nothing; drain the capture
+
+    def test_idle_approval_announced_once_then_served_next_turn(
+        self, monkeypatch, capsys
+    ):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        btw = _idle_btw()
+        # A side run lives past its turn while the session pump stays
+        # entered (the run_loop idle shape, minus the terminal).
+        session_cancel = threading.Event()
+        with broker.pump(session_cancel):
+            btw.attach_live(object(), _pending_future(), "needs approval")
+            btw.running.set()
+            answers: list = []
+
+            def worker() -> None:
+                answers.append(broker.request(lambda: "allow", btw.cancel_event))
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            assert _wait_for(lambda: broker.has_pending)
+            session_turns: list = []
+            _drain_idle_btw(main, btw, broker, "test-model", session_turns)
+            first = capsys.readouterr().out
+            assert BTW_IDLE_APPROVAL in first
+            # Still waiting at the next boundary: announced once, never
+            # re-announced, and the drain never serves it.
+            _drain_idle_btw(main, btw, broker, "test-model", session_turns)
+            assert BTW_IDLE_APPROVAL not in capsys.readouterr().out
+            assert answers == []  # the worker still waits
+            # The next turn's pump serves the queued approval.
+            served = broker.poll(timeout=2.0)
+            assert served is not None
+            served.run_prompt()
+            thread.join(timeout=5.0)
+            assert not thread.is_alive()
+            assert answers == ["allow"]
+            assert not broker.has_pending
+            # Queue clear: the notice arms again for the next episode.
+            _drain_idle_btw(main, btw, broker, "test-model", session_turns)
+            assert btw.approval_announced is False
+            assert capsys.readouterr().out == ""
+
+
+@pytest.mark.integration
+class TestLiveIdleScenario:
+    """Live D-11 bounded-wait scenario (manual-terminal checklist).
+
+    Hermetic doubles prove the mechanism (outlive, idle land, announce,
+    next-turn serve); only a live terminal proves the rendering:
+    start a long main task, fire ``/btw`` needing approval, let main
+    finish first, and confirm the ``btw approval needed`` notice lands
+    once, the tagged ``[btw]`` prompt serves on the next turn, and the
+    fenced block lands without scrambling the ``> `` line.
+    """
+
+    def test_live_outlive_announce_and_land(self, monkeypatch, capsys):
+        if not os.environ.get("STRANDS_CODE_LIVE_MODEL"):
+            pytest.skip("needs a live model + terminal; see the class docstring")
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        spawn = BtwQueue()
+        spawn.put("why is this slow?")
+        btw = BtwContext(
+            spawn_queue=spawn,
+            build=_metered_build(delay=0.2),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        assert _invoke_agent(main, "do the thing", threading.Event(), btw=btw)
+        assert btw.has_live
+        _settle_live_btw(btw)
+        session_turns: list = []
+        _drain_idle_btw(main, btw, broker, "test-model", session_turns)
+        assert "--- btw: " in capsys.readouterr().out
+        assert len(main.messages) == 2
+        assert len(session_turns) == 1

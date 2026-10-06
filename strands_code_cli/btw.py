@@ -55,6 +55,9 @@ BTW_NOTED = "Side question noted — answering in parallel."
 BTW_QUEUED_TEMPLATE = "Side question queued (#{depth} in line) — answering in parallel."
 """Submit echo when a side answer runs (``{depth}`` is the post-put depth)."""
 
+BTW_IDLE_APPROVAL = "btw approval needed — will prompt when the next turn starts."
+"""Bounded-wait notice (D-11 fallback): a side approval waits for a turn pump."""
+
 BTW_FRAMING = (
     "Side task: answer the trailing btw question directly and concisely; "
     "the main task continues in parallel and your answer lands as a fenced side block."
@@ -244,7 +247,7 @@ class BtwQueue:
 
 @dataclass
 class BtwContext:
-    """Per-turn side-channel state (loop-owned, main-thread driven).
+    """Session side-channel state (loop-owned, main-thread driven).
 
     The reader thread only submits questions into :attr:`spawn_queue`
     via :meth:`submit` (never spawns inline); the pump builds,
@@ -255,7 +258,14 @@ class BtwContext:
     echo (set while a side agent runs, cleared once drained).
     :attr:`cancel_targets` records the chooser answer (D-08) when a
     turn unwinds through the cancel path, so the loop can run the
-    two-press machine per named target.
+    two-press machine per named target (reset at each pump entry).
+
+    Outliving-main (D-11): the context is session-scoped — the queue,
+    pending, and running flag survive turn boundaries, and a side run
+    still going when its main turn ends stays attached via
+    :meth:`attach_live` for the idle drain and the next turn's pump.
+    :attr:`cancel_event` is refreshed at each spawn, so it always
+    names the live run's event (or a stale unobserved one when idle).
     """
 
     spawn_queue: BtwQueue
@@ -265,6 +275,48 @@ class BtwContext:
     done: bool = False
     cancel_targets: tuple = ()
     running: threading.Event = field(default_factory=threading.Event)
+    live_agent: Any = None
+    live_future: Any = None
+    live_question: str | None = None
+    approval_announced: bool = False
+
+    @property
+    def has_live(self) -> bool:
+        """True when a side run is attached (running or done-unreaped)."""
+        return self.live_future is not None
+
+    def attach_live(self, agent: Any, future: Any, question: str) -> None:
+        """Attach a side run that outlives the pump (main-thread only)."""
+        self.live_agent = agent
+        self.live_future = future
+        self.live_question = question
+
+    def detach_live(self) -> tuple[Any, Any, str] | None:
+        """Detach and return the live run, or None when nothing attaches."""
+        if self.live_future is None:
+            return None
+        detached = (self.live_agent, self.live_future, self.live_question or "")
+        self.live_agent = None
+        self.live_future = None
+        self.live_question = None
+        return detached
+
+    def take_done_live(self) -> tuple[Any, Any, str] | None:
+        """Detach the live run when completed; None when none/none-done.
+
+        Idle-drain entry: a taken run leaves :attr:`running` set while
+        backlog waits (the next pump spawns into it) and clears it
+        only when the queue is also empty — the same rule as the
+        pump's spawn branch, so submit echoes stay truthful.
+        """
+        future = self.live_future
+        if future is None or not future.done():
+            return None
+        taken = self.detach_live()
+        assert taken is not None  # guarded by the live_future check above
+        if self.spawn_queue.empty():
+            self.running.clear()
+        return taken
 
     def submit(self, question: str) -> int:
         """Enqueue one side question with its visible echo (D-10).
