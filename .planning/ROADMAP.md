@@ -140,7 +140,20 @@ Plans:
   1. User can ask a side question mid-task via a `/btw`-style escape and get an answer from a subagent
   2. User can see the main task continue untouched while the side question is answered
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 07-01-PLAN.md — Tracer: parallel /btw side answer fenced while main continues, plus idle dispatch and cost merge
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 07-02-PLAN.md — Shared-gate parallel correctness: tagged prompts, namespaced batch, per-request cancel, Ctrl-C chooser
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 07-03-PLAN.md — Side-question queue plus outliving-main idle lifecycle
 
 ### Phase 8: Model Routing with Decision Models
 
