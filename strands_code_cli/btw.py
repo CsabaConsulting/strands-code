@@ -177,6 +177,22 @@ def append_btw_turn(messages: list, question: str, answer: str) -> None:
     )
 
 
+def register_btw_cancel(broker: Any, btw: BtwContext) -> None:
+    """Bind the side channel's cancel event under ``"btw"`` (spawn time).
+
+    The broker rides a parameter so this module never imports the gate
+    layer — the policy_gate → btw ``RENDER_LOCK`` import stays acyclic.
+    """
+    if broker is not None:
+        broker.register_cancel("btw", btw.cancel_event)
+
+
+def unregister_btw_cancel(broker: Any) -> None:
+    """Drop the ``"btw"`` cancel binding (side completion)."""
+    if broker is not None:
+        broker.unregister_cancel("btw")
+
+
 @dataclass
 class BtwContext:
     """Per-turn side-channel state (loop-owned, main-thread driven).

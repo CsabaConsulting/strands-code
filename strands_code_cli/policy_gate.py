@@ -218,6 +218,8 @@ class ApprovalBroker:
         self._pumping = threading.Event()
         self._cancel: threading.Event | None = None
         self._pump_ident: int | None = None
+        self._cancel_lock = threading.Lock()
+        self._cancel_by_tag: dict[str, threading.Event] = {}
 
     @contextmanager
     def pump(self, cancel: threading.Event) -> Iterator["ApprovalBroker"]:
@@ -233,13 +235,40 @@ class ApprovalBroker:
             self._cancel = old_cancel
             self._pump_ident = old_ident
 
-    def request(self, prompt: Callable[[], str]) -> str:
-        """Worker side: have the prompt answered by the pump thread."""
+    def register_cancel(self, tag: str, event: threading.Event) -> None:
+        """Bind one worker's cancel event under its agent tag (LOOP-03, D-06).
+
+        The main turn registers ``"main"`` on pump entry; the side
+        channel registers ``"btw"`` at spawn. Each waiter then aborts
+        only on its own event — cancelling one never disturbs the other.
+        """
+        with self._cancel_lock:
+            self._cancel_by_tag[tag] = event
+
+    def unregister_cancel(self, tag: str) -> None:
+        """Drop one tag's cancel binding (turn end / side completion)."""
+        with self._cancel_lock:
+            self._cancel_by_tag.pop(tag, None)
+
+    def cancel_for(self, tag: str) -> threading.Event | None:
+        """This tag's cancel event, or None when unregistered."""
+        with self._cancel_lock:
+            return self._cancel_by_tag.get(tag)
+
+    def request(
+        self, prompt: Callable[[], str], cancel: threading.Event | None = None
+    ) -> str:
+        """Worker side: have the prompt answered by the pump thread.
+
+        ``cancel`` is the waiter's own event; None falls back to the
+        pump cancel, so every existing single-arg call site behaves
+        identically.
+        """
         if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
             return prompt()
         req = _ApprovalRequest(prompt)
         self._queue.put(req)
-        return req.wait_answer(self._cancel)
+        return req.wait_answer(cancel if cancel is not None else self._cancel)
 
     def poll(self, timeout: float = 0.05) -> _ApprovalRequest | None:
         """Pump side: next pending prompt, or None on timeout."""
@@ -470,7 +499,7 @@ class PolicyClassifier:
                 gate_open.set()
                 try:
                     if broker is not None:
-                        answer = broker.request(read_answer)
+                        answer = broker.request(read_answer, broker.cancel_for(tag))
                     else:
                         answer = read_answer()
                 finally:

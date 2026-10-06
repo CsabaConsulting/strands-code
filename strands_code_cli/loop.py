@@ -27,7 +27,9 @@ from strands_code_cli.btw import (
     BtwContext,
     append_btw_turn,
     build_btw_agent,
+    register_btw_cancel,
     render_btw_error,
+    unregister_btw_cancel,
 )
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
@@ -297,6 +299,7 @@ def _invoke_parallel(
                         break
                     if btw_future is not None and btw_future.done():
                         _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
+                        unregister_btw_cancel(broker)
                         btw_future = None
                         btw_question = None
                         btw_agent = None
@@ -318,6 +321,7 @@ def _invoke_parallel(
                                     else {}
                                 )
                                 btw_future = pool.submit(btw_agent, prompt, **btw_kwargs)
+                                register_btw_cancel(broker, btw)
                                 btw_question = question
                     if broker is not None:
                         req = broker.poll()
@@ -337,6 +341,7 @@ def _invoke_parallel(
                 # worker hanging Ctrl-C); the main event is already set
                 # by the turn SIGINT handler.
                 btw.cancel_event.set()
+                unregister_btw_cancel(broker)
                 raise
     history = getattr(agent, "messages", None)
     if isinstance(history, list):
@@ -403,24 +408,30 @@ def _invoke_agent(
             return agent(text, cancel_signal=cancel_event)
         return agent(text)
     kwargs = {"cancel_signal": cancel_event} if hasattr(agent, "cancel_signal") else {}
-    if btw is not None:
-        return _invoke_parallel(agent, text, kwargs, btw, broker, cancel_event)
-    assert broker is not None
-    with broker.pump(cancel_event):
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(agent, text, **kwargs)
-            while True:
-                if future.done():
-                    try:
-                        return future.result()
-                    except TurnCancelled:
-                        # Worker aborted on cancel without a main-thread
-                        # KeyboardInterrupt reaching us: same cancel path.
-                        raise KeyboardInterrupt from None
-                req = broker.poll()
-                if req is None:
-                    continue
-                req.run_prompt()
+    if broker is not None:
+        broker.register_cancel("main", cancel_event)
+    try:
+        if btw is not None:
+            return _invoke_parallel(agent, text, kwargs, btw, broker, cancel_event)
+        assert broker is not None
+        with broker.pump(cancel_event):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(agent, text, **kwargs)
+                while True:
+                    if future.done():
+                        try:
+                            return future.result()
+                        except TurnCancelled:
+                            # Worker aborted on cancel without a main-thread
+                            # KeyboardInterrupt reaching us: same cancel path.
+                            raise KeyboardInterrupt from None
+                    req = broker.poll()
+                    if req is None:
+                        continue
+                    req.run_prompt()
+    finally:
+        if broker is not None:
+            broker.unregister_cancel("main")
 
 
 def _handle_turn_cancel(

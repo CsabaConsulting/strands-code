@@ -194,7 +194,10 @@ class TestDenyFailClosed:
         handler = self._handler(monkeypatch, [])
 
         class _CancellingBroker:
-            def request(self, prompt):
+            def cancel_for(self, tag):
+                return None
+
+            def request(self, prompt, cancel=None):
                 raise TurnCancelled()
 
         monkeypatch.setattr(pg, "_active_broker", lambda: _CancellingBroker())
@@ -204,3 +207,127 @@ class TestDenyFailClosed:
                     _event("shell", {"command": "make test"}, uid="u9")
                 )
             )
+
+
+# ---------------------------------------------------------------------------
+# 07-02 task 2: per-request cancel domains + shared diff-store audit
+# ---------------------------------------------------------------------------
+
+
+class TestPerRequestCancel:
+    def test_only_named_tag_aborts(self):
+        # Distinct main/btw events; only the btw waiter aborts while the
+        # main waiter still receives its served answer (T-07-06). The btw
+        # event is pre-set so the outcome holds however the pump serves.
+        broker = ApprovalBroker()
+        pump_cancel = threading.Event()
+        main_cancel = threading.Event()
+        btw_cancel = threading.Event()
+        btw_cancel.set()
+        broker.register_cancel("main", main_cancel)
+        broker.register_cancel("btw", btw_cancel)
+        box: dict[str, str] = {}
+
+        def main_worker():
+            box["main"] = broker.request(lambda: "main-answer", broker.cancel_for("main"))
+
+        def btw_worker():
+            try:
+                broker.request(lambda: "never", broker.cancel_for("btw"))
+                box["btw"] = "answered?!"
+            except TurnCancelled:
+                box["btw"] = "cancelled"
+
+        with broker.pump(pump_cancel):
+            main_thread = threading.Thread(target=main_worker)
+            btw_thread = threading.Thread(target=btw_worker)
+            main_thread.start()
+            btw_thread.start()
+            while main_thread.is_alive() or btw_thread.is_alive():
+                req = broker.poll(timeout=0.5)
+                if req is not None:
+                    req.run_prompt()
+            main_thread.join(timeout=5)
+            btw_thread.join(timeout=5)
+        assert not main_thread.is_alive()
+        assert not btw_thread.is_alive()
+        assert box == {"main": "main-answer", "btw": "cancelled"}
+        assert not main_cancel.is_set()
+        assert not pump_cancel.is_set()
+
+    def test_single_arg_request_uses_pump_cancel(self):
+        # No registered tag, no cancel arg: the legacy pump path answers.
+        broker = ApprovalBroker()
+        cancel = threading.Event()
+        box: dict[str, str] = {}
+
+        def worker():
+            box["answer"] = broker.request(lambda: "served")
+
+        with broker.pump(cancel):
+            thread = threading.Thread(target=worker)
+            thread.start()
+            while thread.is_alive():
+                req = broker.poll(timeout=0.5)
+                if req is not None:
+                    req.run_prompt()
+            thread.join(timeout=5)
+        assert box["answer"] == "served"
+
+    def test_cancel_registry_defaults_and_unregister(self):
+        broker = ApprovalBroker()
+        assert broker.cancel_for("main") is None
+        event = threading.Event()
+        broker.register_cancel("main", event)
+        assert broker.cancel_for("main") is event
+        broker.unregister_cancel("main")
+        assert broker.cancel_for("main") is None
+        broker.unregister_cancel("main")  # idempotent
+
+    def test_ask_passes_tag_cancel_to_broker(self, monkeypatch):
+        # The ask wires its own tag's event into the request.
+        main_agent = SimpleNamespace(state={})
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        classifier.bind_main_agent(main_agent)
+        broker = ApprovalBroker()
+        main_cancel, btw_cancel = threading.Event(), threading.Event()
+        broker.register_cancel("main", main_cancel)
+        broker.register_cancel("btw", btw_cancel)
+        seen: dict[str, Any] = {}
+        real_request = broker.request
+
+        def spy(prompt, cancel=None):
+            seen["cancel"] = cancel
+            return real_request(prompt, cancel=cancel)
+
+        monkeypatch.setattr(broker, "request", spy)
+        monkeypatch.setattr(pg, "_active_broker", lambda: broker)
+        monkeypatch.setattr("builtins.input", lambda *args: "y")
+        classifier(_event("shell", {"command": "make test"}, uid="b1"))
+        assert classifier.ask("Approve?") == "y"
+        assert seen["cancel"] is btw_cancel
+
+
+class TestPendingStoreThreads:
+    def test_ten_thread_hammer_loses_no_writes(self, tmp_path):
+        from strands_code_cli.diff_gate import PendingStore
+
+        store = PendingStore(tmp_path / "pending")
+        errors: list[BaseException] = []
+
+        def writer(n: int):
+            try:
+                for i in range(25):
+                    store.stash(f"/tmp/f{n}-{i}.py", None, f"new-{n}-{i}", "write")
+                    store.list()
+            except BaseException as exc:  # noqa: BLE001 — collected, asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(n,)) for n in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+        assert not any(thread.is_alive() for thread in threads)
+        assert errors == []
+        assert len(store.list()) == 250

@@ -28,6 +28,7 @@ import asyncio
 import difflib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -97,6 +98,13 @@ class PendingStore:
     Fail-soft on read (missing/corrupt file loads as empty); fail-loud on
     tamper (symlinked roots or files raise ``ValueError``).
 
+    Thread-safety audit outcome (LOOP-03): NOT proven safe — the lazy
+    ``_entries`` load plus the read-modify-write ``stash``/``pop``/``clear``
+    sequences race when the main and btw workers share one store (lost
+    updates: two concurrent stashes can overwrite each other's ``_save``).
+    One store is still shared (no per-agent stores); every public method
+    holds ``_lock`` across load-mutate-save so each call is atomic.
+
     Args:
         root: Directory holding ``pending.json`` (normally the session dir).
     """
@@ -107,11 +115,17 @@ class PendingStore:
             raise ValueError(f"Pending store root must not be a symlink: {raw}")
         self.root = raw
         self._entries: dict[str, dict[str, Any]] | None = None
+        self._lock = threading.Lock()
 
     def _path(self) -> Path:
         return self.root / _PENDING_NAME
 
     def _ensure_loaded(self) -> None:
+        with self._lock:
+            self._load_locked()
+
+    def _load_locked(self) -> None:
+        """File load; the caller holds :attr:`_lock`."""
         if self._entries is not None:
             return
         self._entries = {}
@@ -128,6 +142,11 @@ class PendingStore:
             self._entries = {str(k): v for k, v in data.items() if isinstance(v, dict)}
 
     def _save(self) -> None:
+        with self._lock:
+            self._save_locked()
+
+    def _save_locked(self) -> None:
+        """Sidecar write; the caller holds :attr:`_lock`."""
         assert self._entries is not None
         path = self._path()
         if path.is_symlink():
@@ -139,29 +158,33 @@ class PendingStore:
 
     def stash(self, path: str, old_text: str | None, new_text: str, op: str) -> None:
         """Record a pending change for later ``/diff`` review."""
-        self._ensure_loaded()
-        assert self._entries is not None
-        self._entries[path] = {"old_text": old_text, "new_text": new_text, "op": op}
-        self._save()
+        with self._lock:
+            self._load_locked()
+            assert self._entries is not None
+            self._entries[path] = {"old_text": old_text, "new_text": new_text, "op": op}
+            self._save_locked()
 
     def list(self) -> dict[str, dict[str, Any]]:
         """Return all pending changes keyed by absolute path."""
-        self._ensure_loaded()
-        assert self._entries is not None
-        return dict(self._entries)
+        with self._lock:
+            self._load_locked()
+            assert self._entries is not None
+            return dict(self._entries)
 
     def pop(self, path: str) -> dict[str, Any] | None:
         """Remove and return one pending change, if present."""
-        self._ensure_loaded()
-        assert self._entries is not None
-        entry = self._entries.pop(path, None)
-        self._save()
-        return entry
+        with self._lock:
+            self._load_locked()
+            assert self._entries is not None
+            entry = self._entries.pop(path, None)
+            self._save_locked()
+            return entry
 
     def clear(self) -> None:
         """Drop all pending changes."""
-        self._entries = {}
-        self._save()
+        with self._lock:
+            self._entries = {}
+            self._save_locked()
 
 
 # ---------------------------------------------------------------------------
