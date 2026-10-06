@@ -145,7 +145,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — Tracer: parallel /btw side answer fenced while main continues, plus idle dispatch and cost merge
+- [x] 07-01-PLAN.md — Tracer: parallel /btw side answer fenced while main continues, plus idle dispatch and cost merge
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
