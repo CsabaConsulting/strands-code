@@ -52,7 +52,8 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /skills|/skill [show <name>|remove <name>|reload], "
+    "/compact, /clear, /context, /btw <side question>, "
+    "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
 )
@@ -201,6 +202,12 @@ def dispatch(
         return ("reply", _clear_message(agent, session_id))
     if cmd == "/context":
         return ("reply", _context_message(agent, current_model, session_turns))
+    if cmd == "/btw":
+        # Idle /btw (D-01) is a normal inline turn; placed before the
+        # skills-dynamic branch so the builtin always wins the name.
+        if not rest:
+            return ("reply", "Usage: /btw <side question>")
+        return ("agent", rest)
     if skills is not None:
         entry = skills.resolve(head[1:])
         if entry is not None and not entry.shadowed:
