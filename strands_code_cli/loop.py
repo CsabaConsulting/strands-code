@@ -1292,6 +1292,17 @@ def run_loop(
                             )
                         failed = True
                         break
+                    # Side-channel spend melts into the session total (D-15):
+                    # each completed btw turn records through the shared
+                    # row shape — no btw-specific field, tag, or report
+                    # branch. Consumed so an empty-retry never re-records.
+                    for _, _, btw_result in btw.pending:
+                        btw_usage = record_turn_metrics(
+                            btw_result, current_model, session_turns
+                        )
+                        if btw_usage is not None:
+                            print_plain(console, btw_usage, style="dim")
+                    btw.pending.clear()
                     usage = record_turn_metrics(result, current_model, session_turns)
                     if usage is not None:
                         print_plain(console, usage, style="dim")

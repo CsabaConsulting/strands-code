@@ -499,6 +499,18 @@ class TestLoopUsageWiring:
 
         assert record_turn_metrics(None, "bedrock/x", []) is None
 
+    def test_btw_spend_melts_into_session_totals(self):
+        from strands_code_cli.loop import record_turn_metrics
+
+        turns: list = []
+        record_turn_metrics(_Summary(1000, 200), "bedrock/x-model", turns)
+        record_turn_metrics(_Summary(3000, 400), "bedrock/x-model", turns)
+        assert len(turns) == 2
+        assert set(turns[0]) == set(turns[1])
+        report = cost_report(turns, "bedrock/x-model")
+        assert "Total: in 4.00K, out 600" in report
+        assert "btw" not in report.lower()
+
     def test_auto_compact_fires_at_80_and_keeps_pairs(self, tmp_path):
         from strands_code_cli.loop import maybe_auto_compact
 
