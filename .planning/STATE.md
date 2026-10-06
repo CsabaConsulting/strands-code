@@ -4,15 +4,15 @@ current_phase: 07
 current_phase_name: Subagents + /btw Side Channel
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-10-06T07:50:00.000Z"
+last_updated: "2026-10-06T08:27:00.000Z"
 last_activity: 2026-10-06
-last_activity_desc: Phase 07 plan 2 complete (shared-gate parallel correctness)
-state_head: 5778d9bbf3ddce38755c37da6d7338c0b5546fd8
+last_activity_desc: Phase 07 plan 3 complete (queue plus outliving-main lifecycle)
+state_head: a903b412e2694bc789c0f734d165456c24f9046a
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
   percent: 67
 ---
 
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-10-04)
 
 Phase: 07 (Subagents + /btw Side Channel) — EXECUTING
 Plan: 3 of 3
-Status: Executing Phase 07
-Last activity: 2026-10-06 — Phase 07 plan 2 complete (shared-gate parallel correctness)
+Status: All Phase 07 plans complete — ready for verify-work / phase close
+Last activity: 2026-10-06 — Phase 07 plan 3 complete (queue plus outliving-main lifecycle)
 
 Progress: [███████░░░] 67%
 
@@ -68,6 +68,7 @@ Progress: [███████░░░] 67%
 | Phase 6 P04 | 6min | 3 tasks | 6 files |
 | Phase 7 P01 | 6min | 3 tasks | 10 files |
 | Phase 7 P02 | 14min | 3 tasks | 7 files |
+| Phase 7 P03 | 36min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,9 @@ Recent decisions affecting current work:
 - [Phase 7]: Tagged `[main]`/`[btw]` approvals from event.agent identity with tag-keyed ask stash plus thread-local tag; batch coverage namespaced per agent with denials never covering; trust_delegated btw auto-trust prints a transcript note naming the tool
 - [Phase 7]: Per-request broker cancel registry (main/btw events); shared PendingStore audited not-proven-safe and lock-guarded across load-mutate-save
 - [Phase 7]: Cancel chooser runs inside the dual pump on the main thread (executor shutdown would park on uncancelled workers otherwise); Ctrl-C in the chooser escalates to both; main-only pick drains the side answer through the served pump; tagged cancel lines via print_plain (markup off, WR-06)
+- [Phase 7]: Unbounded FIFO BtwQueue with visible depth echoes; pump spawns only when no side run is live; queue owns its submit echo (BtwContext.submit)
+- [Phase 7]: D-11 ships as bounded-wait, not async-multiplex — spike proved sync prompt_toolkit dialogs cannot run inside the multiplex loop; idle side approvals announced once and served by the next turn's pump
+- [Phase 7]: Tracer join removed; BtwContext is session-scoped so new turns adopt a live side future and queued questions start across the idle gap
 
 ### Pending Todos
 
@@ -126,6 +130,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-06T07:50:00.000Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-10-06T08:27:00.000Z
+Stopped at: Completed 07-03-PLAN.md
 Resume file: None

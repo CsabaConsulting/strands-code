@@ -153,7 +153,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 07-03-PLAN.md — Side-question queue plus outliving-main idle lifecycle
+- [x] 07-03-PLAN.md — Side-question queue plus outliving-main idle lifecycle
 
 ### Phase 8: Model Routing with Decision Models
 
