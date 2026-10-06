@@ -473,8 +473,12 @@ def _pump_parallel(
                 except KeyboardInterrupt:
                     if btw_future is None or btw_future.done():
                         # Single worker (or side already reaped):
-                        # legacy path, the main event is already set
-                        # by the turn SIGINT handler.
+                        # legacy path, the main event is normally set
+                        # by the turn SIGINT handler — but a stale
+                        # both_running flag may have suppressed it, so
+                        # set here too (idempotent) and the turn always
+                        # stops.
+                        cancel_event.set()
                         btw.cancel_event.set()
                         unregister_btw_cancel(broker)
                         raise
