@@ -1,61 +1,47 @@
 ---
-status: testing
+status: complete
 phase: 06-skills-memory-file
-source: [06-01-SUMMARY.md, 06-02-SUMMARY.md, 06-03-SUMMARY.md, 06-04-SUMMARY.md]
-started: 2026-10-05T01:20:00Z
-updated: 2026-10-05T01:20:00Z
+source: [06-UAT-round2.md]
+round: 3
+started: 2026-10-05T09:00:00Z
+updated: 2026-10-05T09:30:00Z
 ---
 
 ## Current Test
 
-number: 1
-name: Invoke a skill via slash
-expected: |
-  Create ./.agent/skills/greet/SKILL.md (name: greet, description: says hello).
-  Type `/greet hello there` — skill runs with "hello there" as input.
-awaiting: user response
+[testing complete — round 3: 1 passed, 1 issue, 0 pending]
 
 ## Tests
 
-### 1. Invoke a skill via slash
-expected: Skill runs from ./.agent/skills with trailing text as input
-result: [pending]
+### 1. Markup-safe reply
+expected: /[/] replies Unknown command '/[/]' plus usage, rendered literally, session survives
+result: pass
 
-### 2. Autocomplete + match echo + typo
-expected: Partial name completes to /namespace:skill; typed full name echoes a match; typo shows no match
-result: [pending]
-
-### 3. Builtin collision
-expected: Skill named like a builtin (e.g. model) warns at startup; builtin still wins the slash
-result: [pending]
-
-### 4. /skills list, show, remove
-expected: /skills lists skills with descriptions; show displays one; remove deletes it (traversal-guarded)
-result: [pending]
-
-### 5. /init scan-draft through curate
-expected: /init drafts .agent/MEMORY.md + thin root STRANDS.md pointer as approvable proposals; re-run merge-scans only
-result: [pending]
-
-### 6. /memory curate loop
-expected: Approve one proposal, deny one, revise one in words with accept/revert/iterate; file state matches
-result: [pending]
-
-### 7. Memory modes + reload + flush
-expected: Curate/silent toggle works (silent still logs); external edit auto-reloads with a note; short run loses nothing on exit
-result: [pending]
-
-### 8. Match echo with markup characters (WR-06 residual)
-expected: Skill whose description contains Rich markup chars (e.g. [/]) echoes cleanly without garble or crash
-result: [pending]
+### 2. Reloaded skill trusted
+expected: New skill created mid-session, after /skills reload the model sees it in its skills tool and follows it (no 'no such skill exists' refusal)
+result: issue
+reported: "Model confirmed 'greeter2 is a legitimate available skill in my system' (registry refresh works) but still refused to follow it, citing the untrusted marker plus memory-stored refusal principles ('user values critical thinking over blind obedience')"
+severity: major
+note: "Registry half PASSED. Remaining refusal is a trust-framing defect (new gap G-6-R3-2). Side observation: /skills now shows a literal backslash ('test \\[/] markup') — the round-1 escape() calls are redundant under print_plain and must be reverted (cosmetic, fold into fix round)."
 
 ## Summary
 
-total: 8
-passed: 0
-issues: 0
-pending: 8
+total: 2
+passed: 1
+issues: 1
+pending: 0
 skipped: 0
 blocked: 0
 
 ## Gaps
+
+- gap_id: G-6-R3-2
+  truth: "An explicitly invoked skill is followed as the task"
+  status: fixed
+  reason: "User reported: model acknowledges the reloaded skill as legitimate but refuses to follow it, citing the untrusted-content marker and memory-stored refusal principles"
+  severity: major
+  test: 2
+  root_cause: "The composed prompt led with an absolute untrusted marker ('verify before acting') with no notion of explicit user invocation, so a diligent model verified and refused the very task the user chose. Round-2 refusal rationalizations were also memorialized as user preferences, so memory actively instructed refusal (contained to /tmp/uattest memory; user to clean before retest)."
+  fix: "Composed prompt reframed around explicit invocation (user chose this skill; follow it; do not re-check the skills tool) with distrust scoped to embedded third-party directives contradicting the task. T-06-02 updated: marker softened by user approval, deny-first gate remains the hard control. Proven by updated routing assertions. LIVE-VERIFIED 2026-10-05: after memory wipe, /local:greeter2 complied ('Hello there, friend!') with the model articulating the explicit-invocation distinction. Redundant escape() calls reverted (print_plain renders verbatim)."
+  artifacts: []
+  missing: []
