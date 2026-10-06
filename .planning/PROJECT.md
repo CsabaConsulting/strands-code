@@ -23,6 +23,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Context controls `/compact`, `/clear`, `/context` + 80% auto-compact — Phase 5 (pair-atomic, tool pairs never split)
 - ✓ Local skills: load from `./.agent/skills`, invoke as `/<name>`, autocomplete + `/skills` manage — Phase 6 (built-ins win collisions, `namespace:skill` prefixes, trailing-text input, typed-name match echo)
 - ✓ Repo memory file: dual `STRANDS.md` + `.agent/MEMORY.md` auto-load, `/init` scan-draft, `/memory` curate/approve + NL revise rounds — Phase 6 (.agent wins, curate-by-default, auto-reload, flush on exit)
+- ✓ Markup-safe transcript: hostile `[...]` content renders literally, never crashes — Phase 6 UAT (print_plain, markup off; supersedes WR-06 escape)
 
 ### Active
 
@@ -34,7 +35,6 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - [ ] Grep-first code understanding (agentic grep/READ); persistent semantic index deferred
 - [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
 - [ ] Skills marketplace commands: add marketplace, install skills (local load/invoke validated Phase 6)
-- [ ] Escape Rich markup in skill-match echo (WR-06 residual: hostile skill descriptions garble/crash the echo line)
 - [ ] Session resume by UUID across runs
 - [ ] Decision-model routing with manual override kept — Phase 8
 - [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
@@ -52,7 +52,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
 - Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.57.0; both move fast and are flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers (local markdown → Hindsight → memsearch).
-- Full test suite green (`uv run pytest tests/`, 790 passed, 5 deselected); dev group carries the data-science packages the toolkit tests execute.
+- Full test suite green (`uv run pytest tests/`, 815 passed, 5 deselected); dev group carries the data-science packages the toolkit tests execute.
 
 ## Constraints
 
@@ -77,6 +77,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 | Automatic most-precise-first pricing + provenance | No (a)/(b) source toggle; Price List → OpenRouter → LiteLLM layering with source line | ✓ Good |
 | Approval prompts served on main thread (ApprovalBroker) | SDK invokes ask in its event-loop worker, where stdin reads park on Ctrl-C and asyncio.run cannot nest; worker aborts via TurnCancelled | ✓ Good |
 | Denials never cover batch signatures | Deny-marked-covered let model retries execute silently in-turn (fail-open); only approvals cover, denials re-prompt | ✓ Good |
+| Owned AgentSkills + refresh-on-reload | Harness registry is load-once; CLI reload left it stale and models refused reloaded skills — owned instance refreshed first, both-stale-or-both-fresh | ✓ Good (live-verified) |
+| Markup-safe printing, markup off | Dynamic transcript text through Rich markup parsing crashed sessions (WR-06 class); print_plain renders verbatim, styling via kwarg | ✓ Good |
+| Explicit invocation frames skill trust | Absolute untrusted marker made models refuse invoked skills; invocation is the trust signal, distrust scoped to embedded third-party directives, gate stays hard control | ✓ Good (live-verified) |
 
 ## Evolution
 
@@ -96,4 +99,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-04 after Phase 6*
+*Last updated: 2026-10-05 after Phase 6 UAT rounds*

@@ -3,11 +3,11 @@ gsd_state_version: "1.0"
 current_phase: 7
 current_phase_name: Subagents + /btw Side Channel
 status: planning
-stopped_at: Phase 6 complete, ready to plan Phase 7
-last_updated: "2026-10-05T01:07:38.368Z"
-last_activity: 2026-10-04
-last_activity_desc: Phase 6 complete, transitioned to Phase 7
-state_head: de4fc8eb9de9c86a6c85b5990ec88812bee5453c
+stopped_at: Phase 6 UAT rounds 1-3 complete (11 gaps fixed, 815 green), ready to plan Phase 7
+last_updated: "2026-10-06T06:12:00Z"
+last_activity: 2026-10-06
+last_activity_desc: Phase 6 UAT rounds + security verified, committed, transition refreshed
+state_head: be0d8ff43fc8659729f66120d5b03a557aa75e6f
 progress:
   total_phases: 9
   completed_phases: 6
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-10-04)
 Phase: 7 — Subagents + /btw Side Channel
 Plan: Not started
 Status: Ready to plan
-Last activity: 2026-10-04 — Phase 6 complete, transitioned to Phase 7
+Last activity: 2026-10-06 — Phase 6 UAT rounds complete, transition refreshed
 
 Progress: [███████░░░] 67%
 
@@ -86,6 +86,9 @@ Recent decisions affecting current work:
 - [Phase 6]: D-13 renders as accept-echo (post-dispatch console line), not inline buffer highlight — Per planner resolution: no prompt_toolkit lexer surgery for the same decision value; the echo shows match vs typo at accept time
 - [Phase 6]: Committed gap-closure work directly on main under branching_strategy none — Sequential dispatch on the main working tree; the #3819 protected-branch guard targets branch workflows and all milestone commits share this line
 - [Phase 6]: Task-2 explicit-approve kept-pending assertion landed in task 3 commit — Pop-first approve (WR-03) drops p1 before the write raises, so the pending half of the criterion required the apply-first reorder; reply-prefix half verified in task 2
+- [Phase 6 UAT]: build_agent owns the AgentSkills instance; /skills reload refreshes the harness registry first via set_available_skills, then the CLI index — failed refresh leaves both stale, never disagreeing (live-verified)
+- [Phase 6 UAT]: print_plain (markup off, style kwarg) for all dynamic transcript prints; callback str paths use markup=False inline — WR-06 class closed without escapes
+- [Phase 6 UAT]: Explicit invocation frames skill trust (follow as the task, no skills-tool re-check); distrust scoped to embedded third-party directives; deny-first gate stays the hard control (live-verified)
 
 ### Pending Todos
 
@@ -94,7 +97,7 @@ None yet.
 ### Blockers/Concerns
 
 - ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–6).
-- ⚠️ [Phase 6] WR-06 residual: skill-match echo prints unescaped descriptions through Rich markup (garble + crash path on hostile input) — verifier-accepted residual, fix queued as Active requirement.
+- ⚠️ [Phase 6 UAT] Silent memory mode can memorialize the model's own rationalizations as user preferences (observed: refusal principles stored as durable preferences) — curate default is the backstop; silent users should review MEMORY.md periodically.
 
 ### Roadmap Evolution
 
@@ -116,6 +119,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-05T01:15:00Z
-Stopped at: Phase 6 complete, ready to plan Phase 7
+Last session: 2026-10-06T06:12:00Z
+Stopped at: Phase 6 UAT rounds 1-3 complete (11 gaps fixed, 815 green, security 18/18), committed, ready to plan Phase 7
 Resume file: None
