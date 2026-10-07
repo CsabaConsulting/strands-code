@@ -456,3 +456,79 @@ class TestAgentTaggedGate:
         assert result.requires_human_in_the_loop is False
         assert result.reason == "delegated-trusted"
         assert "Auto-trusted delegated call (shell)" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# 07-04 task 4: self-identifying approval dialogs (G-7-4)
+# ---------------------------------------------------------------------------
+
+
+class TestDialogAttribution:
+    def _dialog_ask(self, monkeypatch, command, pick, *, btw=False):
+        # Drive one ask through the tty dialog branch with a recording
+        # radio_choice double; return (answer, titles seen).
+        import strands_code_cli.choice as choice_mod
+
+        titles: list[str] = []
+
+        def fake_radio(title, options, **kwargs):
+            titles.append(title)
+            if isinstance(pick, type) and issubclass(pick, BaseException):
+                raise pick()
+            return pick
+
+        monkeypatch.setattr(choice_mod, "radio_choice", fake_radio)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        main_agent = _FakeAgent()
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        classifier.bind_main_agent(main_agent)
+        event_agent = _FakeAgent() if btw else main_agent
+        classifier(_event("shell", {"command": command}, event_agent, "u1"))
+        return classifier.ask("Approve?"), titles
+
+    def test_main_dialog_title_carries_tag_tool_detail(self, monkeypatch):
+        answer, titles = self._dialog_ask(monkeypatch, "make test", "y")
+        assert answer == "y"
+        assert titles == ["Approve? [main] shell — make test"]
+
+    def test_btw_dialog_title_carries_tag_tool_detail(self, monkeypatch):
+        answer, titles = self._dialog_ask(monkeypatch, "sleep 30", "y", btw=True)
+        assert answer == "y"
+        assert titles == ["Approve? [btw] shell — sleep 30"]
+
+    def test_long_detail_truncates_to_one_line(self, monkeypatch):
+        answer, titles = self._dialog_ask(
+            monkeypatch, "run this\nmultiline command " + "x" * 100, "y"
+        )
+        assert answer == "y"
+        assert len(titles) == 1
+        assert "\n" not in titles[0]
+        assert titles[0].startswith("Approve? [main] shell — run this multiline")
+        assert titles[0].endswith("...")
+
+    def test_header_and_typed_fallback_byte_identical(self, monkeypatch):
+        # The typed path keeps its exact lines: header block, options,
+        # and the "> " prompt — attribution lives in the dialog title.
+        monkeypatch.setattr("builtins.input", lambda *args: "y")
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        main_agent = _FakeAgent()
+        classifier.bind_main_agent(main_agent)
+        classifier(_event("shell", {"command": "make test"}, main_agent, "u1"))
+        assert classifier.ask("Approve?") == "y"
+        assert shown == [
+            "Approval needed: [main] shell",
+            "  Detail: make test",
+            "  Risk: Shell command: make test",
+            "Approve? [y/n/always/never]",
+            "> ",
+        ]
+
+    def test_dialog_escape_denies_and_ctrl_c_reraises(self, monkeypatch):
+        answer, _ = self._dialog_ask(monkeypatch, "make test", None)
+        assert answer == "n"  # ESC/None denies fail-closed
+        with pytest.raises(KeyboardInterrupt):
+            self._dialog_ask(monkeypatch, "make test", KeyboardInterrupt)

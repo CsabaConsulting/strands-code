@@ -554,7 +554,9 @@ class PolicyClassifier:
                         # owns SIGINT + termios for the duration. Runs in the
                         # pump thread (main), never the SDK worker thread.
                         # Ctrl-C re-raises (cancel path); ESC/failure denies.
-                        return self._dialog_answer()
+                        return self._dialog_answer(
+                            _dialog_title(tag, tool_name, ctx["tool_input"])
+                        )
                     # Print the whole prompt block through the same stream:
                     # input()'s own prompt arg bypasses the output proxy and
                     # lands lines too early (observed "> " jumping above the
@@ -582,12 +584,12 @@ class PolicyClassifier:
             logger.warning("Policy ask failed closed: %s", exc)
             return "n"
 
-    def _dialog_answer(self) -> str:
+    def _dialog_answer(self, title: str = "Approve?") -> str:
         """Arrow-key approval choice; ESC/failure denies, Ctrl-C re-raises."""
         from strands_code_cli.choice import radio_choice
 
         picked = radio_choice(
-            "Approve?",
+            title,
             [
                 ("y", "Yes — approve once"),
                 ("n", "No — skip (deny once)"),
@@ -646,6 +648,27 @@ def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:
     if "path" in tool_input:
         return str(tool_input.get("path", ""))[:500]
     return str(tool_input)[:500]
+
+
+_DIALOG_DETAIL_CHARS = 60
+"""Detail snippet length carried in the dialog title (single line)."""
+
+
+def _dialog_title(tag: str, tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Self-identifying dialog header: agent tag plus request descriptor.
+
+    Each ``Approve?`` box names its agent and request at a glance, so a
+    multi-dialog flow never asks the user to guess which box belongs to
+    which worker (G-7-4). The descriptor shares the ``_detail_line``
+    source with the Approval-needed header, collapsed to one short
+    line; the header lines and the typed fallback stay byte-identical.
+    """
+    detail = " ".join(_detail_line(tool_name, tool_input).split())
+    if len(detail) > _DIALOG_DETAIL_CHARS:
+        detail = detail[: _DIALOG_DETAIL_CHARS - 3] + "..."
+    if not detail:
+        return f"Approve? [{tag}] {tool_name}"
+    return f"Approve? [{tag}] {tool_name} — {detail}"
 
 
 _ACTIVE: dict[str, Any] = {}
