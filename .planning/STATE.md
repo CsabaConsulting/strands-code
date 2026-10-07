@@ -4,15 +4,15 @@ current_phase: 07
 current_phase_name: Subagents + /btw Side Channel
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-10-06T08:27:00.000Z"
-last_activity: 2026-10-06
-last_activity_desc: Phase 07 plan 3 complete (queue plus outliving-main lifecycle)
+last_updated: "2026-10-07T06:45:00.000Z"
+last_activity: 2026-10-07
+last_activity_desc: Phase 07 plan 4 complete (gap closure G-7-1a/G-7-1b/G-7-2/G-7-4)
 state_head: a903b412e2694bc789c0f734d165456c24f9046a
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 15
+  completed_plans: 15
   percent: 67
 ---
 
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-04)
 ## Current Position
 
 Phase: 07 (Subagents + /btw Side Channel) — EXECUTING
-Plan: 3 of 3
-Status: All Phase 07 plans complete — ready for verify-work / phase close
-Last activity: 2026-10-06 — Phase 07 plan 3 complete (queue plus outliving-main lifecycle)
+Plan: 4 of 4
+Status: All Phase 07 plans complete incl. gap closure — ready for UAT round 2 / phase seal
+Last activity: 2026-10-07 — Phase 07 plan 4 complete (gap closure G-7-1a/G-7-1b/G-7-2/G-7-4)
 
 Progress: [███████░░░] 67%
 
@@ -69,6 +69,7 @@ Progress: [███████░░░] 67%
 | Phase 7 P01 | 6min | 3 tasks | 10 files |
 | Phase 7 P02 | 14min | 3 tasks | 7 files |
 | Phase 7 P03 | 36min | 2 tasks | 5 files |
+| Phase 7 P04 | 7min | 4 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,7 @@ Recent decisions affecting current work:
 - [Phase 7]: Unbounded FIFO BtwQueue with visible depth echoes; pump spawns only when no side run is live; queue owns its submit echo (BtwContext.submit)
 - [Phase 7]: D-11 ships as bounded-wait, not async-multiplex — spike proved sync prompt_toolkit dialogs cannot run inside the multiplex loop; idle side approvals announced once and served by the next turn's pump
 - [Phase 7]: Tracer join removed; BtwContext is session-scoped so new turns adopt a live side future and queued questions start across the idle gap
+- [Phase 7]: Gap closure 07-04 — nesting-refcount pump, ONLY-framed plus context-marked side fork (exclusion fallback held), dead-tag pump drain plus SDK-wrap cancel mapping plus ack-before-join, tagged dialog titles with byte-identical typed path
 
 ### Pending Todos
 
@@ -130,6 +132,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-06T08:27:00.000Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-10-07T06:45:00.000Z
+Stopped at: Completed 07-04-PLAN.md
 Resume file: None
