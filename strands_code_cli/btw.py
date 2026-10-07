@@ -61,16 +61,26 @@ BTW_IDLE_APPROVAL = "btw approval needed — will prompt when the next turn star
 """Bounded-wait notice (D-11 fallback): a side approval waits for a turn pump."""
 
 BTW_FRAMING = (
-    "Side task: answer the trailing btw question directly and concisely; "
-    "the main task continues in parallel and your answer lands as a fenced side block."
+    "Side task: answer ONLY the trailing btw question directly and concisely, "
+    "then end the turn; all earlier user turns are read-only context owned and "
+    "handled by the main agent — do not perform, continue, or anticipate them. "
+    "The main task continues in parallel and your answer lands as a fenced side block."
 )
 """One framing line appended to the side agent's instructions."""
 
 BTW_FORK_PREAMBLE = (
-    "The conversation so far is the main agent's. You are its side channel answering "
-    "the btw question below while the main task continues."
+    "The conversation so far is the main agent's: read-only context owned and "
+    "handled by the main agent — do not perform, continue, or anticipate it. "
+    "You are its side channel answering ONLY the btw question below while the "
+    "main task continues."
 )
 """Frames the forked history's trailing question (mirrors the harness fork preamble)."""
+
+BTW_INFLIGHT_MARKER = (
+    "[In-flight main task — context only, owned and handled by the main agent; "
+    "do not perform:]"
+)
+"""Scope label for the unanswered main directive in a forked side prompt."""
 
 
 def _fence_title(question: str) -> str:
@@ -147,7 +157,9 @@ def fork_btw_history(messages: list | None, question: str) -> list:
     messages left empty. The framed btw question becomes the trailing
     user turn — absorbed into the trailing message when it is already
     user-role, so emitted roles strictly alternate (per the harness
-    ``_with_history`` rule).
+    ``_with_history`` rule). A trailing user turn with raw text (the
+    mid-turn in-flight main directive) is labeled context-only in
+    place; trailing toolResult and assistant turns stay unmarked.
     """
     forked: list = []
     answered = {
@@ -167,6 +179,14 @@ def fork_btw_history(messages: list | None, question: str) -> list:
             forked.append({"role": message["role"], "content": copy.deepcopy(content)})
     framed = {"text": f"{BTW_FORK_PREAMBLE}\n\n{question}"}
     if forked and forked[-1]["role"] == "user":
+        # Mid-turn spawn: the trailing user turn is the unanswered main
+        # directive (raw text, not toolResults) — label it read-only
+        # context in place so the side agent never performs it. Trailing
+        # toolResult turns are completed exchanges, never directives.
+        for block in forked[-1]["content"]:
+            if "text" in block and "toolResult" not in block:
+                block["text"] = f"{BTW_INFLIGHT_MARKER}\n{block['text']}"
+                break
         forked[-1]["content"].append(framed)
     else:
         forked.append({"role": "user", "content": [framed]})

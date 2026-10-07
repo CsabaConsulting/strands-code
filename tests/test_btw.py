@@ -17,8 +17,10 @@ import pytest
 
 import strands_code_cli.policy_gate as pg
 from strands_code_cli.btw import (
+    BTW_FORK_PREAMBLE,
     BTW_FRAMING,
     BTW_IDLE_APPROVAL,
+    BTW_INFLIGHT_MARKER,
     BtwContext,
     BtwQueue,
     FencedBtwHandler,
@@ -159,6 +161,62 @@ class TestForkBtwHistory:
         assert len(forked) == 1
         assert forked[0]["role"] == "user"
         assert forked[0]["content"][0]["text"].endswith("why slow?")
+
+
+class TestForkScope:
+    """G-7-1b A+B: the forked side prompt bounds scope structurally (D-04/D-09)."""
+
+    def test_trailing_unanswered_user_text_turn_gets_context_marker(self):
+        # Mid-turn spawn: the trailing raw-text user turn is the
+        # in-flight main directive — marked context-only in place.
+        parent = [
+            {"role": "user", "content": [{"text": "write an essay"}]},
+        ]
+        forked = fork_btw_history(parent, "list /tmp")
+        assert len(forked) == 1  # absorbed, no split
+        trailing = forked[-1]
+        assert trailing["role"] == "user"
+        assert len(trailing["content"]) == 2
+        assert trailing["content"][0]["text"].startswith(BTW_INFLIGHT_MARKER)
+        assert "write an essay" in trailing["content"][0]["text"]
+        assert trailing["content"][-1]["text"].endswith("list /tmp")
+
+    def test_trailing_toolresult_turn_gets_no_marker(self):
+        forked = fork_btw_history(_history_trailing_user(), "why slow?")
+        texts = [
+            block.get("text", "")
+            for block in forked[-1]["content"]
+            if "text" in block
+        ]
+        assert all(BTW_INFLIGHT_MARKER not in text for text in texts)
+
+    def test_trailing_assistant_turn_gets_no_marker(self):
+        forked = fork_btw_history(_history_trailing_assistant(), "why slow?")
+        texts = [
+            block.get("text", "")
+            for message in forked
+            for block in message["content"]
+            if "text" in block
+        ]
+        assert all(BTW_INFLIGHT_MARKER not in text for text in texts)
+
+    def test_marked_fork_roles_alternate_and_parent_unmutated(self):
+        parent = [
+            {"role": "user", "content": [{"text": "write an essay"}]},
+            {"role": "assistant", "content": [{"text": "on it"}]},
+            {"role": "user", "content": [{"text": "make it long"}]},
+        ]
+        forked = fork_btw_history(parent, "list /tmp")
+        roles = [message["role"] for message in forked]
+        assert roles == ["user", "assistant", "user"]
+        forked[-1]["content"][0]["text"] = "MUTATED"
+        assert parent[-1] == {"role": "user", "content": [{"text": "make it long"}]}
+
+    def test_framing_constants_carry_scope_boundary(self):
+        for constant in (BTW_FRAMING, BTW_FORK_PREAMBLE):
+            assert "ONLY" in constant
+            assert "do not perform" in constant
+            assert "read-only context" in constant
 
 
 class TestAppendBtwTurn:
