@@ -960,6 +960,13 @@ class TestOutlivingMain:
         # entered (the run_loop idle shape, minus the terminal).
         session_cancel = threading.Event()
         with broker.pump(session_cancel):
+            # The exact G-7-1a shape: a turn pump enters and exits
+            # inside the session pump before the idle request — the
+            # session pump must stay entered so the approval enqueues.
+            with broker.pump(threading.Event()):
+                pass
+            assert broker._pumping.is_set()
+            assert broker._cancel is session_cancel
             btw.attach_live(object(), _pending_future(), "needs approval")
             btw.running.set()
             answers: list = []

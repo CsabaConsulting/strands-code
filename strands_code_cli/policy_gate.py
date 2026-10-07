@@ -218,6 +218,11 @@ class ApprovalBroker:
         self._pumping = threading.Event()
         self._cancel: threading.Event | None = None
         self._pump_ident: int | None = None
+        # Nesting depth: turn pumps nest inside the session pump (see
+        # run_loop), so an inner exit must not wipe the outer pump's
+        # entered state. All pump enter/exit runs on the main thread
+        # (session + turn pumps today) — no lock needed.
+        self._depth = 0
         self._cancel_lock = threading.Lock()
         self._cancel_by_tag: dict[str, threading.Event] = {}
 
@@ -227,13 +232,16 @@ class ApprovalBroker:
         old_cancel, old_ident = self._cancel, self._pump_ident
         self._cancel = cancel
         self._pump_ident = threading.get_ident()
+        self._depth += 1
         self._pumping.set()
         try:
             yield self
         finally:
-            self._pumping.clear()
             self._cancel = old_cancel
             self._pump_ident = old_ident
+            self._depth = max(0, self._depth - 1)
+            if self._depth == 0:
+                self._pumping.clear()
 
     def register_cancel(self, tag: str, event: threading.Event) -> None:
         """Bind one worker's cancel event under its agent tag (LOOP-03, D-06).

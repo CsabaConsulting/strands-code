@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -365,3 +366,94 @@ class TestPendingStoreThreads:
         assert not any(thread.is_alive() for thread in threads)
         assert errors == []
         assert len(store.list()) == 250
+
+
+# ---------------------------------------------------------------------------
+# 07-04 task 1: nesting-safe pump (G-7-1a)
+# ---------------------------------------------------------------------------
+
+
+class TestPumpNesting:
+    def test_nested_turn_pump_exit_preserves_session_pump(self):
+        # Turn pumps nest inside the session pump: exiting the turn
+        # must not wipe the still-entered session pump — an idle side
+        # approval then enqueues for the next turn instead of running
+        # inline on the worker thread (where prompt_toolkit fails).
+        broker = ApprovalBroker()
+        session_cancel, turn_cancel = threading.Event(), threading.Event()
+        with broker.pump(session_cancel):
+            with broker.pump(turn_cancel):
+                pass  # turn ends inside the session
+            assert broker._pumping.is_set()  # entered state survives
+            assert broker._cancel is session_cancel  # outer cancel restored
+            box: dict[str, str] = {}
+
+            def worker():
+                box["answer"] = broker.request(lambda: "allow")
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+
+            def _waiting() -> bool:
+                if not broker.has_pending:
+                    return False
+                served = broker.poll(timeout=2.0)
+                assert served is not None
+                served.run_prompt()
+                return True
+
+            deadline = time.monotonic() + 5.0
+            while thread.is_alive() and time.monotonic() < deadline:
+                if _waiting():
+                    break
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert box == {"answer": "allow"}
+        assert not broker._pumping.is_set()  # full exit still clears
+
+    def test_exception_inside_turn_pump_preserves_session_pump(self):
+        # The finally path must preserve the session pump too: an
+        # exception unwinding through the turn pump leaves the session
+        # entered, the session cancel restored, and the depth sane.
+        broker = ApprovalBroker()
+        session_cancel, turn_cancel = threading.Event(), threading.Event()
+        with broker.pump(session_cancel):
+            with pytest.raises(RuntimeError, match="boom"):
+                with broker.pump(turn_cancel):
+                    raise RuntimeError("boom")
+            assert broker._pumping.is_set()
+            assert broker._cancel is session_cancel
+            assert broker._depth == 1
+            box: dict[str, str] = {}
+
+            def worker():
+                box["answer"] = broker.request(lambda: "allow")
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            served = broker.poll(timeout=2.0)
+            assert served is not None  # still enqueues, never inline
+            served.run_prompt()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert box == {"answer": "allow"}
+        assert not broker._pumping.is_set()
+        assert broker._depth == 0
+
+    def test_depth_counts_two_deep_and_clears_on_full_exit(self):
+        # Depth bookkeeping: two-deep entry, one exit leaves depth 1
+        # with the pump entered; the outer exit clears everything.
+        broker = ApprovalBroker()
+        assert broker._depth == 0
+        session_pump = broker.pump(threading.Event())
+        turn_pump = broker.pump(threading.Event())
+        session_pump.__enter__()
+        assert broker._depth == 1
+        turn_pump.__enter__()
+        assert broker._depth == 2
+        turn_pump.__exit__(None, None, None)
+        assert broker._depth == 1
+        assert broker._pumping.is_set()
+        session_pump.__exit__(None, None, None)
+        assert broker._depth == 0
+        assert not broker._pumping.is_set()
