@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 import strands_code_cli.policy_gate as pg
+from concurrent.futures import Future
+from strands.types.exceptions import EventLoopException
 from strands_code_cli.btw import (
     BTW_FORK_PREAMBLE,
     BTW_FRAMING,
@@ -30,8 +32,8 @@ from strands_code_cli.btw import (
     fork_btw_history,
     render_btw_error,
 )
-from strands_code_cli.loop import _drain_idle_btw, _invoke_agent
-from strands_code_cli.policy_gate import ApprovalBroker
+from strands_code_cli.loop import _drain_idle_btw, _finish_btw_turn, _invoke_agent
+from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
 from strands_code_cli.steering import (
     SteeringState,
     is_btw_line,
@@ -1056,6 +1058,25 @@ class TestOutlivingMain:
             _drain_idle_btw(main, btw, broker, "test-model", session_turns)
             assert btw.approval_announced is False
             assert capsys.readouterr().out == ""
+
+
+class TestFinishBtwTurnCancel:
+    def test_cancel_renders_fenced_note_never_failed(self, capsys):
+        # G-7-2 F-2: a side future dying on cancel (raw or SDK-wrapped)
+        # lands as a fenced cancel note — never "btw failed" text.
+        for exc in (TurnCancelled(), EventLoopException(TurnCancelled())):
+            btw = _idle_btw()
+            future: Future = Future()
+            future.set_exception(exc)
+            _finish_btw_turn(btw, object(), future, "needs approval")
+            out = capsys.readouterr().out
+            assert "--- btw: " in out
+            assert "--- end btw ---" in out
+            assert "Cancelled by user" in out
+            assert "failed (" not in out
+            assert "EventLoopException" not in out
+            assert btw.pending == []
+            assert btw.done is False
 
 
 @pytest.mark.integration

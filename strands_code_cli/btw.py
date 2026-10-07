@@ -147,6 +147,19 @@ def render_btw_error(question: str, exc: BaseException) -> None:
         print_plain(console, "--- end btw ---")
 
 
+def render_btw_cancelled(question: str) -> None:
+    """Render a side cancel as a fenced note, never a failure (G-7-2 F-2).
+
+    Same fence shape as answers; the body names the cancel so a
+    cancelled side run reads as user intent in the transcript, not as
+    an internal exception.
+    """
+    with RENDER_LOCK:
+        print_plain(console, f"--- btw: {_fence_title(question)} ---")
+        print_plain(console, "Cancelled by user")
+        print_plain(console, "--- end btw ---")
+
+
 def fork_btw_history(messages: list | None, question: str) -> list:
     """Fork parent history for the side agent (replicated harness "all").
 

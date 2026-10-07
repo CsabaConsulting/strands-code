@@ -30,6 +30,7 @@ from strands_code_cli.btw import (
     append_btw_turn,
     build_btw_agent,
     register_btw_cancel,
+    render_btw_cancelled,
     render_btw_error,
     unregister_btw_cancel,
 )
@@ -82,6 +83,7 @@ from strands_code_cli.policy_gate import (
     bind_turn,
     gate_open,
     set_mode as set_gate_mode,
+    worker_cancelled,
 )
 from strands_code_cli.router import (
     apply_approved_proposal,
@@ -244,6 +246,26 @@ def _choose_cancel_targets() -> tuple[str, ...]:
         return ("main", "btw")
 
 
+def _poll_live(broker: Any) -> Any:
+    """Next live approval request, skipping dead workers' (D-08, G-7-2 F-1).
+
+    The pump is the only choke point that sees both workers: a request
+    whose waiter's cancel event is already set belongs to a dead worker
+    (cancel landed after queueing, or the pump won the poll race), so
+    it is aborted — never served as a phantom dialog — and polling
+    continues. ``cancel=None`` (legacy/tests) always serves.
+    """
+    while True:
+        req = broker.poll()
+        if req is None:
+            return None
+        cancel = getattr(req, "cancel", None)
+        if cancel is not None and cancel.is_set():
+            req.abort()
+            continue
+        return req
+
+
 def record_turn_metrics(
     result: Any, current_model: str, session_turns: list
 ) -> str | None:
@@ -304,6 +326,9 @@ def _finish_btw_turn(
     try:
         result = future.result()
     except Exception as exc:  # noqa: BLE001 — side failure must never fail the main turn
+        if worker_cancelled(exc):
+            render_btw_cancelled(question)
+            return
         render_btw_error(question, exc)
         return
     btw.pending.append((question, _result_text(btw_agent, result), result))
@@ -344,6 +369,11 @@ def _invoke_parallel(
     ``side_pool`` is the session side executor (owned by
     :func:`run_loop`); None (direct calls, tests) builds an ad-hoc
     single-worker pool whose thread a live side rides to completion.
+
+    Cancel aborts at step granularity (no thread preemption): model
+    streams and approval waits abort promptly, but a synchronous tool
+    step runs to completion — so the pump acknowledges the cancel
+    before raising, while the pool-exit join waits out the step.
     """
     btw.cancel_targets = ()
     adopted = btw.detach_live()
@@ -465,7 +495,7 @@ def _pump_parallel(
                     if btw_future is None:
                         _spawn_next()
                     if broker is not None:
-                        req = broker.poll()
+                        req = _poll_live(broker)
                         if req is not None:
                             req.run_prompt()
                     else:
@@ -481,6 +511,8 @@ def _pump_parallel(
                         cancel_event.set()
                         btw.cancel_event.set()
                         unregister_btw_cancel(broker)
+                        # Ack before the pool-exit join waits out the step.
+                        print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
                         raise
                     targets = _choose_cancel_targets()
                     if not targets:
@@ -501,7 +533,7 @@ def _pump_parallel(
                         try:
                             while btw_future is not None and not btw_future.done():
                                 if broker is not None:
-                                    req = broker.poll()
+                                    req = _poll_live(broker)
                                     if req is not None:
                                         req.run_prompt()
                                 else:
@@ -518,6 +550,7 @@ def _pump_parallel(
                                 btw.attach_live(btw_agent, btw_future, btw_question or "")
                             if both_running is not None:
                                 both_running.clear()
+                            print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
                             raise
                         _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
                         unregister_btw_cancel(broker)
@@ -529,11 +562,12 @@ def _pump_parallel(
                     else:
                         # Both picked: the side aborts on its event; it
                         # stays attached so the next turn reaps the
-                        # abort (fenced error, flag hygiene).
+                        # abort (fenced cancel note, flag hygiene).
                         if btw_future is not None:
                             btw.attach_live(btw_agent, btw_future, btw_question or "")
                         if both_running is not None:
                             both_running.clear()
+                    print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
                     raise
             if btw_future is not None:
                 # Outliving-main: the side keeps running past the turn
@@ -545,6 +579,13 @@ def _pump_parallel(
             except TurnCancelled:
                 # Worker aborted on cancel without a main-thread
                 # KeyboardInterrupt reaching us: same cancel path.
+                btw.cancel_event.set()
+                unregister_btw_cancel(broker)
+                raise KeyboardInterrupt from None
+            except Exception as exc:
+                if not worker_cancelled(exc):
+                    raise
+                # SDK-wrapped cancel (EventLoopException): same path.
                 btw.cancel_event.set()
                 unregister_btw_cancel(broker)
                 raise KeyboardInterrupt from None
@@ -635,7 +676,12 @@ def _invoke_agent(
                             # Worker aborted on cancel without a main-thread
                             # KeyboardInterrupt reaching us: same cancel path.
                             raise KeyboardInterrupt from None
-                    req = broker.poll()
+                        except Exception as exc:
+                            if not worker_cancelled(exc):
+                                raise
+                            # SDK-wrapped cancel: same cancel path.
+                            raise KeyboardInterrupt from None
+                    req = _poll_live(broker)
                     if req is None:
                         continue
                     req.run_prompt()
@@ -1239,6 +1285,8 @@ def _drain_revise_rounds(
         except (KeyboardInterrupt, TurnCancelled):
             raise
         except Exception as exc:
+            if worker_cancelled(exc):
+                raise KeyboardInterrupt from None
             print_plain(
                 console, f"Turn failed ({type(exc).__name__}): {exc}", style="red"
             )
@@ -1595,6 +1643,8 @@ def run_loop(
                     except (KeyboardInterrupt, TurnCancelled):
                         raise
                     except Exception as exc:
+                        if worker_cancelled(exc):
+                            raise KeyboardInterrupt from None
                         # Provider/model errors (validation, throttling, ...)
                         # must fail the turn, never the session: report and
                         # re-prompt. Errors never retry — only empty success.

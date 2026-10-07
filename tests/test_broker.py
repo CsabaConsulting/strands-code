@@ -20,9 +20,15 @@ from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.interventions.actions import Confirm, Proceed
 
 import strands_code_cli.policy_gate as pg
-from strands_code_cli.loop import _invoke_agent
+from strands.types.exceptions import EventLoopException
+from strands_code_cli.loop import _invoke_agent, _poll_live
 from strands_code_cli.policy import PolicyConfig
-from strands_code_cli.policy_gate import ApprovalBroker, PolicyClassifier, TurnCancelled
+from strands_code_cli.policy_gate import (
+    ApprovalBroker,
+    PolicyClassifier,
+    TurnCancelled,
+    worker_cancelled,
+)
 
 
 def _event(name: str, tool_input: dict[str, Any], uid: str = "t1"):
@@ -457,3 +463,131 @@ class TestPumpNesting:
         session_pump.__exit__(None, None, None)
         assert broker._depth == 0
         assert not broker._pumping.is_set()
+
+
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    """Spin until the predicate holds (queued-before-cancel sequencing)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+# ---------------------------------------------------------------------------
+# 07-04 task 3: clean cancel with an approval in flight (G-7-2)
+# ---------------------------------------------------------------------------
+
+
+class TestDeadRequestSkip:
+    def test_preset_cancel_request_skipped_pump_side(self):
+        # G-7-2 F-1: cancel lands after queueing (the pump won the poll
+        # race) — the drain aborts the dead request instead of serving
+        # a phantom dialog; the waiter raises TurnCancelled.
+        broker = ApprovalBroker()
+        pump_cancel = threading.Event()
+        side_cancel = threading.Event()
+        calls: list[str] = []
+        box: dict[str, str] = {}
+
+        def worker():
+            try:
+                broker.request(
+                    lambda: calls.append("prompt") or "never", side_cancel
+                )
+                box["side"] = "answered?!"
+            except TurnCancelled:
+                box["side"] = "cancelled"
+
+        with broker.pump(pump_cancel):
+            thread = threading.Thread(target=worker)
+            thread.start()
+            assert _wait_until(lambda: broker.has_pending)  # queued first
+            side_cancel.set()  # cancel lands after queueing
+            assert _poll_live(broker) is None  # skipped, nothing live
+            thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert calls == []  # prompt callable never ran
+        assert box == {"side": "cancelled"}
+
+    def test_mixed_queue_serves_only_live_in_order(self):
+        # Dead-side plus live-main queue: the drain serves ONLY the
+        # live request, in order, with the dead waiter cancelled —
+        # whether the waiter self-discards first or the drain aborts.
+        broker = ApprovalBroker()
+        pump_cancel = threading.Event()
+        side_cancel = threading.Event()
+        main_cancel = threading.Event()
+        calls: list[str] = []
+        box: dict[str, str] = {}
+
+        def side_worker():
+            try:
+                broker.request(lambda: calls.append("side") or "never", side_cancel)
+                box["side"] = "answered?!"
+            except TurnCancelled:
+                box["side"] = "cancelled"
+
+        def main_worker():
+            box["main"] = broker.request(
+                lambda: calls.append("main") or "main-answer", main_cancel
+            )
+
+        with broker.pump(pump_cancel):
+            side_thread = threading.Thread(target=side_worker)
+            side_thread.start()
+            assert _wait_until(lambda: broker.has_pending)  # side queued
+            side_cancel.set()  # ...then dies
+            main_thread = threading.Thread(target=main_worker)
+            main_thread.start()
+            assert _wait_until(lambda: broker._queue.qsize() >= 1)
+            served = _poll_live(broker)
+            assert served is not None
+            served.run_prompt()
+            main_thread.join(timeout=5)
+            side_thread.join(timeout=5)
+            assert _poll_live(broker) is None  # nothing left behind
+        assert not main_thread.is_alive()
+        assert not side_thread.is_alive()
+        assert calls == ["main"]
+        assert box == {"side": "cancelled", "main": "main-answer"}
+
+    def test_none_cancel_always_serves(self):
+        # Legacy/tests requests carry no event: always served, even
+        # with the pump cancel set.
+        broker = ApprovalBroker()
+        pump_cancel = threading.Event()
+        pump_cancel.set()
+        with broker.pump(pump_cancel):
+            broker._queue.put(pg._ApprovalRequest(lambda: "served"))
+            served = _poll_live(broker)
+            assert served is not None
+            served.run_prompt()
+            assert served.answer == "served"
+
+    def test_abort_makes_waiter_raise(self):
+        # The abort half of the skip: done-set with no answer reads as
+        # TurnCancelled to a not-yet-aborted waiter.
+        req = pg._ApprovalRequest(lambda: "x", threading.Event())
+        req.abort()
+        with pytest.raises(TurnCancelled):
+            req.wait_answer(threading.Event())
+
+
+class TestWorkerCancelled:
+    def test_bare_turn_cancelled_maps(self):
+        assert worker_cancelled(TurnCancelled()) is True
+
+    def test_wrapped_turn_cancelled_maps(self):
+        assert worker_cancelled(EventLoopException(TurnCancelled())) is True
+
+    def test_nested_wrap_maps(self):
+        nested = EventLoopException(EventLoopException(TurnCancelled()))
+        assert worker_cancelled(nested) is True
+
+    def test_wrapped_value_error_is_failure(self):
+        assert worker_cancelled(EventLoopException(ValueError("boom"))) is False
+
+    def test_plain_error_is_failure(self):
+        assert worker_cancelled(ValueError("boom")) is False

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
 
 from rich.console import Console
+from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
 
@@ -159,13 +160,36 @@ class TurnCancelled(Exception):
     """
 
 
+def worker_cancelled(exc: BaseException) -> bool:
+    """True when this worker failure is a user cancel (G-7-2 F-2).
+
+    The SDK wraps ``TurnCancelled`` in ``EventLoopException`` (it is not
+    in the event loop's pass-through tuple), so ``except TurnCancelled``
+    sites never fire for real agents — only this unwrap sees the cancel.
+    Nested wraps map too; anything else is a genuine failure.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, TurnCancelled):
+            return True
+        if not isinstance(current, EventLoopException):
+            return False
+        current = current.original_exception
+
+
 class _ApprovalRequest:
     """One prompt handoff from the SDK worker thread to the pump thread."""
 
-    def __init__(self, prompt: Callable[[], str]) -> None:
+    def __init__(
+        self, prompt: Callable[[], str], cancel: threading.Event | None = None
+    ) -> None:
         self._prompt = prompt
         self._done = threading.Event()
         self.answer: str | None = None
+        # The waiter's own cancel event (None for legacy/tests): the
+        # pump skips requests whose event is already set instead of
+        # serving a phantom dialog for a dead worker (G-7-2 F-1).
+        self.cancel = cancel
 
     def run_prompt(self) -> None:
         """Execute the prompt in the pump thread (KeyboardInterrupt propagates)."""
@@ -173,6 +197,15 @@ class _ApprovalRequest:
             self.answer = self._prompt()
         finally:
             self._done.set()
+
+    def abort(self) -> None:
+        """Mark a dead worker's request unanswered (pump-side skip).
+
+        A not-yet-aborted waiter sees the set done-flag with no answer
+        and raises :class:`TurnCancelled` via the cancel/None path.
+        """
+        self.answer = None
+        self._done.set()
 
     def wait_answer(self, cancel: threading.Event | None) -> str:
         """Worker side: block for the answer; abort promptly on cancel.
@@ -276,7 +309,7 @@ class ApprovalBroker:
         """
         if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
             return prompt()
-        req = _ApprovalRequest(prompt)
+        req = _ApprovalRequest(prompt, cancel)
         self._queue.put(req)
         try:
             return req.wait_answer(cancel if cancel is not None else self._cancel)
