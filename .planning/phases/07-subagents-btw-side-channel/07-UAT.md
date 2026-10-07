@@ -59,7 +59,7 @@ blocked: 0
   severity: critical
   test: 1
   artifacts: [strands_code_cli/policy_gate.py]
-  missing: ["Nesting count in ApprovalBroker.pump: __exit__ unconditionally clears _pumping, wiping the session pump's entered state when the turn pump exits; every later idle side approval takes the inline prompt() path on the SDK worker thread where prompt_toolkit fails. Fix: refcount enter/exit; regression test enter-session/exit-turn then assert still-pumping + enqueue-not-inline."]
+  missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-1a.md): confirmed — pump.__exit__ (policy_gate.py:233-236) unconditionally clears _pumping (sole clear site repo-wide), wiping the still-entered session pump (loop.py:1447-1449; design intent at 1438-1441 says turn pumps nest inside it). Every later idle side approval takes inline prompt() on the SDK worker thread where asyncio nesting fails → deny; has_pending stays False so BTW_IDLE_APPROVAL never prints. Fix: nesting refcount in pump enter/exit; regression test enter-session/exit-turn then assert still-pumping + enqueue-not-inline."]
 - gap_id: G-7-1b
   truth: "Side agent answers ONLY the btw question and never continues the main task (D-04/D-09 scope)"
   status: failed
@@ -67,7 +67,7 @@ blocked: 0
   severity: high
   test: 1
   artifacts: [strands_code_cli/btw.py]
-  missing: ["Fork carries the main user message with no assistant response yet; BTW_FRAMING does not bound scope strongly enough, so the model adopts the unanswered main task after finishing the side question. Fix direction: explicit scope boundary in framing (answer ONLY the trailing btw question, end turn when answered) and/or mark the in-flight main turn in the fork. Verify live."]
+  missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-1b.md): confirmed + sharpened — spawn snapshots live history incl. the unanswered main directive (loop.py:572-574); the absorb branch (btw.py:168-172) MERGES main directive + btw question into ONE trailing user turn (upstream _with_history never meets this case: harness children spawn inside tool calls where trailing user turns are already-answered toolResults); neither BTW_FRAMING (btw.py:63-66) nor BTW_FORK_PREAMBLE (btw.py:69-72) forbids performing earlier turns, and CODE_AGENT_INSTRUCTIONS says 'solve tasks'. Attribution proven real (not render leak): [btw] tag classifies by agent identity. Recommended fix A+B: harden framing (ONLY + do-not-perform-main) AND mark the in-flight non-toolResult user turn as context-only; exclusion (C) as fallback if live repro still fails. Verify live."]
 - gap_id: G-7-2
   truth: "Cancel with an approval dialog in flight cancels cleanly: no orphan dialogs, no dialog storms, no internal exceptions (D-08)"
   status: failed
@@ -75,7 +75,7 @@ blocked: 0
   severity: high
   test: 2
   artifacts: [strands_code_cli/loop.py, strands_code_cli/policy_gate.py]
-  missing: ["Hypotheses (verify in fix plan): (a) pump dequeues side request then cancel lands — WR-03 discard only covers waiter-side abort, pump still runs the dialog for a dead worker; pump must skip requests whose tag event is set. (b) dead worker's LATER queued requests are never discarded — discard one covers only the current waiter request; need tag-wide purge on cancel. Second chooser likely user mashing Ctrl-C while stuck — consider chooser re-entry guard. EventLoopException must map to clean 'Cancelled by user' rendering. (c) cancel-both join waits on worker cancel granularity — confirm SDK behavior, consider prompt cancel responsiveness."]
+  missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-2.md): RC-1 CONFIRMED — _ApprovalRequest untagged (policy_gate.py:162), all 3 pump serve sites unconditional (loop.py:470/506/641), pump wins race vs waiter 50ms poll → dialog for dead worker; fix F-1 tag requests + pump-side skip on set tag event. RC-2 PARTIALLY REFUTED — queue holds at most one req per live worker, no tag-wide purge needed. RC-3 CONFIRMED no-fix — second chooser is by-design escalation (Ctrl-C inside phantom dialog); dies with F-1. RC-4 CONFIRMED extends — SDK wraps TurnCancelled in EventLoopException so our except-TurnCancelled sites are dead for real agents; fix F-2 unwrap + map to clean cancel rendering. RC-5 CONFIRMED half-by-design — cancel join waits on SDK step granularity; fix F-3 ack-before-join + doc, no thread preemption."]
 - gap_id: G-7-4
   truth: "Approval dialogs identify their agent and request (transparency: side content never presented ambiguously)"
   status: failed
