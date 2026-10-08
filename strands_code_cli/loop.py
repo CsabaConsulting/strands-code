@@ -31,6 +31,7 @@ from strands_code_cli.btw import (
     build_btw_agent,
     register_btw_cancel,
     render_btw_cancelled,
+    render_btw_dropped,
     render_btw_error,
     unregister_btw_cancel,
 )
@@ -792,6 +793,8 @@ def _drain_idle_btw(
     broker: Any,
     current_model: str,
     session_turns: list,
+    *,
+    from_exit: bool = False,
 ) -> None:
     """Idle-boundary btw delivery (D-11 multiplex + bounded-wait remnant).
 
@@ -805,7 +808,9 @@ def _drain_idle_btw(
     announce below only fires for the race sliver: an approval queued
     after the winning prompt episode returned but before this drain
     runs. It stays queued for the next turn's pump, announced once via
-    :data:`BTW_IDLE_APPROVAL`.
+    :data:`BTW_IDLE_APPROVAL`. On the exit path (``from_exit``) the
+    announce never fires — exit promises no next turn; the dropped
+    side is named by :func:`_note_dropped_side` instead.
     """
     taken = btw.take_done_live()
     if taken is not None:
@@ -823,11 +828,26 @@ def _drain_idle_btw(
             if usage is not None:
                 print_plain(console, usage, style="dim")
     if broker is not None and btw.has_live and broker.has_pending:
-        if not btw.approval_announced:
+        if not btw.approval_announced and not from_exit:
             print_plain(console, BTW_IDLE_APPROVAL)
             btw.approval_announced = True
     elif broker is None or not broker.has_pending:
         btw.approval_announced = False
+
+
+def _note_dropped_side(btw: BtwContext, broker: Any) -> None:
+    """Exit-path note: name a live side run before it is cancelled.
+
+    Main-thread only; call after the exit drain (which reaps done runs)
+    and before ``cancel_event.set()``. A still-attached run is dropped
+    by the exit, so it is named with its state — waiting on an
+    approval vs still running — instead of vanishing silently. Nothing
+    attached (or already reaped) prints nothing.
+    """
+    if not btw.has_live:
+        return
+    waiting = broker is not None and broker.has_pending
+    render_btw_dropped(btw.live_question or "", waiting)
 
 
 def _handle_turn_cancel(
@@ -1854,10 +1874,14 @@ def run_loop(
             titled = True
             _maybe_auto_title(agent, session_id, index, text)
     # A side run completed just before exit still lands (history plus
-    # metrics); a still-running one gets a graceful stop — the session
-    # is over, so D-11's never-cut rule yields to a clean exit — and
-    # the pool join below waits for the abort, never for full work.
-    _drain_idle_btw(agent, btw_session, broker, current_model, session_turns)
+    # metrics); a still-running one is named and gets a graceful stop —
+    # the session is over, so D-11's never-cut rule yields to a clean
+    # exit — and the pool join below waits for the abort, never for
+    # full work.
+    _drain_idle_btw(
+        agent, btw_session, broker, current_model, session_turns, from_exit=True
+    )
+    _note_dropped_side(btw_session, broker)
     if btw_session.has_live:
         btw_session.cancel_event.set()
     try:

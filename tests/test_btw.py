@@ -32,7 +32,12 @@ from strands_code_cli.btw import (
     fork_btw_history,
     render_btw_error,
 )
-from strands_code_cli.loop import _drain_idle_btw, _finish_btw_turn, _invoke_agent
+from strands_code_cli.loop import (
+    _drain_idle_btw,
+    _finish_btw_turn,
+    _invoke_agent,
+    _note_dropped_side,
+)
 from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
 from strands_code_cli.steering import (
     SteeringState,
@@ -1058,6 +1063,81 @@ class TestOutlivingMain:
             _drain_idle_btw(main, btw, broker, "test-model", session_turns)
             assert btw.approval_announced is False
             assert capsys.readouterr().out == ""
+
+
+class TestExitDropNote:
+    """Exit names a live side run with its state; never promises a turn."""
+
+    def _exit_sequence(self, main, btw, broker, session_turns):
+        # The exact run_loop exit order: drain, name, cancel.
+        _drain_idle_btw(
+            main, btw, broker, "test-model", session_turns, from_exit=True
+        )
+        _note_dropped_side(btw, broker)
+        if btw.has_live:
+            btw.cancel_event.set()
+
+    def test_live_parked_side_named_waiting_no_next_turn(
+        self, monkeypatch, capsys
+    ):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        btw = _idle_btw()
+        session_cancel = threading.Event()
+        with broker.pump(session_cancel):
+            btw.attach_live(object(), _pending_future(), "needs approval")
+            btw.running.set()
+            answers: list = []
+
+            def worker() -> None:
+                try:
+                    answers.append(broker.request(lambda: "allow", btw.cancel_event))
+                except TurnCancelled:
+                    answers.append("cancelled")
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            assert _wait_for(lambda: broker.has_pending)
+            self._exit_sequence(main, btw, broker, [])
+            out = capsys.readouterr().out
+            assert "needs approval" in out
+            assert "waiting on approval" in out
+            assert "--- btw: needs approval ---" in out
+            assert BTW_IDLE_APPROVAL not in out
+            assert "next turn" not in out
+            thread.join(timeout=5.0)
+            assert not thread.is_alive()
+            assert answers == ["cancelled"]  # exit cancel unblocks the waiter
+
+    def test_live_running_side_named_still_running(self, monkeypatch, capsys):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        btw = _idle_btw()
+        with broker.pump(threading.Event()):
+            btw.attach_live(object(), _pending_future(), "long analysis")
+            btw.running.set()
+            self._exit_sequence(main, btw, broker, [])
+            out = capsys.readouterr().out
+            assert "long analysis" in out
+            assert "still running" in out
+            assert "next turn" not in out
+
+    def test_done_unreaped_side_lands_without_drop_note(self, monkeypatch, capsys):
+        broker = ApprovalBroker()
+        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
+        main = _MainDouble()
+        btw = _idle_btw()
+        with broker.pump(threading.Event()):
+            btw.attach_live(object(), _done_future(), "q1")
+            btw.running.set()
+            self._exit_sequence(main, btw, broker, [])
+            assert not btw.has_live  # reaped by the exit drain
+            assert btw.pending == []  # flushed to history, nothing held
+            out = capsys.readouterr().out
+            assert "dropped on exit" not in out
+            assert "next turn" not in out
 
 
 class TestFinishBtwTurnCancel:

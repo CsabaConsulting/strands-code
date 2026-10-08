@@ -147,6 +147,21 @@ def render_btw_error(question: str, exc: BaseException) -> None:
         print_plain(console, "--- end btw ---")
 
 
+def render_btw_dropped(question: str, waiting: bool) -> None:
+    """Render an exit-drop as a fenced note naming the question (G-7-1-R2 B).
+
+    Same fence shape as answers; the body names the live question and
+    its state at drop time (waiting on an approval vs still running)
+    so exiting with a live side run is never silent — and never
+    promises a next turn.
+    """
+    state = "was waiting on approval" if waiting else "was still running"
+    with RENDER_LOCK:
+        print_plain(console, f"--- btw: {_fence_title(question)} ---")
+        print_plain(console, f"Side answer dropped on exit — {state}.")
+        print_plain(console, "--- end btw ---")
+
+
 def render_btw_cancelled(question: str) -> None:
     """Render a side cancel as a fenced note, never a failure (G-7-2 F-2).
 
