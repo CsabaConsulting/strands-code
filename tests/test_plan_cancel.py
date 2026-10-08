@@ -330,6 +330,19 @@ class TestAskCancelTarget:
             ("both", "Both"),
         )
 
+    def test_chooser_holds_guard_during_dialog(self, monkeypatch):
+        seen: dict[str, Any] = {}
+
+        def _fake(title: str, options: Any, **kwargs: Any) -> Any:
+            seen["held"] = loop_module.gate_open.held()
+            return "btw"
+
+        monkeypatch.setattr(loop_module, "radio_choice", _fake)
+        assert loop_module.gate_open.held() is False  # headless: no holder
+        assert ask_cancel_target() == "btw"
+        assert seen["held"] is True  # held for the whole dialog call
+        assert loop_module.gate_open.held() is False  # released after
+
 
 class TestChooseCancelTargets:
     """Pump-level choice: empty passes through, in-chooser Ctrl-C names both."""

@@ -221,15 +221,18 @@ def resolve_cancel_targets(choice: str | None) -> tuple[str, ...]:
 def ask_cancel_target() -> str | None:
     """Ask which worker to cancel; None fails closed (cancel nothing).
 
-    No tty (tests, pipes) denies the prompt with None instead of
-    crashing the turn. Ctrl-C inside the chooser propagates as
-    KeyboardInterrupt — the caller escalates that to cancelling both.
+    Holds the stdin guard for the dialog, mirroring ``ask()`` — the
+    steering reader never steals chooser keys. No tty (tests, pipes)
+    denies the prompt with None instead of crashing the turn. Ctrl-C
+    inside the chooser propagates as KeyboardInterrupt — the caller
+    escalates that to cancelling both.
     """
     try:
-        return radio_choice(
-            "Cancel which?",
-            (("main", "Main task"), ("btw", "Side answer"), ("both", "Both")),
-        )
+        with gate_open.hold():
+            return radio_choice(
+                "Cancel which?",
+                (("main", "Main task"), ("btw", "Side answer"), ("both", "Both")),
+            )
     except RuntimeError:
         return None  # no tty: fail closed, the turn continues
 

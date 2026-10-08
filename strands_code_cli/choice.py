@@ -25,6 +25,8 @@ import shutil
 import sys
 from typing import Any, Sequence
 
+from strands_code_cli.steering import stdin_guard
+
 CANCELLED = object()
 """Sentinel: the user pressed Ctrl-C inside the dialog (must re-raise)."""
 
@@ -163,15 +165,32 @@ def radio_choice(
         KeyboardInterrupt: The user pressed Ctrl-C (cancel path).
         RuntimeError: No tty — the caller must use its typed fallback.
     """
-    if not sys.stdin.isatty():
-        raise RuntimeError("radio_choice needs a tty")
-    values = list(options)
-    if not values:
-        return None
+    # Single choke point for every mid-turn dialog: hold the stdin
+    # guard for the dialog's whole lifetime so the steering reader
+    # never steals its keys, and drain prompt_toolkit typeahead on
+    # entry so mashed keys from a lagged dialog cannot auto-confirm
+    # the next one (G-7-1-R2b RC-1 + RC-2). Kernel-buffered bytes are
+    # left alone — legitimately typed steering survives for after.
+    stdin_guard.set()
     try:
-        result = _build_app(title, values, default).run()
-    except Exception:
-        return None  # broken prompt denies, never crashes the turn
-    if result is CANCELLED:
-        raise KeyboardInterrupt
-    return result
+        try:
+            from prompt_toolkit.input import create_input
+            from prompt_toolkit.input.typeahead import clear_typeahead
+
+            clear_typeahead(create_input())
+        except Exception:
+            pass  # hygiene is best-effort; the dialog still runs
+        if not sys.stdin.isatty():
+            raise RuntimeError("radio_choice needs a tty")
+        values = list(options)
+        if not values:
+            return None
+        try:
+            result = _build_app(title, values, default).run()
+        except Exception:
+            return None  # broken prompt denies, never crashes the turn
+        if result is CANCELLED:
+            raise KeyboardInterrupt
+        return result
+    finally:
+        stdin_guard.clear()

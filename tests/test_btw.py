@@ -40,6 +40,7 @@ from strands_code_cli.loop import (
 )
 from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
 from strands_code_cli.steering import (
+    StdinGuard,
     SteeringState,
     is_btw_line,
     start_steering_reader,
@@ -364,7 +365,7 @@ class TestMidTurnCarveOut:
         from strands_code_cli.model_switch import MODEL_REFUSAL
 
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         spawned: list[str] = []
         refused: list[tuple] = []
         read_fd, write_fd = os.pipe()
@@ -393,7 +394,7 @@ class TestMidTurnCarveOut:
 
     def test_bare_btw_mid_turn_yields_usage_not_spawn(self):
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         spawned: list[str] = []
         refused: list[tuple] = []
         read_fd, write_fd = os.pipe()
@@ -818,7 +819,7 @@ class TestBtwFifoDrain:
 class TestSteeringDuringBacklog:
     def test_plain_text_still_steers_main_while_btw_runs(self):
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         btw = _idle_btw()
         btw.running.set()  # backlog: a side answer runs
         read_fd, write_fd = os.pipe()
@@ -837,7 +838,7 @@ class TestSteeringDuringBacklog:
 
     def test_btw_submit_through_reader_echoes_receipt_and_status(self, capsys):
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         btw = _idle_btw()
         btw.running.set()  # backlog: a side answer runs
         read_fd, write_fd = os.pipe()
@@ -860,7 +861,7 @@ class TestSteeringDuringBacklog:
 class TestGateOpenBtw:
     def test_btw_typed_during_open_prompt_waits_for_close(self):
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         gate.set()  # approval prompt open: the reader must not consume
         spawned: list[str] = []
         read_fd, write_fd = os.pipe()

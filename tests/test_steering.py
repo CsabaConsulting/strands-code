@@ -24,6 +24,7 @@ from strands_code_cli.policy import PolicyConfig
 from strands_code_cli.steering import (
     STEERING_NOTED,
     STREAMING_LIMIT,
+    StdinGuard,
     SteeringReader,
     SteeringSlot,
     SteeringState,
@@ -139,7 +140,7 @@ class TestSteeringReader:
     def test_capture_arms_pending_and_echoes(self):
         received: list[str] = []
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         read_fd, write_fd = os.pipe()
         try:
             reader = start_steering_reader(
@@ -161,7 +162,7 @@ class TestSteeringReader:
         steered: list[str] = []
         refused: list[tuple[str, str]] = []
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         read_fd, write_fd = os.pipe()
         try:
             reader = start_steering_reader(
@@ -186,7 +187,7 @@ class TestSteeringReader:
         steered: list[str] = []
         refused: list[tuple[str, str]] = []
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         read_fd, write_fd = os.pipe()
         try:
             reader = start_steering_reader(
@@ -231,7 +232,7 @@ class TestMidTurnSlashReply:
     def test_gate_open_buffers_without_arming(self):
         received: list[str] = []
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         gate.set()  # approval prompt open
         read_fd, write_fd = os.pipe()
         try:
@@ -259,7 +260,7 @@ class TestMidTurnSlashReply:
 
         received: list[str] = []
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         read_fd, write_fd = os.pipe()
         real_select = select_module.select
 
@@ -313,7 +314,7 @@ class TestMidTurnSlashReply:
 
     def test_stop_joins_without_input(self):
         state = SteeringState()
-        gate = threading.Event()
+        gate = StdinGuard()
         read_fd, write_fd = os.pipe()
         try:
             reader = start_steering_reader(state, gate, stdin=_PipeStdin(read_fd))
@@ -348,7 +349,7 @@ class TestFdModeInvariant:
         try:
             assert os.get_blocking(read_fd) is True
             state = SteeringState()
-            gate = threading.Event()
+            gate = StdinGuard()
             reader = start_steering_reader(
                 state, gate, stdin=_PipeStdin(read_fd)
             )
@@ -364,6 +365,89 @@ class TestFdModeInvariant:
             reader.stop()
             assert not reader.alive
             assert os.get_blocking(read_fd) is True
+        finally:
+            os.close(write_fd)
+            os.close(read_fd)
+
+
+class TestStdinGuard:
+    """Reentrant guard unit: overlapping holders compose (G-7-1-R2b)."""
+
+    def test_two_holders_one_release_stays_held(self):
+        guard = StdinGuard()
+        guard.set()  # holder A: first dialog
+        guard.set()  # holder B: overlapping dialog
+        assert guard.held()
+        guard.clear()  # A releases while B still runs
+        assert guard.held()
+        assert guard.is_set()
+        guard.clear()  # B releases: the parked reader wakes
+        assert not guard.held()
+        assert not guard.is_set()
+
+    def test_hold_releases_on_error(self):
+        guard = StdinGuard()
+        try:
+            with guard.hold():
+                assert guard.held()
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("hold must not swallow the error")
+        assert not guard.held()
+
+    def test_nested_hold_balances(self):
+        guard = StdinGuard()
+        with guard.hold():  # chooser-side hold
+            with guard.hold():  # choke-point acquire inside radio_choice
+                assert guard.held()
+            assert guard.held()
+        assert not guard.held()
+
+    def test_stray_clear_still_clears(self):
+        guard = StdinGuard()
+        guard.clear()  # unbalanced: Event-compatible, never negative
+        assert not guard.held()
+        guard.set()
+        assert guard.held()
+
+    def test_singleton_shared_by_gate_chooser_and_dialog(self):
+        import strands_code_cli.choice as choice_module
+        import strands_code_cli.loop as loop_module
+        from strands_code_cli.steering import stdin_guard
+
+        assert gate_open is stdin_guard
+        assert loop_module.gate_open is stdin_guard
+        assert choice_module.stdin_guard is stdin_guard
+
+
+class TestGuardOverlap:
+    """Reader-vs-dialog: bytes survive a held window, overlaps included."""
+
+    def test_overlap_release_keeps_bytes_buffered(self):
+        received: list[str] = []
+        state = SteeringState()
+        guard = StdinGuard()
+        read_fd, write_fd = os.pipe()
+        try:
+            reader = start_steering_reader(
+                state, guard, stdin=_PipeStdin(read_fd), on_line=received.append
+            )
+            guard.set()  # holder A: first dialog opens
+            guard.set()  # holder B: overlapping dialog opens
+            os.write(write_fd, b"steer during dialogs\n")
+            time.sleep(0.3)
+            guard.clear()  # A releases while B still holds
+            assert guard.held()
+            time.sleep(0.3)
+            assert not state.has_pending()  # untouched across the overlap
+            assert received == []
+            guard.clear()  # B releases: the buffered line applies next
+            assert _wait_for(state.has_pending)
+            assert state.take() == "steer during dialogs"
+            reader.stop()
+            assert not reader.alive
         finally:
             os.close(write_fd)
             os.close(read_fd)

@@ -279,3 +279,44 @@ class TestHeadlessDialog:
             assert rendered.count("(*)") == 1
             assert " (*) Model-12" in rendered.split("\n")
             assert len(rendered.split("\n")) == 5
+
+
+class TestDialogGuard:
+    """radio_choice choke point: guard hold plus typeahead hygiene (R2b)."""
+
+    def test_holds_guard_during_dialog(self, monkeypatch):
+        from strands_code_cli.steering import stdin_guard
+
+        monkeypatch.setattr(
+            "sys.stdin",
+            SimpleNamespace(isatty=lambda: True, fileno=lambda: 0, encoding="utf-8"),
+        )
+        seen: dict[str, Any] = {}
+
+        class _App:
+            def run(self):
+                seen["held"] = stdin_guard.held()
+                return "y"
+
+        monkeypatch.setattr(choice_module, "_build_app", lambda *a, **k: _App())
+        assert choice_module.radio_choice("T?", [("y", "Yes")]) == "y"
+        assert seen["held"] is True  # held for the dialog's whole lifetime
+        assert stdin_guard.held() is False  # released after
+
+    def test_entry_clears_typeahead(self, monkeypatch):
+        from prompt_toolkit.input.typeahead import get_typeahead, store_typeahead
+
+        from strands_code_cli.steering import stdin_guard
+
+        monkeypatch.setattr(
+            "sys.stdin",
+            SimpleNamespace(isatty=lambda: False, fileno=lambda: 0, encoding="utf-8"),
+        )
+        probe = SimpleNamespace(typeahead_hash=lambda: "fd-0")
+        store_typeahead(probe, ["mashed-1", "mashed-2"])  # last dialog's mash
+        with pytest.raises(RuntimeError):
+            choice_module.radio_choice("T?", [("y", "Yes")])
+        # Hygiene runs before the tty check: mashed keys cannot
+        # auto-confirm the next dialog.
+        assert get_typeahead(probe) == []
+        assert stdin_guard.held() is False  # released on the error path

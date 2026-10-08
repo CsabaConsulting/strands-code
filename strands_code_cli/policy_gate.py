@@ -51,6 +51,7 @@ from strands_code_cli.policy import (
     decide,
     normalise_command,
 )
+from strands_code_cli.steering import stdin_guard as gate_open
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -59,13 +60,13 @@ _ASK_OPTIONS = "Approve? [y/n/always/never]"
 _ASK_SUFFIX = _ASK_OPTIONS + " "
 _ANSWER_PROMPT = "> "
 
-gate_open = threading.Event()
-"""Set while the gate ``ask`` prompt waits for an answer.
-
-The steering reader checks this flag and never consumes stdin while it
-is set, so a steering line can never be consumed as an answer (and
-the prompt answer is never diverted into steering). Covers both the
-typed ``input()`` fallback and the arrow-key dialog."""
+# ``gate_open`` is the shared reentrant stdin guard, defined in
+# steering (this module lazily imports choice, so the guard must not
+# live here). Held while ``ask`` waits for an answer: the steering
+# reader never consumes stdin while held, so a steering line can
+# never be consumed as an answer (and the answer is never diverted
+# into steering). Covers the typed ``input()`` fallback, the
+# arrow-key dialog, and the cancel chooser.
 
 PLAN_MUTATING_TOOLS = ("write", "edit", "shell", "python_repl")
 """Tools denied in Plan mode (MODE-01, D-03).

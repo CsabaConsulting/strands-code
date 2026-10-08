@@ -48,7 +48,8 @@ import os
 import select
 import sys
 import threading
-from typing import Any, Callable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 STEERING_NOTED = "Steering noted — applies at the next step."
 STREAMING_LIMIT = (
@@ -60,6 +61,65 @@ STEERING_REDIRECT_TEMPLATE = (
     "Steering redirected by user: {text} — continue toward the revised "
     "goal from the next step; the skipped call was not executed."
 )
+
+
+class StdinGuard(threading.Event):
+    """Reentrant stdin guard: the single-reader invariant for dialogs.
+
+    ``threading.Event``-compatible — ``set()`` acquires one hold,
+    ``clear()`` releases one hold, ``held()``/``is_set()`` report
+    whether any hold is outstanding — but refcounted: overlapping
+    dialogs (two asks, an ask plus the cancel chooser) each hold, and
+    the steering reader stays parked until the LAST holder releases.
+    The bare Event this replaces cleared early when worker A released
+    while worker B's dialog still ran (G-7-1-R2b RC-1b).
+
+    Lives here — never in ``policy_gate``, which lazily imports
+    ``choice`` — so the ``radio_choice`` choke point acquires it
+    without an import cycle.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._guard_lock = threading.Lock()
+        self._holders = 0
+
+    def set(self) -> None:
+        """Acquire one hold (parking is idempotent, release counted)."""
+        with self._guard_lock:
+            self._holders += 1
+            super().set()
+
+    def clear(self) -> None:
+        """Release one hold; a stray clear without a hold still clears."""
+        with self._guard_lock:
+            if self._holders > 0:
+                self._holders -= 1
+            if self._holders == 0:
+                super().clear()
+
+    def held(self) -> bool:
+        """True while any dialog holds the guard (the reader polls this)."""
+        return self.is_set()
+
+    @contextmanager
+    def hold(self) -> Iterator[None]:
+        """Hold the guard for the block; release even on error."""
+        self.set()
+        try:
+            yield
+        finally:
+            self.clear()
+
+
+stdin_guard = StdinGuard()
+"""Session stdin guard: every mid-turn dialog holds this while open.
+
+The steering reader never consumes stdin while it is held, so dialog
+key bytes can never be stolen by the reader thread — and gated bytes
+stay buffered for after the dialog, never dropped. Boundary/idle
+dialogs are unaffected (the reader is stopped there).
+"""
 
 
 def is_btw_line(text: str) -> bool:
@@ -270,7 +330,7 @@ class SteeringReader:
 
 def start_steering_reader(
     state: SteeringState,
-    gate_open: threading.Event,
+    guard: StdinGuard,
     *,
     stdin: Any | None = None,
     on_line: Callable[[str], None] | None = None,
@@ -280,14 +340,15 @@ def start_steering_reader(
 ) -> SteeringReader:
     """Start the turn-owned raw-readline reader (daemon + explicit stop).
 
-    While ``gate_open`` is set the reader never consumes stdin, so an
+    While ``guard`` is held the reader never consumes stdin, so an
     open approval prompt owns the terminal exclusively; buffered lines
     are picked up as steering once the prompt closes. Slash-command
     lines are refused idle-only (never armed as steering).
 
     Args:
         state: Per-turn mailbox armed by captured lines.
-        gate_open: Set while the gate ``ask`` prompt is open.
+        guard: Held while a mid-turn dialog is open (reentrant: the
+            reader parks until the last holder releases).
         stdin: Stream to read (default: current ``sys.stdin``); tests
             pass a pipe. Must provide ``readline``.
         on_line: Capture callback (default: transcript echo).
@@ -365,7 +426,7 @@ def start_steering_reader(
         """
         buf = ""
         while not shutdown.is_set():
-            if gate_open.is_set():
+            if guard.held():
                 if shutdown.wait(poll_interval):
                     break
                 continue
@@ -377,9 +438,9 @@ def start_steering_reader(
                 break
             if not ready:
                 continue
-            if gate_open.is_set():
-                # Set between select-return and read: the gate owns the
-                # terminal now — reading here would steal the y/n answer.
+            if guard.held():
+                # Held between select-return and read: the dialog owns
+                # the terminal now — reading here would steal its keys.
                 continue
             try:
                 # Re-poll with zero timeout: a line the first select saw
@@ -415,7 +476,7 @@ def start_steering_reader(
         if readline is None:
             return
         while not shutdown.is_set():
-            if gate_open.is_set():
+            if guard.held():
                 if shutdown.wait(poll_interval):
                     break
                 continue
