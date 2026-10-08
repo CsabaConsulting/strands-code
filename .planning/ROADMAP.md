@@ -140,7 +140,7 @@ Plans:
   1. User can ask a side question mid-task via a `/btw`-style escape and get an answer from a subagent
   2. User can see the main task continue untouched while the side question is answered
 
-**Plans**: 4 plans
+**Plans**: 5 plans
 
 Plans:
 **Wave 1**
@@ -158,6 +158,10 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 07-04-PLAN.md — Gap closure: nesting-safe pump, scoped side prompt, clean cancel-in-flight, dialog attribution
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 07-05-PLAN.md — Round-2 gap closure: multiplexed idle prompt (E), exit-drop note, reentrant stdin guard plus typeahead hygiene
 
 ### Phase 8: Model Routing with Decision Models
 

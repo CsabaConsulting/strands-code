@@ -4,15 +4,15 @@ current_phase: 07
 current_phase_name: Subagents + /btw Side Channel
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-10-07T06:45:00.000Z"
-last_activity: 2026-10-07
-last_activity_desc: Phase 07 plan 4 complete (gap closure G-7-1a/G-7-1b/G-7-2/G-7-4)
+last_updated: "2026-10-08T04:31:16.000Z"
+last_activity: 2026-10-08
+last_activity_desc: Phase 07 plan 5 complete (round-2 gap closure G-7-1-R2/G-7-1-R2b)
 state_head: a903b412e2694bc789c0f734d165456c24f9046a
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 16
+  completed_plans: 16
   percent: 67
 ---
 
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-04)
 ## Current Position
 
 Phase: 07 (Subagents + /btw Side Channel) — EXECUTING
-Plan: 4 of 4
-Status: All Phase 07 plans complete incl. gap closure — ready for UAT round 2 / phase seal
-Last activity: 2026-10-07 — Phase 07 plan 4 complete (gap closure G-7-1a/G-7-1b/G-7-2/G-7-4)
+Plan: 5 of 5
+Status: Round-2 gap closure complete (E multiplex + exit note + stdin guard) — ready for UAT round 3 / phase seal
+Last activity: 2026-10-08 — Phase 07 plan 5 complete (round-2 gap closure G-7-1-R2/G-7-1-R2b)
 
 Progress: [███████░░░] 67%
 
@@ -70,6 +70,7 @@ Progress: [███████░░░] 67%
 | Phase 7 P02 | 14min | 3 tasks | 7 files |
 | Phase 7 P03 | 36min | 2 tasks | 5 files |
 | Phase 7 P04 | 7min | 4 tasks | 7 files |
+| Phase 7 P05 | 24min | 4 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,9 @@ Recent decisions affecting current work:
 - [Phase 7]: D-11 ships as bounded-wait, not async-multiplex — spike proved sync prompt_toolkit dialogs cannot run inside the multiplex loop; idle side approvals announced once and served by the next turn's pump
 - [Phase 7]: Tracer join removed; BtwContext is session-scoped so new turns adopt a live side future and queued questions start across the idle gap
 - [Phase 7]: Gap closure 07-04 — nesting-refcount pump, ONLY-framed plus context-marked side fork (exclusion fallback held), dead-tag pump drain plus SDK-wrap cancel mapping plus ack-before-join, tagged dialog titles with byte-identical typed path
+- [Phase 7]: Gap closure 07-05 — E multiplex ships per live-pty GO verdict; dialog Ctrl-C at idle cancels the side run and re-issues with the buffer; prompt()-only doubles keep the sync prompt
+- [Phase 7]: Gap closure 07-05 — exit names a live side via fenced render_btw_dropped (waiting/running) with the next-turn promise suppressed on the exit path
+- [Phase 7]: Gap closure 07-05 — reentrant StdinGuard in steering.py shared by ask/chooser/radio_choice choke point; typeahead cleared on dialog entry; reader polls held()
 
 ### Pending Todos
 
@@ -132,6 +136,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-07T06:45:00.000Z
-Stopped at: Completed 07-04-PLAN.md
+Last session: 2026-10-08T04:31:16.000Z
+Stopped at: Completed 07-05-PLAN.md
 Resume file: None
