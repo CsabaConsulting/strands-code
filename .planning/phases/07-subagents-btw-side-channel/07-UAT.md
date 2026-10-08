@@ -90,7 +90,7 @@ blocked: 0
   severity: high
   test: 1
   artifacts: [strands_code_cli/loop.py]
-  missing: ["Fresh gap per #1921 (G-7-1a mechanism confirmed working in R2: queued + served + tagged). Defects: (1) BTW_IDLE_APPROVAL prints only in _drain_idle_btw, which runs when the idle prompt RETURNS a line or at exit — an idling user never sees it; announce promptly at turn boundary when side live + approval pending. (2) No idle affordance to serve a queued approval without typing a dummy turn — revisit D-11 multiplex primary or add prompt-with-timeout poll / explicit idle-serve affordance. (3) Exit path (loop.py ~1758-1766) cancels the parked side during shutdown join with no transcript note — announce the dropped side. Needs diagnosis + fix plan."]
+  missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-1-r2.md): single structural cause — main thread parks in blocking session.prompt (loop.py:1535) all idle, so nothing observes/serves the queue. Ranked: A turn-boundary announce (~10 lines, partial) + B exit-path note (~10 lines, full S3) + C1/C2 explicit idle-serve (medium) + D watcher announce (medium) + E multiplex revisit (large). KEY: 07-03 spike disproved serving INSIDE the loop thread only; the sequential suspend→serve-sync→re-issue dance was NEVER disproved (07-03-SUMMARY.md:151) — primary revivable but needs live-TTY spike. USER CHOSE E: spike-then-build; fallback A+B+C1 if spike fails. B ships regardless."]
 - gap_id: G-7-1-R2b
   truth: "Mid-turn approval dialogs respond to input promptly with no phantom repeats, even while the other agent streams"
   status: failed
@@ -98,7 +98,7 @@ blocked: 0
   severity: medium
   test: 1
   artifacts: [strands_code_cli/choice.py, strands_code_cli/loop.py]
-  missing: ["Investigate dialog input latency under concurrent streaming output (prompt_toolkit app competing with patch_stdout re-render churn from the other worker); repro: mid-turn dialog + heavy streaming, measure key-to-highlight latency and Enter loss. Fix direction unknown — needs diagnosis. Strike if not reproducible."]
+  missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-1-r2b.md): two threads race for stdin fd 0 during mid-turn dialogs — the steering reader thread select()+os.read()s fd 0 (steering.py:354-410) while the dialog app reads via its event loop; whoever wakes first eats the key bytes. CPR innocent (ruled out). Ranked fixes: (1) gate the chooser with gate_open around radio_choice mirroring ask() (lowest risk); (2) refcount the guard incl. chooser (closes overlap window); (3) single choke point inside choice.radio_choice entry/exit, guard living in steering.py or new module (NOT policy_gate — cycle); (4) clear_typeahead on dialog entry (kills phantom half). NOT recommended: reader stop/restart, muting streaming, CPR workarounds. Hermetic pipe tests exist as patterns (test_steering.py:231-253, test_plan_cancel.py:290-324); live pty falsification experiment specified."]
 - gap_id: G-7-4
   truth: "Approval dialogs identify their agent and request (transparency: side content never presented ambiguously)"
   status: resolved
