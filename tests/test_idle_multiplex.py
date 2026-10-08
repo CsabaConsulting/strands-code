@@ -421,6 +421,18 @@ class TestIdleMultiplexBranch:
         assert session.sync_calls == ["> "]
         assert session.defaults == []
 
+    def test_prompt_only_session_falls_back_to_sync_prompt(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        class _SyncOnly:
+            def prompt(self, message):
+                return "sync-line"
+
+        req = _FakeRequest()
+        broker = _FakeBroker([req])  # pending, but the session can't race
+        assert _idle_prompt_multiplexed(_SyncOnly(), broker, _fake_btw()) == "sync-line"
+        assert req.served == 0  # legacy blocking prompt, never multiplexed
+
     def test_dead_request_skipped_without_dialog(self):
         import threading
 

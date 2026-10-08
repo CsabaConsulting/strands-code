@@ -768,10 +768,11 @@ def _idle_prompt_multiplexed(session: Any, broker: Any, btw: BtwContext) -> str:
     Ctrl-C in the serve dialog cancels the side run (the turn-semantic
     analogue — at idle the side is the only work) and re-issues with
     the buffer; Ctrl-C/EOF at the prompt propagate to the idle loop's
-    line-cancel/exit contracts. No broker (tests, direct calls) keeps
-    the legacy blocking prompt.
+    line-cancel/exit contracts. No broker (tests, direct calls) — or a
+    prompt()-only session double without prompt_async — keeps the
+    legacy blocking prompt.
     """
-    if broker is None:
+    if broker is None or not hasattr(session, "prompt_async"):
         return session.prompt("> ")
     buf = ""
     while True:
