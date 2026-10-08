@@ -690,6 +690,102 @@ def _invoke_agent(
             broker.unregister_cancel("main")
 
 
+async def _poll_idle_approvals(broker: Any) -> str:
+    """Broker-poll arm of the idle race: returns once one waits."""
+    while True:
+        await asyncio.sleep(0.05)
+        if broker.has_pending:
+            return "APPROVAL"
+
+
+async def _race_idle_episode(session: Any, broker: Any, buf: str) -> tuple[str, str]:
+    """One prompt-vs-broker race; the loser is cancelled and settled."""
+    # The prompt arm channels Ctrl-C/EOF as values: a KeyboardInterrupt
+    # raised inside prompt_task would tear down run_until_complete
+    # itself, stranding the poll task pending ("Task was destroyed but
+    # it is pending"). Re-raised below, after the quiesce, it reaches
+    # the idle loop's cancel-line/exit contracts with no task left over.
+    async def _prompt_arm() -> tuple[str, Any]:
+        try:
+            return ("line", await session.prompt_async("> ", default=buf))
+        except asyncio.CancelledError:
+            raise  # our own cancel when the poll arm wins
+        except BaseException as exc:
+            return ("error", exc)
+
+    prompt_task = asyncio.ensure_future(_prompt_arm())
+    poll_task = asyncio.ensure_future(_poll_idle_approvals(broker))
+    done, pending = await asyncio.wait(
+        {prompt_task, poll_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    for task in pending:
+        task.cancel()
+    for task in pending:  # quiesce before the loop returns
+        try:
+            await task
+        except BaseException:
+            pass
+    if prompt_task in done:
+        kind, payload = prompt_task.result()
+        if kind == "error":
+            raise payload
+        return ("line", payload)
+    return ("approval", session.default_buffer.text)
+
+
+def _run_idle_episode(session: Any, broker: Any, buf: str) -> tuple[str, str]:
+    """Run one idle episode on a fresh loop; the loop never nests.
+
+    Each episode owns its loop outright (new + close): the sync serve
+    below always runs with no loop on the thread, so prompt_toolkit's
+    ``.run()`` can never nest inside a running loop (the 07-03 probe-1
+    disproof). Strictly sequential: suspend, serve sync, re-issue.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_race_idle_episode(session, broker, buf))
+    finally:
+        try:
+            loop.close()
+        finally:
+            asyncio.set_event_loop(None)
+
+
+def _idle_prompt_multiplexed(session: Any, broker: Any, btw: BtwContext) -> str:
+    """Idle prompt multiplexed against the broker queue (D-11 primary, E).
+
+    Main-thread only; built exactly as the Task 1 live-pty spike proved
+    (verdict GO in tests/test_idle_multiplex.py): the prompt races the
+    broker queue, an approval arrival suspends the prompt, one request
+    serves sync after the loop quiesces, and the prompt re-issues with
+    the preserved buffer. No nested prompt_toolkit apps, ever.
+
+    Ctrl-C in the serve dialog cancels the side run (the turn-semantic
+    analogue — at idle the side is the only work) and re-issues with
+    the buffer; Ctrl-C/EOF at the prompt propagate to the idle loop's
+    line-cancel/exit contracts. No broker (tests, direct calls) keeps
+    the legacy blocking prompt.
+    """
+    if broker is None:
+        return session.prompt("> ")
+    buf = ""
+    while True:
+        kind, text = _run_idle_episode(session, broker, buf)
+        if kind == "line":
+            return text
+        buf = text  # approval won; the buffer survives the serve
+        req = _poll_live(broker)
+        if req is None:
+            continue  # dead-tag drain ate it, or the poll won a race
+        try:
+            req.run_prompt()
+        except KeyboardInterrupt:
+            req.abort()
+            btw.cancel_event.set()
+            continue  # re-issue with the preserved buffer
+
+
 def _drain_idle_btw(
     agent: Any,
     btw: BtwContext,
@@ -697,15 +793,19 @@ def _drain_idle_btw(
     current_model: str,
     session_turns: list,
 ) -> None:
-    """Idle-boundary btw delivery (D-11 bounded-wait).
+    """Idle-boundary btw delivery (D-11 multiplex + bounded-wait remnant).
 
     Main-thread only; runs when the idle prompt returns a line and
     once on session exit. Reaps a completed outliving side run into
     history (boundary Q&A append) plus the session metrics row — the
     fenced transcript itself already streamed live. Never spawns (the
-    turn pump owns the single spawn site) and never serves approvals:
-    a side approval waiting at idle stays queued for the next turn's
-    pump, announced once via :data:`BTW_IDLE_APPROVAL`.
+    turn pump owns the single spawn site).
+
+    The multiplexed idle prompt serves approvals at idle, so the
+    announce below only fires for the race sliver: an approval queued
+    after the winning prompt episode returned but before this drain
+    runs. It stays queued for the next turn's pump, announced once via
+    :data:`BTW_IDLE_APPROVAL`.
     """
     taken = btw.take_done_live()
     if taken is not None:
@@ -1532,7 +1632,7 @@ def run_loop(
                 # idle delivery rides the documented patch_stdout
                 # shape; turn dialogs already nest this way).
                 with output_context():
-                    text = session.prompt("> ")
+                    text = _idle_prompt_multiplexed(session, broker, btw_session)
         except KeyboardInterrupt:
             continue  # Ctrl-C cancels the line
         except EOFError:

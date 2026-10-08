@@ -285,6 +285,157 @@ class TestLiveIdleMultiplex:
             driver.close()
 
 
+class _FakeBuffer:
+    def __init__(self, text: str = ""):
+        self.text = text
+
+
+class _FakeSession:
+    """PromptSession double: scripted prompt_async results, default capture."""
+
+    def __init__(self, script, buffer_text: str = ""):
+        self._script = list(script)
+        self.defaults: list = []
+        self.default_buffer = _FakeBuffer(buffer_text)
+        self.sync_calls: list = []
+
+    async def prompt_async(self, message: str, default: str = ""):
+        self.defaults.append(default)
+        result = self._script.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        if result == "HANG":
+            await asyncio.sleep(30)
+            return "never"
+        return result
+
+    def prompt(self, message: str):
+        self.sync_calls.append(message)
+        return "sync-line"
+
+
+class _FakeRequest:
+    def __init__(self, cancel=None, on_prompt=None):
+        self.cancel = cancel
+        self._on_prompt = on_prompt
+        self.served = 0
+        self.aborted = 0
+
+    def run_prompt(self):
+        self.served += 1
+        if self._on_prompt is not None:
+            self._on_prompt()
+
+    def abort(self):
+        self.aborted += 1
+
+
+class _FakeBroker:
+    """ApprovalBroker double: scripted pending flag plus request queue."""
+
+    def __init__(self, requests=()):
+        self._requests = list(requests)
+
+    @property
+    def has_pending(self) -> bool:
+        return bool(self._requests)
+
+    def poll(self, timeout: float = 0.05):
+        if self._requests:
+            return self._requests.pop(0)
+        return None
+
+
+def _fake_btw():
+    import threading
+    from types import SimpleNamespace
+
+    return SimpleNamespace(cancel_event=threading.Event(), approval_announced=False)
+
+
+class TestIdleMultiplexBranch:
+    """GO branch: canned broker events serve at idle (hermetic, no tty)."""
+
+    def test_serves_canned_approval_at_idle(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        req = _FakeRequest()
+        broker = _FakeBroker([req])
+        session = _FakeSession(["HANG", "typed line"], buffer_text="half typed")
+        btw = _fake_btw()
+        assert _idle_prompt_multiplexed(session, broker, btw) == "typed line"
+        assert req.served == 1  # served without a submitted turn
+        assert btw.approval_announced is False  # latch bypassed: immediate
+
+    def test_prompt_reissued_with_preserved_buffer(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        req = _FakeRequest()
+        broker = _FakeBroker([req])
+        session = _FakeSession(["HANG", "typed line"], buffer_text="half typed")
+        assert _idle_prompt_multiplexed(session, broker, _fake_btw()) == "typed line"
+        assert session.defaults == ["", "half typed"]
+
+    def test_line_wins_without_approval(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        broker = _FakeBroker()  # nothing pending, nothing queued
+        session = _FakeSession(["just a line"])
+        assert _idle_prompt_multiplexed(session, broker, _fake_btw()) == "just a line"
+        assert session.defaults == [""]  # single episode, no serve, no re-issue
+
+    def test_dialog_ctrl_c_cancels_side_and_reissues(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        def _interrupt():
+            raise KeyboardInterrupt
+
+        req = _FakeRequest(on_prompt=_interrupt)
+        broker = _FakeBroker([req])
+        session = _FakeSession(["HANG", "after cancel"], buffer_text="kept")
+        btw = _fake_btw()
+        assert _idle_prompt_multiplexed(session, broker, btw) == "after cancel"
+        assert req.aborted == 1  # waiter unblocked, never wedged
+        assert btw.cancel_event.is_set()  # side run cancelled, not orphaned
+        assert session.defaults == ["", "kept"]  # line survives the cancel
+
+    def test_prompt_ctrl_c_cancels_line(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        session = _FakeSession([KeyboardInterrupt()])
+        with pytest.raises(KeyboardInterrupt):
+            _idle_prompt_multiplexed(session, _FakeBroker(), _fake_btw())
+
+    def test_prompt_eof_propagates(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        session = _FakeSession([EOFError()])
+        with pytest.raises(EOFError):
+            _idle_prompt_multiplexed(session, _FakeBroker(), _fake_btw())
+
+    def test_no_broker_falls_back_to_sync_prompt(self):
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        session = _FakeSession(["unused"])
+        assert _idle_prompt_multiplexed(session, None, _fake_btw()) == "sync-line"
+        assert session.sync_calls == ["> "]
+        assert session.defaults == []
+
+    def test_dead_request_skipped_without_dialog(self):
+        import threading
+
+        from strands_code_cli.loop import _idle_prompt_multiplexed
+
+        dead = threading.Event()
+        dead.set()
+        req = _FakeRequest(cancel=dead)
+        broker = _FakeBroker([req])
+        session = _FakeSession(["HANG", "typed line"])
+        assert _idle_prompt_multiplexed(session, broker, _fake_btw()) == "typed line"
+        assert req.served == 0  # dead-tag drain ate it: no phantom dialog
+        assert req.aborted == 1
+
+
 def _child_main(scenario: str) -> int:
     """Spiked episode shape, self-contained for the pty tests.
 
