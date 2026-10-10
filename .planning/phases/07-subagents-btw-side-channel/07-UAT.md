@@ -1,22 +1,26 @@
 ---
-status: complete
+status: testing
 phase: 07-subagents-btw-side-channel
 source: [07-VERIFICATION.md]
 started: 2026-10-06T09:05:00Z
-updated: 2026-10-07T07:10:00Z
-round: 2
+updated: 2026-10-08T04:30:00Z
+round: 3
 ---
 
 ## Current Test
 
-[testing complete — round 2]
+number: 1
+name: (R3 retest) Start a task, fire /btw needing approval, let main finish, then idle at the prompt
+expected: |
+  The side approval dialog appears LIVE at the idle prompt without typing anything; half-typed input (if any) survives; approval serves and the fenced block lands
+awaiting: user response
 
 ## Tests
 
 ### 1. Start a long main task, fire /btw needing approval, let main finish first
 expected: Tagged [btw] prompt is announced at idle ('btw approval needed — will prompt when the next turn starts.') and served by the next turn's pump; fenced block lands without scrambling the prompt line
-result: issue
-reason: "R2: nesting fix works (no self-deny; approval queued and served by next turn with tagged dialog; side stayed in scope). BUT user rejects the idle UX: queued approval hides until an unrelated next turn is typed (24h idle = 24h hidden); BTW_IDLE_APPROVAL only prints when the prompt returns, so an idling user never sees it; looked 'stuck/gone'. Exit silently drops the parked side (cancel + join-abort after drain, no transcript note)."
+result: [pending]
+reason: "Round 2: nesting fix worked but idle UX rejected (queued approval hid until next submit; exit silently dropped parked side). → R3 retest pending (multiplex E)."
 
 ### 2. Run main + btw concurrently, press Ctrl-C once
 expected: Chooser offers main/btw/both and cancels only the named target (ESC cancels nothing)
@@ -46,8 +50,8 @@ reason: "User confirmed. Verified: /tmp/uattest store has 5 main-task facts, zer
 
 total: 6
 passed: 5
-issues: 1
-pending: 0
+issues: 0
+pending: 1
 skipped: 0
 blocked: 0
 
@@ -85,7 +89,9 @@ blocked: 0
   missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-2.md): RC-1 CONFIRMED — _ApprovalRequest untagged (policy_gate.py:162), all 3 pump serve sites unconditional (loop.py:470/506/641), pump wins race vs waiter 50ms poll → dialog for dead worker; fix F-1 tag requests + pump-side skip on set tag event. RC-2 PARTIALLY REFUTED — queue holds at most one req per live worker, no tag-wide purge needed. RC-3 CONFIRMED no-fix — second chooser is by-design escalation (Ctrl-C inside phantom dialog); dies with F-1. RC-4 CONFIRMED extends — SDK wraps TurnCancelled in EventLoopException so our except-TurnCancelled sites are dead for real agents; fix F-2 unwrap + map to clean cancel rendering. RC-5 CONFIRMED half-by-design — cancel join waits on SDK step granularity; fix F-3 ack-before-join + doc, no thread preemption."]
 - gap_id: G-7-1-R2
   truth: "An idle side approval is visible and servable at idle — never hidden until the next turn, never silently dropped on exit (D-11)"
-  status: failed
+  status: resolved
+  resolved_by: 07-05-PLAN.md
+  resolved_at: 2026-10-08
   reason: "User reported (R2): side approval queued while idle stayed invisible until an unrelated second turn was SUBMITTED with Enter (not while typing); looked stuck/gone ('had I waited 24h it would hide for a day'); exit behavior unknown"
   severity: high
   test: 1
@@ -93,7 +99,9 @@ blocked: 0
   missing: ["DIAGNOSED (.planning/debug/DEBUG-g-7-1-r2.md): single structural cause — main thread parks in blocking session.prompt (loop.py:1535) all idle, so nothing observes/serves the queue. Ranked: A turn-boundary announce (~10 lines, partial) + B exit-path note (~10 lines, full S3) + C1/C2 explicit idle-serve (medium) + D watcher announce (medium) + E multiplex revisit (large). KEY: 07-03 spike disproved serving INSIDE the loop thread only; the sequential suspend→serve-sync→re-issue dance was NEVER disproved (07-03-SUMMARY.md:151) — primary revivable but needs live-TTY spike. USER CHOSE E: spike-then-build; fallback A+B+C1 if spike fails. B ships regardless."]
 - gap_id: G-7-1-R2b
   truth: "Mid-turn approval dialogs respond to input promptly with no phantom repeats, even while the other agent streams"
-  status: failed
+  status: resolved
+  resolved_by: 07-05-PLAN.md
+  resolved_at: 2026-10-08
   reason: "User reported (R2 test-1 rerun): felt an unnecessary queued/duplicate approval (approved twice; transcript shows each box once, so likely swallowed inputs forced repeats); selector movement very delayed, 'swallowing every second input' while main streamed around the open dialog. CORROBORATED (R2 test-2 attempt): same lag on the Cancel-which chooser — cursor moved only every ~3rd keypress, Enter needed multiple presses, dialog seemingly repeated."
   severity: medium
   test: 1
