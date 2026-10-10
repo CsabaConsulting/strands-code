@@ -41,9 +41,11 @@ stateless TOML allowlist + classifier fundamentally cannot express, in one langu
 instead of allowlist-plus-code. Wrinkle: locked decision D-05 says determinism,
 "never Cedar" — Dogwood lowers to Cedar, so adoption revisits D-05 (justifiably:
 Dogwood-deterministic is not NL-string policy, but the letter stands). Reference
-interpreter is explicitly not for production; the Local Engine (embedded in Box) is
-the runtime. Verdict: adopt via Box, not standalone; keep our dialogs as the product
-surface.
+interpreter is explicitly not for production; the Local Engine (embedded in Box, also
+usable standalone) is the runtime. Verdict: prefer adoption via Box (shared engine +
+event history); standalone Local Engine acceptable if Box Linux slips badly. D-05
+revisit approved in principle 2026-10-10. Keep our dialogs as the product surface
+either way.
 
 ## Selected direction (post-v1)
 

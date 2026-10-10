@@ -219,3 +219,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
   compare Box verdicts against gate decisions. Full evaluation + rejected
   alternatives (MXC watch, Dogwood-standalone no-go):
   `.planning/research/SANDBOX.md`.
+- [ ] **Semantic policy: Dogwood (standalone or via Box)** - Temporal policy rules
+  the stateless TOML allowlist cannot express (precedence, time windows, spend
+  caps), evaluated in the Dogwood Local Engine. Approved in principle 2026-10-10
+  including a revisit of locked decision D-05 ("never Cedar"): Dogwood-deterministic
+  is not NL-string policy, but the letter stands until re-decided. Prefer adoption
+  via Box (shared engine + event history); standalone Local Engine only if Box
+  Linux slips badly.
