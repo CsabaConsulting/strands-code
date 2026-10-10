@@ -207,3 +207,15 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Subagents + /btw Side Channel | 0/TBD | Not started | - |
 | 8. Model Routing with Decision Models | 0/TBD | Not started | - |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
+
+## Future (post-v1)
+
+- [ ] **Sandbox floor: Strands Box + Dogwood** - Run the CLI inside Strands Box as a
+  non-overridable enforcement floor under the HITL approval dialogs (defense in
+  depth: policy denies what policy forbids even on a misclicked "Always").
+  Blocked on Box Linux support (macOS-only dev preview as of 2026-10-10);
+  adopting Dogwood revisits locked decision D-05 ("never Cedar").
+  First step: spike `box run strands-code` with an allowlist-mirroring policy and
+  compare Box verdicts against gate decisions. Full evaluation + rejected
+  alternatives (MXC watch, Dogwood-standalone no-go):
+  `.planning/research/SANDBOX.md`.
