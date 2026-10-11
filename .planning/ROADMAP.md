@@ -60,6 +60,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 Plans:
 
 - [x] 02-PLAN.md
+
 **UI hint**: yes
 
 ### Phase 3: Permissions Gate
@@ -191,12 +192,12 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: 3 plans
+**Plans**: 1/3 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — Tracer: strategy plus OpenRouter decision plus pre-turn hook plus transcript note, routed effort threading, toggle plus /model warn plus /route on/off/status
+- [x] 08-01-PLAN.md — Tracer: strategy plus OpenRouter decision plus pre-turn hook plus transcript note, routed effort threading, toggle plus /model warn plus /route on/off/status
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -234,7 +235,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
-| 8. Model Routing with Decision Models | 0/TBD | Not started | - |
+| 8. Model Routing with Decision Models | 1/3 | In Progress|  |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)

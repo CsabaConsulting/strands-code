@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 8
+current_phase: 08
 current_phase_name: Model Routing with Decision Models
-status: planning
-stopped_at: Phase 8 context gathered
-last_updated: "2026-10-11T03:24:18.834Z"
+status: executing
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-10-11T04:29:26.665Z"
 last_activity: 2026-10-10
-last_activity_desc: Phase 07 complete, transitioned to Phase 8
-state_head: 6b2bfad11ea6e65f4840648ed82a5a8d3bd3ee8a
+last_activity_desc: Phase 08 execution started
+state_head: fba1af2f90e82cabe790740020de97b7b9dfaaab
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 16
-  completed_plans: 16
+  total_plans: 19
+  completed_plans: 17
 ---
 
 # Project State
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-11)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 8 — Model Routing with Decision Models
+**Current focus:** Phase 08 — Model Routing with Decision Models
 
 ## Current Position
 
-Phase: 8 — Model Routing with Decision Models
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-10 — Phase 07 complete, transitioned to Phase 8
+Phase: 08 (Model Routing with Decision Models) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-10-10 — Phase 08 execution started
 
 Progress: [████████░░] 78%
 
@@ -72,6 +72,7 @@ Progress: [████████░░] 78%
 | Phase 7 P03 | 36min | 2 tasks | 5 files |
 | Phase 7 P04 | 7min | 4 tasks | 7 files |
 | Phase 7 P05 | 24min | 4 tasks | 10 files |
+| Phase 08 P01 | 11min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,9 @@ Recent decisions affecting current work:
 - [Phase 7]: Gap closure 07-05 — E multiplex ships per live-pty GO verdict; dialog Ctrl-C at idle cancels the side run and re-issues with the buffer; prompt()-only doubles keep the sync prompt
 - [Phase 7]: Gap closure 07-05 — exit names a live side via fenced render_btw_dropped (waiting/running) with the next-turn promise suppressed on the exit path
 - [Phase 7]: Gap closure 07-05 — reentrant StdinGuard in steering.py shared by ask/chooser/radio_choice choke point; typeahead cleared on dialog entry; reader polls held()
+- [Phase 08]: Routed effort validates on the switch path only; same-model no-op picks skip validation and effort application — Effort has no sticky companion to compare and re-resolving every ask would churn; the no-op fast path wins
+- [Phase 08]: Hold-note engine slot uses resolve for resolve failures and the producing engine for validation rejects — Keeps the slot truthful: switch-stage cause vs rejected engine output, same attribution as parse failure
+- [Phase 08]: Bare /route reports status mirroring bare /mode; symlinked strategy degrades to routing-off with a note — Bare-status mirrors the ModeState precedent; the loader keeps fail-loud while the loop keeps the session alive
 
 ### Pending Todos
 
@@ -138,6 +142,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-11T03:24:18.756Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-model-routing-with-decision-models/08-CONTEXT.md
+Last session: 2026-10-11T04:29:26.591Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None
