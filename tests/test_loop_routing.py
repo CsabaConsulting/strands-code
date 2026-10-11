@@ -445,7 +445,7 @@ class TestRoutingToggle:
         assert (action, message) == ("reply", ROUTE_USAGE)
 
     def test_usage_hint_advertises_route(self):
-        assert "/route [on|off|status]" in USAGE_HINT
+        assert "/route [on|off|status|setup" in USAGE_HINT
 
     def _configured(self, monkeypatch):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())

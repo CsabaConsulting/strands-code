@@ -53,7 +53,7 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /btw <side question>, /route [on|off|status], "
+    "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup], "
     "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
@@ -577,11 +577,390 @@ def _model_warn_action(selection: str) -> tuple:
     return ("model", selection) if typed in ("y", "yes") else _keep()
 
 
-def _route_message(rest: str, routing: RoutingState | None) -> str:
-    """Handle /route: flip the session toggle or report status.
+_SETUP_DONE = "setup-done-pick"
+"""Sentinel value for the Done entry ending tty candidate picking."""
 
-    Bare ``/route`` reports status like bare ``/mode``; ``setup`` and
-    ``validate`` land in 08-03 and reply with usage until then.
+_SETUP_ABORTED = "Setup cancelled — no changes written."
+
+
+def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
+    """Chat-capable catalog entries, validated and price-sorted (T-08-11).
+
+    Mirrors ``_is_chat_model`` over the OpenRouter entry shape: ``id``
+    must be a non-empty string, embed/rerank ids drop, and ``text`` is
+    required in the ``architecture`` input/output modalities whenever
+    those lists are present (missing keys fail open — never hide a
+    usable model on absent data). Each entry keeps its id, a display
+    label with per-1M prices, a numeric sort key (unpriced sorts last),
+    and whether it advertises structured output. Unknown shapes skip
+    entries; the result sorts by price ascending, then id. Never
+    raises — a hostile payload yields a shorter list, never a crash.
+    """
+    entries: list[dict[str, Any]] = []
+    if not isinstance(models, list):
+        return entries
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        model_id = model.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        lowered = model_id.lower()
+        if "embed" in lowered or "rerank" in lowered:
+            continue
+        arch = model.get("architecture")
+        if isinstance(arch, dict):
+            chat = True
+            for side in ("input_modalities", "output_modalities"):
+                modalities = arch.get(side)
+                if isinstance(modalities, list) and not any(
+                    isinstance(entry, str) and entry.lower() == "text"
+                    for entry in modalities
+                ):
+                    chat = False
+            if not chat:
+                continue
+        in_price: float | None = None
+        out_price: float | None = None
+        pricing = model.get("pricing")
+        if isinstance(pricing, dict):
+            try:
+                if "prompt" in pricing and "completion" in pricing:
+                    in_price = float(pricing["prompt"]) * 1_000_000
+                    out_price = float(pricing["completion"]) * 1_000_000
+            except (TypeError, ValueError):
+                in_price = out_price = None
+        params = model.get("supported_parameters")
+        structured = isinstance(params, list) and any(
+            param in ("response_format", "structured_outputs") for param in params
+        )
+        if in_price is None or out_price is None:
+            label = f"{model_id} (price n/a)"
+            sort_key = float("inf")
+        else:
+            label = f"{model_id} (${in_price:g}/${out_price:g} per 1M)"
+            sort_key = in_price + out_price
+        entries.append(
+            {"id": model_id, "label": label, "sort": sort_key, "structured": structured}
+        )
+    entries.sort(key=lambda entry: (entry["sort"], entry["id"]))
+    return entries
+
+
+def _setup_ask(
+    title: str, options: list[tuple[Any, str]], *, default: int = 0
+) -> Any | None:
+    """One setup choice: radio on tty, numbered typed prompt off-tty.
+
+    ESC/abort, empty input, EOF, Ctrl-C, and unparseable typed answers
+    all fail closed to None; the caller aborts with no writes (D-13).
+    """
+    if sys.stdin.isatty():
+        from strands_code_cli.choice import radio_choice
+
+        try:
+            return radio_choice(title, options, default=default)
+        except (RuntimeError, KeyboardInterrupt):
+            return None
+    print(f"{title}:")
+    for pos, (_, label) in enumerate(options, start=1):
+        print(f"  {pos}. {label}")
+    print("Enter a number (empty aborts): ", end="", flush=True)
+    try:
+        typed = input().strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    if not typed:
+        return None
+    try:
+        picked = int(typed)
+    except ValueError:
+        picked = -1
+    if 1 <= picked <= len(options):
+        return options[picked - 1][0]
+    for value, label in options:
+        if typed == str(value) or typed.lower() == label.lower():
+            return value
+    return None
+
+
+def _setup_pick_candidates_tty(entries: list[dict[str, Any]]) -> list[str] | None:
+    """Repeated radio over the remaining entries plus Done; None aborts.
+
+    Picks append in pick order (never re-sorted); already-picked ids
+    leave the options so duplicates are impossible. Done with zero
+    picks re-prompts — at least one candidate is required.
+    """
+    picked: list[str] = []
+    remaining = list(entries)
+    while True:
+        options = [(entry["id"], entry["label"]) for entry in remaining]
+        options.append((_SETUP_DONE, "Done — finish picking"))
+        choice = _setup_ask(
+            "Pick a candidate model (cheapest first)",
+            options,
+            default=len(options) - 1 if picked else 0,
+        )
+        if choice is None:
+            return None
+        if choice == _SETUP_DONE:
+            if not picked:
+                print("Pick at least one candidate (ESC aborts).")
+                continue
+            return picked
+        picked.append(choice)
+        remaining = [entry for entry in remaining if entry["id"] != choice]
+        if not remaining:
+            return picked
+
+
+def _setup_pick_candidates_typed(entries: list[dict[str, Any]]) -> list[str] | None:
+    """Off-tty candidates: comma-separated ids, validated, re-prompted once.
+
+    Unknown ids reject with the offenders named and one re-prompt; the
+    second attempt writes the valid subset (dropping stragglers with a
+    note) and aborts when nothing usable remains.
+    """
+    known = {entry["id"] for entry in entries}
+    print("Candidate models (cheapest first):")
+    for entry in entries:
+        print(f"  {entry['label']}")
+    for attempt in range(2):
+        print(
+            "Enter candidate ids, comma-separated (empty aborts): ",
+            end="",
+            flush=True,
+        )
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return None
+        valid = list(
+            dict.fromkeys(
+                part.strip() for part in typed.split(",") if part.strip()
+            )
+        )
+        unknown = [piece for piece in valid if piece not in known]
+        valid = [piece for piece in valid if piece in known]
+        if unknown and attempt == 0:
+            print(
+                f"Unknown model ids (not in the live catalog): "
+                f"{', '.join(unknown)} — try again."
+            )
+            continue
+        if unknown:
+            print(f"Dropping unknown ids: {', '.join(unknown)}.")
+        if not valid:
+            return None
+        return valid
+    return None
+
+
+def _setup_typed_id_list(prompt: str) -> list[str] | None:
+    """Comma-separated ids with no catalog to check against (typed fallback).
+
+    Used only when the live catalog fetch fails; spelling cannot be
+    validated, so the caller warns and ``/route validate`` judges the
+    file afterwards. Empty input aborts.
+    """
+    print(f"{prompt} (empty aborts): ", end="", flush=True)
+    try:
+        typed = input().strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    if not typed:
+        return None
+    ids = list(
+        dict.fromkeys(part.strip() for part in typed.split(",") if part.strip())
+    )
+    return ids or None
+
+
+def _setup_pick_decision(
+    entries: list[dict[str, Any]], *, typed_only: bool
+) -> str | None:
+    """Decision-model pick: explicit choice over structured-capable entries.
+
+    With a catalog the choice is constrained to entries advertising
+    ``response_format`` or ``structured_outputs`` support (radio on tty,
+    validated typed id off-tty with one re-prompt); without a catalog —
+    or when nothing advertises support — a typed id is accepted with a
+    note. No default is ever assumed (OQ5).
+    """
+    eligible = [entry for entry in entries if entry["structured"]]
+    if typed_only or not eligible:
+        if entries and not eligible:
+            print(
+                "No catalog entry advertises structured output — "
+                "enter a decision model id manually."
+            )
+        print(
+            "Decision model id (cheap, JSON-capable; empty aborts): ",
+            end="",
+            flush=True,
+        )
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        return typed or None
+    if sys.stdin.isatty():
+        return _setup_ask(
+            "Pick the decision model (explicit choice, no default)",
+            [(entry["id"], entry["label"]) for entry in eligible],
+        )
+    known = {entry["id"] for entry in eligible}
+    print("Decision-model candidates (structured-output support, cheapest first):")
+    for entry in eligible:
+        print(f"  {entry['label']}")
+    for attempt in range(2):
+        print("Enter the decision model id (empty aborts): ", end="", flush=True)
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return None
+        if typed in known:
+            return typed
+        if attempt == 0:
+            print(f"Unknown decision model {typed!r} — pick one from the list above.")
+            continue
+        return None
+    return None
+
+
+def _setup_local_model() -> str | None:
+    """Local decision-model tag as pulled in Ollama; empty input aborts."""
+    print(
+        "Local decision model tag as pulled in Ollama (empty aborts): ",
+        end="",
+        flush=True,
+    )
+    try:
+        typed = input().strip()
+    except (KeyboardInterrupt, EOFError):
+        return None
+    return typed or None
+
+
+def _setup_directives() -> str | None:
+    """Directive lines until a blank line; empty needs an explicit confirm."""
+    print("Enter one directive per line; a blank line finishes.")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not line.strip():
+            break
+        lines.append(line)
+    if not lines:
+        print(
+            "No directives — write the strategy anyway? [yes to confirm]: ",
+            end="",
+            flush=True,
+        )
+        try:
+            confirm = input().strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if confirm not in ("y", "yes"):
+            return None
+        return ""
+    return "\n".join(lines)
+
+
+def _route_setup_message() -> str:
+    """Guided ``/route setup``: scope, engine, candidates, decision, directives.
+
+    Enumerates the live OpenRouter catalog for every model choice —
+    never hardcoded names (D-06), never key prompts (T-08-10) — and
+    writes a valid strategy atomically; a failed catalog fetch falls
+    back to a typed-id path instead of crashing (T-08-11). Any ESC,
+    empty input, or unclear answer aborts with the session unchanged.
+    """
+    from strands_code_cli.live_pricing import fetch_openrouter_models
+    from strands_code_cli.routing import save_strategy
+
+    scope = _setup_ask(
+        "Where should the strategy live",
+        [
+            ("global", "Global — all repos"),
+            ("repo", "This repo only (./.agent/routing.yaml)"),
+        ],
+    )
+    if scope is None:
+        return _SETUP_ABORTED
+    engine = _setup_ask(
+        "Decision engine",
+        [
+            ("openrouter", "OpenRouter API (needs OPENROUTER_API_KEY at runtime)"),
+            ("local", "Local Ollama daemon"),
+        ],
+    )
+    if engine is None:
+        return _SETUP_ABORTED
+    try:
+        models = fetch_openrouter_models()
+    except Exception:
+        models = None
+    entries = _setup_catalog_entries(models)
+    if entries:
+        if sys.stdin.isatty():
+            candidates = _setup_pick_candidates_tty(entries)
+        else:
+            candidates = _setup_pick_candidates_typed(entries)
+        if candidates is None:
+            return _SETUP_ABORTED
+        decision = _setup_pick_decision(entries, typed_only=False)
+    else:
+        print(
+            "Live catalog unreachable — enter model ids manually "
+            "(check spelling carefully)."
+        )
+        candidates = _setup_typed_id_list("Candidate model ids, comma-separated")
+        if candidates is None:
+            return _SETUP_ABORTED
+        decision = _setup_pick_decision([], typed_only=True)
+    if decision is None:
+        return _SETUP_ABORTED
+    local_model: str | None = None
+    if engine == "local":
+        local_model = _setup_local_model()
+        if local_model is None:
+            return _SETUP_ABORTED
+    directives = _setup_directives()
+    if directives is None:
+        return _SETUP_ABORTED
+    payload: dict[str, Any] = {
+        "candidates": [{"id": candidate} for candidate in candidates],
+        "directives": directives,
+        "engine": {"primary": engine, "decision_model": decision},
+    }
+    if local_model is not None:
+        payload["engine"]["local_model"] = local_model
+    try:
+        path = save_strategy(payload, scope)
+    except ValueError as exc:
+        return f"Setup failed — {exc} (nothing written)."
+    noun = "candidate" if len(candidates) == 1 else "candidates"
+    return (
+        f"Routing strategy saved ({scope}): {path}\n"
+        f"{len(candidates)} {noun}, engine {engine}, decision model {decision}.\n"
+        "Manual /model always wins over routing.\n"
+        "Run /route validate to check the file."
+    )
+
+
+def _route_message(rest: str, routing: RoutingState | None) -> str:
+    """Handle /route: toggle, status, and the guided setup flow.
+
+    Bare ``/route`` reports status like bare ``/mode``; ``validate``
+    lands in task 2 and replies with usage until then.
     """
     from strands_code_cli.routing import (
         ROUTE_USAGE,
@@ -599,6 +978,8 @@ def _route_message(rest: str, routing: RoutingState | None) -> str:
         return route_status_text(holder, strategy)
     if verb in ("on", "off"):
         return holder.set(verb)
+    if verb == "setup":
+        return _route_setup_message()
     return ROUTE_USAGE
 
 

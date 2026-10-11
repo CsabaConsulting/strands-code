@@ -6,12 +6,21 @@ warn-and-skip, repo-wins precedence, symlink refusal.
 
 from __future__ import annotations
 
-import pytest
+import re
+import sys
+from pathlib import Path
 
+import pytest
+import yaml
+
+import strands_code_cli.routing as routing_mod
+from strands_code_cli.router import _SETUP_DONE, dispatch
 from strands_code_cli.routing import (
     RoutingCandidate,
     load_strategy,
+    save_strategy,
 )
+from strands_code_cli.session_index import SessionIndex
 
 
 def _write(path, text):
@@ -132,3 +141,335 @@ class TestStrategyLoad:
         strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert strategy is not None
         assert strategy.candidates == []
+
+
+_SETUP_CATALOG = [
+    {
+        "id": "good/cheap",
+        "context_length": 32000,
+        "pricing": {"prompt": "0.00000010", "completion": "0.00000020"},
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+        },
+        "supported_parameters": ["temperature", "response_format"],
+    },
+    {
+        "id": "good/pricey",
+        "context_length": 200000,
+        "pricing": {"prompt": "0.00000300", "completion": "0.00001500"},
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+        },
+        "supported_parameters": ["temperature"],
+    },
+    {
+        "id": "good/unpriced",
+        "context_length": 64000,
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["text"],
+        },
+        "supported_parameters": ["structured_outputs"],
+    },
+    {"id": "vendor/embed-large", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "vendor/rerank-pro", "pricing": {"prompt": "0", "completion": "0"}},
+    {"id": "broken/entry", "pricing": {"prompt": "n/a"}},
+    "not-a-dict",
+    {"id": ""},
+]
+"""Fixture /models payload: priced, unpriced, non-chat, and malformed rows."""
+
+
+def _setup_paths(monkeypatch, tmp_path):
+    """Point both strategy defaults at tmp files; return (repo, global)."""
+    repo = tmp_path / "repo" / ".agent" / "routing.yaml"
+    glob = tmp_path / "home" / "routing.yaml"
+    monkeypatch.setattr(routing_mod, "default_repo_strategy_path", lambda: repo)
+    monkeypatch.setattr(routing_mod, "default_global_strategy_path", lambda: glob)
+    return (repo, glob)
+
+
+def _scripted_radio(monkeypatch, picks):
+    """Serve scripted radio picks; return the (title, options) call log."""
+    import strands_code_cli.choice as choice_mod
+
+    calls: list = []
+    queue = list(picks)
+
+    def _fake(title, options, default=0):
+        calls.append((title, list(options)))
+        return queue.pop(0)
+
+    monkeypatch.setattr(choice_mod, "radio_choice", _fake)
+    return calls
+
+
+def _scripted_input(monkeypatch, lines):
+    """Serve scripted input() lines in order."""
+    queue = list(lines)
+    monkeypatch.setattr("builtins.input", lambda *args: queue.pop(0))
+
+
+def _setup_catalog(monkeypatch, payload=None):
+    """Serve the fixture catalog (deep-ish copy) for fetch_openrouter_models."""
+    import strands_code_cli.live_pricing as live_pricing_mod
+
+    rows = payload if payload is not None else _SETUP_CATALOG
+    monkeypatch.setattr(
+        live_pricing_mod, "fetch_openrouter_models", lambda: [dict(e) if isinstance(e, dict) else e for e in rows]
+    )
+
+
+def _run_setup(tmp_path):
+    return dispatch(
+        "/route setup", session_id="s", index=SessionIndex(tmp_path / "index")
+    )
+
+
+class TestRouteSetup:
+    def test_full_run_writes_repo_scope_in_pick_order(
+        self, tmp_path, monkeypatch
+    ):
+        repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        calls = _scripted_radio(
+            monkeypatch,
+            [
+                "repo",  # scope
+                "openrouter",  # engine
+                "good/pricey",  # candidate 1 (not cheapest: pick order wins)
+                "good/cheap",  # candidate 2
+                _SETUP_DONE,  # done
+                "good/cheap",  # decision model
+            ],
+        )
+        _scripted_input(
+            monkeypatch, ["trivial asks go cheap", "deep work goes big", ""]
+        )
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert repo_path.exists() and not global_path.exists()
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == [
+            "good/pricey",
+            "good/cheap",
+        ]
+        assert data["directives"] == "trivial asks go cheap\ndeep work goes big"
+        assert data["engine"] == {
+            "primary": "openrouter",
+            "decision_model": "good/cheap",
+        }
+        assert "(repo)" in message
+        assert "2 candidates" in message
+        assert "/route validate" in message
+        assert "Manual /model always wins" in message
+        # Catalog hygiene: price-ascending offer, non-chat and malformed
+        # rows never offered, unpriced chat-shaped rows offered last.
+        first_pick = [value for value, _ in calls[2][1]]
+        assert first_pick == [
+            "good/cheap",
+            "good/pricey",
+            "broken/entry",
+            "good/unpriced",
+            _SETUP_DONE,
+        ]
+        offered = [value for _, opts in calls for value, _ in opts]
+        assert "vendor/embed-large" not in offered
+        assert "vendor/rerank-pro" not in offered
+        decision_pick = [value for value, _ in calls[5][1]]
+        assert decision_pick == ["good/cheap", "good/unpriced"]
+
+    def test_global_scope_run_writes_global_path(self, tmp_path, monkeypatch):
+        repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            ["global", "openrouter", "good/cheap", _SETUP_DONE, "good/cheap"],
+        )
+        _scripted_input(monkeypatch, ["", "yes"])  # empty directives + confirm
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert global_path.exists() and not repo_path.exists()
+        data = yaml.safe_load(global_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == ["good/cheap"]
+        assert data["directives"] == ""
+        assert "(global)" in message
+
+    def test_esc_mid_flow_writes_nothing(self, tmp_path, monkeypatch):
+        repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(monkeypatch, ["repo", None])  # ESC at the engine radio
+        _scripted_input(monkeypatch, [])
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "no changes written" in message
+        assert not repo_path.exists() and not global_path.exists()
+
+    def test_empty_input_aborts_off_tty(self, tmp_path, monkeypatch):
+        repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        _scripted_input(monkeypatch, [""])  # empty scope answer aborts
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "no changes written" in message
+        assert not repo_path.exists() and not global_path.exists()
+
+    def test_done_with_zero_picks_reprompts(self, tmp_path, monkeypatch, capsys):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            [
+                "repo",
+                "openrouter",
+                _SETUP_DONE,  # done with zero picks: re-prompted
+                "good/cheap",
+                _SETUP_DONE,
+                "good/cheap",
+            ],
+        )
+        _scripted_input(monkeypatch, ["d", ""])
+        action, _ = _run_setup(tmp_path)
+        assert action == "reply"
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == ["good/cheap"]
+        assert "at least one candidate" in capsys.readouterr().out
+
+    def test_off_tty_comma_list_reprompts_once_then_writes_valid_subset(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        _scripted_input(
+            monkeypatch,
+            [
+                "2",  # scope: repo
+                "1",  # engine: openrouter
+                "good/cheap, bogus/model",  # attempt 1: one unknown id
+                "good/cheap, good/pricey",  # attempt 2: valid subset written
+                "good/cheap",  # decision model
+                "cheap first",
+                "",
+            ],
+        )
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "saved" in message
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == [
+            "good/cheap",
+            "good/pricey",
+        ]
+        assert "bogus/model" in capsys.readouterr().out
+
+    def test_catalog_fetch_failure_offers_typed_id_path(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        import strands_code_cli.live_pricing as live_pricing_mod
+
+        monkeypatch.setattr(live_pricing_mod, "fetch_openrouter_models", lambda: None)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(monkeypatch, ["repo", "openrouter"])
+        _scripted_input(
+            monkeypatch,
+            ["custom/alpha, custom/beta", "custom/decider", "hands on", ""],
+        )
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "saved" in message
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == [
+            "custom/alpha",
+            "custom/beta",
+        ]
+        assert data["engine"]["decision_model"] == "custom/decider"
+        assert "manually" in capsys.readouterr().out
+
+    def test_local_engine_run_captures_local_model(self, tmp_path, monkeypatch):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            ["repo", "local", "good/cheap", _SETUP_DONE, "good/unpriced"],
+        )
+        _scripted_input(monkeypatch, ["qwen3:8b", "side note", ""])
+        action, _ = _run_setup(tmp_path)
+        assert action == "reply"
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert data["engine"] == {
+            "primary": "local",
+            "decision_model": "good/unpriced",
+            "local_model": "qwen3:8b",
+        }
+
+    def test_save_strategy_refuses_symlinked_target(self, tmp_path):
+        target = tmp_path / "real.yaml"
+        target.write_text("candidates: []\n", encoding="utf-8")
+        link = tmp_path / "link.yaml"
+        link.symlink_to(target)
+        with pytest.raises(ValueError, match="symlink"):
+            save_strategy(
+                {"candidates": [{"id": "a/1"}]}, "repo", repo_path=link
+            )
+
+    def test_save_strategy_drops_api_key_shaped_keys(self, tmp_path, caplog):
+        import logging
+
+        data = {
+            "candidates": [{"id": "a/1"}],
+            "directives": "d",
+            "api_key": "sk-live-123",
+            "engine": {
+                "primary": "openrouter",
+                "decision_model": "c/d",
+                "API_KEY": "sk-live-456",
+            },
+        }
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            path = save_strategy(data, "global", global_path=tmp_path / "cfg" / "g.yaml")
+        saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "api_key" not in saved
+        assert "API_KEY" not in saved.get("engine", {})
+        assert saved["candidates"] == [{"id": "a/1"}]
+        assert saved["engine"]["decision_model"] == "c/d"
+        assert "sk-live" not in path.read_text(encoding="utf-8")
+        assert "secret-shaped" in caplog.text
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+
+    def test_save_strategy_refuses_zero_usable_candidates(self, tmp_path):
+        with pytest.raises(ValueError, match="zero usable candidates"):
+            save_strategy(
+                {"candidates": [], "directives": "d"},
+                "repo",
+                repo_path=tmp_path / "r.yaml",
+            )
+        with pytest.raises(ValueError, match="zero usable candidates"):
+            save_strategy(
+                {"candidates": [{"bogus": True}]},
+                "repo",
+                repo_path=tmp_path / "r.yaml",
+            )
+        assert not (tmp_path / "r.yaml").exists()
+
+    def test_docs_routing_examples_are_valid_yaml(self):
+        text = (
+            Path(__file__).parent.parent / "docs" / "ROUTING.md"
+        ).read_text(encoding="utf-8")
+        blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
+        examples = [block for block in blocks if "candidates:" in block]
+        assert len(examples) == 2
+        for example in examples:
+            data = yaml.safe_load(example)
+            assert {"candidates", "directives", "engine"} <= set(data)
+            assert data["candidates"] and all("id" in c for c in data["candidates"])
+            assert data["engine"]["decision_model"]

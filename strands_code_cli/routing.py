@@ -296,6 +296,97 @@ def load_strategy(
     return strategies
 
 
+def _is_secret_shaped_key(key: object) -> bool:
+    """True when a mapping key looks like a credential slot (T-08-10).
+
+    Matches ``api_key`` in any case/separator spelling (``API_KEY``,
+    ``api-key``, ``apikey``, ``apiKey``); anything matching is dropped
+    on save so guided setup can never persist a key next to the
+    strategy — keys stay runtime env per 08-01.
+    """
+    if not isinstance(key, str):
+        return False
+    folded = key.lower().replace("_", "").replace("-", "")
+    return "apikey" in folded
+
+
+def save_strategy(
+    data: dict[str, Any],
+    scope: str,
+    *,
+    global_path: str | Path | None = None,
+    repo_path: str | Path | None = None,
+) -> Path:
+    """Write one guided-setup strategy atomically (D-13).
+
+    ``scope`` selects the global file or the repo file (explicit path
+    overrides exist for tests). The write is tmp-write plus
+    ``os.replace`` with the parent dir at 0700 (the provider-config
+    precedent); api_key-shaped keys are dropped with a warning at both
+    the top level and inside ``engine`` (T-08-10).
+
+    Raises:
+        ValueError: On an unknown scope, a symlinked target, a
+            non-mapping payload, or zero usable candidates (the setup
+            flow guarantees at least one; this is the fail-loud
+            backstop).
+    """
+    if not isinstance(data, dict):
+        raise ValueError("Routing strategy must be a mapping")
+    if scope == "global":
+        resolved = (
+            Path(global_path)
+            if global_path is not None
+            else default_global_strategy_path()
+        )
+    elif scope == "repo":
+        resolved = (
+            Path(repo_path) if repo_path is not None else default_repo_strategy_path()
+        )
+    else:
+        raise ValueError(f"Unknown strategy scope {scope!r}: expected global|repo")
+    if resolved.is_symlink():
+        raise ValueError(f"Routing strategy must not be a symlink: {resolved}")
+    payload: dict[str, Any] = {}
+    for key, value in data.items():
+        if _is_secret_shaped_key(key):
+            logger.warning(
+                "Dropping secret-shaped routing key %r (keys stay runtime env)", key
+            )
+            continue
+        if key == "engine" and isinstance(value, dict):
+            cleaned = {
+                entry_key: entry_value
+                for entry_key, entry_value in value.items()
+                if not _is_secret_shaped_key(entry_key)
+            }
+            for dropped in set(value) - set(cleaned):
+                logger.warning(
+                    "Dropping secret-shaped routing engine key %r"
+                    " (keys stay runtime env)",
+                    dropped,
+                )
+            payload[key] = cleaned
+        else:
+            payload[key] = value
+    usable = 0
+    raw_candidates = payload.get("candidates", [])
+    if isinstance(raw_candidates, list):
+        for pos, entry in enumerate(raw_candidates):
+            if _parse_candidate(entry, pos) is not None:
+                usable += 1
+    if usable == 0:
+        raise ValueError(
+            "Refusing to write a routing strategy with zero usable candidates"
+        )
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(resolved.parent, 0o700)
+    tmp = resolved.with_suffix(".yaml.tmp")
+    tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    os.replace(tmp, resolved)
+    return resolved
+
+
 _SYSTEM_PROMPT = """You route coding asks to exactly one candidate model. Reply with JSON only: {"model": "<candidate id>", "effort": "<level>", "why": "<=12 words>"}.
 Rules:
 - "model" MUST be one id from the candidate table verbatim.
@@ -739,7 +830,7 @@ def format_hold_line(*, current: str, engine: str) -> str:
 
 ROUTING_ON_REPLY = "Routing on — asks route pre-turn through the decision model."
 ROUTING_OFF_REPLY = "Routing off — the current model serves every ask."
-ROUTE_USAGE = "Usage: /route [on|off|status]"
+ROUTE_USAGE = "Usage: /route [on|off|status|setup]"
 MODEL_ROUTING_KEEP_REPLY = "Model unchanged — routing stays on."
 ROUTING_MANUAL_OFF_NOTE = "Routing off — manual /model wins; /route on to re-enable."
 
