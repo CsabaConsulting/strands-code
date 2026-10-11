@@ -191,7 +191,20 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: TBD (not yet planned)
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 08-01-PLAN.md — Tracer: strategy plus OpenRouter decision plus pre-turn hook plus transcript note, routed effort threading, toggle plus /model warn plus /route on/off/status
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 08-02-PLAN.md — Local Ollama engine plus offline chain, /cost routing section plus decision spend plus quiet flag, side-ask routing
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 08-03-PLAN.md — Guided /route setup plus docs, /route validate, single-candidate fast path plus env-gated live engine tests
 
 ### Phase 9: CodeAct Action Interface
 
