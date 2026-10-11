@@ -1,32 +1,40 @@
 ---
 phase: 07-subagents-btw-side-channel
-verified: 2026-10-06T09:00:00Z
-status: human_needed
+verified: 2026-10-11
+status: passed
 score: 11/11 must-haves verified
 covered_files:
-  - .planning/phases/07-subagents-btw-side-channel/07-01-PLAN.md
-  - .planning/phases/07-subagents-btw-side-channel/07-02-PLAN.md
-  - .planning/phases/07-subagents-btw-side-channel/07-03-PLAN.md
-  - .planning/phases/07-subagents-btw-side-channel/07-01-SUMMARY.md
-  - .planning/phases/07-subagents-btw-side-channel/07-02-SUMMARY.md
-  - .planning/phases/07-subagents-btw-side-channel/07-03-SUMMARY.md
-  - .planning/phases/07-subagents-btw-side-channel/07-REVIEW.md
-  - .planning/phases/07-subagents-btw-side-channel/07-REVIEW-FIX.md
   - .planning/REQUIREMENTS.md
+  - .planning/phases/07-subagents-btw-side-channel/07-01-PLAN.md
+  - .planning/phases/07-subagents-btw-side-channel/07-01-SUMMARY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-02-PLAN.md
+  - .planning/phases/07-subagents-btw-side-channel/07-02-SUMMARY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-03-PLAN.md
+  - .planning/phases/07-subagents-btw-side-channel/07-03-SUMMARY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-04-PLAN.md
+  - .planning/phases/07-subagents-btw-side-channel/07-04-SUMMARY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-05-PLAN.md
+  - .planning/phases/07-subagents-btw-side-channel/07-05-SUMMARY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-REVIEW-FIX.md
+  - .planning/phases/07-subagents-btw-side-channel/07-REVIEW.md
+  - .planning/phases/07-subagents-btw-side-channel/07-SECURITY.md
+  - .planning/phases/07-subagents-btw-side-channel/07-UAT.md
+  - scripts/uattest/driver.py
   - strands_code_cli/btw.py
+  - strands_code_cli/diff_gate.py
   - strands_code_cli/loop.py
-  - strands_code_cli/steering.py
   - strands_code_cli/main.py
+  - strands_code_cli/policy_gate.py
   - strands_code_cli/router.py
   - strands_code_cli/skills.py
-  - strands_code_cli/policy_gate.py
-  - strands_code_cli/diff_gate.py
-  - tests/test_btw.py
-  - tests/test_router_btw.py
-  - tests/test_policy_gate.py
+  - strands_code_cli/steering.py
   - tests/test_broker.py
-  - tests/test_plan_cancel.py
+  - tests/test_btw.py
   - tests/test_cost_context.py
+  - tests/test_plan_cancel.py
+  - tests/test_policy_gate.py
+  - tests/test_router_btw.py
+covered_digest: "v1:sha256:ee9129dc5091a13a3d28a35a21f555c438bdea1d2f73ad6047fe11542dff2cad"
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
@@ -54,8 +62,8 @@ human_verification:
 
 **Phase Goal:** Users can ask side questions mid-task without disturbing the main task
 **Verified:** 2026-10-06T09:00:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+**Status:** passed
+**Re-verification:** Yes — 2026-10-11: the 6 frontmatter `human_verification` items were each performed live by the user across UAT rounds 1–3 (07-UAT.md, 6/6 pass, 0 issues) plus a scripted tmux confirmation round (scripts/uattest/driver.py, S1+S2 PASS). Mapping below.
 
 ## Goal Achievement
 
@@ -151,13 +159,27 @@ Review state: CR-01 + WR-01/02/03 fixed and committed (48d48ab, 121205a, 647dc55
 
 See frontmatter `human_verification` (6 items): the 3 manual-only live-terminal checks from 07-VALIDATION.md (D-11 idle landing, D-08 chooser, D-09 fence visuals) plus the 3 judgment-tier prohibition reviews.
 
+### Re-verification (2026-10-11) — human items closed by UAT
+
+| # | Human item | Closed by | Result |
+|---|------------|-----------|--------|
+| 1 | Long main + /btw approval, main finishes first | UAT T1 R3 (live idle dialog, half-typed line preserved) + scripted S1 | pass |
+| 2 | Ctrl-C chooser with main+btw concurrent | UAT T2 R2 (cancel-side, no orphan, clean fence) + scripted S2 | pass |
+| 3 | Fenced btw blocks live mid-stream, no torn lines | UAT T3 (all rounds) | pass |
+| 4 | Safety prohibition: same deny-first gate for btw | UAT T4 (user-confirmed, G-7-4 attribution fix shipped in 07-04) + 07-SECURITY.md T-07-01/T-07-20 | pass |
+| 5 | Transparency prohibition: btw identity everywhere | UAT T5-rounds (fences/headers/history/policy identity held) + 07-SECURITY.md T-07-22 | pass |
+| 6 | Memory-safety prohibition: no durable side writes | UAT T6 (zero side leakage across stores, empty curate queue) + 07-SECURITY.md T-07-21 | pass |
+
+UAT record: 07-UAT.md (status complete, round 3, 6/6 passed, 0 issues). Gaps found during UAT (G-7-1a/1b/2/4, R2/R2b) were fixed in 07-04/07-05 and re-verified in later rounds. Residuals below gap bar per user verdict: one SDK `TurnCancelled` logger noise line; framing "question"-vs-request wording (unfiled).
+
 ### Gaps Summary
 
 No gaps. All must-haves verified against the codebase with passing automated tests. The phase goal is achieved subject to live-terminal human confirmation of rendering and signal choreography, which are inherently non-automatable.
 
-Note: `covered_digest` omitted — no gsd-tools.cjs in this runtime (generic-agent workaround), and digests must never be hand-written.
+Note: `covered_digest` computed 2026-10-11 via `gsd_run query verification.fingerprint` over the extended covered set (added 07-04/07-05 plans+summaries, 07-UAT.md, 07-SECURITY.md, scripts/uattest/driver.py); never hand-written.
 
 ---
 
 _Verified: 2026-10-06T09:00:00Z_
 _Verifier: Muse Code (gsd-verifier; generic-agent workaround)_
+_Re-verified: 2026-10-11 (human items closed by user-attested UAT rounds + secure-phase audit)_

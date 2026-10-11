@@ -1,44 +1,45 @@
 ---
 gsd_state_version: "1.0"
-current_phase: 07
-current_phase_name: Subagents + /btw Side Channel
-status: executing
-stopped_at: Phase 7 context gathered
-last_updated: "2026-10-08T04:31:16.000Z"
-last_activity: 2026-10-08
-last_activity_desc: Phase 07 plan 5 complete (round-2 gap closure G-7-1-R2/G-7-1-R2b)
-state_head: a903b412e2694bc789c0f734d165456c24f9046a
+milestone: v1
+current_phase: 8
+current_phase_name: Model Routing with Decision Models
+status: planning
+stopped_at: Phase 07 complete, ready to plan Phase 8
+last_updated: "2026-10-11T02:03:50.265Z"
+last_activity: 2026-10-10
+last_activity_desc: Phase 07 complete, transitioned to Phase 8
+state_head: dcf2c89a42f0f2f5256749075aa4533a4cb691b6
 progress:
   total_phases: 9
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 16
   completed_plans: 16
-  percent: 67
+  percent: 78
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-04)
+See: .planning/PROJECT.md (updated 2026-10-11)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 07 — Subagents + /btw Side Channel
+**Current focus:** Phase 8 — Model Routing with Decision Models
 
 ## Current Position
 
-Phase: 07 (Subagents + /btw Side Channel) — EXECUTING
-Plan: 5 of 5
-Status: Round-2 gap closure complete (E multiplex + exit note + stdin guard) — ready for UAT round 3 / phase seal
-Last activity: 2026-10-08 — Phase 07 plan 5 complete (round-2 gap closure G-7-1-R2/G-7-1-R2b)
+Phase: 8 — Model Routing with Decision Models
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-10 — Phase 07 complete, transitioned to Phase 8
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 78%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 12
+- Total plans completed: 16
 - Average duration: -
 - Total execution time: -
 
@@ -52,6 +53,7 @@ Progress: [███████░░░] 67%
 | 4 | 1 | - | - |
 | 5 | 1 | - | - |
 | 6 | 4 | - | - |
+| 07 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -113,8 +115,9 @@ None yet.
 
 ### Blockers/Concerns
 
-- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–6).
+- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–7; Phase 7 fork path strips, restore path untouched).
 - ⚠️ [Phase 6 UAT] Silent memory mode can memorialize the model's own rationalizations as user preferences (observed: refusal principles stored as durable preferences) — curate default is the backstop; silent users should review MEMORY.md periodically.
+- ⚠️ [Phase 7] PendingStore lock-guarded but not proven race-safe under dual-stream load; residual dialog-safety risk under concurrent main+side streaming remains.
 
 ### Roadmap Evolution
 
@@ -136,6 +139,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-08T04:31:16.000Z
-Stopped at: Completed 07-05-PLAN.md
+Last session: 2026-10-11T02:03:50.265Z
+Stopped at: Phase 07 complete, ready to plan Phase 8
 Resume file: None

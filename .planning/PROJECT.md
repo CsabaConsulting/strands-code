@@ -24,6 +24,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Local skills: load from `./.agent/skills`, invoke as `/<name>`, autocomplete + `/skills` manage — Phase 6 (built-ins win collisions, `namespace:skill` prefixes, trailing-text input, typed-name match echo)
 - ✓ Repo memory file: dual `STRANDS.md` + `.agent/MEMORY.md` auto-load, `/init` scan-draft, `/memory` curate/approve + NL revise rounds — Phase 6 (.agent wins, curate-by-default, auto-reload, flush on exit)
 - ✓ Markup-safe transcript: hostile `[...]` content renders literally, never crashes — Phase 6 UAT (print_plain, markup off; supersedes WR-06 escape)
+- ✓ Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched — Phase 7 (parallel side agent, shared tagged deny-first gate, fenced blocks, FIFO queue, Ctrl-C chooser, multiplexed idle delivery)
 
 ### Active
 
@@ -31,12 +32,12 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Plan / Act modes with approval between them — Phase 4 (classifier-deny, /approve handoff, session-sticky /mode)
 - ✓ Anytime steering: freeform input injected at the next tool-call boundary without disturbing the task — Phase 4 (cancel_tool hook, finish-then-redirect)
 - [ ] Strip reasoningContent from restored history for non-reasoning Bedrock models (emerged Phase 4: opus history fails validation on model switch; fresh session is the workaround)
-- [ ] Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched
 - [ ] Grep-first code understanding (agentic grep/READ); persistent semantic index deferred
 - [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
 - [ ] Skills marketplace commands: add marketplace, install skills (local load/invoke validated Phase 6)
 - [ ] Session resume by UUID across runs
 - [ ] Decision-model routing with manual override kept — Phase 8
+- [ ] Harness can run GSD workflows (skills + gsd-tools + shell) — emerged Phase 7 (user goal; placement TBD: roadmap phase vs future)
 - [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
 
 ### Out of Scope
@@ -80,6 +81,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 | Owned AgentSkills + refresh-on-reload | Harness registry is load-once; CLI reload left it stale and models refused reloaded skills — owned instance refreshed first, both-stale-or-both-fresh | ✓ Good (live-verified) |
 | Markup-safe printing, markup off | Dynamic transcript text through Rich markup parsing crashed sessions (WR-06 class); print_plain renders verbatim, styling via kwarg | ✓ Good |
 | Explicit invocation frames skill trust | Absolute untrusted marker made models refuse invoked skills; invocation is the trust signal, distrust scoped to embedded third-party directives, gate stays hard control | ✓ Good (live-verified) |
+| Side channel shares the main deny-first gate (tagged [main]/[btw]) | Separate gates would double-prompt and split batch coverage; tags from event.agent identity keep attribution on every prompt | ✓ Good (live-verified, Phase 7) |
+| Side agent via create_harness rebuild, not agents-as-tools | Helper-agent pattern couldn't share gate/model/memory; rebuild over stashed kwargs + forked history keeps one policy surface | ✓ Good (Phase 7) |
+| D-14 append-back: side exchange lands in main history at boundary | One conversation matches the user mental model; fences + /btw identity preserve attribution | ✓ Good (live-verified, Phase 7) |
 
 ## Evolution
 
@@ -99,4 +103,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-11 (context numbers touched up pre-transition; Active→Validated moves pending $gsd-transition-phase)*
+*Last updated: 2026-10-11 after Phase 7*
