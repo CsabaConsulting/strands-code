@@ -1152,6 +1152,47 @@ def apply_model_action(
     )
 
 
+def _record_routing_event(
+    routing_events: list | None,
+    *,
+    strategy: routing_mod.RoutingStrategy,
+    side: bool,
+    model: str,
+    effort: str,
+    why: str,
+    engine: str,
+    decision_engine: str,
+    usage: tuple[int, int],
+    held: bool,
+) -> None:
+    """Append one routing event for a decided ask (None list skips).
+
+    The record carries the 1-based ask number, the side flag, the
+    serving (or picked) model plus routed effort/why, the producing
+    (or failed) engine, the decision-call token pair, the held marker,
+    and the decision model id behind ``decision_engine`` for /cost
+    pricing. Held asks record the serving model with empty effort/why.
+    """
+    if routing_events is None:
+        return
+    routing_events.append(
+        {
+            "ask": len(routing_events) + 1,
+            "side": side,
+            "model": model,
+            "effort": effort,
+            "why": why,
+            "engine": engine,
+            "input_tokens": usage[0],
+            "output_tokens": usage[1],
+            "held": held,
+            "decision_model": routing_mod.decision_model_for(
+                strategy, decision_engine
+            ),
+        }
+    )
+
+
 def _route_pre_turn(
     agent: Any,
     *,
@@ -1162,6 +1203,7 @@ def _route_pre_turn(
     session_id: str,
     stash_path: Path | None,
     routing: routing_mod.RoutingState | None = None,
+    routing_events: list | None = None,
 ) -> str:
     """Pre-turn routing hook: decide, switch, note; returns the model id.
 
@@ -1174,8 +1216,11 @@ def _route_pre_turn(
     (suppressed when the strategy sets ``quiet``). A same-model pick
     skips the switch (no-op fast path) but still prints the line.
     Every engine, parse, validation, or resolve failure holds current
-    with history untouched and prints the hold note (D-08). Effort is
-    per-ask: nothing persists, and manual switches keep the default.
+    with history untouched and prints the hold note (D-08) — hold and
+    failure notes always print, even under ``quiet``. Every decided
+    ask, held included, appends one routing event for /cost (T-08-08).
+    Effort is per-ask: nothing persists, and manual switches keep the
+    default.
     """
     if routing is not None and not routing.is_on():
         return current_model
@@ -1187,10 +1232,22 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
-    pick, engine, _usage = routing_mod.decide(
+    pick, engine, usage = routing_mod.decide(
         strategy, current_model=current_model, side=False, ask=ask_text
     )
     if pick is None:
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            why="",
+            engine=engine,
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
         print_plain(
             console, routing_mod.format_hold_line(current=current_model, engine=engine)
         )
@@ -1203,6 +1260,18 @@ def _route_pre_turn(
                 pick.effort,
                 pick.model,
                 current_model,
+            )
+            _record_routing_event(
+                routing_events,
+                strategy=strategy,
+                side=False,
+                model=current_model,
+                effort="",
+                why="",
+                engine=engine,
+                decision_engine=engine,
+                usage=usage,
+                held=True,
             )
             print_plain(
                 console,
@@ -1220,6 +1289,18 @@ def _route_pre_turn(
             )
         except Exception as exc:  # noqa: BLE001 — switch-first: history untouched
             logger.warning("Routed switch failed (%s); holding %s", exc, current_model)
+            _record_routing_event(
+                routing_events,
+                strategy=strategy,
+                side=False,
+                model=current_model,
+                effort="",
+                why="",
+                engine="resolve",
+                decision_engine=engine,
+                usage=usage,
+                held=True,
+            )
             print_plain(
                 console,
                 routing_mod.format_hold_line(current=current_model, engine="resolve"),
@@ -1237,6 +1318,18 @@ def _route_pre_turn(
             index.ensure(session_id)
             if rich is not None and stash_path is not None:
                 rich.save(stash_path)
+    _record_routing_event(
+        routing_events,
+        strategy=strategy,
+        side=False,
+        model=pick.model,
+        effort=pick.effort,
+        why=pick.why,
+        engine=engine,
+        decision_engine=engine,
+        usage=usage,
+        held=False,
+    )
     if not strategy.quiet:
         print_plain(
             console,
@@ -1721,6 +1814,7 @@ def run_loop(
             style="yellow",
         )
     session_turns: list = []
+    routing_events: list = []
     stash_path = rich_stash_path(index.root, session_id)
     rich = RichHistory.load(stash_path)
     slot = _steering_slot_for(agent)
@@ -1805,6 +1899,7 @@ def run_loop(
                 revise=revise_state,
                 init=init_state,
                 routing=routing,
+                routing_events=routing_events,
             )
         if action == "agent":
             match_note = skill_match_note(skills, text)
@@ -1884,6 +1979,7 @@ def run_loop(
                     session_id=session_id,
                     stash_path=stash_path,
                     routing=routing,
+                    routing_events=routing_events,
                 )
                 history = getattr(agent, "messages", None)
                 before = len(history) if isinstance(history, list) else 0

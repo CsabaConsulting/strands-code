@@ -691,6 +691,20 @@ def validate_routed_effort(
     return True
 
 
+def decision_model_for(strategy: RoutingStrategy, engine: str) -> str | None:
+    """Decision model id behind one engine name, for /cost accounting.
+
+    ``openrouter`` prices at the API decision model, ``local`` at the
+    daemon model; anything else (``resolve`` holds, unknown engines)
+    has no decision model and prices nothing (T-08-08).
+    """
+    if engine == "openrouter":
+        return strategy.engine.decision_model
+    if engine == "local":
+        return strategy.engine.local_model
+    return None
+
+
 def route_cost_delta(new_model: str, prev_model: str, ask: str) -> str:
     """``+0.0123``-style per-ask delta of new vs prev, or ``n/a``.
 

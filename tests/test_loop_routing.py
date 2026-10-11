@@ -604,3 +604,211 @@ class TestRoutingToggle:
         assert any(
             "shadowed by builtin '/route'" in warning for warning in skills.warnings
         )
+
+
+DECIDER = "decider-claude-3-haiku"
+"""Decision model id hitting the static price table (0.25/1.25 per 1M)."""
+
+
+def _event(**overrides):
+    base = {
+        "ask": 1,
+        "side": False,
+        "model": HAIKU,
+        "effort": "high",
+        "why": "cheap and fast",
+        "engine": "openrouter",
+        "input_tokens": 2000,
+        "output_tokens": 100,
+        "held": False,
+        "decision_model": DECIDER,
+    }
+    base.update(overrides)
+    return base
+
+
+def _hook(tmp_path, monkeypatch, strategy, engine_result, events):
+    """Drive the pre-turn hook directly with a canned engine result."""
+    from strands_code_cli.loop import _route_pre_turn
+
+    monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+    monkeypatch.setattr(
+        routing_mod, "decide_via_openrouter", lambda **kw: engine_result
+    )
+    saved: list[str] = []
+    _no_persist(monkeypatch, saved)
+    agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+    served = _route_pre_turn(
+        agent,
+        current_model=NOVA_MICRO,
+        ask_text="hello",
+        rich=None,
+        index=SessionIndex(tmp_path / "index"),
+        session_id="s",
+        stash_path=None,
+        routing=RoutingState(initial="on"),
+        routing_events=events,
+    )
+    return served, saved
+
+
+class TestCostRouting:
+    def test_hook_appends_routing_event_with_usage(self, tmp_path, monkeypatch):
+        events: list = []
+        served, saved = _hook(
+            tmp_path,
+            monkeypatch,
+            _strategy(),
+            _pick_result(HAIKU, usage=(120, 25)),
+            events,
+        )
+        assert served == HAIKU
+        assert saved == [HAIKU]
+        assert events == [
+            {
+                "ask": 1,
+                "side": False,
+                "model": HAIKU,
+                "effort": "high",
+                "why": "cheap and fast",
+                "engine": "openrouter",
+                "input_tokens": 120,
+                "output_tokens": 25,
+                "held": False,
+                "decision_model": "cheap/decider",
+            }
+        ]
+
+    def test_cost_report_renders_routing_and_folds_spend(self):
+        from strands_code_cli.cost_context import cost_for, cost_report
+
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "model": NOVA_MICRO,
+            }
+        ]
+        report = cost_report(turns, NOVA_MICRO, routing=[_event()])
+        assert "Routing:" in report
+        assert HAIKU in report and "cheap and fast" in report
+        assert "openrouter" in report
+        expected = cost_for(1000, 500, NOVA_MICRO) + cost_for(2000, 100, DECIDER)
+        assert expected is not None
+        total = next(line for line in report.splitlines() if line.startswith("Total:"))
+        assert total == (
+            f"Total: in 3.00K, out 600, ${expected:.4f}"
+        )
+        assert "Prices: static table." in report
+
+    def test_dispatch_cost_forwards_routing_events(self, tmp_path):
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "model": NOVA_MICRO,
+            }
+        ]
+        action, message = dispatch(
+            "/cost",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            current_model=NOVA_MICRO,
+            session_turns=turns,
+            routing_events=[_event()],
+        )
+        assert action == "reply"
+        assert message is not None
+        assert "Routing:" in message
+        assert HAIKU in message and "cheap and fast" in message
+
+    def test_cost_report_without_routing_is_byte_identical(self):
+        from strands_code_cli.cost_context import cost_report
+
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "model": NOVA_MICRO,
+            }
+        ]
+        golden = (
+            "Cost — bedrock/amazon.nova-micro-v1:0\n"
+            "  turn 1: in 1.00K, out 500, $0.0001\n"
+            "Total: in 1.00K, out 500, $0.0001\n"
+            "Prices: static table.\n"
+            "Display only — no budgets or enforcement."
+        )
+        assert cost_report(turns, NOVA_MICRO) == golden
+        assert cost_report(turns, NOVA_MICRO, routing=None) == golden
+        assert cost_report(turns, NOVA_MICRO, routing=[]) == golden
+        assert (
+            cost_report([], "mystery/model-x")
+            == "Cost — mystery/model-x\n"
+            "Total: in 0, out 0\n"
+            "Prices: unknown.\n"
+            "Display only — no budgets or enforcement."
+        )
+
+    def test_quiet_strategy_prints_hold_note_on_failure(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        strategy = _strategy()
+        strategy.quiet = True
+        events: list = []
+        served, _ = _hook(
+            tmp_path, monkeypatch, strategy, EngineResult(text=None), events
+        )
+        assert served == NOVA_MICRO  # held current
+        out = capsys.readouterr().out
+        assert "Routed →" not in out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert (
+            f"Routing held on {NOVA_MICRO} (openrouter failed; retrying next ask)"
+            in flat
+        )
+
+    def test_held_ask_appends_held_event(self, tmp_path, monkeypatch):
+        events: list = []
+        served, _ = _hook(
+            tmp_path, monkeypatch, _strategy(), EngineResult(text=None), events
+        )
+        assert served == NOVA_MICRO
+        assert events == [
+            {
+                "ask": 1,
+                "side": False,
+                "model": NOVA_MICRO,
+                "effort": "",
+                "why": "",
+                "engine": "openrouter",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "held": True,
+                "decision_model": "cheap/decider",
+            }
+        ]
+
+    def test_skipped_ask_appends_no_event(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: None)
+        events: list = []
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        from strands_code_cli.loop import _route_pre_turn
+
+        served = _route_pre_turn(
+            agent,
+            current_model=NOVA_MICRO,
+            ask_text="hello",
+            rich=None,
+            index=SessionIndex(tmp_path / "index"),
+            session_id="s",
+            stash_path=None,
+            routing=RoutingState(initial="on"),
+            routing_events=events,
+        )
+        assert served == NOVA_MICRO
+        assert events == []
+        assert capsys.readouterr().out == ""

@@ -120,6 +120,7 @@ def dispatch(
     revise: ReviseState | None = None,
     init: InitState | None = None,
     routing: RoutingState | None = None,
+    routing_events: list | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -159,6 +160,9 @@ def dispatch(
         routing: Session-sticky routing toggle backing /route and the
             /model warn path (None → throwaway off holder, keeping
             standalone/test behaviour without a loop-owned holder).
+        routing_events: Session routing event records accumulated by
+            the loop for the /cost Routing section (None → the
+            pre-routing report, keeping existing callers untouched).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -204,7 +208,10 @@ def dispatch(
             return _model_warn_action(selection)
         return (action, selection)
     if cmd == "/cost":
-        return ("reply", _cost_message(session_turns, current_model, rest))
+        return (
+            "reply",
+            _cost_message(session_turns, current_model, rest, routing_events),
+        )
     if cmd == "/compact":
         return ("reply", _compact_message(agent))
     if cmd == "/clear":
@@ -246,7 +253,10 @@ _COST_USAGE = "Usage: /cost [refresh|table [filter]]"
 
 
 def _cost_message(
-    session_turns: list | None, current_model: str | None, rest: str = ""
+    session_turns: list | None,
+    current_model: str | None,
+    rest: str = "",
+    routing_events: list | None = None,
 ) -> str:
     """Run /cost: session report, live-price refresh, or table listing."""
     from strands_code_cli.cost_context import cost_report, price_table, refresh_report
@@ -255,7 +265,11 @@ def _cost_message(
     head, _, arg = rest.partition(" ")
     word = head.strip().lower()
     if not word:
-        return cost_report(list(session_turns or []), current_model or "unknown-model")
+        return cost_report(
+            list(session_turns or []),
+            current_model or "unknown-model",
+            routing=routing_events,
+        )
     if word == "refresh":
         return refresh_report(refresh_caches())
     if word == "table":

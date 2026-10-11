@@ -172,7 +172,50 @@ def usage_line(input_tokens: int, output_tokens: int, model_id: str) -> str:
     return line
 
 
-def cost_report(session_turns: list[dict[str, Any]], model_id: str) -> str:
+def _routing_line(event: dict[str, Any]) -> str:
+    """One ``/cost`` routing line for a decided ask (never raises).
+
+    ``ask {n}{side}: {model} ({effort}) via {engine} — {why} [held]``
+    plus the decision token cost at the decision model id; held asks
+    name the serving model with empty effort/why and the ``[held]``
+    marker. Missing keys degrade to placeholders — display only.
+    """
+    try:
+        ask = event.get("ask", "?")
+        side = " (btw)" if event.get("side") else ""
+        model = event.get("model", "?")
+        effort = event.get("effort", "") or ""
+        why = event.get("why", "") or ""
+        engine = event.get("engine", "?")
+        in_tok = int(event.get("input_tokens", 0))
+        out_tok = int(event.get("output_tokens", 0))
+    except (TypeError, ValueError):
+        return "  ask ?: unparseable routing event"
+    head = f"  ask {ask}{side}: {model}"
+    if effort:
+        head += f" ({effort})"
+    head += f" via {engine}"
+    if why:
+        head += f" — {why}"
+    if event.get("held"):
+        head += " [held]"
+    cell = f"{head} (decision in {in_tok}, out {out_tok}"
+    decision_model = event.get("decision_model")
+    if decision_model and (in_tok or out_tok):
+        try:
+            decision_cost = cost_for(in_tok, out_tok, decision_model)
+        except Exception:
+            decision_cost = None
+        if decision_cost is not None:
+            cell += f", ${decision_cost:.4f}"
+    return cell + ")"
+
+
+def cost_report(
+    session_turns: list[dict[str, Any]],
+    model_id: str,
+    routing: list[dict[str, Any]] | None = None,
+) -> str:
     """Per-turn rows plus session totals; display only, never enforcement.
 
     Each row prices at its own turn model (mid-session switches keep
@@ -183,6 +226,11 @@ def cost_report(session_turns: list[dict[str, Any]], model_id: str) -> str:
         session_turns: One row per agent turn: turn #, input/output
             tokens, turn model.
         model_id: Active model id string (header + row fallback).
+        routing: Routing event records (ask, side, model, effort, why,
+            engine, token counts, held, decision model). None renders
+            byte-identical output to the pre-routing report; with
+            events a Routing section lists one line per ask and the
+            decision tokens plus cost fold into the session totals.
     """
     lines = [f"Cost — {model_id}"]
     total_in = total_out = 0
@@ -206,6 +254,31 @@ def cost_report(session_turns: list[dict[str, Any]], model_id: str) -> str:
             if provenance not in provenances:
                 provenances.append(provenance)
         lines.append(cell)
+    if routing:
+        lines.append("Routing:")
+        for event in routing:
+            if not isinstance(event, dict):
+                continue
+            lines.append(_routing_line(event))
+            try:
+                in_tok = int(event.get("input_tokens", 0))
+                out_tok = int(event.get("output_tokens", 0))
+            except (TypeError, ValueError):
+                continue
+            total_in += in_tok
+            total_out += out_tok
+            decision_model = event.get("decision_model")
+            if decision_model and (in_tok or out_tok):
+                try:
+                    decision_cost = cost_for(in_tok, out_tok, decision_model)
+                except Exception:
+                    decision_cost = None
+                if decision_cost is not None:
+                    any_priced = True
+                    total_cost += decision_cost
+                    provenance = price_provenance(decision_model)
+                    if provenance not in provenances:
+                        provenances.append(provenance)
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"
     if any_priced:
         total += f", ${total_cost:.4f}"
