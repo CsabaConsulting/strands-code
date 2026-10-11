@@ -71,6 +71,7 @@ from strands_code_cli.model_switch import (
     convert_history,
     estimate_fit,
     from_stash_json,
+    model_id_of,
     normalize_model_ref,
     same_vendor,
     supports_reasoning,
@@ -601,7 +602,104 @@ def _pump_parallel(
     return result
 
 
-def _btw_context_for(agent: Any) -> BtwContext:
+def _route_side_spawn(
+    question: str,
+    kwargs: dict,
+    live_model: Any,
+    current_model: str,
+    routing: routing_mod.RoutingState | None,
+    routing_events: list | None,
+) -> None:
+    """One spawn-time side decision mutating the replayed kwargs (D-04).
+
+    Runs synchronously on the pump (main) thread inside the build
+    closure, once per spawn, before :func:`build_btw_agent`. A parsed
+    pick resolves through ``resolve_model`` with the routed effort and
+    re-points the replayed ``model`` plus ``effort``; any hold or
+    failure keeps the parent live model with no side note. The shared
+    strategy, toggle, and quiet rules apply: routing off or
+    unconfigured spawns exactly as before. Every side decision,
+    routed or held, appends one side-flagged routing event.
+    """
+    if routing is not None and not routing.is_on():
+        return
+    try:
+        strategy = routing_mod.load_strategy()
+    except ValueError:
+        return
+    if strategy is None or not strategy.candidates:
+        return
+    from strands_harness.models import resolve_model
+
+    kwargs["model"] = live_model
+    pick, engine, usage = routing_mod.decide(
+        strategy, current_model=current_model, side=True, ask=question
+    )
+    if pick is None:
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=True,
+            model=current_model,
+            effort="",
+            why="",
+            engine=engine,
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
+        return
+    try:
+        routed = resolve_model(pick.model, pick.model, effort=pick.effort)
+    except Exception:  # noqa: BLE001 — resolve failure holds to the live model
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=True,
+            model=current_model,
+            effort="",
+            why="",
+            engine="resolve",
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
+        return
+    kwargs["model"] = routed
+    kwargs["effort"] = pick.effort
+    _record_routing_event(
+        routing_events,
+        strategy=strategy,
+        side=True,
+        model=pick.model,
+        effort=pick.effort,
+        why=pick.why,
+        engine=engine,
+        decision_engine=engine,
+        usage=usage,
+        held=False,
+    )
+    if not strategy.quiet:
+        print_plain(
+            console,
+            routing_mod.format_routed_line(
+                model=pick.model,
+                effort=pick.effort,
+                why=pick.why,
+                prev_model=current_model,
+                ask=question,
+                side=True,
+            ),
+            style="dim",
+        )
+
+
+def _btw_context_for(
+    agent: Any,
+    *,
+    routing: routing_mod.RoutingState | None = None,
+    routing_events: list | None = None,
+) -> BtwContext:
     """Session side-channel state closing over the parent factory kwargs.
 
     The build closure replays the ``create_harness`` kwargs stashed by
@@ -609,22 +707,38 @@ def _btw_context_for(agent: Any) -> BtwContext:
     object, never a re-resolved one) and a fresh history snapshot per
     spawn. One context serves the whole session (D-11 outliving-main):
     the queue, pending, and live handle survive turn boundaries.
+    Each spawn routes once through the shared strategy side-flagged
+    (D-04); a live side run never re-decides, so a build issued while
+    a run is attached spawns on the parent model with no decision.
     """
     parent_kwargs = dict(getattr(agent, "_harness_kwargs", {}) or {})
     live_model = getattr(agent, "model", None)
     if live_model is not None:
         parent_kwargs["model"] = live_model
 
+    holder: dict[str, Any] = {}
+
     def _build(question: str) -> tuple[Any, list]:
         history = getattr(agent, "messages", None) or []
-        return build_btw_agent(parent_kwargs, list(history), question)
+        kwargs = dict(parent_kwargs)
+        btw = holder.get("btw")
+        if btw is not None and btw.has_live:
+            return build_btw_agent(kwargs, list(history), question)
+        live = getattr(agent, "model", None)
+        if live is not None:
+            _route_side_spawn(
+                question, kwargs, live, model_id_of(live, "?"), routing, routing_events
+            )
+        return build_btw_agent(kwargs, list(history), question)
 
-    return BtwContext(
+    context = BtwContext(
         spawn_queue=BtwQueue(),
         build=_build,
         cancel_event=threading.Event(),
         pending=[],
     )
+    holder["btw"] = context
+    return context
 
 
 def _invoke_agent(
@@ -1835,7 +1949,9 @@ def run_loop(
     session_pump = broker.pump(session_cancel) if broker is not None else None
     if session_pump is not None:
         session_pump.__enter__()
-    btw_session = _btw_context_for(agent)
+    btw_session = _btw_context_for(
+        agent, routing=routing, routing_events=routing_events
+    )
     side_pool = ThreadPoolExecutor(max_workers=1)
     while True:
         changed = sweep_memory_files(memory_snapshot)

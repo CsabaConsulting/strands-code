@@ -627,7 +627,7 @@ def decide(
     strategy: RoutingStrategy,
     *,
     current_model: str,
-    side: bool,
+    side: bool = False,
     ask: str,
 ) -> tuple[RoutingPick | None, str, tuple[int, int]]:
     """Route one ask: prompt build, engine chain, strict parse.
@@ -720,11 +720,16 @@ def route_cost_delta(new_model: str, prev_model: str, ask: str) -> str:
 
 
 def format_routed_line(
-    *, model: str, effort: str, why: str, prev_model: str, ask: str
+    *, model: str, effort: str, why: str, prev_model: str, ask: str, side: bool = False
 ) -> str:
-    """One transcript line for a routed ask (model, why, cost impact)."""
+    """One transcript line for a routed ask (model, why, cost impact).
+
+    Side asks print the ``Routed (btw)`` head so the transcript tells
+    spawn-time side picks apart from main-turn picks.
+    """
     delta = route_cost_delta(model, prev_model, ask)
-    return f"Routed \u2192 {model} ({effort}): {why} \u00b7 ~${delta}/ask vs {prev_model}"
+    head = "Routed (btw)" if side else "Routed"
+    return f"{head} \u2192 {model} ({effort}): {why} \u00b7 ~${delta}/ask vs {prev_model}"
 
 
 def format_hold_line(*, current: str, engine: str) -> str:

@@ -333,6 +333,18 @@ class TestEngineChain:
     def test_registry_orders_openrouter_first(self):
         assert _ENGINE_REGISTRY and _ENGINE_REGISTRY[0][0] == "openrouter"
 
+    def test_decide_defaults_to_main_side(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            body = json.loads(request.data.decode("utf-8"))
+            assert "Side ask: false" in body["messages"][1]["content"]
+            return _FakeResponse(_chat_payload(_pick_json()))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _ = decide(_strategy(), current_model=SONNET, ask="hi")
+        assert pick is not None
+
 
 def _ollama_payload(content: str | None, prompt_eval: int = 0, eval_count: int = 0) -> dict:
     return {

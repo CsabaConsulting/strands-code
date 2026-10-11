@@ -812,3 +812,193 @@ class TestCostRouting:
         assert served == NOVA_MICRO
         assert events == []
         assert capsys.readouterr().out == ""
+
+
+def _side_agent():
+    """Parent double with a live model object resolving to NOVA_MICRO."""
+    live = SimpleNamespace(config=SimpleNamespace(model_id=NOVA_MICRO))
+    return SimpleNamespace(
+        messages=[],
+        model=live,
+        _harness_kwargs={"model": live, "session": True},
+        _session_manager=None,
+    )
+
+
+def _capture_build(calls):
+    def _fake(parent_kwargs, history, question):
+        calls.append((dict(parent_kwargs), list(history), question))
+        return (SimpleNamespace(), [])
+
+    return _fake
+
+
+def _side_ctx(monkeypatch, agent, engine, events, strategy=None):
+    monkeypatch.setattr(
+        routing_mod, "load_strategy", lambda **kw: _strategy() if strategy is None else strategy
+    )
+    monkeypatch.setattr(routing_mod, "decide_via_openrouter", engine)
+    builds: list = []
+    monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+    ctx = loop_mod._btw_context_for(
+        agent, routing=RoutingState(initial="on"), routing_events=events
+    )
+    return ctx, builds
+
+
+class TestSideRouting:
+    def test_spawn_decides_once_side_flagged(self, monkeypatch):
+        seen: list = []
+
+        def _engine(**kwargs):
+            seen.append(kwargs)
+            return _pick_result(HAIKU, usage=(40, 8))
+
+        events: list = []
+        ctx, builds = _side_ctx(monkeypatch, _side_agent(), _engine, events)
+        ctx.build("why is the sky blue?")
+        assert len(seen) == 1  # one decision per spawn
+        assert "Side ask: true" in seen[0]["user"]
+        assert "why is the sky blue?" in seen[0]["user"]
+        assert len(builds) == 1
+        assert events[0]["side"] is True
+        assert events[0]["held"] is False
+        assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (40, 8)
+
+    def test_pick_reaches_build_with_resolved_model_and_effort(
+        self, monkeypatch, capsys
+    ):
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model_switch import model_id_of
+
+        real_resolve = harness_models.resolve_model
+        seen: list = []
+
+        def _spy_resolve(*args, **kwargs):
+            seen.append((args, kwargs))
+            return real_resolve(*args, **kwargs)
+
+        monkeypatch.setattr(harness_models, "resolve_model", _spy_resolve)
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events
+        )
+        ctx.build("deep refactor?")
+        assert len(builds) == 1
+        kwargs, _, question = builds[0]
+        assert question == "deep refactor?"
+        assert kwargs["model"] is not agent.model
+        assert model_id_of(kwargs["model"], "?").endswith(
+            "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        assert kwargs["effort"] == "high"
+        assert seen == [((HAIKU, HAIKU), {"effort": "high"})]
+        out = capsys.readouterr().out
+        assert "Routed (btw)" in out
+        assert "haiku" in " ".join(out.split())
+
+    def test_engine_failure_spawns_on_parent_model_silently(
+        self, monkeypatch, capsys
+    ):
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch, agent, lambda **kw: EngineResult(text=None), events
+        )
+        ctx.build("quick question")
+        assert len(builds) == 1
+        assert builds[0][0]["model"] is agent.model
+        assert "effort" not in builds[0][0]  # replay untouched
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert "Routing held" not in out
+        assert "Routing disabled" not in out
+        assert events[0]["held"] is True
+        assert events[0]["side"] is True
+
+    def test_routing_off_spawns_with_zero_decisions(self, monkeypatch):
+        def _boom(**kwargs):
+            raise AssertionError("routing off: no decision call")
+
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        builds: list = []
+        monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+        events: list = []
+        agent = _side_agent()
+        ctx = loop_mod._btw_context_for(
+            agent, routing=RoutingState(initial="off"), routing_events=events
+        )
+        ctx.build("quick question")
+        assert len(builds) == 1
+        assert builds[0][0]["model"] is agent.model
+        assert events == []
+
+    def test_unconfigured_spawns_with_zero_decisions(self, monkeypatch):
+        def _boom(**kwargs):
+            raise AssertionError("unconfigured: no decision call")
+
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: None)
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        builds: list = []
+        monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+        events: list = []
+        ctx = loop_mod._btw_context_for(
+            _side_agent(), routing=RoutingState(initial="on"), routing_events=events
+        )
+        ctx.build("quick question")
+        assert len(builds) == 1
+        assert events == []
+
+    def test_second_build_while_live_makes_no_new_decision(self, monkeypatch):
+        calls: list = []
+
+        def _engine(**kwargs):
+            calls.append(kwargs)
+            return _pick_result(HAIKU)
+
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(monkeypatch, agent, _engine, events)
+        ctx.build("first question")
+        assert len(calls) == 1
+        ctx.attach_live(SimpleNamespace(), SimpleNamespace(), "first question")
+        assert ctx.has_live is True
+        ctx.build("second question")
+        assert len(calls) == 1  # no re-decision while live
+        assert builds[1][0]["model"] is agent.model
+        assert len(events) == 1
+
+    def test_quiet_strategy_suppresses_btw_line(self, monkeypatch, capsys):
+        strategy = _strategy()
+        strategy.quiet = True
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events, strategy
+        )
+        ctx.build("deep refactor?")
+        assert builds[0][0]["model"] is not agent.model  # pick still applies
+        assert "Routed (btw)" not in capsys.readouterr().out
+
+    def test_resolve_failure_holds_to_parent_silently(self, monkeypatch, capsys):
+        import strands_harness.models as harness_models
+
+        def _boom(*args, **kwargs):
+            raise ValueError("unknown provider 'frobnicate'")
+
+        monkeypatch.setattr(harness_models, "resolve_model", _boom)
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events
+        )
+        ctx.build("deep refactor?")
+        assert builds[0][0]["model"] is agent.model
+        assert "effort" not in builds[0][0]
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert events[0]["held"] is True
+        assert events[0]["engine"] == "resolve"
