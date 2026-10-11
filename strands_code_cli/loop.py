@@ -614,12 +614,16 @@ def _route_side_spawn(
 
     Runs synchronously on the pump (main) thread inside the build
     closure, once per spawn, before :func:`build_btw_agent`. A parsed
-    pick resolves through ``resolve_model`` with the routed effort and
-    re-points the replayed ``model`` plus ``effort``; any hold or
-    failure keeps the parent live model with no side note. The shared
-    strategy, toggle, and quiet rules apply: routing off or
-    unconfigured spawns exactly as before. Every side decision,
-    routed or held, appends one side-flagged routing event.
+    pick for another model validates its effort and resolves through
+    ``resolve_model``, re-pointing the replayed ``model`` plus
+    ``effort``; a same-model pick skips validation and resolve like
+    the main hook's no-op fast path (live deciders return junk
+    efforts on stay picks — resolving those would hold every stay).
+    Any hold or failure keeps the parent live model with no side
+    note. The shared strategy, toggle, and quiet rules apply:
+    routing off or unconfigured spawns exactly as before. Every
+    side decision, routed or held, appends one side-flagged routing
+    event.
     """
     if routing is not None and not routing.is_on():
         return
@@ -664,24 +668,45 @@ def _route_side_spawn(
             held=True,
         )
         return
-    try:
-        routed = resolve_model(pick.model, pick.model, effort=pick.effort)
-    except Exception:  # noqa: BLE001 — resolve failure holds to the live model
-        _record_routing_event(
-            routing_events,
-            strategy=strategy,
-            side=True,
-            model=current_model,
-            effort="",
-            why="",
-            engine="resolve",
-            decision_engine=engine,
-            usage=usage,
-            held=True,
-        )
-        return
-    kwargs["model"] = routed
-    kwargs["effort"] = pick.effort
+    if pick.model != current_model:
+        try:
+            effort_ok = routing_mod.validate_routed_effort(
+                pick, strategy.candidates
+            )
+        except Exception:  # noqa: BLE001 — gate failure holds, never kills
+            effort_ok = False
+        if not effort_ok:
+            _record_routing_event(
+                routing_events,
+                strategy=strategy,
+                side=True,
+                model=current_model,
+                effort="",
+                why="",
+                engine=engine,
+                decision_engine=engine,
+                usage=usage,
+                held=True,
+            )
+            return
+        try:
+            routed = resolve_model(pick.model, pick.model, effort=pick.effort)
+        except Exception:  # noqa: BLE001 — resolve failure holds to the live model
+            _record_routing_event(
+                routing_events,
+                strategy=strategy,
+                side=True,
+                model=current_model,
+                effort="",
+                why="",
+                engine="resolve",
+                decision_engine=engine,
+                usage=usage,
+                held=True,
+            )
+            return
+        kwargs["model"] = routed
+        kwargs["effort"] = pick.effort
     _record_routing_event(
         routing_events,
         strategy=strategy,

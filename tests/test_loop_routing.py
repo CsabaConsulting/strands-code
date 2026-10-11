@@ -1002,3 +1002,63 @@ class TestSideRouting:
         assert "Routed" not in out
         assert events[0]["held"] is True
         assert events[0]["engine"] == "resolve"
+
+    def test_same_model_pick_skips_resolve_and_still_routes(
+        self, monkeypatch, capsys
+    ):
+        # UAT R4: live deciders return junk efforts ("?") on stay picks;
+        # like the main hook, the side path must not resolve those.
+        import strands_harness.models as harness_models
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("same-model pick must not resolve")
+
+        monkeypatch.setattr(harness_models, "resolve_model", _boom)
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small"),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny"),
+            ]
+        )
+        events: list = []
+        agent = _side_agent()  # live model resolves to NOVA_MICRO
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _pick_result(NOVA_MICRO, effort="?"),
+            events,
+            strategy,
+        )
+        ctx.build("quick question")
+        assert builds[0][0]["model"] is agent.model
+        assert "effort" not in builds[0][0]
+        assert events[0]["held"] is False
+        assert events[0]["side"] is True
+        assert "Routed (btw)" in capsys.readouterr().out
+
+    def test_unreasoned_effort_holds_to_parent_silently(
+        self, monkeypatch, capsys
+    ):
+        # Thinking effort on a non-reasoning candidate passes the parse
+        # (level advertised) but the effort gate must still hold.
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(
+                    id="openrouter/some-chat", levels=["low", "high"]
+                ),
+            ]
+        )
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _pick_result("openrouter/some-chat", effort="high"),
+            events,
+            strategy,
+        )
+        ctx.build("deep refactor?")
+        assert builds[0][0]["model"] is agent.model
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert events[0]["held"] is True
