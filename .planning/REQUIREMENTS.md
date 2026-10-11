@@ -9,7 +9,7 @@
 
 - [x] **LOOP-01**: User can hold a multi-ask conversation where the CLI plans and executes each ask with subagents and tools
 - [x] **LOOP-02**: User can steer a running task with freeform input applied at the next tool-call boundary
-- [ ] **LOOP-03**: User can ask a side question mid-task via a `/btw`-style escape answered by a subagent without disturbing the main task
+- [x] **LOOP-03**: User can ask a side question mid-task via a `/btw`-style escape answered by a subagent without disturbing the main task
 - [x] **LOOP-04**: User can cancel a running task with Ctrl-C without quitting the CLI
 
 ### Modes
@@ -91,7 +91,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 |-------------|-------|--------|
 | LOOP-01 | Phase 1 | Complete |
 | LOOP-02 | Phase 4 | Complete |
-| LOOP-03 | Phase 7 | Pending |
+| LOOP-03 | Phase 7 | Complete |
 | LOOP-04 | Phase 4 | Complete |
 | MODE-01 | Phase 4 | Complete |
 | MODE-02 | Phase 4 | Complete |
@@ -120,4 +120,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-09-22*
-*Last updated: 2026-09-22 after initial definition*
+*Last updated: 2026-10-11 (LOOP-03 marked complete pre-transition)*

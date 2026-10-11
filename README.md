@@ -2,16 +2,17 @@
 
 A Claude Code / Codex-class coding CLI built on the [Strands harness](https://github.com/strands-agents/harness-sdk).
 Forked from [aws-samples/sample-strands-code-agent](https://github.com/aws-samples/sample-strands-code-agent);
-its code-first agent library is preserved as the core differentiator, and the CLI is layered on top.
+its agent library is preserved underneath, and a deny-first CLI is layered on top:
+session-sticky Plan/Act, gated tools, skills, repo memory, and a `/btw` side channel.
 
 > Experimental: tracks fast-moving upstream (`strands-agents`, `strands-harness`). Expect churn; wrappers stay thin on purpose.
 
 ## Design directives
 
 1. **Harness-first, gaps-only.** Adopt `strands-harness` (`create_harness()`) for tools, sessions, skills, memory, context management, and effort presets. Build only genuine CLI gaps: slash commands, permissions UX, file picker, memory-tier backends.
-2. **Code-generation-first.** `CodeAgent` + `Toolkit` stay the paradigm: the agent writes Python in a persistent REPL with domain capabilities as importable functions, instead of orchestrating sequential tool calls.
+2. **Deny-first tool-calling.** Gated file/shell tools are the default action interface: every side effect passes a deny-first approval prompt that fails closed on ambiguity. Code-generation-first (CodeAct) arrives later as an opt-in interface (Phase 9) — never mandatory, never the default.
 3. **AWS-optional, never AWS-required.** Bedrock (LLM, KB memory, embeddings) and AgentCore are first-class *choices* behind config flags. Defaults are local: file sessions, markdown memory, sandboxed interpreter. The `agentcore` extra stays optional.
-4. **Tiered memory.** Local markdown/SQLite by default (offline, private) → Hindsight opt-in (team, temporal reasoning) → memsearch/Milvus (enterprise scale). All behind one `MemoryStore` seam.
+4. **Tiered memory.** Local markdown files by default (offline, private) → Hindsight opt-in (team, temporal reasoning) → memsearch/Milvus (enterprise scale). All behind one memory seam.
 5. **Loose dependencies, thin wrappers.** No upper pins during the experimental phase; upstream syncs via the `upstream` remote.
 
 Details: [docs/competitive-gap-analysis.md](docs/competitive-gap-analysis.md).
@@ -47,10 +48,12 @@ First run without AWS credentials stops with a Bedrock setup pointer
 
 REPL basics: type an ask, keep asking — one conversation. `/resume`,
 `/rename`, `/forget`, `/model`, `/cost [refresh|table]`, `/compact`,
-`/clear`, `/context`, `/mode`, `/diff`, `/exit` work; unknown `/slash`
-shows a usage hint. Ctrl-C cancels the line, Ctrl-D exits with state
-saved. See `docs/QUICKSTART.md` for the live-pricing sources behind
-`/cost`.
+`/clear`, `/context`, `/mode`, `/approve`, `/diff`, `/search`,
+`/policy`, `/skills`, `/init`, `/memory`, `/btw`, `/exit` work;
+unknown `/slash` shows a usage hint. Ask a side question mid-task with
+`/btw` — the main task keeps running. Ctrl-C cancels a running task
+(asks which when main + side both run), Ctrl-D exits with state saved.
+See `docs/QUICKSTART.md` for the live-pricing sources behind `/cost`.
 
 ## Library use
 
@@ -85,12 +88,16 @@ agent = CodeAgent(
 
 ## CLI status
 
-Working today (Phase 5 in UAT): resumable multi-ask REPL, resume picker
-with session deletion, `--session-id`, `/resume` `/rename` `/forget`
-`/exit`, `/model` switching with history conversion, `/cost` `/context`
-display, `/compact` `/clear`, Plan/Act modes (`/mode`, `/approve`), gated
-`/diff` review, `/search`, `/policy`, session auto-titles, Bedrock-or-stop
-first-run gate, kill-safe persistence. Coming next: /memory /review,
+Working today (Phase 7 complete): resumable multi-ask REPL, resume
+picker with session deletion, `--session-id`, `/resume` `/rename`
+`/forget` `/exit`, `/model` switching with history conversion, `/cost`
+`/context` display, `/compact` `/clear`, Plan/Act modes (`/mode`,
+`/approve`), anytime steering, gated `/diff` review, `/search`,
+`/policy` with standing rules, local skills (`/skills`), repo memory
+(`/init`, `/memory`), session auto-titles, Bedrock-or-stop first-run
+gate, kill-safe persistence, and the `/btw` side channel (parallel
+side questions under the same deny-first gate). Coming next:
+decision-model routing (Phase 8), opt-in CodeAct (Phase 9), `/review`,
 fuzzy file picker.
 
 ## Upstream sync

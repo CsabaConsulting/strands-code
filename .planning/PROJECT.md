@@ -17,7 +17,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Swappable execution backends (sandboxed default, unrestricted local, remote AgentCore) — existing
 - ✓ OKF knowledge navigation for large documents (`find`/`read`/`children`/`toc`) — existing
 - ✓ Rich terminal rendering + Bedrock token/cost metrics — existing
-- ✓ Reproducible `uv` toolchain, 177-test suite green — existing
+- ✓ Reproducible `uv` toolchain, 935-test suite green (6 deselected) — existing
 - ✓ Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local) — Phase 5 (idle-only swap, switch-first convert, mid-turn refusal, verbatim ARNs)
 - ✓ Cost/token display per session and task — Phase 5 (usage line, `/cost`, live price/window almanac; display-only, no enforcement)
 - ✓ Context controls `/compact`, `/clear`, `/context` + 80% auto-compact — Phase 5 (pair-atomic, tool pairs never split)
@@ -50,9 +50,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 
 - Forked from `aws-samples/sample-strands-code-agent` (library); the CLI is new construction on top. Upstream remote configured for refreshes.
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
-- Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.57.0; both move fast and are flagged Experimental upstream — keep wrappers thin.
+- Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.58.1; both move fast and are flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers (local markdown → Hindsight → memsearch).
-- Full test suite green (`uv run pytest tests/`, 815 passed, 5 deselected); dev group carries the data-science packages the toolkit tests execute.
+- Full test suite green (`uv run pytest tests/`, 935 passed, 6 deselected); dev group carries the data-science packages the toolkit tests execute.
 
 ## Constraints
 
@@ -99,4 +99,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-05 after Phase 6 UAT rounds*
+*Last updated: 2026-10-11 (context numbers touched up pre-transition; Active→Validated moves pending $gsd-transition-phase)*

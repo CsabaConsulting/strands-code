@@ -138,6 +138,14 @@ agent.add_callback(steer_at_boundary)  # registration shape per SDK hooks docs
 
 ### Pattern 3: Subagents as tools with isolated context (main + /btw)
 
+> **Superseded 2026-10-11 (Phase 7 as built):** the agents-as-tools + read-only-snapshot
+> recommendation below was evaluated in `07-RESEARCH.md` and rejected. The shipped
+> `/btw` side channel rebuilds the agent via the `create_harness` factory over stashed
+> parent kwargs, shares the tagged approval gate, and appends the side exchange back
+> to main history at the turn boundary (decision D-14). The "never writes main
+> history" guidance and Anti-Pattern 3 below no longer apply. Original text preserved
+> as the 2026-09-23 research record.
+
 **What:** Both main-task delegation and `/btw` side questions use the agents-as-tools pattern: a child agent gets a scoped prompt (and for `/btw`, a read-only context snapshot) and returns a result object. The main session history is never written by the side channel — `/btw` answers render in a side panel. Main-task subagents report back through the `todos`/checklist plugin.
 **When to use:** `/btw` for side questions; helper-subagent + checklist for open-ended main-task subtasks; SDK Graph/Swarm only if a real task DAG emerges later.
 **Trade-offs:** Pro: isolation is structural (no prompt-leak bugs), matches harness built-in helper agent; con: side channel needs explicit context snapshot plumbing — keep it read-only file/message slices, not full state clone.
