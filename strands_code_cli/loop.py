@@ -1473,6 +1473,13 @@ def _route_pre_turn(
             index.ensure(session_id)
             if rich is not None and stash_path is not None:
                 rich.save(stash_path)
+            if not supports_streaming_tools(pick.model):
+                print_plain(
+                    console,
+                    f"Warning: {pick.model} rejects tool use in streaming "
+                    "mode — turns will fail; /model to switch.",
+                    style="yellow",
+                )
     _record_routing_event(
         routing_events,
         strategy=strategy,
