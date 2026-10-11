@@ -647,12 +647,18 @@ Rules:
 
 def _candidate_row(candidate: RoutingCandidate) -> str:
     """One candidate table line with live price and window values."""
-    prices = price_for(candidate.id)
+    try:
+        prices = price_for(candidate.id)
+    except Exception:
+        prices = None
     if prices is None:
         price_cell = "n/a per 1M"
     else:
         price_cell = f"${prices[0]:g}/${prices[1]:g} per 1M"
-    window = window_for(candidate.id)
+    try:
+        window = window_for(candidate.id)
+    except Exception:
+        window = None
     window_cell = str(window) if window is not None else "n/a"
     tier_cell = candidate.tier if candidate.tier else "-"
     levels_cell = ",".join(candidate.levels) if candidate.levels else "-"
@@ -1070,9 +1076,14 @@ def route_cost_delta(new_model: str, prev_model: str, ask: str) -> str:
     Both sides price the same ask estimate (chars/4, symmetric
     in/out proxy); ``n/a`` when either side lacks prices.
     """
-    estimate = estimate_messages_tokens([{"role": "user", "content": [{"text": ask}]}])
-    new_cost = cost_for(estimate, estimate, new_model)
-    prev_cost = cost_for(estimate, estimate, prev_model)
+    try:
+        estimate = estimate_messages_tokens(
+            [{"role": "user", "content": [{"text": ask}]}]
+        )
+        new_cost = cost_for(estimate, estimate, new_model)
+        prev_cost = cost_for(estimate, estimate, prev_model)
+    except Exception:
+        return "n/a"
     if new_cost is None or prev_cost is None:
         return "n/a"
     return f"{new_cost - prev_cost:+.4f}"

@@ -632,9 +632,24 @@ def _route_side_spawn(
     from strands_harness.models import resolve_model
 
     kwargs["model"] = live_model
-    pick, engine, usage = routing_mod.decide(
-        strategy, current_model=current_model, side=True, ask=question
-    )
+    try:
+        pick, engine, usage = routing_mod.decide(
+            strategy, current_model=current_model, side=True, ask=question
+        )
+    except Exception:  # noqa: BLE001 — side holds stay silent on the live model
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=True,
+            model=current_model,
+            effort="",
+            why="",
+            engine="decide",
+            decision_engine="decide",
+            usage=(0, 0),
+            held=True,
+        )
+        return
     if pick is None:
         _record_routing_event(
             routing_events,
@@ -1346,9 +1361,28 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
-    pick, engine, usage = routing_mod.decide(
-        strategy, current_model=current_model, side=False, ask=ask_text
-    )
+    try:
+        pick, engine, usage = routing_mod.decide(
+            strategy, current_model=current_model, side=False, ask=ask_text
+        )
+    except Exception as exc:  # noqa: BLE001 — pricing/validation failure holds, never kills
+        logger.warning("Routing decision failed (%s); holding %s", exc, current_model)
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            why="",
+            engine="decide",
+            decision_engine="decide",
+            usage=(0, 0),
+            held=True,
+        )
+        print_plain(
+            console, routing_mod.format_hold_line(current=current_model, engine="decide")
+        )
+        return current_model
     if pick is None:
         _record_routing_event(
             routing_events,
@@ -1368,7 +1402,14 @@ def _route_pre_turn(
         return current_model
     prev_model = current_model
     if pick.model != current_model:
-        if not routing_mod.validate_routed_effort(pick, strategy.candidates):
+        try:
+            effort_ok = routing_mod.validate_routed_effort(pick, strategy.candidates)
+        except Exception as exc:  # noqa: BLE001 — gate failure holds, never kills
+            logger.warning(
+                "Routed effort gate failed (%s); holding %s", exc, current_model
+            )
+            effort_ok = False
+        if not effort_ok:
             logger.warning(
                 "Routed effort %r unsupported by %s; holding %s",
                 pick.effort,
@@ -1445,17 +1486,18 @@ def _route_pre_turn(
         held=False,
     )
     if not strategy.quiet:
-        print_plain(
-            console,
-            routing_mod.format_routed_line(
+        try:
+            routed_line = routing_mod.format_routed_line(
                 model=pick.model,
                 effort=pick.effort,
                 why=pick.why,
                 prev_model=prev_model,
                 ask=ask_text,
-            ),
-            style="dim",
-        )
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed note must not kill the turn
+            logger.warning("Routed note failed (%s); switch stands", exc)
+        else:
+            print_plain(console, routed_line, style="dim")
     return current_model
 
 
