@@ -591,6 +591,20 @@ def validate_strategy(
         valid = False
         lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
         lines.append("fix: set engine.primary to openrouter|local|off")
+    raw_base_url = (
+        raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None
+    )
+    if (
+        isinstance(raw_base_url, str)
+        and raw_base_url.strip()
+        and not _valid_base_url(raw_base_url)
+    ):
+        valid = False
+        lines.append(
+            f"engine: INVALID — local_base_url {raw_base_url!r} "
+            "is not an http/https URL"
+        )
+        lines.append("fix: set engine.local_base_url to an http(s) URL or remove it")
     if engine.primary == "off":
         lines.append("engine: primary off — routing disabled by config")
     elif engine.primary == "local":
