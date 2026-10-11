@@ -329,9 +329,9 @@ def save_strategy(
 
     Raises:
         ValueError: On an unknown scope, a symlinked target, a
-            non-mapping payload, or zero usable candidates (the setup
-            flow guarantees at least one; this is the fail-loud
-            backstop).
+            pre-existing temp file, a non-mapping payload, or zero
+            usable candidates (the setup flow guarantees at least
+            one; this is the fail-loud backstop).
     """
     if not isinstance(data, dict):
         raise ValueError("Routing strategy must be a mapping")
@@ -384,6 +384,8 @@ def save_strategy(
     resolved.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(resolved.parent, 0o700)
     tmp = resolved.with_suffix(".yaml.tmp")
+    if tmp.is_symlink() or tmp.exists():
+        raise ValueError(f"Refusing to write through existing temp file: {tmp}")
     tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
     os.replace(tmp, resolved)
     return resolved
