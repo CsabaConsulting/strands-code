@@ -4,10 +4,10 @@ A routing strategy (candidate model set + freeform directives, global or
 repo file with repo winning whole-file) arms routing; without one the
 CLI behaves exactly as before (D-01). Each configured ask routes
 pre-turn at idle through an ordered engine registry — OpenRouter chat
-completions first, hold-current last — and the pick applies through the
-existing switch machinery. No heuristic ever picks a model: every
-engine, parse, or resolve failure holds the current model with history
-byte-identical (D-08).
+completions first, the local Ollama daemon second, hold-current
+last — and the pick applies through the existing switch machinery.
+No heuristic ever picks a model: every engine, parse, or resolve
+failure holds the current model with history byte-identical (D-08).
 """
 
 from __future__ import annotations
@@ -44,6 +44,15 @@ DECISION_TIMEOUT_SECONDS = 10
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 """Default decision engine transport (D-06)."""
+
+OLLAMA_DEFAULT_HOST = "http://127.0.0.1:11434"
+"""Default local daemon address (the harness ``OLLAMA_HOST`` default)."""
+
+OLLAMA_TIMEOUT_SECONDS = 30
+"""Local engine ceiling; cold model loads need room, failures still hold."""
+
+OLLAMA_KEEP_ALIVE = "5m"
+"""Keep the decision model warm between asks (one daemon round trip)."""
 
 _TOP_LEVEL_KEYS = {"candidates", "directives", "engine", "quiet"}
 _CANDIDATE_KEYS = {"id", "tier", "note", "levels", "benchmarks"}
@@ -156,6 +165,17 @@ def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
     )
 
 
+def _valid_base_url(value: str) -> bool:
+    """True when the daemon address is an http(s) URL with a host (T-08-06)."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return False
+    return parts.scheme.lower() in ("http", "https") and bool(parts.hostname)
+
+
 def _parse_engine(raw: object) -> RoutingEngine:
     """Normalize the engine mapping; unknown keys warn and fall to defaults."""
     engine = RoutingEngine()
@@ -171,10 +191,26 @@ def _parse_engine(raw: object) -> RoutingEngine:
         value = raw.get(key)
         if value is None:
             continue
+        if key == "primary" and isinstance(value, bool):
+            # YAML 1.1 folds unquoted on/off (yes/no) to bools: honor
+            # the intent instead of warn-and-defaulting an explicit off.
+            setattr(engine, key, "openrouter" if value else "off")
+            continue
         if not isinstance(value, str):
             logger.warning("Ignoring routing engine %r (not a string)", key)
             continue
         setattr(engine, key, value)
+    base_url = engine.local_base_url
+    if base_url is not None:
+        if not base_url.strip():
+            engine.local_base_url = None
+        elif not _valid_base_url(base_url):
+            logger.warning(
+                "Ignoring routing local_base_url %r (http/https only); using %s",
+                base_url,
+                OLLAMA_DEFAULT_HOST,
+            )
+            engine.local_base_url = OLLAMA_DEFAULT_HOST
     return engine
 
 
@@ -238,7 +274,10 @@ def load_strategy(
 ) -> RoutingStrategy | None:
     """Load the routing strategy: repo wins whole-file, else global.
 
-    Returns None when both files are missing or unparsable (routing off).
+    Returns None when both files are missing or unparsable (routing off)
+    and when the winning strategy sets ``engine.primary: off`` — the
+    off switch lives at the load layer, so the hook takes its existing
+    skip-silently branch with zero engine calls and no hold note.
 
     Raises:
         ValueError: When either resolved path is a symlink (fail-loud,
@@ -247,11 +286,14 @@ def load_strategy(
     repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
     strategies = _load_one(repo)
     if strategies is not None:
-        return strategies
+        return None if strategies.engine.primary == "off" else strategies
     home = (
         Path(global_path) if global_path is not None else default_global_strategy_path()
     )
-    return _load_one(home)
+    strategies = _load_one(home)
+    if strategies is not None and strategies.engine.primary == "off":
+        return None
+    return strategies
 
 
 _SYSTEM_PROMPT = """You route coding asks to exactly one candidate model. Reply with JSON only: {"model": "<candidate id>", "effort": "<level>", "why": "<=12 words>"}.
@@ -300,26 +342,52 @@ def build_routing_prompt(
     return (_SYSTEM_PROMPT, "\n".join(lines))
 
 
+@dataclass(frozen=True)
+class EngineResult:
+    """One engine try: raw assistant text plus decision-call token usage.
+
+    ``text`` is None on any failure (no key, network, timeout,
+    malformed payload); the token counts come from the engine
+    response usage fields and default to zeros when absent, feeding
+    the /cost routing section (T-08-08).
+    """
+
+    text: str | None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+def _count(value: object) -> int:
+    """Best-effort non-negative int for a usage field (bool-safe)."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 def decide_via_openrouter(
     *,
     decision_model: str,
     system: str,
     user: str,
     timeout: float = DECISION_TIMEOUT_SECONDS,
-) -> str | None:
-    """One routing decision via OpenRouter chat completions; None on failure.
+) -> EngineResult:
+    """One routing decision via OpenRouter chat completions.
 
     The ``OPENROUTER_API_KEY`` is read at call time inside this engine
     function only (runtime-supplied credential, never persisted, sent
     header-only, never logged — the harness ``OLLAMA_API_KEY``
     precedent). Any failure (no key, network, timeout, malformed
-    payload) yields None and the chain tries the next engine.
+    payload) yields a text-None result and the chain tries the next
+    engine.
     """
     import urllib.request
 
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key or not decision_model:
-        return None
+        return EngineResult(text=None)
     body = json.dumps(
         {
             "model": decision_model,
@@ -346,20 +414,112 @@ def decide_via_openrouter(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
-        return None
+        return EngineResult(text=None)
     if not isinstance(payload, dict):
-        return None
+        return EngineResult(text=None)
     choices = payload.get("choices", [])
     if not isinstance(choices, list) or not choices:
-        return None
+        return EngineResult(text=None)
     first = choices[0]
     if not isinstance(first, dict):
-        return None
+        return EngineResult(text=None)
     message = first.get("message", {})
     if not isinstance(message, dict):
-        return None
+        return EngineResult(text=None)
     content = message.get("content")
-    return content if isinstance(content, str) and content.strip() else None
+    text = content if isinstance(content, str) and content.strip() else None
+    usage = payload.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+    return EngineResult(
+        text=text,
+        input_tokens=_count(usage.get("prompt_tokens")),
+        output_tokens=_count(usage.get("completion_tokens")),
+    )
+
+
+_OLLAMA_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+"""Hosts that never carry key material (T-08-06)."""
+
+
+def _ollama_headers(base: str) -> dict[str, str]:
+    """Local daemon headers; the auth header only for proxied hosts."""
+    from urllib.parse import urlsplit
+
+    headers = {"Content-Type": "application/json", "User-Agent": "strands-code"}
+    try:
+        loopback = urlsplit(base).hostname in _OLLAMA_LOOPBACK_HOSTS
+    except ValueError:
+        loopback = False
+    api_key = os.environ.get("OLLAMA_API_KEY")
+    if api_key and not loopback:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def decide_via_ollama(
+    *,
+    local_model: str,
+    local_base_url: str | None = None,
+    system: str,
+    user: str,
+    timeout: float = OLLAMA_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """One routing decision via the local Ollama daemon (``/api/chat``).
+
+    The base URL resolves strategy-first, then the harness
+    ``OLLAMA_HOST`` default; only http/https addresses with a host are
+    called. The request is non-streaming with a JSON object format
+    over model/effort/why and a 5m keep-alive; the usage pair comes
+    from the response eval counts. Any failure yields a text-None
+    result — offline with no daemon simply holds current (D-09).
+    """
+    import urllib.request
+
+    if not local_model:
+        return EngineResult(text=None)
+    base = local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
+    if not _valid_base_url(base):
+        return EngineResult(text=None)
+    body = json.dumps(
+        {
+            "model": local_model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "format": {
+                "type": "object",
+                "properties": {
+                    "model": {"type": "string"},
+                    "effort": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+                "required": ["model", "effort", "why"],
+            },
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base.rstrip('/')}/api/chat", data=body, headers=_ollama_headers(base)
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return EngineResult(text=None)
+    if not isinstance(payload, dict):
+        return EngineResult(text=None)
+    message = payload.get("message", {})
+    if not isinstance(message, dict):
+        return EngineResult(text=None)
+    content = message.get("content")
+    return EngineResult(
+        text=content if isinstance(content, str) and content.strip() else None,
+        input_tokens=_count(payload.get("prompt_eval_count")),
+        output_tokens=_count(payload.get("eval_count")),
+    )
 
 
 def parse_pick(
@@ -398,19 +558,21 @@ def parse_pick(
     return RoutingPick(model=model, effort=effort, why=why.splitlines()[0][:200] if why else "")
 
 
-EngineAttempt = Callable[[RoutingStrategy, str, str], str | None]
-"""One engine try: (strategy, system, user) -> raw text or None."""
+EngineAttempt = Callable[[RoutingStrategy, str, str], EngineResult | None]
+"""One engine try: (strategy, system, user) -> result or None when skipped."""
 
 _ENGINE_REGISTRY: list[tuple[str, EngineAttempt]] = []
 """Ordered engine chain; each engine is tried once per ask."""
 
 
 def register_engine(name: str, attempt: EngineAttempt) -> None:
-    """Append one named engine to the chain (08-02 adds the local engine)."""
+    """Append one named engine to the chain (openrouter first, local second)."""
     _ENGINE_REGISTRY.append((name, attempt))
 
 
-def _openrouter_attempt(strategy: RoutingStrategy, system: str, user: str) -> str | None:
+def _openrouter_attempt(
+    strategy: RoutingStrategy, system: str, user: str
+) -> EngineResult | None:
     """OpenRouter chain link: None without a configured decision model."""
     decision_model = strategy.engine.decision_model
     if not decision_model:
@@ -418,7 +580,47 @@ def _openrouter_attempt(strategy: RoutingStrategy, system: str, user: str) -> st
     return decide_via_openrouter(decision_model=decision_model, system=system, user=user)
 
 
+def _ollama_attempt(
+    strategy: RoutingStrategy, system: str, user: str
+) -> EngineResult | None:
+    """Local chain link: None without a configured local model (skipped)."""
+    local_model = strategy.engine.local_model
+    if not local_model:
+        return None
+    return decide_via_ollama(
+        local_model=local_model,
+        local_base_url=strategy.engine.local_base_url,
+        system=system,
+        user=user,
+    )
+
+
 register_engine("openrouter", _openrouter_attempt)
+register_engine("local", _ollama_attempt)
+
+
+def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
+    """Engine links for one strategy: primary selects, unconfigured skips.
+
+    ``openrouter`` tries the API then the daemon; ``local`` tries the
+    daemon only (fully offline local-or-hold, D-09); ``off`` tries
+    nothing — the load layer already yields None for it, and a
+    directly built off strategy degrades the same way here. The local
+    link is skipped, not failed, when no local model configures.
+    """
+    primary = strategy.engine.primary or "openrouter"
+    if primary == "off":
+        return []
+    names = ["local"] if primary == "local" else ["openrouter", "local"]
+    by_name = dict(_ENGINE_REGISTRY)
+    chain: list[tuple[str, EngineAttempt]] = []
+    for name in names:
+        if name == "local" and not strategy.engine.local_model:
+            continue
+        attempt = by_name.get(name)
+        if attempt is not None:
+            chain.append((name, attempt))
+    return chain
 
 
 def decide(
@@ -427,13 +629,15 @@ def decide(
     current_model: str,
     side: bool,
     ask: str,
-) -> tuple[RoutingPick | None, str]:
+) -> tuple[RoutingPick | None, str, tuple[int, int]]:
     """Route one ask: prompt build, engine chain, strict parse.
 
-    Returns ``(pick, engine)`` where engine names the producing engine
-    on success and the last failed engine on hold. Total failure —
-    every engine None or unparseable — yields ``(None, engine)`` and
-    the caller holds current (D-08).
+    Returns ``(pick, engine, usage)`` where engine names the producing
+    engine on success and the last attempted engine on hold, and usage
+    is the decision-call ``(input, output)`` token pair (zeros on
+    hold). Total failure — every engine empty or unparseable — yields
+    ``(None, engine, (0, 0))`` and the caller holds current (D-08).
+    One attempt per engine per ask; never any in-ask retry.
     """
     system, user = build_routing_prompt(
         directives=strategy.directives,
@@ -442,21 +646,24 @@ def decide(
         side=side,
         ask=ask,
     )
-    failed = "openrouter"
-    for name, attempt in _ENGINE_REGISTRY:
+    chain = _chain_for(strategy)
+    if not chain:
+        return (None, strategy.engine.primary or "openrouter", (0, 0))
+    failed = chain[0][0]
+    for name, attempt in chain:
         try:
-            text = attempt(strategy, system, user)
+            result = attempt(strategy, system, user)
         except Exception:
-            text = None
-        if text is None:
+            result = None
+        if result is None or result.text is None:
             failed = name
             continue
-        pick = parse_pick(text, strategy.candidates)
+        pick = parse_pick(result.text, strategy.candidates)
         if pick is None:
             failed = name
             continue
-        return (pick, name)
-    return (None, failed)
+        return (pick, name, (result.input_tokens, result.output_tokens))
+    return (None, failed, (0, 0))
 
 
 _EFFORT_NO_THINKING = ("auto", "off")

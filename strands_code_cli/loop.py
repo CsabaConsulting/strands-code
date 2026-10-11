@@ -1187,7 +1187,7 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
-    pick, engine = routing_mod.decide(
+    pick, engine, _usage = routing_mod.decide(
         strategy, current_model=current_model, side=False, ask=ask_text
     )
     if pick is None:

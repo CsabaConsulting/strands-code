@@ -1,8 +1,9 @@
 """Pre-turn routing hook tests (MODEL-03 tracer).
 
 Drives run_loop end to end with a mocked OpenRouter decision: the
-urllib-adjacent seam patched is decide_via_openrouter (canned JSON),
-while decide/parse/prompt and apply_model_action run for real.
+urllib-adjacent seam patched is decide_via_openrouter (canned
+EngineResult), while decide/parse/prompt and apply_model_action run
+for real.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from strands_code_cli.routing import (
     ROUTE_USAGE,
     ROUTING_MANUAL_OFF_NOTE,
     ROUTING_OFF_REPLY,
+    EngineResult,
     RoutingCandidate,
     RoutingEngine,
     RoutingState,
@@ -51,8 +53,14 @@ def _strategy(candidates=None) -> RoutingStrategy:
     )
 
 
-def _pick_json(model: str, effort: str = "high") -> str:
-    return json.dumps({"model": model, "effort": effort, "why": "cheap and fast"})
+def _pick_result(
+    model: str, effort: str = "high", usage: tuple[int, int] = (0, 0)
+) -> EngineResult:
+    return EngineResult(
+        text=json.dumps({"model": model, "effort": effort, "why": "cheap and fast"}),
+        input_tokens=usage[0],
+        output_tokens=usage[1],
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -149,7 +157,7 @@ class TestPreTurnHook:
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -174,7 +182,7 @@ class TestPreTurnHook:
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(NOVA_MICRO, "low")
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(NOVA_MICRO, "low")
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -192,7 +200,9 @@ class TestPreTurnHook:
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
-        monkeypatch.setattr(routing_mod, "decide_via_openrouter", lambda **kw: None)
+        monkeypatch.setattr(
+            routing_mod, "decide_via_openrouter", lambda **kw: EngineResult(text=None)
+        )
         seed = [
             {"role": "user", "content": [{"text": "earlier"}]},
             {"role": "assistant", "content": [{"text": "answer"}]},
@@ -225,7 +235,7 @@ class TestPreTurnHook:
         # "off" passes effort validation so the pick reaches the resolve
         # guard, which must still hold with history untouched.
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(bad, "off")
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(bad, "off")
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -246,7 +256,7 @@ class TestPreTurnHook:
         strategy.quiet = True
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -268,7 +278,7 @@ class TestPreTurnHook:
         monkeypatch.setattr(
             routing_mod,
             "decide_via_openrouter",
-            lambda **kw: _pick_json(NOVA_MICRO, "low"),
+            lambda **kw: _pick_result(NOVA_MICRO, "low"),
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -292,7 +302,7 @@ class TestPreTurnHook:
 
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
         )
         real_resolve = harness_models.resolve_model
         efforts: list = []
@@ -378,7 +388,7 @@ class TestRoutingToggle:
     def test_route_on_re_enables_hook(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
