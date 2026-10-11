@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 08
 current_phase_name: Model Routing with Decision Models
 status: executing
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-10-11T04:29:26.665Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-10-11T04:50:22.052Z"
 last_activity: 2026-10-10
 last_activity_desc: Phase 08 execution started
-state_head: fba1af2f90e82cabe790740020de97b7b9dfaaab
+state_head: dd1d065ef82a58ae79de52cae2592a2ca6b85eac
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 19
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 ## Current Position
 
 Phase: 08 (Model Routing with Decision Models) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-10-10 — Phase 08 execution started
 
@@ -73,6 +73,7 @@ Progress: [████████░░] 78%
 | Phase 7 P04 | 7min | 4 tasks | 7 files |
 | Phase 7 P05 | 24min | 4 tasks | 10 files |
 | Phase 08 P01 | 11min | 3 tasks | 8 files |
+| Phase 08 P02 | 15min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,9 @@ Recent decisions affecting current work:
 - [Phase 08]: Routed effort validates on the switch path only; same-model no-op picks skip validation and effort application — Effort has no sticky companion to compare and re-resolving every ask would churn; the no-op fast path wins
 - [Phase 08]: Hold-note engine slot uses resolve for resolve failures and the producing engine for validation rejects — Keeps the slot truthful: switch-stage cause vs rejected engine output, same attribution as parse failure
 - [Phase 08]: Bare /route reports status mirroring bare /mode; symlinked strategy degrades to routing-off with a note — Bare-status mirrors the ModeState precedent; the loader keeps fail-loud while the loop keeps the session alive
+- [Phase 08]: Held routing events record the serving model with empty effort/why; zero-usage decisions print no cost part and add no provenance — Keeps held /cost lines truthful and stops failed calls from flipping the Prices provenance line
+- [Phase 08]: YAML 1.1 on/off bools map to openrouter/off at strategy load — Unquoted primary off parses as boolean False; without normalization an explicit off warn-defaulted back to openrouter (fail-open)
+- [Phase 08]: Side holds append held side-flagged events with no transcript note; spawns refresh to the live parent model only on the routing-attempted path — Every decided ask appends an event so side decision spend cannot hide; the live-model refresh is scoped so off/unconfigured spawns replay byte-identically
 
 ### Pending Todos
 
@@ -142,6 +146,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-11T04:29:26.591Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-10-11T04:50:21.976Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
