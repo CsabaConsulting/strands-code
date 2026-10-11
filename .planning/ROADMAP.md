@@ -192,7 +192,7 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans executed
 
 Plans:
 **Wave 1**
@@ -205,7 +205,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-03-PLAN.md — Guided /route setup plus docs, /route validate, single-candidate fast path plus env-gated live engine tests
+- [x] 08-03-PLAN.md — Guided /route setup plus docs, /route validate, single-candidate fast path plus env-gated live engine tests
 
 ### Phase 9: CodeAct Action Interface
 
@@ -235,7 +235,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
-| 8. Model Routing with Decision Models | 2/3 | In Progress|  |
+| 8. Model Routing with Decision Models | 3/3 | In Progress|  |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)

@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 08
 current_phase_name: Model Routing with Decision Models
-status: executing
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-10-11T04:50:22.052Z"
+status: verifying
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-10-11T05:09:41.482Z"
 last_activity: 2026-10-10
 last_activity_desc: Phase 08 execution started
-state_head: dd1d065ef82a58ae79de52cae2592a2ca6b85eac
+state_head: f239a1c375f37cb5d10f98501773a209942db043
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 
 Phase: 08 (Model Routing with Decision Models) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-10 — Phase 08 execution started
 
 Progress: [████████░░] 78%
@@ -74,6 +74,7 @@ Progress: [████████░░] 78%
 | Phase 7 P05 | 24min | 4 tasks | 10 files |
 | Phase 08 P01 | 11min | 3 tasks | 8 files |
 | Phase 08 P02 | 15min | 3 tasks | 6 files |
+| Phase 08 P03 | 16min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,9 @@ Recent decisions affecting current work:
 - [Phase 08]: Held routing events record the serving model with empty effort/why; zero-usage decisions print no cost part and add no provenance — Keeps held /cost lines truthful and stops failed calls from flipping the Prices provenance line
 - [Phase 08]: YAML 1.1 on/off bools map to openrouter/off at strategy load — Unquoted primary off parses as boolean False; without normalization an explicit off warn-defaulted back to openrouter (fail-open)
 - [Phase 08]: Side holds append held side-flagged events with no transcript note; spawns refresh to the live parent model only on the routing-attempted path — Every decided ask appends an event so side decision spend cannot hide; the live-model refresh is scoped so off/unconfigured spawns replay byte-identically
+- [Phase 08]: Validate is the strict judge while load stays fail-soft: skipped entries fail validation, unknown top-level keys and empty directives stay valid notes — Skipped entries mean the file does not mean what the user wrote, so validate fails them with fixes; the loader keeps routing with the survivors
+- [Phase 08]: Single-candidate strategies with advertised levels skip all decision engines via a pick-shaped fast-path verdict — Nothing to choose means no decision call to pay for; the unchanged hook takes its pick branch with zero-token spend recorded
+- [Phase 08]: Live engine tests skip on absent credentials or daemon but fail loudly when a present endpoint rejects the call — Absence skips keep CI hermetic; failing on present-but-broken endpoints surfaces contract drift, proven by the live OpenRouter pass this run
 
 ### Pending Todos
 
@@ -146,6 +150,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-11T04:50:21.976Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-10-11T05:09:41.408Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file: None
