@@ -945,7 +945,7 @@ def _route_setup_message() -> str:
         payload["engine"]["local_model"] = local_model
     try:
         path = save_strategy(payload, scope)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         return f"Setup failed — {exc} (nothing written)."
     noun = "candidate" if len(candidates) == 1 else "candidates"
     return (
