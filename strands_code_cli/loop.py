@@ -86,6 +86,7 @@ from strands_code_cli.policy_gate import (
     set_mode as set_gate_mode,
     worker_cancelled,
 )
+from strands_code_cli import routing as routing_mod
 from strands_code_cli.router import (
     apply_approved_proposal,
     apply_memory_section,
@@ -1148,6 +1149,88 @@ def apply_model_action(
     )
 
 
+def _route_pre_turn(
+    agent: Any,
+    *,
+    current_model: str,
+    ask_text: str,
+    rich: RichHistory | None,
+    index: SessionIndex,
+    session_id: str,
+    stash_path: Path | None,
+) -> str:
+    """Pre-turn routing hook: decide, switch, note; returns the model id.
+
+    Runs after dispatch plus the plan prefix and before the retry loop.
+    Unconfigured sessions (no strategy, or zero candidates) skip
+    silently; a parsed pick applies through :func:`apply_model_action`
+    with the same persistence as the model-action site, and every
+    routed ask prints one transcript line (suppressed when the
+    strategy sets ``quiet``). A same-model pick skips the switch
+    (no-op fast path) but still prints the line. Every engine, parse,
+    or resolve failure holds current with history untouched and
+    prints the hold note naming the failed engine (D-08).
+    """
+    try:
+        strategy = routing_mod.load_strategy()
+    except ValueError as exc:
+        logger.warning("Routing disabled for this ask: %s", exc)
+        print_plain(console, f"Routing disabled ({exc}).")
+        return current_model
+    if strategy is None or not strategy.candidates:
+        return current_model
+    pick, engine = routing_mod.decide(
+        strategy, current_model=current_model, side=False, ask=ask_text
+    )
+    if pick is None:
+        print_plain(
+            console, routing_mod.format_hold_line(current=current_model, engine=engine)
+        )
+        return current_model
+    prev_model = current_model
+    if pick.model != current_model:
+        try:
+            resolved_id, _reply = apply_model_action(
+                agent,
+                pick.model,
+                turn_running=False,
+                current_model=current_model,
+                rich=rich,
+            )
+        except Exception as exc:  # noqa: BLE001 — switch-first: history untouched
+            logger.warning("Routed switch failed (%s); holding %s", exc, current_model)
+            print_plain(
+                console,
+                routing_mod.format_hold_line(current=current_model, engine="resolve"),
+            )
+            return current_model
+        if resolved_id is not None:
+            current_model = pick.model  # verbatim pick persists, like /model
+            from strands_code_cli.provider_config import ProviderConfig
+
+            try:
+                ProviderConfig.load().save_model_choice(current_model)
+            except ValueError as exc:
+                logger.warning("Model choice not persisted: %s", exc)
+            explicit_save(agent)
+            index.ensure(session_id)
+            if rich is not None and stash_path is not None:
+                rich.save(stash_path)
+    if not strategy.quiet:
+        print_plain(
+            console,
+            routing_mod.format_routed_line(
+                model=pick.model,
+                effort=pick.effort,
+                why=pick.why,
+                prev_model=prev_model,
+                ask=ask_text,
+            ),
+            style="dim",
+        )
+    return current_model
+
+
 def _review_answer() -> str:
     """One approve/deny/revise answer; anything unclear fails closed to deny."""
     if sys.stdin.isatty():
@@ -1748,6 +1831,15 @@ def run_loop(
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
                     agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
+                current_model = _route_pre_turn(
+                    agent,
+                    current_model=current_model,
+                    ask_text=message if message is not None else text,
+                    rich=rich,
+                    index=index,
+                    session_id=session_id,
+                    stash_path=stash_path,
+                )
                 history = getattr(agent, "messages", None)
                 before = len(history) if isinstance(history, list) else 0
                 attempts = 0
