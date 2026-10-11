@@ -202,6 +202,13 @@ def _parse_engine(raw: object) -> RoutingEngine:
             logger.warning("Ignoring routing engine %r (not a string)", key)
             continue
         setattr(engine, key, value)
+    if engine.primary not in ("openrouter", "local", "off"):
+        logger.warning(
+            "Ignoring routing engine primary %r "
+            "(expected openrouter|local|off); using openrouter",
+            engine.primary,
+        )
+        engine.primary = "openrouter"
     base_url = engine.local_base_url
     if base_url is not None:
         if not base_url.strip():
@@ -574,6 +581,16 @@ def validate_strategy(
                 "or re-run /route setup"
             )
     engine = _parse_engine(data.get("engine"))
+    raw_engine = data.get("engine")
+    raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None
+    if isinstance(raw_primary, str) and raw_primary not in (
+        "openrouter",
+        "local",
+        "off",
+    ):
+        valid = False
+        lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
+        lines.append("fix: set engine.primary to openrouter|local|off")
     if engine.primary == "off":
         lines.append("engine: primary off — routing disabled by config")
     elif engine.primary == "local":
