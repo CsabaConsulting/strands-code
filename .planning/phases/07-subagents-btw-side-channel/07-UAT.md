@@ -1,26 +1,22 @@
 ---
-status: testing
+status: complete
 phase: 07-subagents-btw-side-channel
 source: [07-VERIFICATION.md]
 started: 2026-10-06T09:05:00Z
-updated: 2026-10-08T04:30:00Z
+updated: 2026-10-10T17:30:00Z
 round: 3
 ---
 
 ## Current Test
 
-number: 1
-name: (R3 retest) Start a task, fire /btw needing approval, let main finish, then idle at the prompt
-expected: |
-  The side approval dialog appears LIVE at the idle prompt without typing anything; half-typed input (if any) survives; approval serves and the fenced block lands
-awaiting: user response
+[testing complete — round 3]
 
 ## Tests
 
 ### 1. Start a long main task, fire /btw needing approval, let main finish first
 expected: Tagged [btw] prompt is announced at idle ('btw approval needed — will prompt when the next turn starts.') and served by the next turn's pump; fenced block lands without scrambling the prompt line
-result: [pending]
-reason: "Round 2: nesting fix worked but idle UX rejected (queued approval hid until next submit; exit silently dropped parked side). → R3 retest pending (multiplex E)."
+result: pass
+reason: "R3: (1) side approval dialog popped LIVE at the idle prompt with nothing typed — tagged Approve? [btw] box, answered, fenced result + digest landed; (2) half-typed line preserved across idle side delivery (user-confirmed, visible at prompt after landing). Multiplex E verified in the wild."
 
 ### 2. Run main + btw concurrently, press Ctrl-C once
 expected: Chooser offers main/btw/both and cancels only the named target (ESC cancels nothing)
@@ -49,9 +45,9 @@ reason: "User confirmed. Verified: /tmp/uattest store has 5 main-task facts, zer
 ## Summary
 
 total: 6
-passed: 5
+passed: 6
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 
