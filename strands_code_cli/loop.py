@@ -2131,7 +2131,10 @@ def run_loop(
                 current_model = _route_pre_turn(
                     agent,
                     current_model=current_model,
-                    ask_text=message if message is not None else text,
+                    # Raw typed line only: the composed message may carry
+                    # untrusted skill/memory/init content that must never
+                    # reach the external decision model.
+                    ask_text=text,
                     rich=rich,
                     index=index,
                     session_id=session_id,
