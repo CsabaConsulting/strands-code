@@ -491,6 +491,17 @@ def _bare_catalog_id(model_id: str) -> str:
     return model_id
 
 
+def _catalog_known(model_id: str, catalog: set[str]) -> bool:
+    """True when the id is catalog-known verbatim or prefix-stripped.
+
+    Verbatim wins: genuine catalog ids can start with ``openrouter/``
+    (e.g. ``openrouter/auto``), so stripping first would mangle them
+    (UAT R1). The stripped form stays as a fallback for aggregator
+    routes like ``litellm/openrouter/<id>``.
+    """
+    return model_id in catalog or _bare_catalog_id(model_id) in catalog
+
+
 def validate_strategy(
     global_path: str | Path | None = None,
     repo_path: str | Path | None = None,
@@ -642,7 +653,7 @@ def validate_strategy(
                     f"engine: decision model {engine.decision_model} — unchecked "
                     "(no cached catalog; run /cost refresh, then re-validate)"
                 )
-            elif _bare_catalog_id(engine.decision_model) in catalog:
+            elif _catalog_known(engine.decision_model, catalog):
                 lines.append(
                     f"engine: decision model {engine.decision_model} — "
                     "known in the cached catalog"

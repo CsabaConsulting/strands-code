@@ -521,6 +521,22 @@ class TestRouteValidate:
         text = report.format()
         assert "unchecked" in text and "/cost refresh" in text
 
+    def test_openrouter_prefixed_id_matches_verbatim(self, tmp_path):
+        # UAT R1: openrouter/auto is a genuine catalog id — the
+        # aggregator-prefix strip must not mangle it into "auto".
+        _seed_catalog_ids(tmp_path, ["openrouter/auto"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: openrouter, decision_model: openrouter/auto}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "known in the cached catalog" in report.format()
+
     def test_unknown_decision_model_reports_engine_failure(self, tmp_path):
         _seed_catalog_ids(tmp_path, ["other/model"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
