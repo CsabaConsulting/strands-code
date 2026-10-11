@@ -213,8 +213,10 @@ class TestPreTurnHook:
             candidates=[RoutingCandidate(id=bad), RoutingCandidate(id=NOVA_MICRO)]
         )
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        # "off" passes effort validation so the pick reaches the resolve
+        # guard, which must still hold with history untouched.
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(bad)
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(bad, "off")
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -247,6 +249,61 @@ class TestPreTurnHook:
         )
         assert saved == [HAIKU]  # switch still applies
         assert "Routed \u2192" not in capsys.readouterr().out
+
+    def test_rejected_effort_holds_current_byte_identical(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # nova-micro advertises "low" but supports no thinking: the pick
+        # parses yet the pre-mutation gate rejects it.
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: _pick_json(NOVA_MICRO, "low"),
+        )
+        seed = [{"role": "user", "content": [{"text": "earlier"}]}]
+        agent = SimpleNamespace(
+            messages=[dict(m) for m in seed], model="sentinel", _session_manager=None
+        )
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(monkeypatch, ["hello"], agent, index, HAIKU, _quiet_invoke(calls))
+        assert calls  # the turn still runs, on the current model
+        assert agent.messages == seed
+        assert agent.model == "sentinel"
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert f"Routing held on {HAIKU} (openrouter failed; retrying next ask)" in flat
+        assert "Routed \u2192" not in out
+
+    def test_accepted_effort_reaches_resolved_model(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import strands_harness.models as harness_models
+
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        monkeypatch.setattr(
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+        )
+        real_resolve = harness_models.resolve_model
+        efforts: list = []
+
+        def _spy_resolve(*args, **kwargs):
+            efforts.append(kwargs.get("effort"))
+            return real_resolve(*args, **kwargs)
+
+        monkeypatch.setattr(harness_models, "resolve_model", _spy_resolve)
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
+        )
+        assert saved == [HAIKU]
+        assert efforts == ["high"]  # routed level reached the resolved model
+        assert len(_routed_lines(capsys.readouterr().out)) == 1
 
     def test_empty_candidates_skip_silently(self, tmp_path, monkeypatch, capsys):
         strategy = _strategy(candidates=[])

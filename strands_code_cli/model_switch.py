@@ -623,7 +623,13 @@ def normalize_model_ref(selection: str) -> str:
     return selection
 
 
-def apply_switch(agent: Any, new_string: str, default: str | None = None) -> tuple[Any, str]:
+def apply_switch(
+    agent: Any,
+    new_string: str,
+    default: str | None = None,
+    *,
+    effort: str | None = None,
+) -> tuple[Any, str]:
     """Resolve and in-place swap the agent's model (tracer-winning seam).
 
     Assigns ``agent.model`` directly; history stays in place (the caller runs
@@ -634,6 +640,8 @@ def apply_switch(agent: Any, new_string: str, default: str | None = None) -> tup
         agent: Live session agent.
         new_string: ``"provider/name"`` selection (bare Bedrock ids allowed).
         default: Default model string when selection is empty.
+        effort: Routed thinking level, forwarded to ``resolve_model``
+            only when not None (two-arg behavior is byte-identical).
 
     Returns:
         ``(model, resolved_id)`` for replies and persistence.
@@ -641,6 +649,9 @@ def apply_switch(agent: Any, new_string: str, default: str | None = None) -> tup
     from strands_harness.models import resolve_model
 
     new_string = normalize_model_ref(new_string)
-    model = resolve_model(new_string, default or new_string)
+    if effort is None:
+        model = resolve_model(new_string, default or new_string)
+    else:
+        model = resolve_model(new_string, default or new_string, effort=effort)
     agent.model = model
     return (model, model_id_of(model, new_string))

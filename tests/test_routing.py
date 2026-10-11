@@ -21,6 +21,7 @@ from strands_code_cli.routing import (
     decide,
     decide_via_openrouter,
     parse_pick,
+    validate_routed_effort,
 )
 
 HAIKU = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -300,3 +301,85 @@ class TestEngineChain:
 
     def test_registry_orders_openrouter_first(self):
         assert _ENGINE_REGISTRY and _ENGINE_REGISTRY[0][0] == "openrouter"
+
+
+class TestRoutedEffort:
+    def test_apply_switch_forwards_effort_to_resolve(self, monkeypatch):
+        import strands_harness.models as harness_models
+        from types import SimpleNamespace
+
+        from strands_code_cli.model_switch import apply_switch
+
+        calls: list = []
+
+        def _fake_resolve(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace()
+
+        monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve)
+        agent = SimpleNamespace()
+        _model, resolved = apply_switch(agent, HAIKU, effort="high")
+        assert resolved == HAIKU
+        assert calls == [((HAIKU, HAIKU), {"effort": "high"})]
+
+    def test_apply_switch_without_effort_calls_two_args(self, monkeypatch):
+        import strands_harness.models as harness_models
+        from types import SimpleNamespace
+
+        from strands_code_cli.model_switch import apply_switch
+
+        calls: list = []
+
+        def _fake_resolve(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace()
+
+        monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve)
+        apply_switch(SimpleNamespace(), HAIKU)
+        assert calls == [((HAIKU, HAIKU), {})]  # byte-identical two-arg call
+
+    def test_validate_accepts_listed_level_on_reasoning_candidate(self):
+        pick = RoutingPick(model=HAIKU, effort="high", why="deep work")
+        assert validate_routed_effort(pick, _candidates()) is True
+
+    def test_validate_rejects_unlisted_level(self):
+        pick = RoutingPick(model=HAIKU, effort="max", why="too much")
+        assert validate_routed_effort(pick, _candidates()) is False
+
+    def test_validate_rejects_listed_level_on_incapable_candidate(self):
+        # nova-micro advertises "low" but supports no thinking: mismatch
+        # holds current, never coerces the level.
+        pick = RoutingPick(model=NOVA_MICRO, effort="low", why="cheap")
+        assert validate_routed_effort(pick, _candidates()) is False
+
+    def test_validate_accepts_auto_and_off_without_advertised_levels(self):
+        # SONNET advertises no levels, so any string effort passes the
+        # levels gate; auto/off need no thinking support either.
+        for effort in ("auto", "off"):
+            pick = RoutingPick(model=SONNET, effort=effort, why="default")
+            assert validate_routed_effort(pick, _candidates()) is True
+
+    def test_validate_rejects_unknown_model(self):
+        pick = RoutingPick(model="ghost/1", effort="low", why="ghost")
+        assert validate_routed_effort(pick, _candidates()) is False
+
+    def test_apply_model_action_without_effort_resolves_as_before(self, monkeypatch):
+        import strands_harness.models as harness_models
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+
+        real_resolve = harness_models.resolve_model
+        calls: list = []
+
+        def _spy_resolve(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_resolve(*args, **kwargs)
+
+        monkeypatch.setattr(harness_models, "resolve_model", _spy_resolve)
+        agent = SimpleNamespace(messages=[])
+        resolved_id, _reply = loop_mod.apply_model_action(
+            agent, HAIKU, turn_running=False, current_model=NOVA_MICRO
+        )
+        assert resolved_id is not None
+        assert calls and all("effort" not in kwargs for _, kwargs in calls)

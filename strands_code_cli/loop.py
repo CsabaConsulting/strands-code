@@ -1069,6 +1069,7 @@ def apply_model_action(
     turn_running: bool,
     current_model: str,
     rich: RichHistory | None = None,
+    effort: str | None = None,
 ) -> tuple[str | None, str]:
     """Apply a validated /model selection (loop-owned; never the router).
 
@@ -1086,6 +1087,8 @@ def apply_model_action(
         turn_running: True when a turn is in flight → refuse.
         current_model: Active model id string for the fit estimate.
         rich: Loop-owned richest-variant stash (None → convert only).
+        effort: Routed thinking level (None → harness default, the
+            manual-/model-switch behavior).
 
     Returns:
         ``(resolved_id, reply)``; resolved_id is None on refusal.
@@ -1095,7 +1098,7 @@ def apply_model_action(
     new_id = normalize_model_ref(new_id)
     # Switch first: resolve raises before any history mutation, so a bad
     # selection leaves the session (model AND messages) untouched.
-    _model, resolved_id = apply_switch(agent, new_id)
+    _model, resolved_id = apply_switch(agent, new_id, effort=effort)
     source = list(agent.messages)
     restored = False
     if (
@@ -1163,13 +1166,15 @@ def _route_pre_turn(
 
     Runs after dispatch plus the plan prefix and before the retry loop.
     Unconfigured sessions (no strategy, or zero candidates) skip
-    silently; a parsed pick applies through :func:`apply_model_action`
-    with the same persistence as the model-action site, and every
-    routed ask prints one transcript line (suppressed when the
-    strategy sets ``quiet``). A same-model pick skips the switch
-    (no-op fast path) but still prints the line. Every engine, parse,
-    or resolve failure holds current with history untouched and
-    prints the hold note naming the failed engine (D-08).
+    silently; a parsed pick validates its routed effort (levels plus
+    reasoning support) and then applies through
+    :func:`apply_model_action` with the same persistence as the
+    model-action site, and every routed ask prints one transcript line
+    (suppressed when the strategy sets ``quiet``). A same-model pick
+    skips the switch (no-op fast path) but still prints the line.
+    Every engine, parse, validation, or resolve failure holds current
+    with history untouched and prints the hold note (D-08). Effort is
+    per-ask: nothing persists, and manual switches keep the default.
     """
     try:
         strategy = routing_mod.load_strategy()
@@ -1189,6 +1194,18 @@ def _route_pre_turn(
         return current_model
     prev_model = current_model
     if pick.model != current_model:
+        if not routing_mod.validate_routed_effort(pick, strategy.candidates):
+            logger.warning(
+                "Routed effort %r unsupported by %s; holding %s",
+                pick.effort,
+                pick.model,
+                current_model,
+            )
+            print_plain(
+                console,
+                routing_mod.format_hold_line(current=current_model, engine=engine),
+            )
+            return current_model
         try:
             resolved_id, _reply = apply_model_action(
                 agent,
@@ -1196,6 +1213,7 @@ def _route_pre_turn(
                 turn_running=False,
                 current_model=current_model,
                 rich=rich,
+                effort=pick.effort,
             )
         except Exception as exc:  # noqa: BLE001 — switch-first: history untouched
             logger.warning("Routed switch failed (%s); holding %s", exc, current_model)
