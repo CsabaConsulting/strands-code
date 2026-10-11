@@ -978,7 +978,24 @@ def decide(
     hold). Total failure — every engine empty or unparseable — yields
     ``(None, engine, (0, 0))`` and the caller holds current (D-08).
     One attempt per engine per ask; never any in-ask retry.
+
+    A single candidate advertising at least one level skips every
+    engine (nothing to choose): the verdict names the candidate with
+    its first advertised level, engine ``none``, and zero usage, so
+    the unchanged hook takes its pick branch with the standard Routed
+    line (D-08). A lone candidate with no levels, an empty set, and
+    multi-candidate sets keep their existing behavior exactly.
     """
+    if strategy.engine.primary != "off" and len(strategy.candidates) == 1:
+        only = strategy.candidates[0]
+        if only.levels:
+            return (
+                RoutingPick(
+                    model=only.id, effort=only.levels[0], why="only candidate"
+                ),
+                "none",
+                (0, 0),
+            )
     system, user = build_routing_prompt(
         directives=strategy.directives,
         candidates=strategy.candidates,

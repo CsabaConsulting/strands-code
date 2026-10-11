@@ -17,6 +17,7 @@ from strands_code_cli.routing import (
     RoutingCandidate,
     RoutingEngine,
     RoutingPick,
+    RoutingState,
     RoutingStrategy,
     _ENGINE_REGISTRY,
     build_routing_prompt,
@@ -734,3 +735,246 @@ class TestRoutedEffort:
         )
         assert resolved_id is not None
         assert calls and all("effort" not in kwargs for _, kwargs in calls)
+
+
+class TestSingleCandidateFastPath:
+    def test_single_candidate_with_levels_skips_all_engines(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("fast path must not call any engine")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="qwen3:8b"
+            ),
+        )
+        pick, engine, usage = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick == RoutingPick(model=HAIKU, effort="low", why="only candidate")
+        assert engine == "none"
+        assert usage == (0, 0)
+
+    def test_single_candidate_without_levels_calls_engine_chain(self, monkeypatch):
+        import urllib.request
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            return _FakeResponse(_chat_payload(_pick_json()))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU)],
+            engine=RoutingEngine(decision_model="cheap/decider"),
+        )
+        pick, engine, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert calls  # no advertised levels: the engine chain runs
+        assert engine == "openrouter"
+        assert pick == RoutingPick(model=HAIKU, effort="high", why="cheap and fast")
+
+    def test_single_candidate_with_empty_levels_falls_through(self, monkeypatch):
+        import urllib.request
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            return _FakeResponse(_chat_payload(_pick_json()))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=[])],
+            engine=RoutingEngine(decision_model="cheap/decider"),
+        )
+        pick, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        assert calls  # empty levels advertise nothing: the chain runs
+        # ...and the strict parse then rejects every effort (not a fast path).
+        assert pick is None
+
+    def test_hook_prints_standard_routed_line_with_zero_token_event(
+        self, monkeypatch, capsys
+    ):
+        import urllib.request
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.routing as routing_mod
+
+        def _boom(request, timeout=None):
+            raise AssertionError("fast path must not call any engine")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        events: list = []
+        model = loop_mod._route_pre_turn(
+            SimpleNamespace(),
+            current_model=HAIKU,  # same-model no-op: no switch, still a line
+            ask_text="fix the typo",
+            rich=None,
+            index=None,
+            session_id="s",
+            stash_path=None,
+            routing=RoutingState(initial="on"),
+            routing_events=events,
+        )
+        assert model == HAIKU
+        assert events == [
+            {
+                "ask": 1,
+                "side": False,
+                "model": HAIKU,
+                "effort": "low",
+                "why": "only candidate",
+                "engine": "none",
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "held": False,
+                "decision_model": None,
+            }
+        ]
+        shown = " ".join(capsys.readouterr().out.split())
+        assert f"Routed → {HAIKU} (low): only candidate" in shown
+
+
+class TestLiveEngines:
+    def test_stub_server_ollama_decision_parses_pick(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        seen: dict = {}
+        canned = _ollama_payload(_pick_json(NOVA_MICRO, "low"), 90, 12)
+
+        class _Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                seen["path"] = self.path
+                seen["body"] = json.loads(self.rfile.read(length).decode("utf-8"))
+                body = json.dumps(canned).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), _Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            strategy = _strategy(
+                candidates=_candidates()[:2],
+                engine=RoutingEngine(
+                    primary="local",
+                    local_model="stub-model",
+                    local_base_url=f"http://127.0.0.1:{port}",
+                ),
+            )
+            pick, engine, usage = decide(
+                strategy, current_model=SONNET, side=False, ask="hi"
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=10)
+            server.server_close()
+        assert pick == RoutingPick(
+            model=NOVA_MICRO, effort="low", why="cheap and fast"
+        )
+        assert engine == "local"
+        assert usage == (90, 12)
+        assert seen["path"] == "/api/chat"
+        body = seen["body"]
+        assert body["model"] == "stub-model"
+        assert body["stream"] is False
+        assert [m["role"] for m in body["messages"]] == ["system", "user"]
+        assert set(body["format"]["properties"]) == {"model", "effort", "why"}
+
+    @pytest.mark.integration
+    def test_openrouter_live_decision_returns_text(self):
+        import os
+
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            pytest.skip("OPENROUTER_API_KEY not set")
+        from strands_code_cli.live_pricing import fetch_openrouter_models
+        from strands_code_cli.router import _setup_catalog_entries
+
+        models = fetch_openrouter_models()
+        if not models:
+            pytest.skip("OpenRouter catalog unreachable")
+        entries = [e for e in _setup_catalog_entries(models) if e["structured"]]
+        if not entries:
+            pytest.skip("no structured-output decision model in the catalog")
+        decision_model = entries[0]["id"]  # cheapest structured-capable
+        system, user = build_routing_prompt(
+            directives="live probe",
+            candidates=[RoutingCandidate(id=e["id"]) for e in entries[:2]],
+            current_model=entries[0]["id"],
+            side=False,
+            ask="live probe",
+        )
+        result = decide_via_openrouter(
+            decision_model=decision_model, system=system, user=user
+        )
+        assert result.text is not None, (
+            "live decision call failed — check key, quota, and network"
+        )
+        assert result.input_tokens >= 0 and result.output_tokens >= 0
+
+    @pytest.mark.integration
+    def test_ollama_live_daemon_decision_returns_text(self):
+        import os
+        import urllib.request
+
+        if not os.environ.get("OLLAMA_LIVE"):
+            pytest.skip("OLLAMA_LIVE not set")
+        base = os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{base.rstrip('/')}/api/tags",
+                    headers={"User-Agent": "strands-code"},
+                ),
+                timeout=10,
+            ) as response:
+                tags = json.loads(response.read().decode("utf-8"))
+        except Exception:
+            pytest.skip(f"Ollama daemon unreachable at {base}")
+        names = [
+            model.get("name")
+            for model in tags.get("models", [])
+            if isinstance(model, dict) and model.get("name")
+        ]
+        wanted = os.environ.get("OLLAMA_TEST_MODEL")
+        if wanted:
+            if wanted not in names:
+                pytest.skip(f"OLLAMA_TEST_MODEL {wanted} not pulled")
+            model = wanted
+        elif names:
+            model = names[0]
+        else:
+            pytest.skip("no models pulled in the daemon")
+        system, user = build_routing_prompt(
+            directives="live probe",
+            candidates=[RoutingCandidate(id="live/a"), RoutingCandidate(id="live/b")],
+            current_model="live/a",
+            side=False,
+            ask="live probe",
+        )
+        result = decide_via_ollama(
+            local_model=model, system=system, user=user, timeout=120
+        )
+        assert result.text is not None, f"live Ollama decision failed on {model}"
