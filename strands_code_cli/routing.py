@@ -707,11 +707,17 @@ def build_routing_prompt(
     """Build the (system, user) decision prompt for one ask.
 
     The user message carries directives, one candidate table line per
-    model, the current model plus the side flag, then the ask text
-    truncated to 2000 chars. No history, tool results, file contents,
-    or catalog descriptions ever enter the prompt (T-08-02).
+    model, the current model plus the side flag, then the ask text.
+    Directives and ask are each truncated to ASK_TRUNCATE_CHARS so a
+    malicious repo strategy file cannot inject unbounded text into the
+    paid decision call (T-08-07). No history, tool results, file
+    contents, or catalog descriptions ever enter the prompt (T-08-02).
     """
-    lines = ["User directives:", directives or "(none)", ""]
+    lines = [
+        "User directives:",
+        directives[:ASK_TRUNCATE_CHARS] if directives else "(none)",
+        "",
+    ]
     lines.append("Candidate table (id | $in/$out per 1M | window | tier | levels):")
     lines.extend(_candidate_row(candidate) for candidate in candidates)
     lines.append("")

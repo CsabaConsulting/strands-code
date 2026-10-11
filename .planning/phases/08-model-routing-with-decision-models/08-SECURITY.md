@@ -66,6 +66,7 @@ created: "2026-10-11"
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-11 | 13 | 12 | 1 (T-08-07, non-blocking medium) | gsd-security-auditor via generic-agent workaround (typed dispatch unavailable) — plan-driven audit, ASVS L1, block_on high |
+| 2026-10-11 | 13 | 13 | 0 | Gap fix: directives truncated to ASK_TRUNCATE_CHARS in `build_routing_prompt` + `test_prompt_truncates_long_directives` (suite 1067 passed) |
 
 ---
 

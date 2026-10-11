@@ -98,6 +98,19 @@ class TestRoutingPrompt:
         assert tail == "x" * 2000
         assert long_ask not in user
 
+    def test_prompt_truncates_long_directives(self):
+        # T-08-07: unbounded repo directives must not reach the paid call.
+        long_directives = "d" * 5000
+        _, user = build_routing_prompt(
+            directives=long_directives,
+            candidates=_candidates()[:1],
+            current_model=HAIKU,
+            side=False,
+            ask="hi",
+        )
+        assert "d" * 2000 in user
+        assert long_directives not in user
+
     def test_prompt_uses_static_prices_without_monkeypatch(self):
         # Static table hit: nova-micro is priced at 0.035/0.14 per 1M.
         _, user = build_routing_prompt(
