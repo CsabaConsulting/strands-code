@@ -509,3 +509,79 @@ def format_routed_line(
 def format_hold_line(*, current: str, engine: str) -> str:
     """Hold-current failure note naming the failed engine (D-08)."""
     return f"Routing held on {current} ({engine} failed; retrying next ask)"
+
+
+ROUTING_ON_REPLY = "Routing on — asks route pre-turn through the decision model."
+ROUTING_OFF_REPLY = "Routing off — the current model serves every ask."
+ROUTE_USAGE = "Usage: /route [on|off|status]"
+MODEL_ROUTING_KEEP_REPLY = "Model unchanged — routing stays on."
+ROUTING_MANUAL_OFF_NOTE = "Routing off — manual /model wins; /route on to re-enable."
+
+
+class RoutingState:
+    """Session-sticky routing toggle (D-10; mirrors :class:`ModeState`).
+
+    ``state`` is ``"on"`` or ``"off"`` (anything else raises
+    ``ValueError``). The loop owns one instance, defaulting to on when
+    a strategy configures; ``/route`` flips it and a confirmed manual
+    ``/model`` switch turns it off.
+    """
+
+    VALID = ("on", "off")
+
+    def __init__(self, initial: str = "on") -> None:
+        if initial not in self.VALID:
+            raise ValueError(f"unknown routing state {initial!r}: expected on|off")
+        self._state = initial
+
+    @property
+    def state(self) -> str:
+        """Current toggle state (``"on"`` or ``"off"``)."""
+        return self._state
+
+    def is_on(self) -> bool:
+        """True when the pre-turn hook may route."""
+        return self._state == "on"
+
+    def set(self, state: str) -> str:
+        """Flip the toggle; returns the transcript announcement.
+
+        Raises:
+            ValueError: For anything outside ``on|off``.
+        """
+        if state not in self.VALID:
+            raise ValueError(f"unknown routing state {state!r}: expected on|off")
+        self._state = state
+        return ROUTING_ON_REPLY if state == "on" else ROUTING_OFF_REPLY
+
+    def announce(self, strategy: RoutingStrategy | None = None) -> str:
+        """Bare-status report for ``/route`` (toggle plus strategy detail)."""
+        return route_status_text(self, strategy)
+
+
+def route_status_text(
+    routing: RoutingState, strategy: RoutingStrategy | None
+) -> str:
+    """Full ``/route status`` report: toggle, source, engine, count."""
+    lines = [f"Routing: {routing.state}"]
+    if strategy is None:
+        lines.append("Strategy: none configured")
+        return "\n".join(lines)
+    source = str(strategy.source) if strategy.source is not None else "(unsaved)"
+    count = len(strategy.candidates)
+    noun = "candidate" if count == 1 else "candidates"
+    lines.append(f"Strategy: {source} ({count} {noun})")
+    decision = strategy.engine.decision_model or "(no decision model)"
+    lines.append(f"Engine: {strategy.engine.primary} ({decision})")
+    return "\n".join(lines)
+
+
+def warn_applies(routing: RoutingState | None) -> bool:
+    """True when ``/model`` must warn: toggle on AND a strategy configures."""
+    if routing is None or not routing.is_on():
+        return False
+    try:
+        strategy = load_strategy()
+    except ValueError:
+        return False
+    return strategy is not None and bool(strategy.candidates)

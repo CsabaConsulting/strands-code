@@ -38,6 +38,7 @@ BUILTIN_SLASH_HEADS = frozenset(
         "memory",
         "init",
         "btw",
+        "route",
     }
 )
 """Builtin slash heads (no leading slash) that always win collisions (D-02).

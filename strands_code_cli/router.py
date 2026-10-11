@@ -45,6 +45,7 @@ from strands_code_cli.output import print_plain
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
 if TYPE_CHECKING:
+    from strands_code_cli.routing import RoutingState
     from strands_code_cli.skills import SkillIndex
 
 USAGE_HINT = (
@@ -52,7 +53,7 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /btw <side question>, "
+    "/compact, /clear, /context, /btw <side question>, /route [on|off|status], "
     "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
@@ -118,6 +119,7 @@ def dispatch(
     curate: CurateQueue | None = None,
     revise: ReviseState | None = None,
     init: InitState | None = None,
+    routing: RoutingState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -154,6 +156,9 @@ def dispatch(
             untouched).
         init: Session-sticky init-draft holder armed by /init (None →
             throwaway holder, keeping existing callers untouched).
+        routing: Session-sticky routing toggle backing /route and the
+            /model warn path (None → throwaway off holder, keeping
+            standalone/test behaviour without a loop-owned holder).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -194,7 +199,10 @@ def dispatch(
     if cmd == "/approve":
         return _approve_message(mode)
     if cmd in ("/model", "/models"):
-        return _model_message(rest, current_model)
+        action, selection = _model_message(rest, current_model)
+        if action == "model" and selection is not None and _routing_warns(routing):
+            return _model_warn_action(selection)
+        return (action, selection)
     if cmd == "/cost":
         return ("reply", _cost_message(session_turns, current_model, rest))
     if cmd == "/compact":
@@ -209,6 +217,10 @@ def dispatch(
         if not rest:
             return ("reply", "Usage: /btw <side question>")
         return ("agent", rest)
+    if cmd == "/route":
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named route stays shadowed).
+        return ("reply", _route_message(rest, routing))
     if skills is not None:
         entry = skills.resolve(head[1:])
         if entry is not None and not entry.shadowed:
@@ -489,6 +501,91 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     except ImportError as exc:
         return ("reply", f"Cannot use model {selection!r}: {exc}{_sdk_hint(selection)}")
     return ("model", normalize_model_ref(selection))
+
+
+def _routing_holder(routing: RoutingState | None) -> RoutingState:
+    """Loop-owned holder when present, else a throwaway off default."""
+    from strands_code_cli.routing import RoutingState
+
+    return routing if routing is not None else RoutingState(initial="off")
+
+
+def _routing_warns(routing: RoutingState | None) -> bool:
+    """True when a /model selection must pass the warn-and-cancel dialog."""
+    from strands_code_cli.routing import warn_applies
+
+    return warn_applies(routing)
+
+
+def _model_warn_action(selection: str) -> tuple:
+    """Warn-and-cancel around a /model selection while routing is on.
+
+    Proceed applies the selection (the loop disables routing after a
+    successful warn-path apply); cancel keeps routing with no model
+    action. Radio on tty, typed warn-and-confirm off-tty; every
+    unclear answer fails closed to keep-routing. Never swaps inline —
+    success returns ``("model", selection)`` like the wrapped path.
+    """
+    from strands_code_cli.routing import MODEL_ROUTING_KEEP_REPLY
+
+    def _keep() -> tuple:
+        return ("reply", MODEL_ROUTING_KEEP_REPLY)
+
+    if sys.stdin.isatty():
+        from strands_code_cli.choice import radio_choice
+
+        try:
+            picked = radio_choice(
+                f"Switch to {selection}? This turns routing off.",
+                [
+                    ("proceed", "Switch — turn routing off"),
+                    ("cancel", "Cancel — keep routing"),
+                ],
+                default=1,  # fail-closed highlight on cancel
+            )
+        except RuntimeError:
+            return _keep()
+        except KeyboardInterrupt:
+            return _keep()
+        return ("model", selection) if picked == "proceed" else _keep()
+    # Same stream discipline as the gate: print the prompt, then bare
+    # input() so echo stays on the prompt line.
+    print(
+        f"Switch to {selection}? This turns routing off. "
+        "[yes to switch, anything else keeps routing]: ",
+        end="",
+        flush=True,
+    )
+    try:
+        typed = input().strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return _keep()
+    return ("model", selection) if typed in ("y", "yes") else _keep()
+
+
+def _route_message(rest: str, routing: RoutingState | None) -> str:
+    """Handle /route: flip the session toggle or report status.
+
+    Bare ``/route`` reports status like bare ``/mode``; ``setup`` and
+    ``validate`` land in 08-03 and reply with usage until then.
+    """
+    from strands_code_cli.routing import (
+        ROUTE_USAGE,
+        load_strategy,
+        route_status_text,
+    )
+
+    holder = _routing_holder(routing)
+    verb = rest.strip().lower()
+    if not verb or verb == "status":
+        try:
+            strategy = load_strategy()
+        except ValueError:
+            strategy = None
+        return route_status_text(holder, strategy)
+    if verb in ("on", "off"):
+        return holder.set(verb)
+    return ROUTE_USAGE
 
 
 def _mode_holder(mode: ModeState | None) -> ModeState:

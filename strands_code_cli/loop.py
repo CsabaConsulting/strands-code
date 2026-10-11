@@ -1161,13 +1161,14 @@ def _route_pre_turn(
     index: SessionIndex,
     session_id: str,
     stash_path: Path | None,
+    routing: routing_mod.RoutingState | None = None,
 ) -> str:
     """Pre-turn routing hook: decide, switch, note; returns the model id.
 
     Runs after dispatch plus the plan prefix and before the retry loop.
-    Unconfigured sessions (no strategy, or zero candidates) skip
-    silently; a parsed pick validates its routed effort (levels plus
-    reasoning support) and then applies through
+    A toggled-off session or an unconfigured one (no strategy, or zero
+    candidates) skips silently; a parsed pick validates its routed
+    effort (levels plus reasoning support) and then applies through
     :func:`apply_model_action` with the same persistence as the
     model-action site, and every routed ask prints one transcript line
     (suppressed when the strategy sets ``quiet``). A same-model pick
@@ -1176,6 +1177,8 @@ def _route_pre_turn(
     with history untouched and prints the hold note (D-08). Effort is
     per-ask: nothing persists, and manual switches keep the default.
     """
+    if routing is not None and not routing.is_on():
+        return current_model
     try:
         strategy = routing_mod.load_strategy()
     except ValueError as exc:
@@ -1621,6 +1624,11 @@ def run_loop(
     fenced blocks are consumed after the turn, re-invoking while the
     user iterates. Armed ``/init`` drafts run one agent turn whose
     labeled blocks queue as proposals for curate approval.
+
+    Phase 8: the loop owns the session-sticky :class:`RoutingState`
+    (``/route`` toggle, defaulting to on when a strategy configures)
+    and runs the pre-turn routing hook at idle; a confirmed manual
+    ``/model`` switch disables routing with a transcript note.
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -1668,6 +1676,19 @@ def run_loop(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
+    try:
+        _boot_strategy = routing_mod.load_strategy()
+    except ValueError as exc:
+        logger.warning("Routing disabled: %s", exc)
+        print_plain(console, f"Routing disabled ({exc}).")
+        _boot_strategy = None
+    routing = routing_mod.RoutingState(
+        initial=(
+            "on"
+            if _boot_strategy is not None and _boot_strategy.candidates
+            else "off"
+        )
+    )
     try:
         initial_mode = MemoryModeConfig.load().mode
     except ValueError:
@@ -1783,6 +1804,7 @@ def run_loop(
                 curate=curate_queue,
                 revise=revise_state,
                 init=init_state,
+                routing=routing,
             )
         if action == "agent":
             match_note = skill_match_note(skills, text)
@@ -1820,6 +1842,10 @@ def run_loop(
                 explicit_save(agent)
                 index.ensure(session_id)
                 rich.save(stash_path)
+                if routing_mod.warn_applies(routing):
+                    # Warn-path apply: manual override wins, routing off.
+                    routing.set("off")
+                    print_plain(console, routing_mod.ROUTING_MANUAL_OFF_NOTE)
             continue
         steering = SteeringState()
         turn_id = f"{session_id}:{uuid.uuid4().hex}"
@@ -1857,6 +1883,7 @@ def run_loop(
                     index=index,
                     session_id=session_id,
                     stash_path=stash_path,
+                    routing=routing,
                 )
                 history = getattr(agent, "messages", None)
                 before = len(history) if isinstance(history, list) else 0

@@ -11,17 +11,26 @@ import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 
+import sys
+
 import pytest
 
 import strands_code_cli.loop as loop_mod
 import strands_code_cli.routing as routing_mod
 from strands_code_cli.provider_config import ProviderConfig
+from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.routing import (
+    MODEL_ROUTING_KEEP_REPLY,
+    ROUTE_USAGE,
+    ROUTING_MANUAL_OFF_NOTE,
+    ROUTING_OFF_REPLY,
     RoutingCandidate,
     RoutingEngine,
+    RoutingState,
     RoutingStrategy,
 )
 from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.skills import SkillIndex
 
 HAIKU = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_MICRO = "bedrock/amazon.nova-micro-v1:0"
@@ -321,3 +330,267 @@ class TestPreTurnHook:
         out = capsys.readouterr().out
         assert "Routed \u2192" not in out
         assert "Routing held" not in out
+
+
+def _write_skill(skills_dir, name: str):
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: A route skill.\n---\n# Route\nGo.\n",
+        encoding="utf-8",
+    )
+    return skill_dir
+
+
+class TestRoutingToggle:
+    def test_routing_state_rejects_unknown_values(self):
+        with pytest.raises(ValueError, match="on\\|off"):
+            RoutingState(initial="bogus")
+        holder = RoutingState(initial="on")
+        with pytest.raises(ValueError, match="on\\|off"):
+            holder.set("bogus")
+        assert holder.is_on() is True
+
+    def test_route_off_skips_engine_seam(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+
+        def _boom(**kwargs):
+            raise AssertionError("toggled off: engine must not run")
+
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            ["/route off", "hello"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        assert [text for text, _ in calls] == ["hello"]
+        out = capsys.readouterr().out
+        assert ROUTING_OFF_REPLY in out
+        assert "Routed \u2192" not in out
+        assert "Routing held" not in out
+
+    def test_route_on_re_enables_hook(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        monkeypatch.setattr(
+            routing_mod, "decide_via_openrouter", lambda **kw: _pick_json(HAIKU)
+        )
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            ["/route off", "/route on", "hello"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        assert saved == [HAIKU]
+        assert len(_routed_lines(capsys.readouterr().out)) == 1
+
+    def test_route_status_names_source_engine_and_count(self, tmp_path, monkeypatch):
+        source = tmp_path / "routing.yaml"
+        strategy = _strategy()
+        strategy.source = source
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        action, message = dispatch(
+            "/route status",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            routing=RoutingState(initial="on"),
+        )
+        assert action == "reply"
+        assert message is not None
+        assert "Routing: on" in message
+        assert str(source) in message
+        assert "openrouter" in message and "cheap/decider" in message
+        assert "2 candidates" in message
+
+    def test_bare_route_reports_status(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        action, message = dispatch(
+            "/route",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            routing=RoutingState(initial="off"),
+        )
+        assert action == "reply"
+        assert message is not None and "Routing: off" in message
+
+    def test_route_unknown_subcommand_returns_usage(self, tmp_path):
+        action, message = dispatch(
+            "/route frobnicate",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            routing=RoutingState(initial="on"),
+        )
+        assert (action, message) == ("reply", ROUTE_USAGE)
+
+    def test_usage_hint_advertises_route(self):
+        assert "/route [on|off|status]" in USAGE_HINT
+
+    def _configured(self, monkeypatch):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+
+    def test_model_with_routing_on_radio_cancel_keeps_routing(
+        self, tmp_path, monkeypatch
+    ):
+        import strands_code_cli.choice as choice_mod
+
+        self._configured(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(choice_mod, "radio_choice", lambda *a, **k: "cancel")
+        holder = RoutingState(initial="on")
+        action, message = dispatch(
+            f"/model {HAIKU}",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            current_model=NOVA_MICRO,
+            routing=holder,
+        )
+        assert (action, message) == ("reply", MODEL_ROUTING_KEEP_REPLY)
+        assert holder.is_on() is True
+
+    def test_model_with_routing_on_radio_proceed_disables_after_apply(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import strands_code_cli.choice as choice_mod
+
+        self._configured(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        monkeypatch.setattr(choice_mod, "radio_choice", lambda *a, **k: "proceed")
+
+        def _boom(**kwargs):
+            raise AssertionError("routing off after apply: engine must not run")
+
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            [f"/model {HAIKU}", "hello"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        assert saved == [HAIKU]  # manual switch applied
+        assert [text for text, _ in calls] == ["hello"]  # served, unrouted
+        out = capsys.readouterr().out
+        assert ROUTING_MANUAL_OFF_NOTE in " ".join(out.split())
+        assert "Routed \u2192" not in out
+
+    def test_model_off_tty_empty_input_keeps_routing(self, tmp_path, monkeypatch):
+        self._configured(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda *a: "")
+        holder = RoutingState(initial="on")
+        action, message = dispatch(
+            f"/model {HAIKU}",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            current_model=NOVA_MICRO,
+            routing=holder,
+        )
+        assert (action, message) == ("reply", MODEL_ROUTING_KEEP_REPLY)
+        assert holder.is_on() is True
+
+    def test_model_off_tty_typed_confirm_disables_after_apply(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._configured(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda *a: "yes")
+
+        def _boom(**kwargs):
+            raise AssertionError("routing off after apply: engine must not run")
+
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            [f"/model {HAIKU}", "hello"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        assert saved == [HAIKU]
+        assert [text for text, _ in calls] == ["hello"]
+        assert ROUTING_MANUAL_OFF_NOTE in " ".join(capsys.readouterr().out.split())
+
+    def test_model_with_routing_off_skips_warn_entirely(self, tmp_path, monkeypatch):
+        import strands_code_cli.choice as choice_mod
+
+        monkeypatch.setattr(
+            choice_mod,
+            "radio_choice",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no radio")),
+        )
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (_ for _ in ()).throw(AssertionError("no input"))
+        )
+        holder = RoutingState(initial="off")
+        action, message = dispatch(
+            f"/model {HAIKU}",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            current_model=NOVA_MICRO,
+            routing=holder,
+        )
+        assert (action, message) == ("model", HAIKU)
+
+    def test_model_unconfigured_skips_warn_entirely(self, tmp_path, monkeypatch):
+        import strands_code_cli.choice as choice_mod
+
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: None)
+        monkeypatch.setattr(
+            choice_mod,
+            "radio_choice",
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no radio")),
+        )
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (_ for _ in ()).throw(AssertionError("no input"))
+        )
+        holder = RoutingState(initial="on")
+        action, message = dispatch(
+            f"/model {HAIKU}",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            current_model=NOVA_MICRO,
+            routing=holder,
+        )
+        assert (action, message) == ("model", HAIKU)
+
+    def test_route_skill_shadowed_while_builtin_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        skills_dir = tmp_path / ".agent" / "skills"
+        _write_skill(skills_dir, "route")
+        skills = SkillIndex(skills_dir=skills_dir)
+        action, message = dispatch(
+            "/route status",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            routing=RoutingState(initial="on"),
+            skills=skills,
+        )
+        assert action == "reply"
+        assert message is not None and "Routing: on" in message
+        assert any(
+            "shadowed by builtin '/route'" in warning for warning in skills.warnings
+        )
