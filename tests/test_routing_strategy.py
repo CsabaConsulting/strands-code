@@ -6,6 +6,7 @@ warn-and-skip, repo-wins precedence, symlink refusal.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -19,6 +20,7 @@ from strands_code_cli.routing import (
     RoutingCandidate,
     load_strategy,
     save_strategy,
+    validate_strategy,
 )
 from strands_code_cli.session_index import SessionIndex
 
@@ -473,3 +475,262 @@ class TestRouteSetup:
             assert {"candidates", "directives", "engine"} <= set(data)
             assert data["candidates"] and all("id" in c for c in data["candidates"])
             assert data["engine"]["decision_model"]
+
+
+def _seed_catalog_ids(tmp_path, ids):
+    """Seed the isolated OpenRouter disk cache with the given ids."""
+    (tmp_path / "cache" / "openrouter-models.json").write_text(
+        json.dumps(
+            {
+                "fetched_at": 0,
+                "models": {i: {"in": 1.0, "out": 2.0} for i in ids},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+class TestRouteValidate:
+    @pytest.fixture(autouse=True)
+    def _empty_cache(self, tmp_path, monkeypatch):
+        cache = tmp_path / "cache"
+        cache.mkdir(exist_ok=True)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(cache))
+
+    def test_valid_file_reports_clean_naming_winning_source(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert report.source == path
+        text = report.format()
+        assert text.startswith("Routing strategy VALID")
+        assert str(path) in text
+        assert "candidate #0 a/1: ok" in text
+        assert "known in the cached catalog" in text
+        assert "directives: present" in text
+
+    def test_unchecked_catalog_stays_valid(self, tmp_path):
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        text = report.format()
+        assert "unchecked" in text and "/cost refresh" in text
+
+    def test_unknown_decision_model_reports_engine_failure(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["other/model"])
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert text.startswith("Routing strategy INVALID")
+        assert "not in the cached catalog" in text
+        assert "fix: pick a live id" in text
+
+    def test_corrupt_file_reports_invalid_with_loader_reason(self, tmp_path):
+        repo = _write(tmp_path / "repo.yaml", "candidates: [unclosed\n")
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=repo
+        )
+        assert report.valid is False
+        text = report.format()
+        assert f"repo strategy {repo} is unreadable" in text
+        assert "fix: repair the YAML" in text
+        listed = _write(tmp_path / "listed.yaml", "- just\n- a\n- list\n")
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=listed
+        )
+        assert report.valid is False
+        assert "not a mapping" in report.format()
+
+    def test_corrupt_repo_falls_back_to_global_with_note(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        repo = _write(tmp_path / "repo.yaml", "candidates: [unclosed\n")
+        home = _write(tmp_path / "global.yaml", _strategy_yaml())
+        report = validate_strategy(global_path=home, repo_path=repo)
+        assert report.valid is True
+        assert report.source == home
+        assert "using the global file instead" in report.format()
+
+    def test_entry_with_unknown_keys_reports_skip_reason_with_fix(
+        self, tmp_path
+    ):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(
+                candidates=(
+                    "\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n"
+                )
+            ),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "candidate #0 good/1: ok" in text
+        assert "candidate #1: SKIP — unknown keys: ['bogus']" in text
+        assert "fix: remove the unknown keys from candidates[1]" in text
+
+    def test_missing_decision_model_with_primary_openrouter(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\n"
+            "engine: {primary: openrouter}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "with no decision_model" in text
+        assert "fix: set engine.decision_model" in text
+
+    def test_missing_local_model_with_primary_local(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: local}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "with no local_model" in text
+        assert "fix: set engine.local_model" in text
+
+    def test_local_primary_with_model_reports_valid(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\n"
+            "engine: {primary: local, local_model: qwen3:8b}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "unused while primary is local" in report.format()
+
+    def test_primary_off_reports_valid_disabled(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: off}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "disabled by config" in report.format()
+
+    def test_empty_candidates_list_reports_invalid(self, tmp_path):
+        missing = _write(tmp_path / "missing.yaml", "directives: d\n")
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=missing
+        )
+        assert report.valid is False
+        assert "no usable candidates" in report.format()
+        empty = _write(
+            tmp_path / "empty.yaml",
+            "candidates: []\ndirectives: d\n"
+            "engine: {primary: openrouter, decision_model: c/d}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=empty
+        )
+        assert report.valid is False
+        assert "no usable candidates" in report.format()
+
+    def test_no_strategy_file_reports_invalid(self, tmp_path):
+        report = validate_strategy(
+            global_path=tmp_path / "absent-global.yaml",
+            repo_path=tmp_path / "absent-repo.yaml",
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "no strategy file found" in text
+        assert "fix: run /route setup" in text
+
+    def test_symlinked_path_reports_invalid_without_raising(self, tmp_path):
+        target = _write(tmp_path / "real.yaml", _strategy_yaml())
+        link = tmp_path / "link.yaml"
+        link.symlink_to(target)
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=link
+        )
+        assert report.valid is False
+        assert "symlink" in report.format()
+
+    def test_unknown_top_level_keys_are_notes_not_failures(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml", _strategy_yaml(extra="mystery: 42\n")
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "unknown top-level keys ignored" in report.format()
+
+    def test_skip_reason_matches_loader_warning(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(
+                candidates=(
+                    "\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n"
+                )
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert [c.id for c in strategy.candidates] == ["good/1"]
+        assert (
+            "Ignoring routing candidate #1 (unknown keys: ['bogus'])"
+            in caplog.text
+        )
+        report = validate_strategy(
+            global_path=path, repo_path=tmp_path / "absent.yaml"
+        )
+        assert "candidate #1: SKIP — unknown keys: ['bogus']" in report.format()
+
+    def test_validate_dispatch_never_writes_or_fetches(
+        self, tmp_path, monkeypatch
+    ):
+        import urllib.request
+
+        repo = _write(tmp_path / "r.yaml", _strategy_yaml())
+        monkeypatch.setattr(routing_mod, "default_repo_strategy_path", lambda: repo)
+        monkeypatch.setattr(
+            routing_mod, "default_global_strategy_path", lambda: tmp_path / "g.yaml"
+        )
+
+        def _boom(request, timeout=None):
+            raise AssertionError("validate must not touch the network")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        index = SessionIndex(tmp_path / "index")
+        before = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in tmp_path.rglob("*")
+        }
+        action, message = dispatch(
+            "/route validate", session_id="s", index=index
+        )
+        after = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in tmp_path.rglob("*")
+        }
+        assert action == "reply"
+        assert message.startswith("Routing strategy VALID")
+        assert str(repo) in message
+        assert after == before

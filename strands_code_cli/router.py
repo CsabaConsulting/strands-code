@@ -53,7 +53,7 @@ USAGE_HINT = (
     "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup], "
+    "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup|validate], "
     "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
@@ -956,11 +956,17 @@ def _route_setup_message() -> str:
     )
 
 
-def _route_message(rest: str, routing: RoutingState | None) -> str:
-    """Handle /route: toggle, status, and the guided setup flow.
+def _route_validate_message() -> str:
+    """Print the strategy validity report; never mutates, never fetches."""
+    from strands_code_cli.routing import validate_strategy
 
-    Bare ``/route`` reports status like bare ``/mode``; ``validate``
-    lands in task 2 and replies with usage until then.
+    return validate_strategy().format()
+
+
+def _route_message(rest: str, routing: RoutingState | None) -> str:
+    """Handle /route: toggle, status, guided setup, and validation.
+
+    Bare ``/route`` reports status like bare ``/mode``.
     """
     from strands_code_cli.routing import (
         ROUTE_USAGE,
@@ -980,6 +986,8 @@ def _route_message(rest: str, routing: RoutingState | None) -> str:
         return holder.set(verb)
     if verb == "setup":
         return _route_setup_message()
+    if verb == "validate":
+        return _route_validate_message()
     return ROUTE_USAGE
 
 

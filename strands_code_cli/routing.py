@@ -111,57 +111,59 @@ def default_repo_strategy_path() -> Path:
     return Path(os.getcwd()) / _REPO_STRATEGY_REL
 
 
-def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
-    """Normalize one candidate entry; warn and return None when untrusted."""
+def _candidate_skip_reason(entry: object, pos: int) -> str | None:
+    """None when the entry parses; else the exact loader skip reason.
+
+    Single source of truth for candidate validity: the loader warns
+    with this reason and ``validate_strategy`` reports it, so the
+    command shows exactly what the loader would do.
+    """
     if not isinstance(entry, dict):
-        logger.warning("Ignoring routing candidate #%d (not a mapping)", pos)
-        return None
+        return "not a mapping"
     unknown = set(entry) - _CANDIDATE_KEYS
     if unknown:
-        logger.warning(
-            "Ignoring routing candidate #%d (unknown keys: %s)", pos, sorted(unknown)
-        )
-        return None
+        return f"unknown keys: {sorted(unknown)}"
     candidate_id = entry.get("id")
     if not isinstance(candidate_id, str) or not candidate_id.strip():
-        logger.warning("Ignoring routing candidate #%d (missing id)", pos)
-        return None
+        return "missing id"
     tier = entry.get("tier")
     if tier is not None and not isinstance(tier, str):
-        logger.warning("Ignoring routing candidate #%d ('tier' not a string)", pos)
-        return None
+        return "'tier' not a string"
     note = entry.get("note")
     if note is not None and not isinstance(note, str):
-        logger.warning("Ignoring routing candidate #%d ('note' not a string)", pos)
-        return None
+        return "'note' not a string"
     levels = entry.get("levels")
-    if levels is not None:
-        if not isinstance(levels, list) or any(
-            not isinstance(level, str) for level in levels
-        ):
-            logger.warning(
-                "Ignoring routing candidate #%d ('levels' not a string list)", pos
-            )
-            return None
-        levels = list(levels)
+    if levels is not None and (
+        not isinstance(levels, list)
+        or any(not isinstance(level, str) for level in levels)
+    ):
+        return "'levels' not a string list"
     benchmarks = entry.get("benchmarks")
     if benchmarks is not None:
         if not isinstance(benchmarks, dict):
-            logger.warning(
-                "Ignoring routing candidate #%d ('benchmarks' not a mapping)", pos
-            )
-            return None
+            return "'benchmarks' not a mapping"
         unknown_bench = set(benchmarks) - _BENCHMARK_KEYS
         if unknown_bench:
-            logger.warning(
-                "Ignoring routing candidate #%d (unknown benchmark keys: %s)",
-                pos,
-                sorted(unknown_bench),
-            )
-            return None
-        benchmarks = dict(benchmarks)
+            return f"unknown benchmark keys: {sorted(unknown_bench)}"
+    return None
+
+
+def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
+    """Normalize one candidate entry; warn and return None when untrusted."""
+    reason = _candidate_skip_reason(entry, pos)
+    if reason is not None:
+        logger.warning("Ignoring routing candidate #%d (%s)", pos, reason)
+        return None
+    if not isinstance(entry, dict):  # unreachable: a None reason proves a dict
+        return None
+    levels = entry.get("levels")
+    benchmarks = entry.get("benchmarks")
     return RoutingCandidate(
-        id=candidate_id, tier=tier, note=note, levels=levels, benchmarks=benchmarks
+        id=entry["id"],
+        tier=entry.get("tier"),
+        note=entry.get("note"),
+        levels=list(levels) if levels is not None else None,
+        benchmarks=dict(benchmarks) if benchmarks is not None else None,
     )
 
 
@@ -385,6 +387,253 @@ def save_strategy(
     tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
     os.replace(tmp, resolved)
     return resolved
+
+
+@dataclass
+class ValidationReport:
+    """One strategy validity judgment for ``/route validate``."""
+
+    valid: bool
+    source: Path | None
+    lines: list[str] = field(default_factory=list)
+    """Detail lines in display order: candidates, engine, directives, notes."""
+
+    def format(self) -> str:
+        """Render the full report as the ``/route validate`` reply."""
+        head = "Routing strategy VALID" if self.valid else "Routing strategy INVALID"
+        source = str(self.source) if self.source is not None else "(no file)"
+        return "\n".join([f"{head} — {source}"] + self.lines)
+
+
+def _read_strategy_data(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    """Raw YAML mapping plus failure reason (None reason when absent-or-ok).
+
+    Missing and empty files read as absent (None, None) — the loader
+    falls through them; corrupt and non-mapping files read as broken
+    with the loader's reason.
+    """
+    if not path.exists():
+        return (None, None)
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        return (None, f"unreadable: {exc}")
+    if data is None:
+        return (None, None)
+    if not isinstance(data, dict):
+        return (None, "not a mapping")
+    return (data, None)
+
+
+def _candidate_fix(reason: str, pos: int) -> str:
+    """Manual-edit fix line for one loader skip reason."""
+    if reason == "not a mapping":
+        return f"make candidates[{pos}] a mapping like {{id: provider/model}}"
+    if reason.startswith("unknown keys:"):
+        return (
+            f"remove the unknown keys from candidates[{pos}] "
+            "(allowed: id, tier, note, levels, benchmarks)"
+        )
+    if reason == "missing id":
+        return f"add id: <provider/model> to candidates[{pos}]"
+    if reason == "'tier' not a string":
+        return f"make candidates[{pos}].tier a string"
+    if reason == "'note' not a string":
+        return f"make candidates[{pos}].note a string"
+    if reason == "'levels' not a string list":
+        return f"make candidates[{pos}].levels a list like [low, high]"
+    if reason == "'benchmarks' not a mapping":
+        return f"make candidates[{pos}].benchmarks a mapping"
+    if reason.startswith("unknown benchmark keys:"):
+        return (
+            f"remove the unknown keys from candidates[{pos}].benchmarks "
+            "(allowed: swe_verified, lmarena_coding, aa_index, pulled)"
+        )
+    return f"repair candidates[{pos}] ({reason})"
+
+
+def _cached_catalog_ids() -> set[str] | None:
+    """OpenRouter catalog ids from the disk cache only (None when absent).
+
+    Never fetches: validate judges the real file against cached entries
+    only and must report without network (D-13).
+    """
+    from strands_code_cli.live_pricing import cached_tables
+
+    try:
+        tables = cached_tables()
+    except Exception:
+        return None
+    openrouter = tables.get("openrouter")
+    if not isinstance(openrouter, dict):
+        return None
+    models = openrouter.get("models")
+    if not isinstance(models, dict):
+        return None
+    return {key for key in models if isinstance(key, str)}
+
+
+def _bare_catalog_id(model_id: str) -> str:
+    """Strip an aggregator prefix for the cached-catalog membership check."""
+    lowered = model_id.lower()
+    for prefix in ("litellm/openrouter/", "openrouter/"):
+        if lowered.startswith(prefix):
+            return model_id[len(prefix) :]
+    return model_id
+
+
+def validate_strategy(
+    global_path: str | Path | None = None,
+    repo_path: str | Path | None = None,
+) -> ValidationReport:
+    """Judge the winning strategy file without network, writes, or engines.
+
+    Mirrors ``load_strategy`` precedence (repo wins whole-file, broken
+    files fall back with a note) and reports the winning source, one
+    line per candidate (ok or the exact loader skip reason), engine
+    checks with the decision model looked up in the cached catalog only
+    (unchecked when the cache is unreachable), and the directives
+    presence note. Every failure class carries a manual-edit fix.
+    """
+    repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
+    home = (
+        Path(global_path) if global_path is not None else default_global_strategy_path()
+    )
+    for path in (repo, home):
+        if path.is_symlink():
+            return ValidationReport(
+                valid=False,
+                source=None,
+                lines=[
+                    f"strategy path is a symlink: {path}",
+                    "fix: replace the symlink with a real file",
+                ],
+            )
+    repo_data, repo_reason = _read_strategy_data(repo)
+    home_data, home_reason = _read_strategy_data(home)
+    if repo_data is not None:
+        data, source = repo_data, repo
+        fallback: str | None = None
+    elif home_data is not None:
+        data, source = home_data, home
+        fallback = (
+            f"note: repo strategy {repo} is {repo_reason} "
+            "(using the global file instead) — fix the repo file or delete it"
+            if repo_reason is not None
+            else None
+        )
+    else:
+        lines = []
+        if repo_reason is not None:
+            lines.append(f"repo strategy {repo} is {repo_reason}")
+            lines.append(
+                "fix: repair the YAML or delete the file and re-run /route setup"
+            )
+        if home_reason is not None:
+            lines.append(f"global strategy {home} is {home_reason}")
+            lines.append(
+                "fix: repair the YAML or delete the file and re-run /route setup"
+            )
+        if not lines:
+            lines.append("no strategy file found")
+            lines.append("fix: run /route setup to create one")
+        return ValidationReport(valid=False, source=None, lines=lines)
+    lines = [fallback] if fallback is not None else []
+    valid = True
+    unknown_top = set(data) - _TOP_LEVEL_KEYS
+    if unknown_top:
+        lines.append(
+            f"note: unknown top-level keys ignored: {sorted(unknown_top)} "
+            "(the loader warns and continues)"
+        )
+    raw_candidates: object = data.get("candidates", [])
+    if raw_candidates is None:
+        raw_candidates = []
+    if not isinstance(raw_candidates, list):
+        valid = False
+        lines.append("candidates: INVALID — not a list (the loader ignores it)")
+        lines.append("fix: make candidates: a list of {id: ...} entries")
+    else:
+        usable = 0
+        for pos, entry in enumerate(raw_candidates):
+            reason = _candidate_skip_reason(entry, pos)
+            if reason is None:
+                usable += 1
+                lines.append(f"candidate #{pos} {entry['id']}: ok")
+            else:
+                valid = False
+                lines.append(f"candidate #{pos}: SKIP — {reason}")
+                lines.append(f"fix: {_candidate_fix(reason, pos)}")
+        if usable == 0:
+            valid = False
+            lines.append("no usable candidates — routing stays off")
+            lines.append(
+                "fix: add at least one candidates entry with a model id, "
+                "or re-run /route setup"
+            )
+    engine = _parse_engine(data.get("engine"))
+    if engine.primary == "off":
+        lines.append("engine: primary off — routing disabled by config")
+    elif engine.primary == "local":
+        if not engine.local_model:
+            valid = False
+            lines.append("engine: INVALID — primary is local with no local_model")
+            lines.append(
+                "fix: set engine.local_model to your Ollama tag, "
+                "or switch primary to openrouter"
+            )
+        else:
+            lines.append(f"engine: primary local, model {engine.local_model} — ok")
+        if engine.decision_model:
+            lines.append(
+                f"engine: decision model {engine.decision_model} "
+                "(unused while primary is local)"
+            )
+        else:
+            lines.append("engine: no decision model (unused while primary is local)")
+    else:
+        if not engine.decision_model:
+            valid = False
+            lines.append(
+                f"engine: INVALID — primary is {engine.primary} "
+                "with no decision_model"
+            )
+            lines.append(
+                "fix: set engine.decision_model to a cheap chat model id, "
+                "or re-run /route setup"
+            )
+        else:
+            catalog = _cached_catalog_ids()
+            if catalog is None:
+                lines.append(
+                    f"engine: decision model {engine.decision_model} — unchecked "
+                    "(no cached catalog; run /cost refresh, then re-validate)"
+                )
+            elif _bare_catalog_id(engine.decision_model) in catalog:
+                lines.append(
+                    f"engine: decision model {engine.decision_model} — "
+                    "known in the cached catalog"
+                )
+            else:
+                valid = False
+                lines.append(
+                    f"engine: INVALID — decision model {engine.decision_model} "
+                    "not in the cached catalog"
+                )
+                lines.append(
+                    "fix: pick a live id (re-run /route setup), then "
+                    "/cost refresh and re-validate"
+                )
+    directives = data.get("directives", "")
+    if directives is None:
+        directives = ""
+    if not isinstance(directives, str):
+        lines.append("note: directives is not a string (the loader ignores it)")
+    elif directives.strip():
+        lines.append(f"directives: present ({len(directives)} chars)")
+    else:
+        lines.append("note: no directives — the decider picks without guidance")
+    return ValidationReport(valid=valid, source=source, lines=lines)
 
 
 _SYSTEM_PROMPT = """You route coding asks to exactly one candidate model. Reply with JSON only: {"model": "<candidate id>", "effort": "<level>", "why": "<=12 words>"}.
@@ -830,7 +1079,7 @@ def format_hold_line(*, current: str, engine: str) -> str:
 
 ROUTING_ON_REPLY = "Routing on — asks route pre-turn through the decision model."
 ROUTING_OFF_REPLY = "Routing off — the current model serves every ask."
-ROUTE_USAGE = "Usage: /route [on|off|status|setup]"
+ROUTE_USAGE = "Usage: /route [on|off|status|setup|validate]"
 MODEL_ROUTING_KEEP_REPLY = "Model unchanged — routing stays on."
 ROUTING_MANUAL_OFF_NOTE = "Routing off — manual /model wins; /route on to re-enable."
 
