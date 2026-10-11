@@ -37,7 +37,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. User can resume a previous session by UUID (`--session-id`, `/resume`) and continue where they left off
   3. User can kill the CLI process and resume without silently losing conversation state
 
-**Plans**: TBD
+**Plans**: 3/3 plans executed
 
 - [x] 01-01-PLAN.md
 - [x] 01-02-PLAN.md
@@ -55,7 +55,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. User can open a `/diff` viewer showing pending changes before they apply
   3. User can ask the agent to find code in an unfamiliar repo and get an answer grounded in grep/READ navigation, with no index to maintain
 
-**Plans**: TBD
+**Plans**: 1/1 plans executed
+
+Plans:
+
+- [x] 02-PLAN.md
 **UI hint**: yes
 
 ### Phase 3: Permissions Gate
@@ -69,7 +73,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. User is prompted to approve or deny before the agent edits files, runs shell commands, or touches the network
   2. User can encode standing allow/deny rules in a policy file so routine actions stop prompting while dangerous ones stay gated
 
-**Plans**: TBD
+**Plans**: 1/1 plans executed
+
+Plans:
+
+- [x] 03-PLAN.md
 
 ### Phase 4: Plan/Act Modes + Steering
 
@@ -84,7 +92,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can type freeform steering input mid-task and see it applied at the next tool-call boundary
   4. User can cancel a running task with Ctrl-C and stay in the CLI
 
-**Plans**: TBD
+**Plans**: 1/1 plans executed
+
+Plans:
+
+- [x] 04-PLAN.md
 
 ### Phase 5: Model + Cost + Context Commands
 
@@ -98,7 +110,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. User can see cost and token usage per session and task via `/cost` (display only)
   3. User can compact, clear, and inspect context usage (`/compact`, `/clear`, `/context`) without losing their place
 
-**Plans**: TBD
+**Plans**: 1/1 plans executed
+
+Plans:
+
+- [x] 05-PLAN.md
 
 ### Phase 6: Skills + Memory File
 
@@ -175,7 +191,7 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: TBD
+**Plans**: TBD (not yet planned)
 
 ### Phase 9: CodeAct Action Interface
 
@@ -189,7 +205,7 @@ Plans:
   2. CodeAct executes code-first actions through the harness sandbox primitive with deny-first approvals still gating side effects (reconciled with no-prompt-inside-orchestration; Risk 9 currently disables it)
   3. Switching interfaces mid-session keeps history and approvals coherent
 
-**Plans**: TBD
+**Plans**: TBD (not yet planned)
 
 ## Progress
 
