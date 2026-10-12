@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 9
-current_phase_name: Native TypeSafe Decision Engine
-status: planning
-stopped_at: Phase 09 context gathered
-last_updated: "2026-10-12T16:42:18.807Z"
+current_phase: 09
+current_phase_name: native-typesafe-decision-engine
+status: executing
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-10-12T20:17:59.180Z"
 last_activity: 2026-10-12
-last_activity_desc: Phase 08 complete, transitioned to Phase 9
-state_head: 9ab0e0ac50e9060c2cd5d840d4768e5a249b6602
+last_activity_desc: Phase 09 execution started
+state_head: 4516663882bb51b03f7cf948c58dea0d0fafdee2
 progress:
   total_phases: 11
   completed_phases: 8
-  total_plans: 23
-  completed_plans: 23
+  total_plans: 26
+  completed_plans: 24
 ---
 
 # Project State
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-11)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 08 — Model Routing with Decision Models
+**Current focus:** Phase 09 — native-typesafe-decision-engine
 
 ## Current Position
 
-Phase: 9 — Native TypeSafe Decision Engine
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-12 — Phase 08 complete, transitioned to Phase 9
+Phase: 09 (native-typesafe-decision-engine) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
+Last activity: 2026-10-12 — Phase 09 execution started
 
 Progress: [███████░░░] 73%
 
@@ -83,6 +83,7 @@ Progress: [███████░░░] 73%
 | Phase 08 P05 | 24min | 3 tasks | 8 files |
 | Phase 08 P06 | 4min | 3 tasks | 4 files |
 | Phase 08 P07 | 24min | 3 tasks | 5 files |
+| Phase 09 P01 | 15min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,10 @@ Recent decisions affecting current work:
 - [Phase 08]: [Phase 08-06]: GAP-01/02/03 closed — YAML-bool levels fold to on/off strings in the loader (identity checks, int still skips), non-string choice holds at both membership checks, probe local tag resolves on the local path only — Hand-edited unquoted off must parse per D-13, every failure class holds per D-08, and cloud calibration never needs a daemon per D-06
 - [Phase 08]: [Phase 08-07]: FENCE — routed picks never persist the global default; only explicit /model choices persist
 - [Phase 08]: [Phase 08-07]: Rig waits match (n/a) cost lines and snapshot all baselines pre-send; live R2/R3/R4 PASS closes G-08-1
+- [Phase 09]: Empty effective order (explicit [] or legacy off) yields the off-equivalent hold via _effective_order in decide and _decide_effort — Explicit order [] must disable routing exactly like primary off, including the single-candidate fast-path guard
+- [Phase 09]: decision_model_for names the native model for native — Otherwise production native events record decision_model None and real /cost output never carries the computed-rate marker (Rule 2 adjunct)
+- [Phase 09]: Unknown primary is not judged when engine.order is present — An ignored value judges nothing; the both-present validate test pins it
+- [Phase 09]: Non-list engine.order fails validation with a fix line — Mirrors the candidates not-a-list precedent; loader stays warn-and-default
 
 ### Pending Todos
 
@@ -170,6 +175,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T16:42:18.716Z
-Stopped at: Phase 09 context gathered
-Resume file: .planning/phases/09-native-typesafe-decision-engine/09-CONTEXT.md
+Last session: 2026-10-12T20:17:59.094Z
+Stopped at: Completed 09-01-PLAN.md
+Resume file: None
