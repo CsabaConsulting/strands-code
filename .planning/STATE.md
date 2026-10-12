@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 10
 current_phase_name: provider-reported-turn-spend
-status: executing
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-10-12T23:19:56.161Z"
+status: verifying
+stopped_at: Completed 10-03-PLAN.md
+last_updated: "2026-10-12T23:29:50.209Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 10 execution started
-state_head: 0e06ef0750b74c7948533f2efbe6dba89ccf9d55
+state_head: 4ffbaad661cf2478f630092f0d7c4d35cab3b146
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 29
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 
 Phase: 10 (provider-reported-turn-spend) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-12 — Phase 10 execution started
 
 Progress: [████████░░] 82%
@@ -89,6 +89,7 @@ Progress: [████████░░] 82%
 | Phase 09 P03 | 25min | 3 tasks | 7 files |
 | Phase 10 P01 | 7min | 2 tasks | 6 files |
 | Phase 10 P02 | 3min | 2 tasks | 2 files |
+| Phase 10 P03 | 7min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -160,6 +161,8 @@ Recent decisions affecting current work:
 - [Phase 09]: R1 branches on the native radio — Alternation wait keeps r1 green key-present and key-absent
 - [Phase 10]: Tracer: reported_cost row key stored only when present; actual-wins branches check is-not-None; marker text is the literal word actual — Conditional key keeps the existing exact-dict row assertion green without weakening it; is-not-None keeps a present 0.0 an actual per Ruling 1; literal-word marker matches the D-08 split vocabulary with one marker everywhere
 - [Phase 10]: Display: lane-opens is presence-based (present 0.0 actual opens the actuals lane, derived zeros never do); split sits beneath Total as '  (actual $X + estimated $Y)' — Direct reading of the planner lock that a lane opens only on a present reported value or a computed estimate; keeps marker-iff-reported crisp and D-11 restraint symmetric
+- [Phase 10]: Side builds fresh-copy cost-aware models (plain pass through identical); routed side wrap sits inside the resolve try so a wrap failure holds to the live model like a resolve failure — Keeps main-vs-btw drains separate per D-09 with zero drift on non-wrapped paths; preserves the side-hold contract with no new failure mode
+- [Phase 10]: Live proof constructs LiteLLMModel directly with the env key in client_args instead of going through resolve_model — The harness litellm builder only forwards LITELLM_API_KEY/LITELLM_BASE_URL env, so resolve_model would not carry OPENROUTER_API_KEY; direct construction follows the verified harness client_args shape
 
 ### Pending Todos
 
@@ -191,6 +194,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T23:19:51.902Z
-Stopped at: Completed 10-02-PLAN.md
+Last session: 2026-10-12T23:29:45.029Z
+Stopped at: Completed 10-03-PLAN.md
 Resume file: None
