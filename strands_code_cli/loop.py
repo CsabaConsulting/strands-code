@@ -288,8 +288,16 @@ def _drain_reported_cost(model: Any) -> float | None:
         return None
 
 
+_UNSET: Any = object()
+"""Sentinel distinguishing an omitted reported_cost from explicit None."""
+
+
 def record_turn_metrics(
-    result: Any, current_model: str, session_turns: list, model: Any = None
+    result: Any,
+    current_model: str,
+    session_turns: list,
+    model: Any = None,
+    reported_cost: Any = _UNSET,
 ) -> str | None:
     """Append one per-turn token row; return the usage line when computable.
 
@@ -299,7 +307,13 @@ def record_turn_metrics(
     from strands_code_agent.utils import get_response_metrics
 
     # Drain first: a failed turn must never bleed costs into the next turn.
-    reported = _drain_reported_cost(model)
+    # An explicitly passed reported cost (including None) wins without
+    # consulting the model, so drained side turns never re-drain a newer
+    # agent; only the omitted case drains the serving model.
+    if reported_cost is _UNSET:
+        reported = _drain_reported_cost(model)
+    else:
+        reported = reported_cost
     try:
         metrics = get_response_metrics(
             result, model_id=current_model, price_table=MODEL_PRICING
@@ -356,7 +370,10 @@ def _finish_btw_turn(
             return
         render_btw_error(question, exc)
         return
-    btw.pending.append((question, _result_text(btw_agent, result), result))
+    reported = _drain_reported_cost(getattr(btw_agent, "model", None))
+    btw.pending.append(
+        (question, _result_text(btw_agent, result), result, reported)
+    )
     btw.done = True
 
 
@@ -616,7 +633,7 @@ def _pump_parallel(
                 raise KeyboardInterrupt from None
     history = getattr(agent, "messages", None)
     if isinstance(history, list):
-        for question, answer, _ in btw.pending:
+        for question, answer, _, _ in btw.pending:
             append_btw_turn(history, question, answer)
     return result
 
@@ -733,6 +750,9 @@ def _route_side_spawn(
             return
         try:
             routed = resolve_model(pick.model, pick.model, effort=pick.effort)
+            from strands_code_cli.reported_cost import wrap_for_openrouter
+
+            routed = wrap_for_openrouter(pick.model, routed)
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
             _record_routing_event(
                 routing_events,
@@ -1029,10 +1049,12 @@ def _drain_idle_btw(
         delivered = btw.pending[before:]
         del btw.pending[before:]
         history = getattr(agent, "messages", None)
-        for answered, body, result in delivered:
+        for answered, body, result, reported in delivered:
             if isinstance(history, list):
                 append_btw_turn(history, answered, body)
-            usage = record_turn_metrics(result, current_model, session_turns)
+            usage = record_turn_metrics(
+                result, current_model, session_turns, reported_cost=reported
+            )
             if usage is not None:
                 print_plain(console, usage, style="dim")
     if broker is not None and btw.has_live and broker.has_pending:
@@ -2302,9 +2324,12 @@ def run_loop(
                     # each completed btw turn records through the shared
                     # row shape — no btw-specific field, tag, or report
                     # branch. Consumed so an empty-retry never re-records.
-                    for _, _, btw_result in btw.pending:
+                    for _, _, btw_result, btw_reported in btw.pending:
                         btw_usage = record_turn_metrics(
-                            btw_result, current_model, session_turns
+                            btw_result,
+                            current_model,
+                            session_turns,
+                            reported_cost=btw_reported,
                         )
                         if btw_usage is not None:
                             print_plain(console, btw_usage, style="dim")

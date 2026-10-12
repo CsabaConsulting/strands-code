@@ -10,6 +10,7 @@ never behavior.
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from strands_code_cli import live_pricing
@@ -108,3 +109,18 @@ def wrap_for_openrouter(model_id: str, resolved: Any) -> Any:
     if getattr(resolved, "_reported_costs", None) is None:
         resolved._reported_costs = []
     return resolved
+
+
+def fresh_side_model(model: Any) -> Any:
+    """Fresh cost side-channel for a side-agent build, else input unchanged.
+
+    A side build replaying the parent's wrapped model must never share
+    the parent's accumulated costs: shallow-copy the instance and empty
+    the copy's cost list. Inputs without a cost side channel pass
+    through untouched (the identical object).
+    """
+    if not callable(getattr(model, "take_reported_costs", None)):
+        return model
+    fresh = copy.copy(model)
+    fresh._reported_costs = []
+    return fresh

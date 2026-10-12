@@ -302,8 +302,9 @@ class BtwContext:
     The reader thread only submits questions into :attr:`spawn_queue`
     via :meth:`submit` (never spawns inline); the pump builds,
     submits, and reaps side agents. Completed turns wait in
-    :attr:`pending` as ``(question, answer, result)`` tuples for the
-    boundary flush; :attr:`done` flips once a side answer lands.
+    :attr:`pending` as ``(question, answer, result, reported_cost)``
+    tuples for the boundary flush; :attr:`done` flips once a side
+    answer lands.
     :attr:`running` mirrors the side worker's lifetime for the submit
     echo (set while a side agent runs, cleared once drained).
     :attr:`cancel_targets` records the chooser answer (D-08) when a
@@ -417,8 +418,14 @@ def build_btw_agent(
         with the framed question as its trailing user turn — the
         side invocation prompt, passed as the agent's message list.
     """
+    from strands_code_cli.reported_cost import fresh_side_model
+
     prompt = fork_btw_history(history, question)
     kwargs = dict(parent_kwargs)
+    if "model" in kwargs:
+        # Never share the parent's cost side-channel (D-09): a replayed
+        # wrapper gets its own emptied list; anything else passes through.
+        kwargs["model"] = fresh_side_model(kwargs["model"])
     steering_hook = kwargs.pop("steering_hook", None)
     if "hooks" in kwargs:
         hooks = list(kwargs["hooks"] or [])
