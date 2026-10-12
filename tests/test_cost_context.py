@@ -379,6 +379,62 @@ class TestBlendedTotalsAndSplit:
         ]
 
 
+class TestBedrockOfflineParity:
+    def test_bedrock_report_byte_identical(self):
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1_000_000,
+                "output_tokens": 500_000,
+                "model": "bedrock/global.anthropic.claude-sonnet-4-6",
+            },
+            {
+                "turn": 2,
+                "input_tokens": 2000,
+                "output_tokens": 500,
+                "model": "bedrock/global.anthropic.claude-sonnet-4-6",
+            },
+        ]
+        assert cost_report(
+            turns, "bedrock/global.anthropic.claude-sonnet-4-6"
+        ) == (
+            "Cost — bedrock/global.anthropic.claude-sonnet-4-6\n"
+            "  turn 1: in 1.00M, out 500.00K, $10.5000\n"
+            "  turn 2: in 2.00K, out 500, $0.0135\n"
+            "Total: in 1.00M, out 500.50K, $10.5135\n"
+            "Prices: static table.\n"
+            "Display only — no budgets or enforcement."
+        )
+
+    def test_bedrock_usage_line_unchanged(self):
+        assert (
+            usage_line(1000, 500, "bedrock/global.anthropic.claude-sonnet-4-6")
+            == "1.00K (0%) $0.01"
+        )
+
+    def test_estimate_only_has_no_marker_or_split(self):
+        turns = [
+            _session_row(turn=1, input_tokens=4000, output_tokens=0),
+            _session_row(turn=2, input_tokens=12, output_tokens=1),
+        ]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "actual" not in report
+        assert not [
+            line for line in report.splitlines() if line.startswith("  (actual")
+        ]
+        assert "n/a" not in report
+
+    def test_unpriced_offline_report_byte_identical(self):
+        row = _session_row(model="mystery/acme-1")
+        assert cost_report([row], "mystery/acme-1") == (
+            "Cost — mystery/acme-1\n"
+            "  turn 1: in 12, out 1\n"
+            "Total: in 12, out 1\n"
+            "Prices: unknown.\n"
+            "Display only — no budgets or enforcement."
+        )
+
+
 def _routed_event(**overrides):
     base = {
         "ask": 1,
