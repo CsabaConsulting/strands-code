@@ -304,6 +304,120 @@ class TestPreTurnHook:
         assert saved == [HAIKU]  # switch still applies
         assert "Routed \u2192" not in capsys.readouterr().out
 
+    def test_all_refused_ask_pauses_and_serves_current(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        events: list = []
+        routing = RoutingState(initial="on")
+        served, _ = _hook_with_routing(
+            tmp_path,
+            monkeypatch,
+            _strategy(),
+            EngineResult(answers=None, error="refused"),
+            events,
+            routing,
+        )
+        assert served == NOVA_MICRO  # the current model serves the ask
+        assert routing.is_paused() is True  # same-turn decisions skip
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert (
+            f"Routing held on {NOVA_MICRO} "
+            "(paused: all engines unreachable (openrouter); retrying next ask)"
+            in flat
+        )
+        assert "Routed \u2192" not in out
+        assert events[0]["held"] is True
+        assert events[0]["engine"] == "openrouter"
+
+    def test_transport_hold_prints_engine_and_code_note(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        events: list = []
+        served, _ = _hook(
+            tmp_path,
+            monkeypatch,
+            _strategy(),
+            EngineResult(answers=None, error="HTTP 503"),
+            events,
+        )
+        assert served == NOVA_MICRO
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert (
+            f"Routing held on {NOVA_MICRO} (openrouter 503; retrying next ask)"
+            in flat
+        )
+
+    def test_quiet_keeps_pause_note(self, tmp_path, monkeypatch, capsys):
+        strategy = _strategy()
+        strategy.quiet = True
+        events: list = []
+        served, _ = _hook(
+            tmp_path,
+            monkeypatch,
+            strategy,
+            EngineResult(answers=None, error="refused"),
+            events,
+        )
+        assert served == NOVA_MICRO
+        out = capsys.readouterr().out
+        assert "Routed \u2192" not in out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert "paused: all engines unreachable (openrouter)" in flat
+
+    def test_quiet_keeps_failure_note_on_decide_error(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from strands_code_cli.loop import _route_pre_turn
+
+        strategy = _strategy()
+        strategy.quiet = True
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("almanac down")
+
+        monkeypatch.setattr(routing_mod, "decide", _boom)
+        agent = SimpleNamespace(
+            messages=[], model="sentinel", _session_manager=None
+        )
+        served = _route_pre_turn(
+            agent,
+            current_model=NOVA_MICRO,
+            ask_text="hello",
+            rich=None,
+            index=SessionIndex(tmp_path / "index"),
+            session_id="s",
+            stash_path=None,
+            routing=RoutingState(initial="on"),
+            routing_events=[],
+        )
+        assert served == NOVA_MICRO
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert (
+            f"Routing held on {NOVA_MICRO} (decide failed; retrying next ask)"
+            in flat
+        )
+
+    def test_pause_resumes_on_next_ask(self, tmp_path, monkeypatch, capsys):
+        events: list = []
+        routing = RoutingState(initial="on")
+        routing.pause()
+        served, saved = _hook_with_routing(
+            tmp_path,
+            monkeypatch,
+            _strategy(),
+            _table_result(HAIKU),
+            events,
+            routing,
+        )
+        assert served == HAIKU  # the new ask attempts fresh and routes
+        assert saved == [HAIKU]
+        assert routing.is_paused() is False
+        assert len(_routed_lines(capsys.readouterr().out)) == 1
+
     def test_rejected_effort_holds_current_byte_identical(
         self, tmp_path, monkeypatch, capsys
     ):
@@ -468,6 +582,15 @@ class TestRoutingToggle:
         with pytest.raises(ValueError, match="on\\|off"):
             holder.set("bogus")
         assert holder.is_on() is True
+
+    def test_pause_resume_round_trip(self):
+        routing = RoutingState(initial="on")
+        assert routing.is_paused() is False
+        routing.pause()
+        assert routing.is_paused() is True
+        assert routing.is_on() is True  # pause never flips the toggle
+        routing.resume()
+        assert routing.is_paused() is False
 
     def test_route_off_skips_engine_seam(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
@@ -758,6 +881,33 @@ def _hook(tmp_path, monkeypatch, strategy, engine_result, events):
         session_id="s",
         stash_path=None,
         routing=RoutingState(initial="on"),
+        routing_events=events,
+    )
+    return served, saved
+
+
+def _hook_with_routing(
+    tmp_path, monkeypatch, strategy, engine_result, events, routing
+):
+    """Drive the pre-turn hook directly with a caller-owned toggle."""
+    from strands_code_cli.loop import _route_pre_turn
+
+    monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+    monkeypatch.setattr(
+        routing_mod, "decide_via_openrouter", lambda **kw: engine_result
+    )
+    saved: list[str] = []
+    _no_persist(monkeypatch, saved)
+    agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+    served = _route_pre_turn(
+        agent,
+        current_model=NOVA_MICRO,
+        ask_text="hello",
+        rich=None,
+        index=SessionIndex(tmp_path / "index"),
+        session_id="s",
+        stash_path=None,
+        routing=routing,
         routing_events=events,
     )
     return served, saved
@@ -1083,6 +1233,52 @@ class TestSideRouting:
         ctx.build("quick question")
         assert len(builds) == 1
         assert events == []
+
+    def test_paused_turn_spawns_with_zero_decisions(self, monkeypatch, capsys):
+        def _boom(**kwargs):
+            raise AssertionError("paused turn: no decision call")
+
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
+        monkeypatch.setattr(routing_mod, "decide_via_openrouter", _boom)
+        builds: list = []
+        monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+        events: list = []
+        agent = _side_agent()
+        routing = RoutingState(initial="on")
+        routing.pause()
+        ctx = loop_mod._btw_context_for(
+            agent, routing=routing, routing_events=events
+        )
+        ctx.build("quick question")
+        assert len(builds) == 1
+        assert builds[0][0]["model"] is agent.model
+        assert "effort" not in builds[0][0]  # replay untouched
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert "Routing held" not in out
+        assert events[0]["held"] is True
+        assert events[0]["side"] is True
+        assert events[0]["engine"] == "paused"
+        assert events[0]["decision_model"] is None  # zero spend on skip
+
+    def test_side_pause_skips_second_build(self, monkeypatch):
+        calls: list = []
+
+        def _engine(**kwargs):
+            calls.append(kwargs)
+            return EngineResult(answers=None, error="refused")
+
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(monkeypatch, agent, _engine, events)
+        ctx.build("first question")
+        assert len(calls) == 1  # call 1 pauses; call 2 never runs
+        assert builds[0][0]["model"] is agent.model
+        ctx.build("second question")
+        assert len(calls) == 1  # paused turn: zero new decisions
+        assert builds[1][0]["model"] is agent.model
+        assert events[0]["held"] is True and events[0]["engine"] == "openrouter"
+        assert events[1]["held"] is True and events[1]["engine"] == "paused"
 
     def test_second_build_while_live_makes_no_new_decision(self, monkeypatch):
         calls: list = []

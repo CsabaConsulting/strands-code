@@ -620,8 +620,9 @@ def _route_side_spawn(
     the main hook's no-op fast path. Any hold or failure keeps the
     parent live model with no side note. The shared strategy, toggle,
     and quiet rules apply: routing off or unconfigured spawns
-    exactly as before. Every side decision, routed or held, appends
-    one side-flagged routing event.
+    exactly as before. A turn the pre-turn hook paused spawns with
+    zero decisions on a held paused event. Every side decision,
+    routed or held, appends one side-flagged routing event.
     """
     if routing is not None and not routing.is_on():
         return
@@ -631,11 +632,27 @@ def _route_side_spawn(
         return
     if strategy is None or not strategy.candidates:
         return
+    if routing is not None and routing.is_paused():
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=True,
+            model=current_model,
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+            engine="paused",
+            decision_engine="paused",
+            usage=(0, 0, None),
+            held=True,
+        )
+        return
     from strands_harness.models import resolve_model
 
     kwargs["model"] = live_model
     try:
-        pick, engine, usage, _detail = routing_mod.decide(
+        pick, engine, usage, detail = routing_mod.decide(
             strategy, current_model=current_model, side=True, ask=question
         )
     except Exception:  # noqa: BLE001 — side holds stay silent on the live model
@@ -655,6 +672,8 @@ def _route_side_spawn(
         )
         return
     if pick is None:
+        if routing is not None and routing_mod.is_pause_detail(detail):
+            routing.pause()
         _record_routing_event(
             routing_events,
             strategy=strategy,
@@ -1389,8 +1408,10 @@ def _route_pre_turn(
     Every engine, validation, gate, or resolve failure holds current
     with history untouched and prints the hold note with its reason
     detail (D-08, D-16) — hold and failure notes always print, even
-    under ``quiet``. Every decided ask, held included, appends one
-    routing event for /cost (T-08-08). Effort is per-ask: nothing
+    under ``quiet``. An all-refused ask pauses routing for the turn
+    with the distinct pause note, and later same-turn decisions skip
+    with zero POSTs (D-09). Every decided ask, held included, appends
+    one routing event for /cost (T-08-08). Effort is per-ask: nothing
     persists, and manual switches keep the default.
     """
     if routing is not None and not routing.is_on():
@@ -1403,6 +1424,8 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
+    if routing is not None:
+        routing.resume()  # a new ask attempts fresh; pause covers one ask
     try:
         pick, engine, usage, detail = routing_mod.decide(
             strategy, current_model=current_model, side=False, ask=ask_text
@@ -1429,6 +1452,8 @@ def _route_pre_turn(
         )
         return current_model
     if pick is None:
+        if routing is not None and routing_mod.is_pause_detail(detail):
+            routing.pause()
         _record_routing_event(
             routing_events,
             strategy=strategy,

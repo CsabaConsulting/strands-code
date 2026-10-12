@@ -942,14 +942,63 @@ def _retryable_error(exc: BaseException) -> bool:
     return False
 
 
+_CONNECTION_ERRORS = frozenset({"refused", "unreachable"})
+"""Failure classes that pause routing when they take every link (D-09)."""
+
+
+def _refused_reason(reason: object) -> bool:
+    """True when a transport reason is a refused connection (errno 111)."""
+    import errno
+
+    if isinstance(reason, TimeoutError):
+        return False
+    if isinstance(reason, ConnectionRefusedError):
+        return True
+    return (
+        isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED
+    )
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """Short failure class for one transport exception (never secrets).
+
+    ``HTTP <code>`` for HTTP errors, ``timeout`` for timeouts,
+    ``refused``/``unreachable`` for connection-level failures,
+    ``invalid body`` for undecodable 200s — ``json`` and ``utf-8``
+    decode errors are both ``ValueError``.
+    """
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, TimeoutError):
+            return "timeout"
+        if _refused_reason(reason):
+            return "refused"
+        return "unreachable"
+    if isinstance(exc, (ConnectionError, OSError)):
+        if _refused_reason(exc):
+            return "refused"
+        return "unreachable"
+    if isinstance(exc, ValueError):
+        return "invalid body"
+    return "error"
+
+
 def _post_decision(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
-) -> dict[str, Any] | None:
-    """POST one Decision-API request; parsed mapping or None on failure.
+) -> tuple[dict[str, Any] | None, str | None]:
+    """POST one Decision-API request; (parsed mapping, failure class).
 
-    Retries at most once on retryable codes and timeouts, never on
-    4xx or schema failures — a wrong-shaped 200 is its own outcome,
-    never a reason to re-ask. Shared by both engines (T-08-24).
+    Returns ``(data, None)`` on a well-shaped 200 and ``(None,
+    reason)`` otherwise. Retries at most once on retryable codes and
+    timeouts, never on 4xx or schema failures — a wrong-shaped 200 is
+    its own outcome, never a reason to re-ask. Shared by both
+    engines (T-08-24).
     """
     import urllib.request
 
@@ -962,9 +1011,11 @@ def _post_decision(
         except Exception as exc:  # noqa: BLE001 — every failure class holds
             if attempt_no == 0 and _retryable_error(exc):
                 continue
-            return None
-        return data if isinstance(data, dict) else None
-    return None  # unreachable: the loop always returns first
+            return None, _failure_reason(exc)
+        if not isinstance(data, dict):
+            return None, "invalid body"
+        return data, None
+    return None, "unreachable"  # unreachable: the loop always returns first
 
 
 def decide_via_openrouter(
@@ -987,7 +1038,7 @@ def decide_via_openrouter(
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key or not decision_model:
         return EngineResult(answers=None)
-    data = _post_decision(
+    data, error = _post_decision(
         OPENROUTER_DECISIONS_URL,
         {"model": decision_model, "state": state, "questions": questions},
         {
@@ -998,10 +1049,10 @@ def decide_via_openrouter(
         timeout,
     )
     if data is None:
-        return EngineResult(answers=None)
+        return EngineResult(answers=None, error=error)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(answers=None)
+        return EngineResult(answers=None, error="invalid body")
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1128,7 +1179,7 @@ def decide_via_ollama(
     base = _ollama_base(local_base_url)
     if not _valid_base_url(base):
         return EngineResult(answers=None)
-    data = _post_decision(
+    data, error = _post_decision(
         f"{base.rstrip('/')}/v1/systemone",
         {
             "model": local_model,
@@ -1140,10 +1191,10 @@ def decide_via_ollama(
         timeout,
     )
     if data is None:
-        return EngineResult(answers=None)
+        return EngineResult(answers=None, error=error)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(answers=None)
+        return EngineResult(answers=None, error="invalid body")
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1331,15 +1382,33 @@ register_engine("local", _ollama_attempt)
 
 
 def _link_detail(name: str, error: str | None) -> str:
-    """Verdict detail for one failed link: unready skips name the cause.
+    """Verdict detail for one failed link: engine plus cause.
 
-    Links without failure information keep the legacy ``<engine>
-    failed`` shape; transport and schema classes name engine plus
-    cause (extended per class in the fault-matrix task).
+    Unready skips name the preflight cause; HTTP failures name engine
+    plus code; timeouts, refusals, and unreachable hosts name engine
+    plus class; schema misses name the validation failure. Links
+    without failure information keep the legacy ``<engine> failed``
+    shape (byte-identical for missing-key and decide-level holds).
     """
     if error == "unready":
         return f"{name} unready (daemon version or tag not ready)"
+    if error is not None and error.startswith("HTTP "):
+        return f"{name} {error[len('HTTP '):]}"
+    if error in ("timeout", "refused", "unreachable"):
+        return f"{name} {error}"
+    if error in ("invalid body", "invalid table"):
+        return f"{name} {error}"
     return f"{name} failed"
+
+
+def _pause_detail(down: list[str]) -> str:
+    """Distinct pause detail naming every unreachable link (D-09)."""
+    return f"paused: all engines unreachable ({', '.join(down)})"
+
+
+def is_pause_detail(detail: str) -> bool:
+    """True when a verdict detail pauses routing for the ask (D-09)."""
+    return detail.startswith("paused:")
 
 
 def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
@@ -1388,15 +1457,17 @@ def _decide_effort(
     candidate: RoutingCandidate,
     state: dict[str, Any],
     chain: list[tuple[str, EngineAttempt]],
-) -> tuple[str | None, float | None, tuple[int, int, float | None], str]:
+) -> tuple[str | None, float | None, tuple[int, int, float | None], str, str]:
     """Second sequential choice over the picked levels (D-15).
 
     Runs the pick_effort question through the same engine chain on
     the same state — never parallel with call 1, whose answer scopes
-    the criteria. Returns ``(effort, confidence, usage, engine)``
-    with the top choice taken ungated (a weak effort read still
-    routes, D-16); a None effort holds the ask, since a failed or
-    unparseable effort read carries no level to route.
+    the criteria. Returns ``(effort, confidence, usage, engine,
+    detail)`` with the top choice taken ungated (a weak effort read
+    still routes, D-16); a None effort holds the ask, since a failed
+    or unparseable effort read carries no level to route. The detail
+    mirrors call 1 (engine plus cause, pause when every link went
+    down at connection level).
     """
     questions = {
         "pick_effort": build_effort_question(
@@ -1404,6 +1475,9 @@ def _decide_effort(
         )
     }
     failed = chain[0][0] if chain else (strategy.engine.primary or "openrouter")
+    detail = f"{failed} failed"
+    down: list[str] = []
+    informative = False
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -1412,7 +1486,13 @@ def _decide_effort(
         if result is None:
             continue  # skipped link: unconfigured, never attempted
         if result.answers is None:
-            failed = name
+            failed, detail = name, _link_detail(name, result.error)
+            if result.error in _CONNECTION_ERRORS:
+                down.append(name)
+            elif result.error not in (None, "unready"):
+                # Skipped and unready links are pause-neutral: never
+                # attempted, so only attempted failures judge the pause.
+                informative = True
             continue
         if result.model:
             logger.debug(
@@ -1420,7 +1500,8 @@ def _decide_effort(
             )
         table = _validate_effort_answer(result.answers.get("pick_effort"))
         if table is None:
-            failed = name
+            failed, detail = name, _link_detail(name, "invalid table")
+            informative = True
             continue
         ranked = sorted(table.items(), key=lambda item: (-item[1], item[0]))
         top, top_prob = ranked[0]
@@ -1429,8 +1510,11 @@ def _decide_effort(
             float(top_prob),
             (result.input_tokens, result.output_tokens, result.cost),
             name,
+            "",
         )
-    return (None, None, (0, 0, None), failed)
+    if down and not informative:
+        return (None, None, (0, 0, None), down[-1], _pause_detail(down))
+    return (None, None, (0, 0, None), failed, detail)
 
 
 def decide(
@@ -1450,7 +1534,9 @@ def decide(
     failure — every engine down or schema-invalid — yields a None
     pick and the caller holds current (D-08). One chain pass per
     call; each engine retries at most once on retryable failures
-    only.
+    only. Connection-level failure on every attempted link pauses
+    routing for the ask with a distinct pause detail (D-09); other
+    holds name engine plus cause.
 
     A below-threshold table holds immediately without trying the next
     engine: the ask itself is ambiguous, so the retry happens next
@@ -1510,11 +1596,11 @@ def decide(
         if not chain:
             primary = strategy.engine.primary or "openrouter"
             return (None, primary, (0, 0, None), f"{primary} failed")
-        effort, effort_confidence, usage, name = _decide_effort(
+        effort, effort_confidence, usage, name, effort_detail = _decide_effort(
             strategy, only, state, chain
         )
         if effort is None:
-            return (None, name, (0, 0, None), f"{name} failed")
+            return (None, name, (0, 0, None), effort_detail)
         fast = RoutingPick(
             model=only.id,
             effort=effort,
@@ -1546,6 +1632,8 @@ def decide(
         return (None, primary, (0, 0, None), f"{primary} failed")
     failed = chain[0][0]
     detail = f"{failed} failed"
+    down: list[str] = []
+    informative = False
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -1555,6 +1643,12 @@ def decide(
             continue  # skipped link: unconfigured, never attempted
         if result.answers is None:
             failed, detail = name, _link_detail(name, result.error)
+            if result.error in _CONNECTION_ERRORS:
+                down.append(name)
+            elif result.error not in (None, "unready"):
+                # Skipped and unready links are pause-neutral: never
+                # attempted, so only attempted failures judge the pause.
+                informative = True
             continue
         if result.model:
             logger.debug("Routing decision via %s served by %s", name, result.model)
@@ -1562,7 +1656,8 @@ def decide(
             result.answers.get("pick_model"), strategy.candidates
         )
         if answer is None:
-            failed, detail = name, f"{name} failed"
+            failed, detail = name, _link_detail(name, "invalid table")
+            informative = True
             continue
         model_id, tie_break, gate_detail = gate_model(answer, strategy)
         if model_id is None:
@@ -1584,7 +1679,7 @@ def decide(
             effort, effort_confidence = candidate.levels[0], None
             total = (result.input_tokens, result.output_tokens, result.cost)
         else:
-            effort, effort_confidence, effort_usage, effort_engine = (
+            effort, effort_confidence, effort_usage, effort_engine, effort_detail = (
                 _decide_effort(strategy, candidate, state, chain)
             )
             if effort is None:
@@ -1592,7 +1687,7 @@ def decide(
                     None,
                     effort_engine,
                     (0, 0, None),
-                    f"{effort_engine} failed",
+                    effort_detail,
                 )
             total = (
                 result.input_tokens + effort_usage[0],
@@ -1621,6 +1716,8 @@ def decide(
             total,
             gate_detail,
         )
+    if down and not informative:
+        return (None, down[-1], (0, 0, None), _pause_detail(down))
     return (None, failed, (0, 0, None), detail)
 
 
@@ -1741,7 +1838,9 @@ class RoutingState:
     ``state`` is ``"on"`` or ``"off"`` (anything else raises
     ``ValueError``). The loop owns one instance, defaulting to on when
     a strategy configures; ``/route`` flips it and a confirmed manual
-    ``/model`` switch turns it off.
+    ``/model`` switch turns it off. The pause flag is separate and
+    turn-scoped: an all-refused ask pauses same-turn decisions with
+    zero new POSTs, and the next pre-turn hook resumes.
     """
 
     VALID = ("on", "off")
@@ -1750,6 +1849,7 @@ class RoutingState:
         if initial not in self.VALID:
             raise ValueError(f"unknown routing state {initial!r}: expected on|off")
         self._state = initial
+        self._paused = False
 
     @property
     def state(self) -> str:
@@ -1759,6 +1859,18 @@ class RoutingState:
     def is_on(self) -> bool:
         """True when the pre-turn hook may route."""
         return self._state == "on"
+
+    def is_paused(self) -> bool:
+        """True when an all-refused ask paused this turn's decisions."""
+        return self._paused
+
+    def pause(self) -> None:
+        """Pause routing for the ask: later same-turn decisions skip."""
+        self._paused = True
+
+    def resume(self) -> None:
+        """Clear the pause: the next ask attempts its decision calls."""
+        self._paused = False
 
     def set(self, state: str) -> str:
         """Flip the toggle; returns the transcript announcement.

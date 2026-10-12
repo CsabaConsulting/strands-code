@@ -638,7 +638,7 @@ class TestEngineChain:
         assert pick is None
         assert engine == "openrouter"
         assert usage == (0, 0, None)
-        assert detail == "openrouter failed"
+        assert detail == "openrouter 503"  # last engine plus code
 
     @pytest.mark.parametrize("code", [400, 401, 402, 403, 404, 413])
     def test_4xx_never_retries(self, monkeypatch, code):
@@ -748,11 +748,14 @@ class TestEngineChain:
     def test_schema_failures_hold_without_retry(self, monkeypatch):
         import urllib.request
 
-        for payload in (
-            {"model": "m", "usage": {}},  # answers key missing
-            {"model": "m", "answers": [], "usage": {}},  # answers not a dict
-            {"model": "m", "answers": {"other": {}}, "usage": {}},  # key missing
-            ["not", "a", "mapping"],  # body not a mapping
+        for payload, expected in (
+            ({"model": "m", "usage": {}}, "openrouter invalid body"),
+            ({"model": "m", "answers": [], "usage": {}}, "openrouter invalid body"),
+            (
+                {"model": "m", "answers": {"other": {}}, "usage": {}},
+                "openrouter invalid table",
+            ),
+            (["not", "a", "mapping"], "openrouter invalid body"),
         ):
             calls: list = []
 
@@ -761,11 +764,12 @@ class TestEngineChain:
                 return _FakeResponse(payload)
 
             monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-            pick, engine, _, _ = decide(
+            pick, engine, _, detail = decide(
                 _strategy(), current_model=SONNET, side=False, ask="hi"
             )
             assert pick is None
             assert engine == "openrouter"
+            assert detail == expected  # the validation detail, never a guess
             assert len(calls) == 1  # schema misses never re-ask
 
     def test_malformed_table_falls_through_to_next_engine(self, monkeypatch):
@@ -806,7 +810,7 @@ class TestEngineChain:
         )
         assert pick is None
         assert engine == "openrouter"
-        assert detail == "openrouter failed"
+        assert detail == "openrouter invalid table"
 
     def test_threshold_hold_short_circuits_chain(self, monkeypatch):
         import urllib.request
@@ -917,6 +921,234 @@ class TestEngineChain:
         pick, _, _, _ = decide(_strategy(), current_model=SONNET, ask="hi")
         assert pick is not None
 
+    @pytest.mark.parametrize("code", [400, 401, 402, 403, 404, 413])
+    def test_4xx_holds_with_engine_and_code_detail(self, monkeypatch, code):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            raise _http_error(code)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1  # the request itself is wrong: hold
+        assert pick is None
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == f"openrouter {code}"
+
+    @pytest.mark.parametrize("code", [400, 401, 402, 403, 404, 413])
+    def test_local_4xx_holds_with_engine_and_code_detail(
+        self, monkeypatch, code
+    ):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request)
+            raise _http_error(code)
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
+        strategy = _strategy(
+            engine=RoutingEngine(primary="local", local_model="nimble")
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(posts) == 1  # one decision POST, then hold
+        assert pick is None
+        assert engine == "local"
+        assert detail == f"local {code}"
+
+    def test_500_then_success_posts_twice_and_routes(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+        script: list = [_http_error(500)]
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            step = script.pop(0) if script else None
+            if isinstance(step, Exception):
+                raise step
+            return _FakeResponse(
+                _route_payload(
+                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
+                )
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        # NOVA_MICRO advertises one level, so no effort call follows and
+        # the same-model pick skips effort validation: exactly two POSTs.
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=NOVA_MICRO, side=False, ask="hi"
+        )
+        assert len(calls) == 2  # initial plus the one retry, then route
+        assert pick is not None and pick.model == NOVA_MICRO
+        assert pick.effort == "low" and pick.effort_confidence is None
+        assert engine == "openrouter"
+        assert detail == ""
+
+    def test_retryable_exhaustion_falls_to_next_link(self, monkeypatch):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request.full_url)
+            if "openrouter" in request.full_url:
+                raise _http_error(500)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
+            return _FakeResponse(_route_payload(cost=None))
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
+        strategy = _strategy(
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="nimble"
+            )
+        )
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "local"  # exhausted openrouter yields per call
+        assert posts.count(OPENROUTER_DECISIONS_URL) == 4  # retry per call
+        assert posts.count(f"{OLLAMA_DEFAULT_HOST}/v1/systemone") == 2
+
+    def test_schema_invalid_table_holds_with_validation_detail(
+        self, monkeypatch
+    ):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            bad = _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5, SONNET: 0.5})
+            return _FakeResponse(_decision_payload(bad))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1  # a bad table never re-asks
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == "openrouter invalid table"
+
+    def test_non_json_body_holds_with_validation_detail(self, monkeypatch):
+        import urllib.request
+
+        class _RawResponse:
+            def read(self) -> bytes:
+                return b"not json{{"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            return _RawResponse()
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1  # garbage bytes never re-ask
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == "openrouter invalid body"
+
+    def test_all_links_refused_pauses_with_both_links_named(
+        self, monkeypatch
+    ):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request)
+            raise urllib.error.URLError(
+                ConnectionRefusedError(111, "Connection refused")
+            )
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
+        strategy = _strategy(
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="nimble"
+            )
+        )
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "local"  # last refused link
+        assert usage == (0, 0, None)
+        assert detail == "paused: all engines unreachable (openrouter, local)"
+        assert len(posts) == 2  # one attempt per link, zero retries
+
+    def test_single_link_refused_pauses(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            raise urllib.error.URLError(
+                ConnectionRefusedError(111, "Connection refused")
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == "paused: all engines unreachable (openrouter)"
+        assert len(calls) == 1
+
+    def test_mixed_failure_holds_without_pause(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if "openrouter" in request.full_url:
+                raise _http_error(500)
+            raise urllib.error.URLError("daemon down")
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
+        strategy = _strategy(
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="nimble"
+            )
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None  # the 500 rules out a pause verdict
+        assert engine == "local"
+        assert detail == "local unreachable"
+        assert not detail.startswith("paused:")
+
 
 class TestLocalEngine:
     @pytest.fixture(autouse=True)
@@ -994,10 +1226,14 @@ class TestLocalEngine:
         assert engine == "local"
         assert usage == (434, 47, None)  # local spend records as None
 
-    def test_both_failing_holds_current(self, monkeypatch):
+    def test_offline_dual_strategy_pauses_routing(self, monkeypatch):
         import urllib.request
 
+        posts: list = []
+
         def _boom(request, timeout=None):
+            if request.data is not None:
+                posts.append(request)
             raise urllib.error.URLError("offline")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
@@ -1005,11 +1241,10 @@ class TestLocalEngine:
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
-        assert engine == "local"  # last attempted engine
+        assert engine == "openrouter"  # last attempted link
         assert usage == (0, 0, None)
-        # The refused preflight skips the local link with the distinct
-        # unready detail instead of a transport failure.
-        assert detail == "local unready (daemon version or tag not ready)"
+        assert detail == "paused: all engines unreachable (openrouter)"
+        assert len(posts) == 1  # refused links never retry
 
     def test_primary_local_skips_the_api(self, monkeypatch):
         import urllib.request
@@ -1726,7 +1961,7 @@ class TestRoutedEffort:
         assert pick is None  # no level to route: hold, never guess
         assert engine == "openrouter"
         assert usage == (0, 0, None)
-        assert detail == "openrouter failed"
+        assert detail == "openrouter invalid table"
 
     def test_cost_absent_effort_keeps_call_1_spend(self, monkeypatch):
         import urllib.request
