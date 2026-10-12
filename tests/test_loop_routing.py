@@ -964,7 +964,7 @@ def _side_ctx(monkeypatch, agent, engine, events, strategy=None):
 
 
 class TestSideRouting:
-    def test_spawn_decides_once_side_flagged(self, monkeypatch):
+    def test_spawn_runs_two_calls_both_side_flagged(self, monkeypatch):
         seen: list = []
 
         def _engine(**kwargs):
@@ -975,11 +975,22 @@ class TestSideRouting:
         ctx, builds = _side_ctx(monkeypatch, _side_agent(), _engine, events)
         ctx.build("why is the sky blue?")
         assert len(seen) == 2  # model call plus effort call per spawn
+        assert [set(call["questions"]) for call in seen] == [
+            {"pick_model"},
+            {"pick_effort"},
+        ]
+        assert seen[1]["state"] == seen[0]["state"]  # same state reused
         assert all(call["state"]["side"] is True for call in seen)
         assert seen[0]["state"]["ask"] == "why is the sky blue?"
+        assert set(seen[1]["questions"]["pick_effort"]["criteria"]) == {
+            "low",
+            "high",
+        }
         assert len(builds) == 1
         assert events[0]["side"] is True
         assert events[0]["held"] is False
+        assert events[0]["model_confidence"] == 0.85
+        assert events[0]["effort_confidence"] == 0.7
         assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (80, 16)
         assert events[0]["decision_cost"] == 0.0001 + 0.0001
 
@@ -1011,11 +1022,14 @@ class TestSideRouting:
         assert model_id_of(kwargs["model"], "?").endswith(
             "anthropic.claude-haiku-4-5-20251001-v1:0"
         )
-        assert kwargs["effort"] == "low"  # first advertised level
+        assert kwargs["effort"] == "low"  # decided level
         assert seen == [((HAIKU, HAIKU), {"effort": "low"})]
         out = capsys.readouterr().out
-        assert "Routed (btw)" in out
-        assert "haiku" in " ".join(out.split())
+        flat = " ".join(out.split())  # console width may wrap the line
+        assert "Routed (btw)" in out  # side head, never the main head
+        assert HAIKU in flat  # picked model named
+        assert "85%" in flat and "70%" in flat  # both confidences inline
+        assert "~$" in flat and "/ask vs" in flat
 
     def test_engine_failure_spawns_on_parent_model_silently(
         self, monkeypatch, capsys
@@ -1188,3 +1202,79 @@ class TestSideRouting:
         assert events[0]["held"] is True
         assert events[0]["side"] is True
         assert events[0]["engine"] == "openrouter"
+
+    def test_effort_reject_holds_to_parent_silently(self, monkeypatch, capsys):
+        # Call-2-driven hold: the effort top choice sits outside the
+        # picked levels, so the side spawn holds with no note.
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _table_result(
+                HAIKU,
+                effort="max",
+                effort_probs={"low": 0.15, "max": 0.85},
+            ),
+            events,
+        )
+        ctx.build("deep refactor?")
+        assert builds[0][0]["model"] is agent.model
+        assert "effort" not in builds[0][0]
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert "Routing held" not in out
+        assert events[0]["held"] is True
+        assert events[0]["side"] is True
+
+    def test_threshold_hold_stays_silent_with_event(self, monkeypatch, capsys):
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _table_result(
+                HAIKU, probs={HAIKU: 0.41, NOVA_MICRO: 0.59}
+            ),
+            events,
+        )
+        ctx.build("ambiguous ask?")
+        assert builds[0][0]["model"] is agent.model
+        out = capsys.readouterr().out
+        assert "Routed" not in out
+        assert "Routing held" not in out
+        assert events[0]["held"] is True
+        assert events[0]["side"] is True
+        assert events[0]["engine"] == "openrouter"
+
+    def test_single_candidate_side_route_carries_effort_only_usage(
+        self, monkeypatch, capsys
+    ):
+        # Fast-path parity: a lone candidate routes the side spawn
+        # through the effort call only, with no model confidence.
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])]
+        )
+        events: list = []
+        agent = _side_agent()
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _table_result(HAIKU, usage=(40, 8, 0.0001)),
+            events,
+            strategy,
+        )
+        ctx.build("deep refactor?")
+        kwargs = builds[0][0]
+        assert kwargs["model"] is not agent.model
+        assert kwargs["effort"] == "low"
+        assert events[0]["held"] is False
+        assert events[0]["side"] is True
+        assert events[0]["model_confidence"] is None
+        assert events[0]["effort_confidence"] == 0.7
+        assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (40, 8)
+        assert events[0]["decision_cost"] == 0.0001  # call-2-only spend
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the line
+        assert "Routed (btw)" in out
+        assert "model n/a, effort 70%" in flat
