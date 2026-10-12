@@ -59,7 +59,7 @@ Cheap default — two candidates with criteria prose behind one decision model:
 # Example: cheap default — written 2026-10-12. Starting point only; run
 # /route setup for live ids, then /route validate.
 candidates:
-  - id: bedrock/amazon.nova-micro-v1:0
+  - id: bedrock/us.amazon.nova-micro-v1:0
     tier: small
     criteria: Cheapest small model for trivial asks and one-liners.
     levels: [low]

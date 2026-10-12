@@ -25,6 +25,11 @@ WORKDIR = "/tmp/uattest"
 WORKDIR8 = "/tmp/uatr8"
 COST_RE = re.compile(r"\(\d+%\) \$", re.MULTILINE)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ACTIVE SYSTEM_DEFINED inference-profile form in us-west-2; the bare
+# base id supports only INFERENCE_PROFILE throughput and is rejected
+# at ConverseStream (G-08-1). All rig strategies build from this one
+# constant so the sites cannot drift again.
+RIG_NOVA_MICRO = "bedrock/us.amazon.nova-micro-v1:0"
 
 
 def tmux(*args):
@@ -367,7 +372,7 @@ def scenario_r2():
         current = current_model_from_boot(pane_text(sess))
         write_strategy(workdir, (
             "candidates:\n"
-            "  - id: bedrock/amazon.nova-micro-v1:0\n"
+            f"  - id: {RIG_NOVA_MICRO}\n"
             "    tier: tiny\n"
             "    levels: [auto, off]\n"
             f"  - id: {current}\n"
@@ -427,7 +432,7 @@ def scenario_r3():
         wait_for(sess, r"OpenRouter:", 120, "refresh-done")
         write_strategy(workdir, (
             "candidates:\n"
-            "  - id: bedrock/amazon.nova-micro-v1:0\n"
+            f"  - id: {RIG_NOVA_MICRO}\n"
             "    tier: tiny\n"
             "    levels: [auto, off]\n"
             f"  - id: {current}\n"
@@ -504,7 +509,7 @@ def scenario_r4():
         current = current_model_from_boot(pane_text(sess))
         write_strategy(workdir, (
             "candidates:\n"
-            "  - id: bedrock/amazon.nova-micro-v1:0\n"
+            f"  - id: {RIG_NOVA_MICRO}\n"
             "    tier: tiny\n"
             "    levels: [auto, off]\n"
             f"  - id: {current}\n"
