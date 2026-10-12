@@ -1230,10 +1230,74 @@ def _route_setup_message() -> str:
 
 
 def _route_validate_message() -> str:
-    """Print the strategy validity report; never mutates, never fetches."""
-    from strands_code_cli.routing import validate_strategy
+    """File validity report plus a conditional native live-ping (D-07).
 
-    return validate_strategy().format()
+    Prints the file report first and never mutates; only when native
+    is listed in the effective order and the file is otherwise valid,
+    one cheap ping runs through the production native transport.
+    Answers append an ok line naming the serving snapshot; a
+    rejected key or an unknown model string flips the report to
+    INVALID with a fix line; transport failures and an absent key
+    append a note leaving validity unchanged (T-9-01: HTTP classes
+    map to notes, never bodies; no key echo).
+    """
+    from strands_code_cli.routing import (
+        NATIVE_JEV_PIN,
+        decide_via_typesafe,
+        load_strategy,
+        native_engine_ready,
+        validate_strategy,
+    )
+
+    report = validate_strategy()
+    if not report.valid:
+        return report.format()
+    strategy = load_strategy()
+    if strategy is None or "native" not in (strategy.engine.order or []):
+        return report.format()
+    if not native_engine_ready():
+        report.lines.append(
+            "note: native ping skipped (no TypeSafe key in the environment)"
+        )
+        return report.format()
+    result = decide_via_typesafe(
+        native_model=strategy.engine.native_model or "",
+        state={"ask": "validate", "directives": "", "side": False},
+        questions={
+            "ping": {
+                "type": "choice",
+                "instructions": "Which option?",
+                "criteria": {"a": "first", "b": "second"},
+            }
+        },
+    )
+    if result.answers is not None:
+        snapshot = result.model or strategy.engine.native_model
+        report.lines.append(f"native: engine ok (snapshot {snapshot})")
+        return report.format()
+    error = result.error or "no answer"
+    if error in ("HTTP 401", "HTTP 403"):
+        report.valid = False
+        report.lines.append(f"native: INVALID — TypeSafe key rejected ({error})")
+        report.lines.append(
+            "fix: set TYPESAFE_API_KEY to a valid key and re-run /route validate"
+        )
+    elif error == "HTTP 400":
+        report.valid = False
+        report.lines.append(
+            "native: INVALID — unknown native model "
+            f"{strategy.engine.native_model!r} ({error})"
+        )
+        report.lines.append(
+            f"fix: set engine.native_model to {NATIVE_JEV_PIN} "
+            "and re-run /route validate"
+        )
+    else:
+        report.lines.append(
+            f"note: native ping inconclusive ({error}) — file checks stand; "
+            "re-run /route validate to retry"
+        )
+    return report.format()
 
 
 def _route_message(rest: str, routing: RoutingState | None) -> str:

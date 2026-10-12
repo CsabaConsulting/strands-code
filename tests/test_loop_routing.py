@@ -607,6 +607,88 @@ class TestPreTurnHook:
         assert "Routing held" not in out
 
 
+def _keyless_native_strategy(**overrides) -> RoutingStrategy:
+    """Two-candidate strategy with a keyless native link first (D-03)."""
+    strategy = RoutingStrategy(
+        candidates=[
+            RoutingCandidate(id=HAIKU, tier="small", levels=["low", "high"]),
+            RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+        ],
+        directives="trivial asks go cheap",
+        engine=RoutingEngine(
+            order=["native", "openrouter"],
+            decision_model="cheap/decider",
+            native_model="jev-1.13.0",
+        ),
+    )
+    for key, value in overrides.items():
+        if key in ("skip_notes",):
+            setattr(strategy.engine, key, value)
+        else:
+            setattr(strategy, key, value)
+    return strategy
+
+
+class TestChainSkipNotes:
+    @pytest.fixture(autouse=True)
+    def _fresh_notes(self, monkeypatch):
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        loop_mod._emitted_chain_skip_notes.clear()
+        yield
+        loop_mod._emitted_chain_skip_notes.clear()
+
+    def _drive_two_asks(self, tmp_path, monkeypatch, strategy):
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        monkeypatch.setattr(
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
+        )
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            ["hello", "again"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        assert len(calls) == 2  # both asks served through the hook
+        return saved
+
+    def test_two_routed_asks_emit_one_skip_line(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._drive_two_asks(
+            tmp_path, monkeypatch, _keyless_native_strategy()
+        )
+        out = capsys.readouterr().out
+        assert len(_routed_lines(out)) == 2  # the hook ran for both asks
+        assert (
+            out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
+        )
+
+    def test_skip_notes_false_emits_zero(self, tmp_path, monkeypatch, capsys):
+        self._drive_two_asks(
+            tmp_path, monkeypatch, _keyless_native_strategy(skip_notes=False)
+        )
+        out = capsys.readouterr().out
+        assert len(_routed_lines(out)) == 2
+        assert "native engine skipped" not in out
+
+    def test_quiet_true_still_emits_note(self, tmp_path, monkeypatch, capsys):
+        self._drive_two_asks(
+            tmp_path, monkeypatch, _keyless_native_strategy(quiet=True)
+        )
+        out = capsys.readouterr().out
+        assert _routed_lines(out) == []  # quiet suppresses the routine line
+        assert (
+            out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
+        )
+
+
 def _write_skill(skills_dir, name: str):
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)

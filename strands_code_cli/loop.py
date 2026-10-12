@@ -105,6 +105,9 @@ from strands_code_cli.steering import (
 logger = logging.getLogger(__name__)
 console = Console()
 
+_emitted_chain_skip_notes: set[str] = set()
+"""D-03 skip notes already printed this session (tests reset by attribute)."""
+
 TITLE_PROMPT = "Summarize this exchange in at most six words, plain words only: "
 TITLE_WORDS = 6
 TITLE_FALLBACK_WORDS = 8
@@ -1409,6 +1412,9 @@ def _route_pre_turn(
     Every engine, validation, gate, or resolve failure holds current
     with history untouched and prints the hold note with its reason
     detail (D-08, D-16) — hold and failure notes always print, even
+    under ``quiet``. A listed-but-keyless engine prints its one-line
+    skip note once per session unless the strategy sets ``skip_notes``
+    false (D-03) — the knob alone governs, so the note prints even
     under ``quiet``. An all-refused ask pauses routing for the turn
     with the distinct pause note, and later same-turn decisions skip
     with zero POSTs (D-09). Every decided ask, held included, appends
@@ -1425,6 +1431,11 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
+    if strategy.engine.skip_notes:
+        for note in routing_mod.chain_skip_notes(strategy):
+            if note not in _emitted_chain_skip_notes:
+                _emitted_chain_skip_notes.add(note)
+                print_plain(console, note)
     if routing is not None:
         routing.resume()  # a new ask attempts fresh; pause covers one ask
     try:

@@ -18,6 +18,7 @@ from strands_code_cli.router import _SETUP_DONE, dispatch
 from strands_code_cli.routing import (
     NATIVE_JEV_ALIAS,
     NATIVE_JEV_PIN,
+    EngineResult,
     load_strategy,
 )
 from strands_code_cli.session_index import SessionIndex
@@ -375,3 +376,145 @@ class TestSetupAbortAndRoundTrip:
         assert strategy.engine.skip_notes is False
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
         assert data["engine"]["skip_notes"] is False
+
+
+def _run_validate(tmp_path):
+    return dispatch(
+        "/route validate", session_id="s", index=SessionIndex(tmp_path / "index")
+    )
+
+
+def _write_strategy_file(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+_NATIVE_FILE = (
+    "candidates: [{id: a/1}]\n"
+    "directives: d\n"
+    f"engine: {{order: [native], native_model: {NATIVE_JEV_PIN}}}\n"
+)
+"""Valid native-listed strategy for the live-ping tests."""
+
+
+def _stub_ping(monkeypatch, result):
+    """Serve one canned ping result; return the call-kwarg log."""
+    calls: list = []
+
+    def _fake(**kwargs):
+        calls.append(kwargs)
+        return result
+
+    monkeypatch.setattr(routing_mod, "decide_via_typesafe", _fake)
+    return calls
+
+
+class TestValidatePing:
+    def test_ping_ok_names_serving_snapshot(self, tmp_path, monkeypatch):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(repo_path, _NATIVE_FILE)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        calls = _stub_ping(
+            monkeypatch,
+            EngineResult(answers={"ping": {"choice": "a"}}, model="jev-1.13.0"),
+        )
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy VALID")
+        assert "native: engine ok (snapshot jev-1.13.0)" in message
+        assert len(calls) == 1
+        assert calls[0]["native_model"] == NATIVE_JEV_PIN
+        assert list(calls[0]["questions"]) == ["ping"]
+        assert calls[0]["questions"]["ping"]["type"] == "choice"
+
+    @pytest.mark.parametrize("code", ["HTTP 401", "HTTP 403"])
+    def test_ping_rejected_key_fails_with_key_fix(
+        self, tmp_path, monkeypatch, code
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(repo_path, _NATIVE_FILE)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        _stub_ping(monkeypatch, EngineResult(answers=None, error=code))
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy INVALID")
+        assert "native: INVALID — TypeSafe key rejected" in message
+        assert "fix: set TYPESAFE_API_KEY" in message
+
+    def test_ping_unknown_model_fails_with_model_fix(
+        self, tmp_path, monkeypatch
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(repo_path, _NATIVE_FILE)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        _stub_ping(monkeypatch, EngineResult(answers=None, error="HTTP 400"))
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy INVALID")
+        assert "native: INVALID — unknown native model" in message
+        assert f"fix: set engine.native_model to {NATIVE_JEV_PIN}" in message
+
+    @pytest.mark.parametrize("error", ["timeout", "refused", "unreachable"])
+    def test_ping_transport_failure_warns_leaving_valid(
+        self, tmp_path, monkeypatch, error
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(repo_path, _NATIVE_FILE)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        _stub_ping(monkeypatch, EngineResult(answers=None, error=error))
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy VALID")
+        assert f"native ping inconclusive ({error})" in message
+
+    def test_key_absent_skips_ping_without_calling(
+        self, tmp_path, monkeypatch
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(repo_path, _NATIVE_FILE)
+        calls = _stub_ping(
+            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
+        )
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy VALID")
+        assert "native ping skipped" in message
+        assert calls == []
+
+    def test_no_ping_when_native_unlisted(self, tmp_path, monkeypatch):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(
+            repo_path,
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [local], local_model: nimble}\n",
+        )
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        calls = _stub_ping(
+            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
+        )
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy VALID")
+        assert "native:" not in message
+        assert calls == []
+
+    def test_no_ping_when_file_invalid(self, tmp_path, monkeypatch):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _write_strategy_file(
+            repo_path,
+            "candidates: []\n"
+            "directives: d\n"
+            f"engine: {{order: [native], native_model: {NATIVE_JEV_PIN}}}\n",
+        )
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        calls = _stub_ping(
+            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
+        )
+        action, message = _run_validate(tmp_path)
+        assert action == "reply"
+        assert message.startswith("Routing strategy INVALID")
+        assert "native: engine ok" not in message
+        assert "native ping" not in message
+        assert calls == []
