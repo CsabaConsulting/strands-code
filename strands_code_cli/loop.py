@@ -1544,13 +1544,10 @@ def _route_pre_turn(
             )
             return current_model
         if resolved_id is not None:
-            current_model = pick.model  # verbatim pick persists, like /model
-            from strands_code_cli.provider_config import ProviderConfig
-
-            try:
-                ProviderConfig.load().save_model_choice(current_model)
-            except ValueError as exc:
-                logger.warning("Model choice not persisted: %s", exc)
+            # FENCE (G-08-1): routed picks apply in memory only and
+            # never persist the global default (routing re-decides
+            # every ask; only explicit /model choices persist).
+            current_model = pick.model
             explicit_save(agent)
             index.ensure(session_id)
             if rich is not None and stash_path is not None:

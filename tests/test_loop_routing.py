@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import sys
@@ -193,7 +194,7 @@ class TestPreTurnHook:
         _drive(
             monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
         )
-        assert saved == [HAIKU]  # routed switch persisted like /model
+        assert saved == []  # FENCE: routed switch applies in memory only
         assert len(calls) == 1 and calls[0][0] == "hello"
         assert "haiku" in calls[0][1]  # turn served on the picked model
         out = capsys.readouterr().out
@@ -301,7 +302,7 @@ class TestPreTurnHook:
         _drive(
             monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
         )
-        assert saved == [HAIKU]  # switch still applies
+        assert saved == []  # FENCE: switch applies in memory, never persists
         assert "Routed \u2192" not in capsys.readouterr().out
 
     def test_all_refused_ask_pauses_and_serves_current(
@@ -414,7 +415,7 @@ class TestPreTurnHook:
             routing,
         )
         assert served == HAIKU  # the new ask attempts fresh and routes
-        assert saved == [HAIKU]
+        assert saved == []  # FENCE: routed resume never persists
         assert routing.is_paused() is False
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
@@ -515,7 +516,7 @@ class TestPreTurnHook:
         _drive(
             monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
         )
-        assert saved == [HAIKU]
+        assert saved == []  # FENCE: routed switch never persists
         assert efforts == ["low"]  # first advertised level reached the model
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
@@ -583,7 +584,7 @@ class TestPreTurnHook:
         _drive(
             monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
         )
-        assert saved == [SONNET]  # near-tie substituted the cheaper candidate
+        assert saved == []  # FENCE: tie-break switch never persists
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the line
         assert SONNET in flat and "tie-break" in flat
@@ -676,7 +677,7 @@ class TestRoutingToggle:
             NOVA_MICRO,
             _serving_invoke(calls),
         )
-        assert saved == [HAIKU]
+        assert saved == []  # FENCE: re-enabled hook never persists
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
     def test_route_status_names_source_engine_and_count(self, tmp_path, monkeypatch):
@@ -966,7 +967,7 @@ class TestCostRouting:
             events,
         )
         assert served == HAIKU
-        assert saved == [HAIKU]
+        assert saved == []  # FENCE: routed pick never persists
         assert events == [
             {
                 "ask": 1,
@@ -1516,3 +1517,21 @@ class TestSideRouting:
         flat = " ".join(out.split())  # console width may wrap the line
         assert "Routed (btw)" in out
         assert "model n/a, effort 70%" in flat
+
+
+class TestRoutedPickNoPersist:
+    """FENCE (G-08-1): routed picks apply in memory and never touch
+    the global default; only explicit /model choices persist."""
+
+    def test_routed_pick_records_zero_saves(self, tmp_path, monkeypatch, capsys):
+        events: list = []
+        served, saved = _hook(
+            tmp_path, monkeypatch, _strategy(), _table_result(HAIKU), events
+        )
+        assert served == HAIKU  # in-memory switch still applies
+        assert saved == []  # but the global default is untouched
+        assert len(_routed_lines(capsys.readouterr().out)) == 1  # note intact
+
+    def test_explicit_model_branch_is_sole_persist_call_site(self):
+        src = Path(loop_mod.__file__).read_text()
+        assert src.count("save_model_choice") == 1
