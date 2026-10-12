@@ -60,15 +60,18 @@ def wait_for(sess, pattern, timeout, label, poll=3):
     raise AssertionError(f"TIMEOUT waiting for {label}: {pattern!r}")
 
 
-def wait_for_new(sess, pattern, timeout, label, poll=3):
+def wait_for_new(sess, pattern, timeout, label, poll=3, before=None):
     """wait_for that ignores matches already in the scrollback (r-scenarios).
 
     Multi-turn scenarios re-match earlier output (status lines, cost
     lines, Routed notes); snapshotting the baseline count makes the
-    wait fire only on a fresh occurrence.
+    wait fire only on a fresh occurrence. Pass a pre-send ``before``
+    count when the reply is an instant local command: snapshotting
+    after send races the reply and hangs on a match already present.
     """
     rx = re.compile(pattern, re.MULTILINE) if isinstance(pattern, str) else pattern
-    before = len(rx.findall(pane_text(sess)))
+    if before is None:
+        before = len(rx.findall(pane_text(sess)))
     end = time.time() + timeout
     while time.time() < end:
         text = pane_text(sess)
@@ -406,8 +409,9 @@ def scenario_r2():
         assert text.count(": ok") >= 2, "candidates not ok"
         send(sess, "/route on", "Enter")  # file landed after boot; enable explicitly
         wait_for(sess, r"Routing on", 60, "explicit-on")
+        status_before = len(re.findall(r"Routing: ", pane_text(sess)))
         send(sess, "/route status", "Enter")
-        text = wait_for_new(sess, r"Routing: ", 60, "status")
+        text = wait_for_new(sess, r"Routing: ", 60, "status", before=status_before)
         assert "Routing: on" in text, "routing not on"
         assert "routing.yaml" in text, "status lacks strategy source"
         send(sess, "Reply with exactly these 3 words: alpha beta gamma", "Enter")
@@ -418,8 +422,9 @@ def scenario_r2():
         assert "Routing held" not in text, "local engine held current"
         text, _ = wait_main_end(sess)
         assert "alpha beta gamma" in text.lower(), "turn not served"
+        cost_before = len(re.findall(r"Routing:", pane_text(sess)))
         send(sess, "/cost", "Enter")
-        text = wait_for_new(sess, r"Routing:", 60, "cost-routing")
+        text = wait_for_new(sess, r"Routing:", 60, "cost-routing", before=cost_before)
         assert "via local" in text, "decision engine not local"
         assert re.search(r"via local \$0\.0000", text), "local decision spend nonzero"
         assert "[held]" not in text, "held marker in cost report"
@@ -472,22 +477,25 @@ def scenario_r3():
         assert "Routing held" not in text, "openrouter engine held current"
         text, _ = wait_main_end(sess)
         assert "alpha beta gamma" in text.lower(), "turn not served"
+        cost_before = len(re.findall(r"Routing:", pane_text(sess)))
         send(sess, "/cost", "Enter")
-        text = wait_for_new(sess, r"Routing:", 60, "cost-routing")
+        text = wait_for_new(sess, r"Routing:", 60, "cost-routing", before=cost_before)
         assert "via openrouter" in text, "decision engine not openrouter"
         assert re.search(r"\[model \d+%, effort \d+%]", text), "cost entry lacks confidences"
         assert re.search(r"via openrouter \$\d+\.\d{4}", text), "cost entry lacks spend"
         assert "[held]" not in text, "held marker in cost report"
         snap = pane_text(sess)
         routed_before = snap.count("Routed \u2192")
+        off_before = len(re.findall(r"Routing off", pane_text(sess)))
         send(sess, "/route off", "Enter")
-        wait_for_new(sess, r"Routing off", 60, "off")
+        wait_for_new(sess, r"Routing off", 60, "off", before=off_before)
         send(sess, "Reply with exactly: offcheck", "Enter")
         after_cost = len(COST_RE.findall(pane_text(sess)))
         text, _ = wait_main_end(sess, after=after_cost)
         assert text.count("Routed \u2192") == routed_before, "routed while off"
+        on_before = len(re.findall(r"Routing on", pane_text(sess)))
         send(sess, "/route on", "Enter")
-        wait_for_new(sess, r"Routing on", 60, "on")
+        wait_for_new(sess, r"Routing on", 60, "on", before=on_before)
         send(sess, "Reply with exactly: oncheck", "Enter")
         marked = text.count("Routed \u2192") + text.count("Routing held")
         text, _ = wait_routed(sess, 120, "routed-again", after=marked)
@@ -550,14 +558,18 @@ def scenario_r4():
             # Transient decision-API failure holds silently on the side
             # path; each spawn decides once, so a second /btw retries.
             print("[r4] first spawn unmarked, sending a second /btw", flush=True)
+            spawn_before = len(re.findall(r"Side question noted", pane_text(sess)))
             send(sess, "/btw Reply with exactly: sidecheck two", "Enter")
-            wait_for_new(sess, r"Side question noted", 60, "side-spawn-2")
+            wait_for_new(
+                sess, r"Side question noted", 60, "side-spawn-2", before=spawn_before
+            )
             text, _ = wait_routed(sess, 120, "routed-btw-2", side=True)
         routed_line_with_confidences(text, side=True)
         text, _ = wait_main_end(sess, timeout=300)
         assert "sidecheck" in text.lower(), "side answer not served"
+        cost_before = len(re.findall(r"Routing:", pane_text(sess)))
         send(sess, "/cost", "Enter")
-        text = wait_for_new(sess, r"Routing:", 120, "cost-routing")
+        text = wait_for_new(sess, r"Routing:", 120, "cost-routing", before=cost_before)
         assert "(btw)" in text, "no side-flagged cost entry"
         assert "via openrouter" in text, "side decision engine not openrouter"
         print("R4 PASS", flush=True)

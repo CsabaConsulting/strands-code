@@ -98,3 +98,20 @@ class TestFailFast:
         text, marker = driver.wait_routed("sess", 1, "routed-line")
         assert text == CLEAN_ROUTED
         assert marker is None
+
+
+class TestWaitForNewBaseline:
+    def test_caller_baseline_catches_instant_reply(self, monkeypatch):
+        # Instant local reply already in the pane (it beat the
+        # post-send snapshot): a pre-send baseline still detects it.
+        monkeypatch.setattr(driver, "pane_text", lambda sess: "Routing on\n> ")
+        text = driver.wait_for_new("sess", r"Routing on", 1, "on", before=0)
+        assert "Routing on" in text
+
+    def test_default_snapshot_unchanged(self, monkeypatch):
+        panes = iter(["none\n> ", "Routing on\n> "])
+        monkeypatch.setattr(
+            driver, "pane_text", lambda sess: next(panes, "Routing on\n> ")
+        )
+        text = driver.wait_for_new("sess", r"Routing on", 5, "on", poll=0)
+        assert "Routing on" in text
