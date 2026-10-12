@@ -287,6 +287,11 @@ def cost_report(
                 decision_model = event.get("decision_model")
                 if decision_model:
                     provenance = price_provenance(decision_model)
+                    if (
+                        event.get("engine") == "native"
+                        and provenance == "unknown"
+                    ):
+                        provenance = "native computed input rate"
                     if provenance not in provenances:
                         provenances.append(provenance)
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"

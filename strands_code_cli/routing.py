@@ -1547,9 +1547,16 @@ def _ollama_attempt(
 def _typesafe_attempt(
     strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
 ) -> EngineResult | None:
-    """Native chain link: None without a configured native model."""
+    """Native chain link: None without a model, or without a key (D-03).
+
+    A listed native engine with no ``TYPESAFE_API_KEY`` skips
+    silently here; :func:`chain_skip_notes` carries the one-line
+    note for the print site.
+    """
     native_model = strategy.engine.native_model
     if not native_model:
+        return None
+    if not os.environ.get("TYPESAFE_API_KEY"):
         return None
     return decide_via_typesafe(
         native_model=native_model, state=state, questions=questions
@@ -1572,6 +1579,24 @@ def _local_unready_attempt(
 register_engine("openrouter", _openrouter_attempt)
 register_engine("local", _ollama_attempt)
 register_engine("native", _typesafe_attempt)
+
+
+def chain_skip_notes(strategy: RoutingStrategy) -> list[str]:
+    """One-line D-03 notes for listed-but-skipped engines (native only).
+
+    A native engine listed in the effective order with a model
+    configured but no ``TYPESAFE_API_KEY`` is skipped by the chain;
+    this carries the single line naming the skip. The print site
+    honors ``skip_notes`` (plan 09-02).
+    """
+    engine = strategy.engine
+    if (
+        "native" in _effective_order(engine)
+        and engine.native_model
+        and not os.environ.get("TYPESAFE_API_KEY")
+    ):
+        return ["native engine skipped: TYPESAFE_API_KEY not set"]
+    return []
 
 
 def _link_detail(name: str, error: str | None) -> str:
@@ -2013,13 +2038,16 @@ def decision_model_for(strategy: RoutingStrategy, engine: str) -> str | None:
     """Decision model id behind one engine name, for /cost accounting.
 
     ``openrouter`` prices at the API decision model, ``local`` at the
-    daemon model; anything else (``resolve`` holds, unknown engines)
-    has no decision model and prices nothing (T-08-08).
+    daemon model, ``native`` at the native model; anything else
+    (``resolve`` holds, unknown engines) has no decision model and
+    prices nothing (T-08-08).
     """
     if engine == "openrouter":
         return strategy.engine.decision_model
     if engine == "local":
         return strategy.engine.local_model
+    if engine == "native":
+        return strategy.engine.native_model
     return None
 
 

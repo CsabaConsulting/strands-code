@@ -27,14 +27,17 @@ from strands_code_cli.routing import (
     _ENGINE_REGISTRY,
     _chain_for,
     _fit_decision_payload,
+    _typesafe_attempt,
     _validate_effort_answer,
     build_decision_state,
     build_effort_question,
     build_model_question,
+    chain_skip_notes,
     decide,
     decide_via_ollama,
     decide_via_openrouter,
     decide_via_typesafe,
+    decision_model_for,
     format_routed_line,
     gate_model,
     load_strategy,
@@ -2129,6 +2132,198 @@ class TestNativeEngine:
         assert engine == "off"
         assert usage == (0, 0, None)
         assert detail == "off failed"
+
+
+class TestNativeFaults:
+    @pytest.fixture(autouse=True)
+    def _keys(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def _native_only(self) -> RoutingStrategy:
+        return _strategy(
+            engine=RoutingEngine(order=["native"], native_model=NATIVE_PIN)
+        )
+
+    @pytest.mark.parametrize("code", [400, 401, 403, 422])
+    def test_native_4xx_holds_with_zero_retry(self, monkeypatch, code):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request)
+            raise _http_error(code)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            self._native_only(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(posts) == 1
+        assert pick is None
+        assert engine == "native"
+        assert usage == (0, 0, None)
+        assert detail == f"native {code}"
+
+    @pytest.mark.parametrize("code", [429, 529, 500, 502, 503, 524])
+    def test_native_retryable_retries_once(self, monkeypatch, code):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request)
+            raise _http_error(code)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        result = decide_via_typesafe(
+            native_model=NATIVE_PIN,
+            state={"ask": "hi"},
+            questions={"pick_model": {}},
+        )
+        assert len(posts) == 2
+        assert result.answers is None
+
+    def test_native_timeout_retries_once(self, monkeypatch):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request)
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        result = decide_via_typesafe(
+            native_model=NATIVE_PIN,
+            state={"ask": "hi"},
+            questions={"pick_model": {}},
+        )
+        assert len(posts) == 2
+        assert result.answers is None
+
+    @pytest.mark.parametrize("fault", ["429", "timeout"])
+    def test_native_retry_exhaustion_falls_to_next_link(
+        self, monkeypatch, fault
+    ):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            if request.full_url == TYPESAFE_DECISIONS_URL:
+                posts.append(request)
+                if fault == "timeout":
+                    raise TimeoutError("timed out")
+                raise _http_error(429)
+            return _FakeResponse(_effort_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=_candidates()[:1],  # effort call only: one chain pass
+            engine=RoutingEngine(
+                order=["native", "openrouter"],
+                decision_model="cheap/decider",
+                native_model=NATIVE_PIN,
+            ),
+        )
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(posts) == 2  # one retry, then the next link
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "openrouter"
+
+    def test_native_timeout_holds_then_next_call_succeeds(self, monkeypatch):
+        import urllib.request
+
+        def _timeout(request, timeout=None):
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _timeout)
+        pick, engine, usage, detail = decide(
+            self._native_only(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "native"
+        assert usage == (0, 0, None)
+        assert detail == "native timeout"
+
+        def _serve(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_native_effort_payload())
+            return _FakeResponse(_native_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _serve)
+        pick, engine, _, detail = decide(
+            self._native_only(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "native"
+        assert detail == ""
+
+    def test_keyless_native_skips_with_one_note(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("keyless native must never attempt")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        strategy = self._native_only()
+        state = build_decision_state(ask="hi", directives="d", side=False)
+        assert _typesafe_attempt(strategy, state, {"pick_model": {}}) is None
+        assert chain_skip_notes(strategy) == [
+            "native engine skipped: TYPESAFE_API_KEY not set"
+        ]
+        unlisted = _strategy(
+            engine=RoutingEngine(
+                decision_model="cheap/decider", native_model=NATIVE_PIN
+            )
+        )
+        assert chain_skip_notes(unlisted) == []  # legacy order: no native
+        unconfigured = _strategy(engine=RoutingEngine(order=["native"]))
+        assert (
+            _typesafe_attempt(unconfigured, state, {"pick_model": {}}) is None
+        )
+        assert chain_skip_notes(unconfigured) == []  # no model: silent
+
+    def test_keyed_native_routes_with_no_skip_note(self, monkeypatch):
+        import urllib.request
+
+        def _serve(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_native_effort_payload())
+            return _FakeResponse(_native_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _serve)
+        assert chain_skip_notes(self._native_only()) == []
+        pick, engine, _, _ = decide(
+            self._native_only(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "native"
+
+    def test_native_verdict_cost_is_exact_input_rate_math(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(
+                _native_payload(input_tokens=1_000_000, output_tokens=7)
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        result = decide_via_typesafe(
+            native_model=NATIVE_PIN,
+            state={"ask": "hi"},
+            questions={"pick_model": {}},
+        )
+        assert result.cost is not None
+        assert result.cost == pytest.approx(0.042)
+
+    def test_decision_model_for_names_native_model(self):
+        strategy = self._native_only()
+        assert decision_model_for(strategy, "native") == NATIVE_PIN
 
 
 class TestRoutedEffort:

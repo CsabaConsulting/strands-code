@@ -337,6 +337,28 @@ class TestRoutingEntries:
             " via local $0.0000"
         ]
 
+    def test_native_entry_renders_computed_spend_with_marker(self):
+        from strands_code_cli.routing import TYPESAFE_INPUT_USD_PER_MTOK
+
+        event = _routed_event(
+            engine="native",
+            input_tokens=1000000,
+            output_tokens=7,
+            decision_cost=1000000 * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000,
+            decision_model="jev-1.13.0",
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model 85%, effort n/a]"
+            " via native $0.0420"
+        ]
+        assert "Prices: native computed input rate." in report
+
+    def test_openrouter_unknown_provenance_keeps_unknown(self):
+        event = _routed_event(decision_model="mystery/x")
+        report = cost_report([], "a/routed", routing=[event])
+        assert "Prices: unknown." in report
+
     def test_held_entry_names_serving_model(self):
         event = _routed_event(
             ask=2,
