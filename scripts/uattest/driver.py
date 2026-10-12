@@ -23,7 +23,10 @@ LOGDIR8 = "/tmp/uatr8"
 CLI = "/home/csaba/.local/bin/uv run --project /home/csaba/repos/AWS/strands-code strands-code"
 WORKDIR = "/tmp/uattest"
 WORKDIR8 = "/tmp/uatr8"
-COST_RE = re.compile(r"\(\d+%\) \$", re.MULTILINE)
+# Matches the post-turn usage line in both shapes: ``451.27K (45%) $0.01``
+# and the unknown-window fallback ``4.49K (n/a) $0.00`` (G-08-1: nova
+# turns print the fallback, which the old %-only pattern never saw).
+COST_RE = re.compile(r"\((?:\d+%|n/a)\) \$", re.MULTILINE)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ACTIVE SYSTEM_DEFINED inference-profile form in us-west-2; the bare
 # base id supports only INFERENCE_PROFILE throughput and is rejected

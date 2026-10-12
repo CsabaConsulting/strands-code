@@ -55,6 +55,7 @@ FAILED_TURN = (
     "> "
 )
 CLEAN_MAIN_END = "turn output\n(12%) $0.0012\n> "
+NA_WINDOW_MAIN_END = "turn output\n4.49K (n/a) $0.00\n> "
 CLEAN_ROUTED = (
     "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n"
     "> "
@@ -84,6 +85,12 @@ class TestFailFast:
         monkeypatch.setattr(driver, "pane_text", lambda sess: CLEAN_MAIN_END)
         text, served = driver.wait_main_end("sess", timeout=1)
         assert text == CLEAN_MAIN_END
+        assert served is False
+
+    def test_wait_main_end_accepts_unknown_window_cost_line(self, monkeypatch):
+        monkeypatch.setattr(driver, "pane_text", lambda sess: NA_WINDOW_MAIN_END)
+        text, served = driver.wait_main_end("sess", timeout=1)
+        assert text == NA_WINDOW_MAIN_END
         assert served is False
 
     def test_wait_routed_clean_transcript_unchanged(self, monkeypatch):
