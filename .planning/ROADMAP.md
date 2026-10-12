@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls (completed 2026-10-04)
 - [x] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file (completed 2026-10-04)
 - [x] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task (completed 2026-10-11)
-- [ ] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
+- [x] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
 - [ ] **Phase 9: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
 
 ## Phase Details
@@ -192,7 +192,7 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: 7/7 plans executed (Decision-API rework; prior chat-JSON plans archived; 08-07 UAT gap closure pending)
+**Plans**: 7/7 plans executed (Decision-API rework; prior chat-JSON plans archived; 08-07 UAT gap closure complete)
 
 Plans:
 **Wave 1**
