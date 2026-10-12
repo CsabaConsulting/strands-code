@@ -47,6 +47,11 @@ class TestRigModelId:
             assert "RIG_NOVA_MICRO" in src, f"{name} does not use the shared constant"
             assert BARE_FORM not in src, f"{name} still hardcodes the bare id"
 
+    def test_native_helper_builds_from_shared_constant(self):
+        src = inspect.getsource(driver._native_strategy)
+        assert "RIG_NOVA_MICRO" in src
+        assert BARE_FORM not in src
+
     def test_docs_example_uses_profile_form(self):
         docs = (REPO_ROOT / "docs" / "ROUTING.md").read_text()
         assert PROFILE_FORM in docs

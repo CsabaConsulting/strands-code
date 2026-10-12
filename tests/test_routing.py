@@ -2949,6 +2949,84 @@ class TestLiveEngines:
         )
 
     @pytest.mark.integration
+    def test_typesafe_live_decision_returns_typed_table_with_computed_spend(
+        self,
+    ):
+        import os
+
+        if not os.environ.get("TYPESAFE_API_KEY"):
+            pytest.skip("TYPESAFE_API_KEY not set")
+        # Pinned full-semver id verified live at 09-RESEARCH time
+        # (minor-only and prefixed forms 400).
+        native_model = "jev-1.13.0"
+        candidates = [
+            RoutingCandidate(id="live/a"),
+            RoutingCandidate(id="live/b"),
+        ]
+        state = build_decision_state(
+            ask="live probe", directives="live probe", side=False
+        )
+        questions = {
+            "pick_model": build_model_question(
+                candidates=candidates, directives="live probe"
+            )
+        }
+        result = decide_via_typesafe(
+            native_model=native_model, state=state, questions=questions
+        )
+        # Present-but-rejecting endpoints fail here, never skip: a
+        # set key with a failing call is contract drift, not absence.
+        assert result.answers is not None, (
+            f"live native decision call failed ({result.error}) — check key, "
+            "quota, and network"
+        )
+        answer = validate_choice_answer(
+            result.answers.get("pick_model"), candidates
+        )
+        assert answer is not None, "live answer failed typed validation"
+        probs = answer["probabilities"]
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+        assert result.model, "live response logged no serving snapshot"
+        assert result.model.startswith("jev-1.13"), result.model
+        assert result.input_tokens > 0, (
+            "live response reported no input tokens"
+        )
+        assert result.cost == (
+            result.input_tokens * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
+        )
+        assert result.cost == result.input_tokens * 0.042 / 1_000_000
+
+    @pytest.mark.integration
+    def test_typesafe_live_usage_triple_folds_computed_spend(self):
+        import os
+
+        if not os.environ.get("TYPESAFE_API_KEY"):
+            pytest.skip("TYPESAFE_API_KEY not set")
+        # Single candidate with levels (D-15): exactly one native
+        # effort call, routed ungated, so usage is call-2-only and
+        # the spend identity holds deterministically.
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id="live/solo", levels=["auto", "off"])
+            ],
+            engine=RoutingEngine(
+                order=["native"], native_model="jev-1.13.0"
+            ),
+        )
+        pick, engine, usage, detail = decide(
+            strategy, current_model="live/solo", side=False, ask="live probe"
+        )
+        assert pick is not None, (
+            f"live native effort read failed ({detail}) — check key, "
+            "quota, and network"
+        )
+        assert engine == "native"
+        in_tok, _out_tok, cost = usage
+        assert in_tok > 0, "live verdict folded no input tokens"
+        assert cost == in_tok * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
+        assert cost == in_tok * 0.042 / 1_000_000
+
+    @pytest.mark.integration
     def test_ollama_live_daemon_decision_returns_typed_table(self):
         import os
         import urllib.request

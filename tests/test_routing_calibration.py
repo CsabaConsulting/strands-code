@@ -216,6 +216,22 @@ class TestRigScenarioContracts:
         source = inspect.getsource(driver.scenario_r1)
         assert '"api_key" not in saved' in source
 
+    def test_rig_exposes_native_scenarios(self, driver):
+        for name in ("scenario_n1", "scenario_n2", "scenario_n3", "scenario_n4"):
+            assert callable(getattr(driver, name, None)), f"{name} missing"
+
+    def test_native_strategy_advertises_routable_levels(self, driver):
+        source = inspect.getsource(driver._native_strategy)
+        assert "levels: [auto, off]" in source
+        for name in ("scenario_n3", "scenario_n4"):
+            scenario = inspect.getsource(getattr(driver, name))
+            assert "_native_strategy" in scenario, f"{name} bypasses the helper"
+
+    def test_native_bad_key_uses_bogus_value_only(self, driver):
+        assert driver.BOGUS_TYPESAFE_KEY == "probe-bogus-key"
+        source = inspect.getsource(driver.scenario_n3)
+        assert "BOGUS_TYPESAFE_KEY" in source
+
 
 class TestLazyLocalTag:
     """GAP-03: cloud runs never touch local-tag resolution (D-06).
