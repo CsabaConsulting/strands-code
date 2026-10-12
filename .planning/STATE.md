@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 10
 current_phase_name: provider-reported-turn-spend
 status: executing
-stopped_at: Completed 10-01-PLAN.md
-last_updated: "2026-10-12T23:14:05.632Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-10-12T23:19:56.161Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 10 execution started
-state_head: 21da6cdbbfe32a925e989c0ce19689bbcbb1cf43
+state_head: 0e06ef0750b74c7948533f2efbe6dba89ccf9d55
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 29
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 10 (provider-reported-turn-spend) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-10-12 — Phase 10 execution started
 
@@ -88,6 +88,7 @@ Progress: [████████░░] 82%
 | Phase 09 P02 | 17min | 3 tasks | 8 files |
 | Phase 09 P03 | 25min | 3 tasks | 7 files |
 | Phase 10 P01 | 7min | 2 tasks | 6 files |
+| Phase 10 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -158,6 +159,7 @@ Recent decisions affecting current work:
 - [Phase 09]: N4 asserts the via-native spend cell, not the Prices marker — Live turns fold the unit-pinned single-source marker into Prices mixed (shipped 09-01 behavior)
 - [Phase 09]: R1 branches on the native radio — Alternation wait keeps r1 green key-present and key-absent
 - [Phase 10]: Tracer: reported_cost row key stored only when present; actual-wins branches check is-not-None; marker text is the literal word actual — Conditional key keeps the existing exact-dict row assertion green without weakening it; is-not-None keeps a present 0.0 an actual per Ruling 1; literal-word marker matches the D-08 split vocabulary with one marker everywhere
+- [Phase 10]: Display: lane-opens is presence-based (present 0.0 actual opens the actuals lane, derived zeros never do); split sits beneath Total as '  (actual $X + estimated $Y)' — Direct reading of the planner lock that a lane opens only on a present reported value or a computed estimate; keeps marker-iff-reported crisp and D-11 restraint symmetric
 
 ### Pending Todos
 
@@ -189,6 +191,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T23:14:00.321Z
-Stopped at: Completed 10-01-PLAN.md
+Last session: 2026-10-12T23:19:51.902Z
+Stopped at: Completed 10-02-PLAN.md
 Resume file: None
