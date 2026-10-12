@@ -493,12 +493,13 @@ class TestRouteSetup:
     ):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         calls = _scripted_radio(
             monkeypatch,
             [
                 "repo",  # scope
-                "openrouter",  # engine
                 "good/pricey",  # candidate 1 (not cheapest: pick order wins)
                 "good/cheap",  # candidate 2
                 _SETUP_DONE,  # done
@@ -506,7 +507,15 @@ class TestRouteSetup:
             ],
         )
         _scripted_input(
-            monkeypatch, ["trivial asks go cheap", "deep work goes big", ""]
+            monkeypatch,
+            [
+                "",  # accept the proposed order
+                "",  # local tag takes nimble
+                "",  # skip notes stay on
+                "trivial asks go cheap",
+                "deep work goes big",
+                "",
+            ],
         )
         action, message = _run_setup(tmp_path)
         assert action == "reply"
@@ -518,16 +527,19 @@ class TestRouteSetup:
         ]
         assert data["directives"] == "trivial asks go cheap\ndeep work goes big"
         assert data["engine"] == {
-            "primary": "openrouter",
+            "order": ["openrouter", "local"],
+            "skip_notes": True,
             "decision_model": "decide/cheap",
+            "local_model": "nimble",
         }
         assert "(repo)" in message
         assert "2 candidates" in message
+        assert "engine order openrouter, local" in message
         assert "/route validate" in message
         assert "Manual /model always wins" in message
         # Catalog hygiene: price-ascending offer, non-chat and malformed
         # rows never offered, unpriced chat-shaped rows offered last.
-        first_pick = [value for value, _ in calls[2][1]]
+        first_pick = [value for value, _ in calls[1][1]]
         assert first_pick == [
             "good/cheap",
             "good/pricey",
@@ -538,7 +550,7 @@ class TestRouteSetup:
         offered = [value for _, opts in calls for value, _ in opts]
         assert "vendor/embed-large" not in offered
         assert "vendor/rerank-pro" not in offered
-        decision_pick = [value for value, _ in calls[5][1]]
+        decision_pick = [value for value, _ in calls[4][1]]
         assert decision_pick == [
             "decide/cheap",
             "decide/pricey",
@@ -551,26 +563,34 @@ class TestRouteSetup:
     def test_global_scope_run_writes_global_path(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["global", "openrouter", "good/cheap", _SETUP_DONE, "decide/cheap"],
+            ["global", "good/cheap", _SETUP_DONE, "decide/cheap"],
         )
-        _scripted_input(monkeypatch, ["", "yes"])  # empty directives + confirm
+        _scripted_input(
+            monkeypatch,
+            ["", "", "", "", "yes"],  # proposal, tag, skip, empty directives + confirm
+        )
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert global_path.exists() and not repo_path.exists()
         data = yaml.safe_load(global_path.read_text(encoding="utf-8"))
         assert [c["id"] for c in data["candidates"]] == ["good/cheap"]
         assert data["directives"] == ""
+        assert data["engine"]["order"] == ["openrouter", "local"]
         assert "(global)" in message
 
     def test_esc_mid_flow_writes_nothing(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(monkeypatch, ["repo", None])  # ESC at the engine radio
-        _scripted_input(monkeypatch, [])
+        _scripted_radio(monkeypatch, ["repo", None])  # ESC at the primary radio
+        _scripted_input(monkeypatch, ["no"])  # decline the proposal first
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "no changes written" in message
@@ -579,6 +599,8 @@ class TestRouteSetup:
     def test_empty_input_aborts_off_tty(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         _scripted_input(monkeypatch, [""])  # empty scope answer aborts
         action, message = _run_setup(tmp_path)
@@ -589,19 +611,20 @@ class TestRouteSetup:
     def test_done_with_zero_picks_reprompts(self, tmp_path, monkeypatch, capsys):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
             [
                 "repo",
-                "openrouter",
                 _SETUP_DONE,  # done with zero picks: re-prompted
                 "good/cheap",
                 _SETUP_DONE,
                 "decide/cheap",
             ],
         )
-        _scripted_input(monkeypatch, ["d", ""])
+        _scripted_input(monkeypatch, ["", "", "", "d", ""])
         action, _ = _run_setup(tmp_path)
         assert action == "reply"
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
@@ -613,15 +636,19 @@ class TestRouteSetup:
     ):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         _scripted_input(
             monkeypatch,
             [
                 "2",  # scope: repo
-                "1",  # engine: openrouter
+                "",  # accept the proposed order
                 "good/cheap, bogus/model",  # attempt 1: one unknown id
                 "good/cheap, good/pricey",  # attempt 2: valid subset written
                 "decide/cheap",  # decision model (decisions catalog)
+                "",  # local tag takes nimble
+                "",  # skip notes stay on
                 "cheap first",
                 "",
             ],
@@ -642,15 +669,25 @@ class TestRouteSetup:
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         import strands_code_cli.live_pricing as live_pricing_mod
 
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(live_pricing_mod, "fetch_openrouter_models", lambda: None)
         monkeypatch.setattr(
             live_pricing_mod, "fetch_openrouter_decision_models", lambda: None
         )
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(monkeypatch, ["repo", "openrouter"])
+        _scripted_radio(monkeypatch, ["repo"])
         _scripted_input(
             monkeypatch,
-            ["custom/alpha, custom/beta", "custom/decider", "hands on", ""],
+            [
+                "",
+                "custom/alpha, custom/beta",
+                "custom/decider",
+                "",
+                "",
+                "hands on",
+                "",
+            ],
         )
         action, message = _run_setup(tmp_path)
         assert action == "reply"
@@ -666,17 +703,20 @@ class TestRouteSetup:
     def test_local_engine_run_captures_local_model(self, tmp_path, monkeypatch):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["repo", "local", "good/cheap", _SETUP_DONE, "decide/pricey"],
+            ["repo", "good/cheap", _SETUP_DONE, "decide/pricey"],
         )
-        _scripted_input(monkeypatch, ["tev1:0.8b", "side note", ""])
+        _scripted_input(monkeypatch, ["", "tev1:0.8b", "", "side note", ""])
         action, _ = _run_setup(tmp_path)
         assert action == "reply"
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
         assert data["engine"] == {
-            "primary": "local",
+            "order": ["openrouter", "local"],
+            "skip_notes": True,
             "decision_model": "decide/pricey",
             "local_model": "tev1:0.8b",
         }
@@ -705,14 +745,16 @@ class TestRouteSetup:
         # Chat catalog fine, decisions catalog down: candidates pick
         # from the radio, the decider falls back to a typed id with
         # no default assumed.
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(
             live_pricing_mod, "fetch_openrouter_decision_models", lambda: None
         )
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(
-            monkeypatch, ["repo", "openrouter", "good/cheap", _SETUP_DONE]
+        _scripted_radio(monkeypatch, ["repo", "good/cheap", _SETUP_DONE])
+        _scripted_input(
+            monkeypatch, ["", "custom/decider", "", "", "hands on", ""]
         )
-        _scripted_input(monkeypatch, ["custom/decider", "hands on", ""])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "saved" in message
@@ -733,11 +775,11 @@ class TestRouteSetup:
                 {"id": "d/zero", "context_length": 0},
             ],
         )
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(
-            monkeypatch, ["repo", "openrouter", "good/cheap", _SETUP_DONE]
-        )
-        _scripted_input(monkeypatch, ["typed/decider", "d", ""])
+        _scripted_radio(monkeypatch, ["repo", "good/cheap", _SETUP_DONE])
+        _scripted_input(monkeypatch, ["", "typed/decider", "", "", "d", ""])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "saved" in message
@@ -748,12 +790,14 @@ class TestRouteSetup:
     def test_abort_at_decider_writes_nothing(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         _scripted_input(
             monkeypatch,
             [
                 "2",  # scope: repo
-                "1",  # engine: openrouter
+                "",  # accept the proposed order
                 "good/cheap",  # candidates
                 "",  # decider: empty aborts
             ],
@@ -768,12 +812,14 @@ class TestRouteSetup:
     ):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         _scripted_input(
             monkeypatch,
             [
                 "2",
-                "1",
+                "",
                 "good/cheap",
                 "bogus/decider",  # attempt 1: unknown, re-prompted
                 "bogus/again",  # attempt 2: unknown, aborts
@@ -788,12 +834,14 @@ class TestRouteSetup:
     def test_setup_never_prompts_for_keys(self, tmp_path, monkeypatch, capsys):
         _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["repo", "openrouter", "good/cheap", _SETUP_DONE, "decide/cheap"],
+            ["repo", "good/cheap", _SETUP_DONE, "decide/cheap"],
         )
-        _scripted_input(monkeypatch, ["d", ""])
+        _scripted_input(monkeypatch, ["", "", "", "d", ""])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "saved" in message
@@ -804,12 +852,14 @@ class TestRouteSetup:
     def test_local_model_empty_takes_nimble_default(self, tmp_path, monkeypatch):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["repo", "local", "good/cheap", _SETUP_DONE, "decide/cheap"],
+            ["repo", "good/cheap", _SETUP_DONE, "decide/cheap"],
         )
-        _scripted_input(monkeypatch, ["", "side note", ""])
+        _scripted_input(monkeypatch, ["", "", "", "side note", ""])
         action, _ = _run_setup(tmp_path)
         assert action == "reply"
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))

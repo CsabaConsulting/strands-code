@@ -582,6 +582,13 @@ _SETUP_DONE = "setup-done-pick"
 
 _SETUP_ABORTED = "Setup cancelled — no changes written."
 
+_ENGINE_LABELS = {
+    "openrouter": "OpenRouter API (needs OPENROUTER_API_KEY at runtime)",
+    "local": "Local Ollama daemon",
+    "native": "Native TypeSafe API",
+}
+"""Display labels for the setup order builder (D-01, D-06)."""
+
 
 def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
     """Chat-capable catalog entries, validated and price-sorted (T-08-11).
@@ -741,6 +748,35 @@ def _setup_ask(
     for value, label in options:
         if typed == str(value) or typed.lower() == label.lower():
             return value
+    return None
+
+
+def _setup_confirm(prompt: str, *, default: bool) -> bool | None:
+    """Yes/no setup prompt on any tty; empty takes the default.
+
+    EOF, Ctrl-C, and a second unrecognized answer fail closed to
+    None; the caller aborts with no writes.
+    """
+    hint = "Yes/no" if default else "yes/No"
+    default_word = "yes" if default else "no"
+    for attempt in range(2):
+        print(
+            f"{prompt} [{hint}] (empty takes {default_word}): ",
+            end="",
+            flush=True,
+        )
+        try:
+            typed = input().strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return default
+        if typed in ("y", "yes"):
+            return True
+        if typed in ("n", "no"):
+            return False
+        if attempt == 0:
+            print("Answer yes or no (empty takes the default).")
     return None
 
 
@@ -913,6 +949,142 @@ def _setup_local_model() -> str | None:
     return typed or "nimble"
 
 
+def _setup_pick_order_tty(available: list[str]) -> list[str] | None:
+    """Order builder on tty: primary radio, then fallback radios plus Done.
+
+    Native appears only when the caller lists it (D-06 hides it
+    without a key); ESC at any radio aborts with no writes.
+    """
+    primary = _setup_ask(
+        "Primary decision engine",
+        [(name, _ENGINE_LABELS[name]) for name in available],
+    )
+    if primary is None:
+        return None
+    order = [primary]
+    remaining = [name for name in available if name != primary]
+    while remaining:
+        options = [(name, _ENGINE_LABELS[name]) for name in remaining]
+        options.append((_SETUP_DONE, "Done — no more fallbacks"))
+        choice = _setup_ask(
+            "Add a fallback engine", options, default=len(options) - 1
+        )
+        if choice is None:
+            return None
+        if choice == _SETUP_DONE:
+            return order
+        order.append(choice)
+        remaining = [name for name in remaining if name != choice]
+    return order
+
+
+def _setup_pick_order_typed(available: list[str]) -> list[str] | None:
+    """Order builder off-tty: typed comma list, one re-prompt, fail-closed.
+
+    Unknown engine names reject with the offenders named and one
+    re-prompt; the second attempt aborts instead of writing a
+    partial order.
+    """
+    print("Available engines:")
+    for name in available:
+        print(f"  {name} — {_ENGINE_LABELS[name]}")
+    for attempt in range(2):
+        print(
+            "Enter engines in try order, comma-separated (empty aborts): ",
+            end="",
+            flush=True,
+        )
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return None
+        names = list(
+            dict.fromkeys(
+                part.strip() for part in typed.split(",") if part.strip()
+            )
+        )
+        unknown = [name for name in names if name not in available]
+        names = [name for name in names if name in available]
+        if unknown and attempt == 0:
+            print(f"Unknown engines: {', '.join(unknown)} — try again.")
+            continue
+        if unknown or not names:
+            return None
+        return names
+    return None
+
+
+def _setup_engine_order() -> list[str] | None:
+    """D-02 order proposal plus the builder when declined (D-01, D-06).
+
+    Native leads the proposal only when the TypeSafe key is present;
+    otherwise the proposal is the current OpenRouter-then-local order
+    and native stays out of every offered choice. An empty line
+    accepts, "no" runs the builder, and EOF or Ctrl-C aborts. A lazy
+    daemon probe notes an unreachable local link before the prompt.
+    """
+    from strands_code_cli.routing import local_engine_ready, native_engine_ready
+
+    has_key = native_engine_ready()
+    if has_key:
+        proposal = ["native", "openrouter", "local"]
+        print(
+            "Proposed engine order: native, openrouter, local "
+            "(TypeSafe key found — native first)."
+        )
+    else:
+        proposal = ["openrouter", "local"]
+        print(
+            "Proposed engine order: openrouter, local "
+            "(no TypeSafe key — native hidden)."
+        )
+    if not local_engine_ready(None, "nimble"):
+        print(
+            "Note: local Ollama daemon not ready for nimble "
+            "(down, outdated, or tag not pulled) — "
+            "the local link will skip until it is."
+        )
+    use_proposal = _setup_confirm("Use this order?", default=True)
+    if use_proposal is None:
+        return None
+    if use_proposal:
+        return proposal
+    available = (
+        ["native", "openrouter", "local"] if has_key else ["openrouter", "local"]
+    )
+    if sys.stdin.isatty():
+        return _setup_pick_order_tty(available)
+    return _setup_pick_order_typed(available)
+
+
+def _setup_pick_native_model() -> str | None:
+    """Pinned Jev pick: full-semver pin plus the explicit alias (D-05).
+
+    Only the two verified strings are ever offered — never the
+    moving preview alias, minor-only, or prefixed forms. The alias
+    choice prints a drift warning naming the per-verdict snapshot
+    logging; the pin stays quiet.
+    """
+    from strands_code_cli.routing import NATIVE_JEV_ALIAS, NATIVE_JEV_PIN
+
+    picked = _setup_ask(
+        "Pick the native Jev model (pin recommended)",
+        [
+            (NATIVE_JEV_PIN, f"{NATIVE_JEV_PIN} (pinned build, recommended)"),
+            (NATIVE_JEV_ALIAS, f"{NATIVE_JEV_ALIAS} (moving alias — may drift)"),
+        ],
+    )
+    if picked == NATIVE_JEV_ALIAS:
+        print(
+            f"Warning: {NATIVE_JEV_ALIAS} is a moving alias — it can resolve "
+            "to a new build without notice; every verdict logs the serving "
+            "snapshot so drift stays visible."
+        )
+    return picked
+
+
 def _setup_directives() -> str | None:
     """Directive lines until a blank line; empty needs an explicit confirm."""
     print("Enter one directive per line; a blank line finishes.")
@@ -942,14 +1114,19 @@ def _setup_directives() -> str | None:
 
 
 def _route_setup_message() -> str:
-    """Guided ``/route setup``: scope, engine, candidates, decision, directives.
+    """Guided ``/route setup``: scope, order, candidates, models, directives.
 
-    Enumerates the live OpenRouter chat catalog for candidates and the
-    live decisions catalog for the decider — never hardcoded names
-    (D-06), never key prompts (T-08-34) — and writes a valid strategy
-    atomically; a failed catalog fetch falls back to a typed-id path
-    instead of crashing (T-08-33). ESC or empty input aborts with the
-    session unchanged (empty at the local-model prompt takes nimble).
+    Proposes the availability-driven engine order (native first with
+    a key, else OpenRouter-then-local) with an order builder on
+    decline, then enumerates the live OpenRouter chat catalog for
+    candidates and — for listed engines only — the live decisions
+    catalog for the decider, the Ollama tag, and the pinned Jev
+    list — never hardcoded names (D-06), never key prompts
+    (T-08-34) — and writes a valid strategy atomically; a failed
+    catalog fetch falls back to a typed-id path instead of crashing
+    (T-08-33). ESC or empty input aborts with the session unchanged
+    (empty accepts the proposed order and the nimble default, and
+    keeps skip notes on).
     """
     from strands_code_cli.live_pricing import fetch_openrouter_decision_models
     from strands_code_cli.live_pricing import fetch_openrouter_models
@@ -964,24 +1141,20 @@ def _route_setup_message() -> str:
     )
     if scope is None:
         return _SETUP_ABORTED
-    engine = _setup_ask(
-        "Decision engine",
-        [
-            ("openrouter", "OpenRouter API (needs OPENROUTER_API_KEY at runtime)"),
-            ("local", "Local Ollama daemon"),
-        ],
-    )
-    if engine is None:
+    order = _setup_engine_order()
+    if order is None:
         return _SETUP_ABORTED
     try:
         models = fetch_openrouter_models()
     except Exception:
         models = None
     entries = _setup_catalog_entries(models)
-    try:
-        decision_models = fetch_openrouter_decision_models()
-    except Exception:
-        decision_models = None
+    decision_models = None
+    if "openrouter" in order:
+        try:
+            decision_models = fetch_openrouter_decision_models()
+        except Exception:
+            decision_models = None
     decision_entries = _setup_decision_entries(decision_models)
     if entries:
         if sys.stdin.isatty():
@@ -998,34 +1171,59 @@ def _route_setup_message() -> str:
         candidates = _setup_typed_id_list("Candidate model ids, comma-separated")
         if candidates is None:
             return _SETUP_ABORTED
-    decision = _setup_pick_decision(
-        decision_entries, typed_only=decision_models is None
-    )
-    if decision is None:
-        return _SETUP_ABORTED
+    decision: str | None = None
+    if "openrouter" in order:
+        decision = _setup_pick_decision(
+            decision_entries, typed_only=decision_models is None
+        )
+        if decision is None:
+            return _SETUP_ABORTED
     local_model: str | None = None
-    if engine == "local":
+    if "local" in order:
         local_model = _setup_local_model()
         if local_model is None:
             return _SETUP_ABORTED
+    native_model: str | None = None
+    if "native" in order:
+        native_model = _setup_pick_native_model()
+        if native_model is None:
+            return _SETUP_ABORTED
+    skip_notes = _setup_confirm(
+        "Print a one-line note when a listed engine is skipped", default=True
+    )
+    if skip_notes is None:
+        return _SETUP_ABORTED
     directives = _setup_directives()
     if directives is None:
         return _SETUP_ABORTED
     payload: dict[str, Any] = {
         "candidates": [{"id": candidate} for candidate in candidates],
         "directives": directives,
-        "engine": {"primary": engine, "decision_model": decision},
+        "engine": {"order": order, "skip_notes": skip_notes},
     }
+    if decision is not None:
+        payload["engine"]["decision_model"] = decision
     if local_model is not None:
         payload["engine"]["local_model"] = local_model
+    if native_model is not None:
+        payload["engine"]["native_model"] = native_model
     try:
         path = save_strategy(payload, scope)
     except (ValueError, OSError) as exc:
         return f"Setup failed — {exc} (nothing written)."
     noun = "candidate" if len(candidates) == 1 else "candidates"
+    model_bits = []
+    if decision is not None:
+        model_bits.append(f"openrouter {decision}")
+    if local_model is not None:
+        model_bits.append(f"local {local_model}")
+    if native_model is not None:
+        model_bits.append(f"native {native_model}")
+    models_bit = f" ({', '.join(model_bits)})" if model_bits else ""
     return (
         f"Routing strategy saved ({scope}): {path}\n"
-        f"{len(candidates)} {noun}, engine {engine}, decision model {decision}.\n"
+        f"{len(candidates)} {noun}, engine order {', '.join(order)}"
+        f"{models_bit}.\n"
         "Manual /model always wins over routing.\n"
         "Run /route validate to check the file."
     )

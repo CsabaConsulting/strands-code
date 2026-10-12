@@ -42,6 +42,7 @@ from strands_code_cli.routing import (
     gate_model,
     load_strategy,
     local_engine_ready,
+    native_engine_ready,
     validate_choice_answer,
     validate_routed_effort,
 )
@@ -1910,6 +1911,28 @@ class TestLocalEngine:
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         assert local_engine_ready("", "nimble") is False
         assert local_engine_ready(OLLAMA_DEFAULT_HOST, "") is False
+
+    def test_none_base_probes_the_default_daemon(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        gets: list = []
+
+        def _fake_get(url, headers):
+            gets.append(url)
+            if url.endswith("/api/version"):
+                return {"version": "0.40.3"}
+            return {"models": [{"name": "nimble"}]}
+
+        monkeypatch.setattr(routing_mod, "_preflight_get", _fake_get)
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        assert local_engine_ready(None, "nimble") is True
+        assert gets[0] == f"{OLLAMA_DEFAULT_HOST}/api/version"
+
+    def test_native_engine_ready_is_key_presence_only(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        assert native_engine_ready() is True
+        monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+        assert native_engine_ready() is False
 
     def test_ollama_transport_truncates_to_cap(self, monkeypatch):
         import urllib.request

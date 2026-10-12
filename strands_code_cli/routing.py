@@ -1404,15 +1404,32 @@ def _version_tuple(text: object) -> tuple[int, ...] | None:
         return None
 
 
-def local_engine_ready(base: str, tag: str) -> bool:
+def native_engine_ready() -> bool:
+    """True when a native call is worth attempting: key present (D-06).
+
+    No network: like the OpenRouter link (which has no preflight),
+    attempted-call failure carries the detail (401 bad key, 403 no
+    key, 400 unknown model). Presence only — the value never leaves
+    the environment. The setup proposal and the hidden-until-key
+    gate read this; env reads stay in the engine layer, never the
+    presentation layer.
+    """
+    return bool(os.environ.get("TYPESAFE_API_KEY"))
+
+
+def local_engine_ready(base: str | None, tag: str) -> bool:
     """True when the Ollama daemon meets the floor and has the tag pulled.
 
     Probes GET ``<base>/api/version`` for the 0.35 floor (0.35.1 for
     tags starting with ``clef``) and GET ``<base>/api/tags`` for the
-    tag (exact or ``:latest``-suffixed daemon names match). Any
+    tag (exact or ``:latest``-suffixed daemon names match). A None
+    base resolves the default daemon base (the setup proposal
+    probe); an empty base or tag still reads unready. Any
     transport or parse failure returns False without raising — the
     chain treats unready as skip, never as ready (T-08-30).
     """
+    if base is None:
+        base = _ollama_base(None)
     if not base or not tag:
         return False
     root = base.rstrip("/")
