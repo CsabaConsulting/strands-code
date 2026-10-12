@@ -1,0 +1,227 @@
+"""Tracer: provider-reported turn spend from capture to marked display.
+
+Hermetic: the LiteLLMModel base is stubbed in sys.modules with a fake class
+(copied-double pattern, no litellm import, no network, no credentials).
+Covers capture, delegate-verbatim, drain, wrap gate, promotion, the
+reported_cost usage-line kwarg, and the end-to-end tracer.
+"""
+
+from __future__ import annotations
+
+import sys
+import types
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+
+@pytest.fixture
+def _litellm_stub(monkeypatch):
+    """Stub strands.models.litellm with a fake base class (hermetic)."""
+
+    class FakeLiteLLMModel:
+        """Minimal format_chunk base standing in for LiteLLMModel."""
+
+        def format_chunk(self, event: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+            return {"chunk": dict(event), "kwargs": dict(kwargs)}
+
+    module = types.ModuleType("strands.models.litellm")
+    module.LiteLLMModel = FakeLiteLLMModel
+    monkeypatch.setitem(sys.modules, "strands.models.litellm", module)
+    return FakeLiteLLMModel
+
+
+def _wrapped(model_id: str, fake_base: type, **config: Any):
+    """Promote a fake resolved instance through the wrap gate."""
+    from strands_code_cli.reported_cost import wrap_for_openrouter
+
+    resolved = fake_base()
+    for key, value in config.items():
+        setattr(resolved, key, value)
+    return wrap_for_openrouter(model_id, resolved)
+
+
+def _metadata(cost: Any) -> dict[str, Any]:
+    """One metadata chunk carrying a Usage-shaped fake (or a bare object)."""
+    return {"chunk_type": "metadata", "data": SimpleNamespace(cost=cost)}
+
+
+class _Summary:
+    """Minimal response double exposing metrics.get_summary()."""
+
+    def __init__(self, in_tok: int, out_tok: int) -> None:
+        self._summary = {
+            "accumulated_usage": {"inputTokens": in_tok, "outputTokens": out_tok},
+            "total_cycles": 1,
+            "total_duration": 0.5,
+        }
+
+    @property
+    def metrics(self):
+        outer = self
+
+        class _M:
+            def get_summary(self):
+                return outer._summary
+
+        return _M()
+
+
+class TestCapture:
+    def test_metadata_chunk_with_cost_records_cost(self, _litellm_stub):
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0024))
+        assert model.take_reported_costs() == [0.0024]
+
+    def test_metadata_chunk_without_cost_records_absent(self, _litellm_stub):
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk({"chunk_type": "metadata", "data": SimpleNamespace()})
+        model.format_chunk({"chunk_type": "metadata", "data": None})
+        assert model.take_reported_costs() == [None, None]
+        assert sum_reported_costs(model.take_reported_costs()) is None
+
+    def test_non_metadata_chunks_ignored(self, _litellm_stub):
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk({"chunk_type": "text", "data": SimpleNamespace(cost=9.99)})
+        assert model.take_reported_costs() == []
+
+    def test_malformed_costs_never_raise_and_drain_to_none(self, _litellm_stub):
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata("0.0024"))
+        model.format_chunk(_metadata(True))
+        model.format_chunk(_metadata(object()))
+        model.format_chunk({"chunk_type": "metadata", "data": SimpleNamespace()})
+        assert sum_reported_costs(model.take_reported_costs()) is None
+
+
+class TestDelegateChunks:
+    def test_override_returns_super_output_exactly(self, _litellm_stub):
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        event = _metadata(0.0024)
+        assert model.format_chunk(event) == _litellm_stub().format_chunk(event)
+
+
+class TestDrain:
+    def test_take_returns_accumulated_and_resets(self, _litellm_stub):
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.001))
+        model.format_chunk(_metadata(0.002))
+        assert model.take_reported_costs() == [0.001, 0.002]
+        assert model.take_reported_costs() == []
+
+    def test_multi_cycle_sums_present_only(self, _litellm_stub):
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.001))
+        model.format_chunk({"chunk_type": "metadata", "data": SimpleNamespace()})
+        model.format_chunk(_metadata(0.002))
+        assert sum_reported_costs(model.take_reported_costs()) == pytest.approx(0.003)
+
+    def test_present_zero_drains_as_present_zero(self, _litellm_stub):
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0))
+        assert sum_reported_costs(model.take_reported_costs()) == 0.0
+        model.format_chunk(_metadata(0))
+        drained = sum_reported_costs(model.take_reported_costs())
+        assert drained == 0.0 and drained is not None
+
+
+class TestWrapGate:
+    def test_non_openrouter_ids_pass_through_identical(self, _litellm_stub):
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        bedrock = _litellm_stub()
+        assert wrap_for_openrouter("bedrock/anthropic.claude-x", bedrock) is bedrock
+        plain = _litellm_stub()
+        assert wrap_for_openrouter("openai/gpt-4o", plain) is plain
+        assert not hasattr(bedrock, "take_reported_costs")
+
+    def test_openrouter_prefix_forms_wrap(self, _litellm_stub):
+        first = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        second = _wrapped("openrouter/qwen/qwen3-32b", _litellm_stub)
+        assert callable(getattr(first, "take_reported_costs", None))
+        assert callable(getattr(second, "take_reported_costs", None))
+
+    def test_missing_extra_returns_resolved_unchanged(self, monkeypatch):
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        monkeypatch.setitem(sys.modules, "strands.models.litellm", None)
+        resolved = SimpleNamespace(model_id="litellm/openrouter/qwen/qwen3-32b")
+        assert (
+            wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved) is resolved
+        )
+
+
+class TestPromotion:
+    def test_promoted_instance_keeps_config(self, _litellm_stub):
+        model = _wrapped(
+            "litellm/openrouter/qwen/qwen3-32b",
+            _litellm_stub,
+            client_args={"base_url": "https://openrouter.ai/api/v1"},
+            effort="high",
+        )
+        assert isinstance(model, _litellm_stub)
+        assert type(model) is not _litellm_stub
+        assert model.client_args == {"base_url": "https://openrouter.ai/api/v1"}
+        assert model.effort == "high"
+
+
+class TestUsageLineActual:
+    def test_reported_cost_marks_actual(self):
+        from strands_code_cli.cost_context import usage_line
+
+        line = usage_line(12, 1, "bedrock/any", reported_cost=0.0024)
+        assert "$0.00 actual" in line
+
+    def test_actual_wins_over_estimate(self):
+        from strands_code_cli.cost_context import usage_line
+
+        line = usage_line(
+            1_000_000,
+            1_000_000,
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            reported_cost=0.0024,
+        )
+        assert line == "1.00M (100%) $0.00 actual"
+
+    def test_without_reported_cost_byte_identical(self):
+        from strands_code_cli.cost_context import usage_line
+
+        assert (
+            usage_line(451270, 1000, "bedrock/global.anthropic.claude-sonnet-4-6")
+            == "451.27K (45%) $1.37"
+        )
+        assert usage_line(451270, 1000, "mystery/acme-1") == "451.27K (n/a)"
+
+
+class TestTracerEndToEnd:
+    def test_fake_cost_flows_to_row_and_usage_line(self, _litellm_stub):
+        from strands_code_cli.loop import record_turn_metrics
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0024))
+        turns: list = []
+        line = record_turn_metrics(
+            _Summary(12, 1), "litellm/openrouter/qwen/qwen3-32b", turns, model=model
+        )
+        assert turns[-1]["reported_cost"] == 0.0024
+        assert line is not None and "$0.00 actual" in line
+
+    def test_failed_turn_drains_without_bleed(self, _litellm_stub):
+        from strands_code_cli.loop import record_turn_metrics
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0024))
+        assert (
+            record_turn_metrics(None, "litellm/openrouter/qwen/qwen3-32b", [], model=model)
+            is None
+        )
+        assert model.take_reported_costs() == []
