@@ -1352,16 +1352,27 @@ def decide(
     violates the 2-26 floor — so the lone level rides through with
     effort_confidence None.
 
-    A single candidate advertising at least one level skips every
-    engine (nothing to choose): the verdict names the candidate with
-    its first advertised level, engine ``none``, and zero usage.
-    A lone candidate with no levels holds with no engine call — a
-    one-option choice is invalid (2-26) and there is no effort to
-    pass through.
+    A single candidate skips the model call but still asks the
+    effort question over the lone candidate's levels (D-15): the
+    verdict carries the decided level with model_confidence None, no
+    tie marker, and call-2-only usage. A lone single-level candidate
+    is fully degenerate — nothing to choose at either stage — so the
+    lone level rides through with no decision call. A lone candidate
+    with no levels holds with no engine call: a one-option choice is
+    invalid (2-26) and there is no effort to pass through.
     """
     if strategy.engine.primary != "off" and len(strategy.candidates) == 1:
         only = strategy.candidates[0]
-        if only.levels:
+        if not only.levels:
+            return (
+                None,
+                "none",
+                (0, 0, None),
+                "only candidate advertises no levels",
+            )
+        if len(only.levels) == 1:
+            # Fully degenerate: no model choice and no effort choice —
+            # the lone level rides through with no decision call.
             fast = RoutingPick(
                 model=only.id,
                 effort=only.levels[0],
@@ -1379,7 +1390,35 @@ def decide(
                     f"effort {only.levels[0]!r} unsupported by {only.id}",
                 )
             return (fast, "none", (0, 0, None), "")
-        return (None, "none", (0, 0, None), "only candidate advertises no levels")
+        state = build_decision_state(
+            ask=ask, directives=strategy.directives, side=side
+        )
+        chain = _chain_for(strategy)
+        if not chain:
+            primary = strategy.engine.primary or "openrouter"
+            return (None, primary, (0, 0, None), f"{primary} failed")
+        effort, effort_confidence, usage, name = _decide_effort(
+            strategy, only, state, chain
+        )
+        if effort is None:
+            return (None, name, (0, 0, None), f"{name} failed")
+        fast = RoutingPick(
+            model=only.id,
+            effort=effort,
+            model_confidence=None,
+            effort_confidence=effort_confidence,
+            tie_break=False,
+        )
+        if only.id != current_model and not validate_routed_effort(
+            fast, strategy.candidates
+        ):
+            return (
+                None,
+                name,
+                (0, 0, None),
+                f"effort {effort!r} unsupported by {only.id}",
+            )
+        return (fast, name, usage, "")
     state = build_decision_state(
         ask=ask, directives=strategy.directives, side=side
     )

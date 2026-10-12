@@ -1159,8 +1159,8 @@ class TestSideRouting:
     def test_unreasoned_effort_holds_to_parent_silently(
         self, monkeypatch, capsys
     ):
-        # Thinking effort on a non-reasoning candidate passes the gate
-        # but the fast-path effort check must still hold.
+        # Thinking effort on a non-reasoning candidate passes the
+        # effort call but the switch-path effort check must still hold.
         strategy = _strategy(
             candidates=[
                 RoutingCandidate(
@@ -1170,14 +1170,21 @@ class TestSideRouting:
         )
         events: list = []
         agent = _side_agent()
-
-        def _boom(**kwargs):
-            raise AssertionError("single candidate: no engine call")
-
-        ctx, builds = _side_ctx(monkeypatch, agent, _boom, events, strategy)
+        ctx, builds = _side_ctx(
+            monkeypatch,
+            agent,
+            lambda **kw: _table_result(
+                "openrouter/some-chat",
+                effort="low",
+                effort_probs={"low": 0.8, "high": 0.2},
+            ),
+            events,
+            strategy,
+        )
         ctx.build("deep refactor?")
         assert builds[0][0]["model"] is agent.model
         out = capsys.readouterr().out
         assert "Routed" not in out
         assert events[0]["held"] is True
-        assert events[0]["engine"] == "none"
+        assert events[0]["side"] is True
+        assert events[0]["engine"] == "openrouter"

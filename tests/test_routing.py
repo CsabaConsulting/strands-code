@@ -1512,16 +1512,17 @@ class TestRoutedEffort:
 
 
 class TestSingleCandidateFastPath:
-    def test_single_candidate_passes_first_advertised_level(self, monkeypatch):
-        # Interim 08-01 shape: nothing to choose, so the first
-        # advertised level rides through with zero engine calls; the
-        # effort decision call lands in plan 08-02.
+    def test_single_candidate_asks_effort_only(self, monkeypatch):
         import urllib.request
 
-        def _boom(request, timeout=None):
-            raise AssertionError("fast path must not call any engine")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        bodies: list = []
 
-        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        def _fake_urlopen(request, timeout=None):
+            bodies.append(json.loads(request.data.decode("utf-8")))
+            return _FakeResponse(_effort_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
             engine=RoutingEngine(
@@ -1531,15 +1532,22 @@ class TestSingleCandidateFastPath:
         pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
+        assert len(bodies) == 1  # the effort question only, never a model call
+        assert set(bodies[0]["questions"]) == {"pick_effort"}
+        assert set(bodies[0]["questions"]["pick_effort"]["criteria"]) == {
+            "low",
+            "high",
+        }
         assert pick == RoutingPick(
             model=HAIKU,
             effort="low",
             model_confidence=None,
-            effort_confidence=None,
+            effort_confidence=0.7,
             tie_break=False,
         )
-        assert engine == "none"
-        assert usage == (0, 0, None)
+        assert engine == "openrouter"
+        assert usage == (384, 41, 0.000016128)  # call-2-only, never zero
+        assert usage != (0, 0, None)
         assert detail == ""
 
     def test_single_candidate_without_levels_holds_with_no_call(self, monkeypatch):
@@ -1588,10 +1596,12 @@ class TestSingleCandidateFastPath:
     def test_single_candidate_with_rejected_first_level_holds(
         self, monkeypatch
     ):
+        # Fully degenerate: the lone level rides through with no
+        # decision call, then validation holds it.
         import urllib.request
 
         def _boom(request, timeout=None):
-            raise AssertionError("fast path must not call any engine")
+            raise AssertionError("degenerate path must not call any engine")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = _strategy(
@@ -1605,7 +1615,63 @@ class TestSingleCandidateFastPath:
         assert engine == "none"
         assert detail == f"effort 'low' unsupported by {NOVA_MICRO}"
 
-    def test_hook_prints_routed_line_with_zero_token_event(
+    def test_lone_single_level_routes_with_no_call(self, monkeypatch):
+        # Fully degenerate exception to the one-POST rule: a lone
+        # single-level candidate has no choice at either stage, and a
+        # one-option question violates the 2-26 floor — so the lone
+        # level rides through with no decision call.
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("degenerate path must not call any engine")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["high"])],
+            engine=RoutingEngine(decision_model="cheap/decider"),
+        )
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="high",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+        )
+        assert engine == "none"
+        assert usage == (0, 0, None)
+        assert detail == ""
+
+    def test_single_candidate_with_rejected_decided_level_holds(
+        self, monkeypatch
+    ):
+        import urllib.request
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            return _FakeResponse(
+                _effort_payload("max", {"low": 0.15, "max": 0.85})
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
+            engine=RoutingEngine(decision_model="cheap/decider"),
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == f"effort 'max' unsupported by {HAIKU}"
+
+    def test_hook_prints_routed_line_with_effort_usage(
         self, monkeypatch, capsys
     ):
         import urllib.request
@@ -1614,10 +1680,12 @@ class TestSingleCandidateFastPath:
         import strands_code_cli.loop as loop_mod
         import strands_code_cli.routing as routing_mod
 
-        def _boom(request, timeout=None):
-            raise AssertionError("fast path must not call any engine")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(_effort_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
         )
@@ -1642,18 +1710,18 @@ class TestSingleCandidateFastPath:
                 "model": HAIKU,
                 "effort": "low",
                 "model_confidence": None,
-                "effort_confidence": None,
+                "effort_confidence": 0.7,
                 "tie_break": False,
-                "engine": "none",
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "decision_cost": None,
+                "engine": "openrouter",
+                "input_tokens": 384,
+                "output_tokens": 41,
+                "decision_cost": 0.000016128,
                 "held": False,
-                "decision_model": None,
+                "decision_model": "cheap/decider",
             }
         ]
         shown = " ".join(capsys.readouterr().out.split())
-        assert f"Routed → {HAIKU} (low): model n/a, effort n/a" in shown
+        assert f"Routed → {HAIKU} (low): model n/a, effort 70%" in shown
 
 
 class TestLiveEngines:
