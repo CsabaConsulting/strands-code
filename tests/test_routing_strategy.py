@@ -15,7 +15,11 @@ import pytest
 import yaml
 
 import strands_code_cli.routing as routing_mod
-from strands_code_cli.router import _SETUP_DONE, dispatch
+from strands_code_cli.router import (
+    _SETUP_DONE,
+    _setup_decision_entries,
+    dispatch,
+)
 from strands_code_cli.routing import (
     RoutingCandidate,
     load_strategy,
@@ -312,13 +316,71 @@ def _scripted_input(monkeypatch, lines):
     monkeypatch.setattr("builtins.input", lambda *args: queue.pop(0))
 
 
-def _setup_catalog(monkeypatch, payload=None):
-    """Serve the fixture catalog (deep-ish copy) for fetch_openrouter_models."""
+_SETUP_DECISIONS = [
+    {
+        "id": "decide/cheap",
+        "context_length": 64000,
+        "pricing": {"prompt": "0.00000004", "completion": "0"},
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["decisions"],
+        },
+    },
+    {
+        "id": "decide/pricey",
+        "context_length": 32000,
+        "pricing": {"prompt": "0.00000020", "completion": "0"},
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["text", "decisions"],
+        },
+    },
+    {
+        "id": "decide/unpriced",
+        "context_length": 128000,
+        "architecture": {
+            "input_modalities": ["text"],
+            "output_modalities": ["decisions"],
+        },
+    },
+    {
+        "id": "~decide/alias",
+        "context_length": 64000,
+        "pricing": {"prompt": "0.00000001", "completion": "0"},
+        "architecture": {"output_modalities": ["decisions"]},
+    },
+    {
+        "id": "decide/zero-ctx",
+        "context_length": 0,
+        "pricing": {"prompt": "0.00000001", "completion": "0"},
+        "architecture": {"output_modalities": ["decisions"]},
+    },
+    {
+        "id": "chat/only",
+        "context_length": 64000,
+        "pricing": {"prompt": "0.00000001", "completion": "0"},
+        "architecture": {"output_modalities": ["text"]},
+    },
+    {"id": "broken/decider", "pricing": {"prompt": "n/a"}},
+    "not-a-dict",
+    {"id": ""},
+]
+"""Fixture decisions catalog: valid, alias, zero-context, chat-only, malformed."""
+
+
+def _setup_catalog(monkeypatch, payload=None, decisions=None):
+    """Serve fixture catalogs (deep-ish copies) for both setup fetches."""
     import strands_code_cli.live_pricing as live_pricing_mod
 
     rows = payload if payload is not None else _SETUP_CATALOG
     monkeypatch.setattr(
         live_pricing_mod, "fetch_openrouter_models", lambda: [dict(e) if isinstance(e, dict) else e for e in rows]
+    )
+    decision_rows = decisions if decisions is not None else _SETUP_DECISIONS
+    monkeypatch.setattr(
+        live_pricing_mod,
+        "fetch_openrouter_decision_models",
+        lambda: [dict(e) if isinstance(e, dict) else e for e in decision_rows],
     )
 
 
@@ -343,7 +405,7 @@ class TestRouteSetup:
                 "good/pricey",  # candidate 1 (not cheapest: pick order wins)
                 "good/cheap",  # candidate 2
                 _SETUP_DONE,  # done
-                "good/cheap",  # decision model
+                "decide/cheap",  # decision model (decisions catalog)
             ],
         )
         _scripted_input(
@@ -360,7 +422,7 @@ class TestRouteSetup:
         assert data["directives"] == "trivial asks go cheap\ndeep work goes big"
         assert data["engine"] == {
             "primary": "openrouter",
-            "decision_model": "good/cheap",
+            "decision_model": "decide/cheap",
         }
         assert "(repo)" in message
         assert "2 candidates" in message
@@ -380,7 +442,14 @@ class TestRouteSetup:
         assert "vendor/embed-large" not in offered
         assert "vendor/rerank-pro" not in offered
         decision_pick = [value for value, _ in calls[5][1]]
-        assert decision_pick == ["good/cheap", "good/unpriced"]
+        assert decision_pick == [
+            "decide/cheap",
+            "decide/pricey",
+            "decide/unpriced",
+        ]
+        assert "~decide/alias" not in decision_pick
+        assert "decide/zero-ctx" not in decision_pick
+        assert "chat/only" not in decision_pick
 
     def test_global_scope_run_writes_global_path(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
@@ -388,7 +457,7 @@ class TestRouteSetup:
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["global", "openrouter", "good/cheap", _SETUP_DONE, "good/cheap"],
+            ["global", "openrouter", "good/cheap", _SETUP_DONE, "decide/cheap"],
         )
         _scripted_input(monkeypatch, ["", "yes"])  # empty directives + confirm
         action, message = _run_setup(tmp_path)
@@ -432,7 +501,7 @@ class TestRouteSetup:
                 _SETUP_DONE,  # done with zero picks: re-prompted
                 "good/cheap",
                 _SETUP_DONE,
-                "good/cheap",
+                "decide/cheap",
             ],
         )
         _scripted_input(monkeypatch, ["d", ""])
@@ -455,7 +524,7 @@ class TestRouteSetup:
                 "1",  # engine: openrouter
                 "good/cheap, bogus/model",  # attempt 1: one unknown id
                 "good/cheap, good/pricey",  # attempt 2: valid subset written
-                "good/cheap",  # decision model
+                "decide/cheap",  # decision model (decisions catalog)
                 "cheap first",
                 "",
             ],
@@ -477,6 +546,9 @@ class TestRouteSetup:
         import strands_code_cli.live_pricing as live_pricing_mod
 
         monkeypatch.setattr(live_pricing_mod, "fetch_openrouter_models", lambda: None)
+        monkeypatch.setattr(
+            live_pricing_mod, "fetch_openrouter_decision_models", lambda: None
+        )
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(monkeypatch, ["repo", "openrouter"])
         _scripted_input(
@@ -500,17 +572,151 @@ class TestRouteSetup:
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(
             monkeypatch,
-            ["repo", "local", "good/cheap", _SETUP_DONE, "good/unpriced"],
+            ["repo", "local", "good/cheap", _SETUP_DONE, "decide/pricey"],
         )
-        _scripted_input(monkeypatch, ["qwen3:8b", "side note", ""])
+        _scripted_input(monkeypatch, ["tev1:0.8b", "side note", ""])
         action, _ = _run_setup(tmp_path)
         assert action == "reply"
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
         assert data["engine"] == {
             "primary": "local",
-            "decision_model": "good/unpriced",
-            "local_model": "qwen3:8b",
+            "decision_model": "decide/pricey",
+            "local_model": "tev1:0.8b",
         }
+
+    def test_decision_entries_drop_alias_zero_context_and_chat_only(self):
+        entries = _setup_decision_entries(_SETUP_DECISIONS)
+        assert [entry["id"] for entry in entries] == [
+            "decide/cheap",
+            "decide/pricey",
+            "decide/unpriced",
+        ]
+        assert entries[0]["label"].endswith("(price n/a)") is False
+        assert "per 1M" in entries[0]["label"]
+        assert entries[2]["label"].endswith("(price n/a)")
+        assert _setup_decision_entries(None) == []
+        assert _setup_decision_entries({"id": "x"}) == []
+        assert _setup_decision_entries("nope") == []
+
+    def test_unreachable_decisions_catalog_falls_back_to_typed_id(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        import strands_code_cli.live_pricing as live_pricing_mod
+
+        # Chat catalog fine, decisions catalog down: candidates pick
+        # from the radio, the decider falls back to a typed id with
+        # no default assumed.
+        monkeypatch.setattr(
+            live_pricing_mod, "fetch_openrouter_decision_models", lambda: None
+        )
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch, ["repo", "openrouter", "good/cheap", _SETUP_DONE]
+        )
+        _scripted_input(monkeypatch, ["custom/decider", "hands on", ""])
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "saved" in message
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert [c["id"] for c in data["candidates"]] == ["good/cheap"]
+        assert data["engine"]["decision_model"] == "custom/decider"
+        assert "Decisions catalog unreachable" in capsys.readouterr().out
+
+    def test_useless_decisions_catalog_falls_back_to_typed_id(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        # Reachable but nothing usable (alias + zero-context only).
+        _setup_catalog(
+            monkeypatch,
+            decisions=[
+                {"id": "~d/alias", "context_length": 1},
+                {"id": "d/zero", "context_length": 0},
+            ],
+        )
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch, ["repo", "openrouter", "good/cheap", _SETUP_DONE]
+        )
+        _scripted_input(monkeypatch, ["typed/decider", "d", ""])
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "saved" in message
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert data["engine"]["decision_model"] == "typed/decider"
+        assert "No usable decision models" in capsys.readouterr().out
+
+    def test_abort_at_decider_writes_nothing(self, tmp_path, monkeypatch):
+        repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        _scripted_input(
+            monkeypatch,
+            [
+                "2",  # scope: repo
+                "1",  # engine: openrouter
+                "good/cheap",  # candidates
+                "",  # decider: empty aborts
+            ],
+        )
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "no changes written" in message
+        assert not repo_path.exists() and not global_path.exists()
+
+    def test_off_tty_decider_reprompts_once_then_aborts(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        _scripted_input(
+            monkeypatch,
+            [
+                "2",
+                "1",
+                "good/cheap",
+                "bogus/decider",  # attempt 1: unknown, re-prompted
+                "bogus/again",  # attempt 2: unknown, aborts
+            ],
+        )
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "no changes written" in message
+        assert not repo_path.exists()
+        assert "Unknown decision model" in capsys.readouterr().out
+
+    def test_setup_never_prompts_for_keys(self, tmp_path, monkeypatch, capsys):
+        _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            ["repo", "openrouter", "good/cheap", _SETUP_DONE, "decide/cheap"],
+        )
+        _scripted_input(monkeypatch, ["d", ""])
+        action, message = _run_setup(tmp_path)
+        assert action == "reply"
+        assert "saved" in message
+        out = capsys.readouterr().out.lower()
+        assert "api_key" not in out
+        assert "api key" not in out
+
+    def test_local_model_empty_takes_nimble_default(self, tmp_path, monkeypatch):
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            ["repo", "local", "good/cheap", _SETUP_DONE, "decide/cheap"],
+        )
+        _scripted_input(monkeypatch, ["", "side note", ""])
+        action, _ = _run_setup(tmp_path)
+        assert action == "reply"
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert data["engine"]["local_model"] == "nimble"
 
     def test_save_strategy_refuses_symlinked_target(self, tmp_path):
         target = tmp_path / "real.yaml"

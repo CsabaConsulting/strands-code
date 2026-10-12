@@ -647,6 +647,66 @@ def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
     return entries
 
 
+def _setup_decision_entries(models: object) -> list[dict[str, Any]]:
+    """Decision-capable catalog entries, validated and price-sorted (T-08-33).
+
+    Mirrors ``_setup_catalog_entries`` over the decisions-filtered
+    listing: ``id`` must be a non-empty string, tilde-prefixed aliases
+    drop (aliases shift silently), zero-context entries drop, and the
+    ``architecture`` output modalities must include ``decisions``.
+    Each entry keeps its id, a display label with per-1M prices, and a
+    numeric sort key (unpriced sorts last). Unknown shapes skip
+    entries; the result sorts by prompt price ascending, then id
+    (decision calls bill input only). Never raises — a hostile
+    payload yields a shorter list, never a crash.
+    """
+    entries: list[dict[str, Any]] = []
+    if not isinstance(models, list):
+        return entries
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        model_id = model.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        if model_id.startswith("~"):
+            continue
+        try:
+            window = float(model.get("context_length", 0))
+        except (TypeError, ValueError):
+            continue
+        if window <= 0:
+            continue
+        arch = model.get("architecture")
+        if not isinstance(arch, dict):
+            continue
+        modalities = arch.get("output_modalities")
+        if not isinstance(modalities, list) or not any(
+            isinstance(entry, str) and entry.lower() == "decisions"
+            for entry in modalities
+        ):
+            continue
+        in_price: float | None = None
+        out_price: float | None = None
+        pricing = model.get("pricing")
+        if isinstance(pricing, dict):
+            try:
+                if "prompt" in pricing and "completion" in pricing:
+                    in_price = float(pricing["prompt"]) * 1_000_000
+                    out_price = float(pricing["completion"]) * 1_000_000
+            except (TypeError, ValueError):
+                in_price = out_price = None
+        if in_price is None or out_price is None:
+            label = f"{model_id} (price n/a)"
+            sort_key = float("inf")
+        else:
+            label = f"{model_id} (${in_price:g}/${out_price:g} per 1M)"
+            sort_key = in_price
+        entries.append({"id": model_id, "label": label, "sort": sort_key})
+    entries.sort(key=lambda entry: (entry["sort"], entry["id"]))
+    return entries
+
+
 def _setup_ask(
     title: str, options: list[tuple[Any, str]], *, default: int = 0
 ) -> Any | None:
@@ -781,23 +841,26 @@ def _setup_typed_id_list(prompt: str) -> list[str] | None:
 def _setup_pick_decision(
     entries: list[dict[str, Any]], *, typed_only: bool
 ) -> str | None:
-    """Decision-model pick: explicit choice over structured-capable entries.
+    """Decision-model pick over decisions-catalog entries (D-06, T-08-34).
 
-    With a catalog the choice is constrained to entries advertising
-    ``response_format`` or ``structured_outputs`` support (radio on tty,
-    validated typed id off-tty with one re-prompt); without a catalog —
-    or when nothing advertises support — a typed id is accepted with a
-    note. No default is ever assumed (OQ5).
+    With a reachable catalog the choice is constrained to the offered
+    entries (radio on tty, validated typed id off-tty with one
+    re-prompt); without one — or when nothing usable was offered — a
+    typed id is accepted with a note. No default is ever assumed.
     """
-    eligible = [entry for entry in entries if entry["structured"]]
-    if typed_only or not eligible:
-        if entries and not eligible:
+    if typed_only or not entries:
+        if typed_only:
             print(
-                "No catalog entry advertises structured output — "
+                "Decisions catalog unreachable — "
+                "enter a decision model id manually."
+            )
+        else:
+            print(
+                "No usable decision models in the live catalog — "
                 "enter a decision model id manually."
             )
         print(
-            "Decision model id (cheap, JSON-capable; empty aborts): ",
+            "Decision model id (empty aborts): ",
             end="",
             flush=True,
         )
@@ -809,11 +872,11 @@ def _setup_pick_decision(
     if sys.stdin.isatty():
         return _setup_ask(
             "Pick the decision model (explicit choice, no default)",
-            [(entry["id"], entry["label"]) for entry in eligible],
+            [(entry["id"], entry["label"]) for entry in entries],
         )
-    known = {entry["id"] for entry in eligible}
-    print("Decision-model candidates (structured-output support, cheapest first):")
-    for entry in eligible:
+    known = {entry["id"] for entry in entries}
+    print("Decision-model candidates (decisions catalog, cheapest first):")
+    for entry in entries:
         print(f"  {entry['label']}")
     for attempt in range(2):
         print("Enter the decision model id (empty aborts): ", end="", flush=True)
@@ -833,9 +896,13 @@ def _setup_pick_decision(
 
 
 def _setup_local_model() -> str | None:
-    """Local decision-model tag as pulled in Ollama; empty input aborts."""
+    """Local decision-model tag as pulled in Ollama (empty takes nimble).
+
+    EOF and Ctrl-C abort; an empty line accepts the nimble default tag.
+    """
     print(
-        "Local decision model tag as pulled in Ollama (empty aborts): ",
+        "Local decision model tag as pulled in Ollama [nimble] "
+        "(empty takes nimble): ",
         end="",
         flush=True,
     )
@@ -843,7 +910,7 @@ def _setup_local_model() -> str | None:
         typed = input().strip()
     except (KeyboardInterrupt, EOFError):
         return None
-    return typed or None
+    return typed or "nimble"
 
 
 def _setup_directives() -> str | None:
@@ -877,12 +944,14 @@ def _setup_directives() -> str | None:
 def _route_setup_message() -> str:
     """Guided ``/route setup``: scope, engine, candidates, decision, directives.
 
-    Enumerates the live OpenRouter catalog for every model choice —
-    never hardcoded names (D-06), never key prompts (T-08-10) — and
-    writes a valid strategy atomically; a failed catalog fetch falls
-    back to a typed-id path instead of crashing (T-08-11). Any ESC,
-    empty input, or unclear answer aborts with the session unchanged.
+    Enumerates the live OpenRouter chat catalog for candidates and the
+    live decisions catalog for the decider — never hardcoded names
+    (D-06), never key prompts (T-08-34) — and writes a valid strategy
+    atomically; a failed catalog fetch falls back to a typed-id path
+    instead of crashing (T-08-33). ESC or empty input aborts with the
+    session unchanged (empty at the local-model prompt takes nimble).
     """
+    from strands_code_cli.live_pricing import fetch_openrouter_decision_models
     from strands_code_cli.live_pricing import fetch_openrouter_models
     from strands_code_cli.routing import save_strategy
 
@@ -909,6 +978,11 @@ def _route_setup_message() -> str:
     except Exception:
         models = None
     entries = _setup_catalog_entries(models)
+    try:
+        decision_models = fetch_openrouter_decision_models()
+    except Exception:
+        decision_models = None
+    decision_entries = _setup_decision_entries(decision_models)
     if entries:
         if sys.stdin.isatty():
             candidates = _setup_pick_candidates_tty(entries)
@@ -916,7 +990,6 @@ def _route_setup_message() -> str:
             candidates = _setup_pick_candidates_typed(entries)
         if candidates is None:
             return _SETUP_ABORTED
-        decision = _setup_pick_decision(entries, typed_only=False)
     else:
         print(
             "Live catalog unreachable — enter model ids manually "
@@ -925,7 +998,9 @@ def _route_setup_message() -> str:
         candidates = _setup_typed_id_list("Candidate model ids, comma-separated")
         if candidates is None:
             return _SETUP_ABORTED
-        decision = _setup_pick_decision([], typed_only=True)
+    decision = _setup_pick_decision(
+        decision_entries, typed_only=decision_models is None
+    )
     if decision is None:
         return _SETUP_ABORTED
     local_model: str | None = None

@@ -41,6 +41,11 @@ _PRICING_ENDPOINT_REGION = "us-east-1"
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 """Public endpoint: per-model pricing + context_length, no key needed."""
 
+_OPENROUTER_DECISION_MODELS_URL = (
+    "https://openrouter.ai/api/v1/models?output_modalities=decisions"
+)
+"""Public endpoint: decision-capable models only, no key needed (D-06)."""
+
 _ROUTE_PREFIXES = ("global.", "us.", "eu.", "apac.", "au.", "jp.")
 """Cross-region routing prefixes (mirrors model_switch; routed ids skip live).
 
@@ -379,8 +384,24 @@ def fetch_openrouter_models() -> list[dict[str, Any]] | None:
         return None
 
 
-def _store_openrouter(models: list[dict[str, Any]]) -> dict[str, Any]:
-    """Parse a /models payload into the cache payload and persist it."""
+def fetch_openrouter_decision_models() -> list[dict[str, Any]] | None:
+    """Raw decisions-filtered ``/models`` payload (public, no key), or None."""
+    import urllib.request
+
+    try:
+        request = urllib.request.Request(
+            _OPENROUTER_DECISION_MODELS_URL, headers={"User-Agent": "strands-code"}
+        )
+        with urllib.request.urlopen(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        models = payload.get("data", [])
+        return models if isinstance(models, list) else None
+    except Exception:
+        return None
+
+
+def _models_entries(models: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
+    """Parse a /models payload into the ``{id: {in, out, window?}}`` map."""
     entries: dict[str, dict[str, float]] = {}
     for model in models:
         if not isinstance(model, dict):
@@ -400,8 +421,20 @@ def _store_openrouter(models: list[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(window, (int, float)) and window > 0:
             entry["window"] = float(window)
         entries[model_key] = entry
-    payload = {"fetched_at": time.time(), "models": entries}
+    return entries
+
+
+def _store_openrouter(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse a /models payload into the cache payload and persist it."""
+    payload = {"fetched_at": time.time(), "models": _models_entries(models)}
     _write_cache(_cache_dir() / "openrouter-models.json", payload)
+    return payload
+
+
+def _store_decisions(models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse a decisions-filtered payload into its cache payload (D-06)."""
+    payload = {"fetched_at": time.time(), "models": _models_entries(models)}
+    _write_cache(_cache_dir() / "openrouter-decision-models.json", payload)
     return payload
 
 
@@ -480,7 +513,7 @@ def litellm_entry(model_id: str) -> dict[str, float] | None:
 
 
 def refresh_caches(region: str | None = None) -> dict[str, Any]:
-    """Force-refetch both live sources, bypassing TTL and cooldown.
+    """Force-refetch every live source, bypassing TTL and cooldown.
 
     Explicit user action (``/cost refresh``): failures are reported in
     the summary, never raised, and previously cached data is kept.
@@ -513,6 +546,12 @@ def refresh_caches(region: str | None = None) -> dict[str, Any]:
         payload = _store_openrouter(models)
         _cooldown_until.pop("openrouter", None)
         summary["openrouter"] = {"models": len(payload.get("models", {}))}
+    decisions = fetch_openrouter_decision_models()
+    if decisions is None:
+        summary["decisions"] = {"error": "fetch failed (unreachable)"}
+    else:
+        payload = _store_decisions(decisions)
+        summary["decisions"] = {"models": len(payload.get("models", {}))}
     return summary
 
 
@@ -527,4 +566,12 @@ def cached_tables(region: str | None = None) -> dict[str, Any]:
     openrouter = _read_cache(_cache_dir() / "openrouter-models.json")
     if not isinstance(openrouter, dict):
         openrouter = None
-    return {"region": resolved, "bedrock": bedrock, "openrouter": openrouter}
+    decisions = _read_cache(_cache_dir() / "openrouter-decision-models.json")
+    if not isinstance(decisions, dict):
+        decisions = None
+    return {
+        "region": resolved,
+        "bedrock": bedrock,
+        "openrouter": openrouter,
+        "decisions": decisions,
+    }

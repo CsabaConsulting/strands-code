@@ -3,6 +3,8 @@
 import json
 import sys
 import types
+import urllib.request
+from urllib.error import URLError
 
 import pytest
 
@@ -529,8 +531,25 @@ class TestResolutionOrder:
 # ----------------------------------------------------------------------
 
 
-def _fake_openrouter(monkeypatch, models=_OR_MODELS):
-    """Serve a /models payload for the OpenRouter fetch; count calls."""
+_DECISION_MODELS = [
+    {
+        "id": "typesafe/jev-1.13",
+        "context_length": 64000,
+        "pricing": {"prompt": "0.000000042", "completion": "0"},
+        "architecture": {"output_modalities": ["decisions"]},
+    },
+    {
+        "id": "inception/mercury-decide",
+        "context_length": 65536,
+        "pricing": {"prompt": "0.00000002", "completion": "0"},
+        "architecture": {"output_modalities": ["decisions"]},
+    },
+]
+"""Fixture decisions-filtered /models payload (priced, decision-capable)."""
+
+
+def _fake_openrouter(monkeypatch, models=_OR_MODELS, decisions=_DECISION_MODELS):
+    """Serve /models payloads for both OpenRouter fetches; count chat calls."""
     calls = []
 
     def _fetch():
@@ -538,7 +557,57 @@ def _fake_openrouter(monkeypatch, models=_OR_MODELS):
         return [dict(model) for model in models]
 
     monkeypatch.setattr(live_pricing, "fetch_openrouter_models", _fetch)
+    monkeypatch.setattr(
+        live_pricing,
+        "fetch_openrouter_decision_models",
+        lambda: [dict(model) for model in decisions],
+    )
     return calls
+
+
+class _FakeResponse:
+    """Minimal urlopen context manager serving one JSON payload."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return json.dumps(self._payload).encode("utf-8")
+
+
+class TestFetchDecisionModels:
+    def test_hits_filtered_endpoint_and_returns_data(self, monkeypatch):
+        seen = {}
+
+        def _fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
+            return _FakeResponse({"data": [{"id": "d/1"}]})
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        assert live_pricing.fetch_openrouter_decision_models() == [{"id": "d/1"}]
+        assert seen["url"].startswith("https://openrouter.ai/api/v1/models?")
+        assert "output_modalities=decisions" in seen["url"]
+
+    def test_failure_returns_none(self, monkeypatch):
+        def _boom(request, timeout=None):
+            raise URLError("unreachable")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        assert live_pricing.fetch_openrouter_decision_models() is None
+
+    def test_non_list_data_returns_none(self, monkeypatch):
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            lambda request, timeout=None: _FakeResponse({"data": {"id": "x"}}),
+        )
+        assert live_pricing.fetch_openrouter_decision_models() is None
 
 
 class TestRefreshCaches:
@@ -549,9 +618,21 @@ class TestRefreshCaches:
         assert summary["bedrock"]["models"] == 7
         assert summary["bedrock"]["publication"] == "2026-10-03T00:11:38Z"
         assert summary["openrouter"]["models"] == 2
+        assert summary["decisions"]["models"] == 2
         report = cost_context.refresh_report(summary)
         assert "us-west-2" in report and "7 models" in report
         assert "OpenRouter: 2 models." in report
+
+    def test_refresh_stores_decisions_cache_for_validate(self, monkeypatch):
+        _fake_fetch(monkeypatch)
+        _fake_openrouter(monkeypatch)
+        live_pricing.refresh_caches(region="us-west-2")
+        tables = live_pricing.cached_tables(region="us-west-2")
+        assert tables["decisions"] is not None
+        assert set(tables["decisions"]["models"]) == {
+            "typesafe/jev-1.13",
+            "inception/mercury-decide",
+        }
 
     def test_refresh_bypasses_cooldown(self, monkeypatch):
         monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _r: None)
@@ -571,9 +652,13 @@ class TestRefreshCaches:
         path.write_text(json.dumps(payload), encoding="utf-8")
         monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _r: None)
         monkeypatch.setattr(live_pricing, "fetch_openrouter_models", lambda: None)
+        monkeypatch.setattr(
+            live_pricing, "fetch_openrouter_decision_models", lambda: None
+        )
         summary = live_pricing.refresh_caches(region="us-west-2")
         assert "error" in summary["bedrock"]
         assert "error" in summary["openrouter"]
+        assert "error" in summary["decisions"]
         assert "fetch failed" in cost_context.refresh_report(summary)
         stale = live_pricing.bedrock_live_price(
             "mistral.mistral-large-3-675b-instruct", "us-west-2"
