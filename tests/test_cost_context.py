@@ -276,6 +276,45 @@ class TestCostReport:
         assert "Total: in 3.00M, out 2.00M, $1.9250" in report
 
 
+def _session_row(**overrides):
+    base = {
+        "turn": 1,
+        "input_tokens": 12,
+        "output_tokens": 1,
+        "model": "anthropic.claude-3-haiku-20240307-v1:0",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestReportedRows:
+    def test_actual_row_renders_marked(self):
+        report = cost_report([_session_row(reported_cost=0.0024)], "mystery/acme-1")
+        assert "  turn 1: in 12, out 1, $0.0024 actual" in report
+
+    def test_present_zero_renders_marked_zero(self):
+        report = cost_report([_session_row(reported_cost=0.0)], "mystery/acme-1")
+        assert "  turn 1: in 12, out 1, $0.0000 actual" in report
+
+    def test_none_with_price_renders_bare(self):
+        report = cost_report([_session_row(reported_cost=None)], "mystery/acme-1")
+        assert "  turn 1: in 12, out 1, $0.0000" in report
+        assert "actual" not in report
+
+    def test_none_unpriced_tokens_only(self):
+        row = _session_row(reported_cost=None, model="mystery/acme-1")
+        report = cost_report([row], "mystery/acme-1")
+        assert "$" not in report
+
+    def test_mixed_actual_and_estimate_total(self):
+        turns = [
+            _session_row(reported_cost=0.0024),
+            _session_row(turn=2, input_tokens=4000, output_tokens=0),
+        ]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "Total: in 4.01K, out 1, $0.0034" in report
+
+
 def _routed_event(**overrides):
     base = {
         "ask": 1,
