@@ -1535,3 +1535,10 @@ class TestRoutedPickNoPersist:
     def test_explicit_model_branch_is_sole_persist_call_site(self):
         src = Path(loop_mod.__file__).read_text()
         assert src.count("save_model_choice") == 1
+
+    def test_sole_persist_call_site_is_inside_model_branch(self):
+        lines = Path(loop_mod.__file__).read_text().splitlines()
+        hits = [i for i, ln in enumerate(lines) if "save_model_choice" in ln]
+        assert len(hits) == 1
+        window = "\n".join(lines[max(0, hits[0] - 20) : hits[0]])
+        assert 'action == "model"' in window

@@ -14,7 +14,7 @@ audit_mode: "generic-agent workaround (typed gsd-nyquist-auditor dispatch unavai
 # Phase 08 — Validation Strategy
 
 > Per-phase validation contract for feedback sampling during execution.
-> Covers the Decision-API rework (plans 08-01…08-05, 13 tasks, MODEL-03).
+> Covers the Decision-API rework (plans 08-01…08-07, 19 tasks, MODEL-03).
 
 ---
 
@@ -24,9 +24,9 @@ audit_mode: "generic-agent workaround (typed gsd-nyquist-auditor dispatch unavai
 |----------|-------|
 | **Framework** | pytest 8.x via `uv run pytest` |
 | **Config file** | `pyproject.toml` (`[tool.pytest.ini_options]`, `integration` marker deselected by default) |
-| **Quick run command** | `uv run pytest tests/test_routing.py tests/test_loop_routing.py tests/test_routing_strategy.py tests/test_cost_context.py tests/test_live_pricing.py tests/test_routing_calibration.py -q` |
+| **Quick run command** | `uv run pytest tests/test_routing.py tests/test_loop_routing.py tests/test_routing_strategy.py tests/test_cost_context.py tests/test_live_pricing.py tests/test_routing_calibration.py tests/test_uattest_driver.py -q` |
 | **Full suite command** | `uv run pytest -q` |
-| **Estimated runtime** | ~5s quick / ~42s full (1256 passed, 8 deselected) |
+| **Estimated runtime** | ~5s quick / ~41s full (1274 passed, 8 deselected) |
 
 ---
 
@@ -60,6 +60,9 @@ audit_mode: "generic-agent workaround (typed gsd-nyquist-auditor dispatch unavai
 | 08-06-01 | 06 | 6 | MODEL-03 | T-08-39 | YAML-bool levels fold to on/off strings; int still skips | unit | `uv run pytest tests/test_routing_strategy.py::TestBoolLevelNormalization -q` | ✅ | ✅ green (closes escalated BLOCKER) |
 | 08-06-02 | 06 | 6 | MODEL-03 | T-08-40 | unhashable choice answers hold (None), never raise | unit | `uv run pytest tests/test_routing.py::TestUnhashableChoiceHolds -q` | ✅ | ✅ green |
 | 08-06-03 | 06 | 6 | MODEL-03 | — | cloud probe runs skip local-tag resolution; local still resolves+warms | unit | `uv run pytest tests/test_routing_calibration.py::TestLazyLocalTag -q` | ✅ audit-added | ✅ green |
+| 08-07-01 | 07 | 7 | MODEL-03 | — | RIG_NOVA_MICRO profile form feeds r2/r3/r4 + docs; zero bare form | unit | `uv run pytest tests/test_uattest_driver.py::TestRigModelId -q` | ✅ | ✅ green |
+| 08-07-02 | 07 | 7 | MODEL-03 | T-08-42/43 | fail-fast Turn-failed diagnostic (200-char cap); (n/a) cost lines; pre-send baselines | unit | `uv run pytest tests/test_uattest_driver.py::TestFailFast tests/test_uattest_driver.py::TestWaitForNewBaseline tests/test_uattest_driver.py::TestR3CostBaselines -q` | ✅ | ✅ green |
+| 08-07-03 | 07 | 7 | MODEL-03 | T-08-41 | routed picks never persist; sole save site is the /model branch | unit | `uv run pytest tests/test_loop_routing.py::TestRoutedPickNoPersist -q` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky/partial*
 
@@ -75,10 +78,12 @@ Existing infrastructure covers all phase requirements (pytest suite predates the
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| r2/r3/r4 live rig runs + r1 regression | MODEL-03 | Human-owned live runs: need tmux + OPENROUTER_API_KEY + Ollama + Bedrock + spend (tracked in 08-UAT.md #1–2) | `python3 scripts/uattest/driver.py r2`, `r3`, `r4`, `r1` — expect `R1/R2/R3/R4 PASS` |
+| r2/r3/r4 live rig runs + r1 regression | MODEL-03 | Human-owned live runs: need tmux + OPENROUTER_API_KEY + Ollama + Bedrock + spend. Acceptance recorded 2026-10-12: R2/R3/R4 PASS per 08-07-SUMMARY + 08-VERIFICATION (31/31); re-runs stay human-owned via 08-UAT.md #1–2 | `python3 scripts/uattest/driver.py r2`, `r3`, `r4`, `r1` — expect `R1/R2/R3/R4 PASS` |
 | Probe live run + compare (`--run openrouter`, `--run local`, `--compare`) | MODEL-03 | Human-owned live runs: need live engines + spend; nondeterministic effort reads (tracked in 08-UAT.md #3) | `python3 scripts/route-probe.py --run openrouter && python3 scripts/route-probe.py --run local && python3 scripts/route-probe.py --compare` — expect 20+20 verdicts, exit 0 (maintenance contract: re-run on decision-model id change, directive edit, or criteria rewrite) |
 
-*Static contract guards for the rig scenarios (`TestRigScenarioContracts`: py_compile, zero-spend/both-confidences/side-line asserts, levels advertisement, no-key-material) and the probe runner (`TestProbeRunner`, `TestProbeComposition`, `TestCalibrationBaseline`, `TestRegressionPath`, `TestLazyLocalTag`) run hermetically in `tests/test_routing_calibration.py` (22 tests, green).*
+*Static contract guards for the rig scenarios (`TestRigScenarioContracts`: py_compile, zero-spend/both-confidences/side-line asserts, levels advertisement, no-key-material) and the probe runner (`TestProbeRunner`, `TestProbeComposition`, `TestCalibrationBaseline`, `TestRegressionPath`, `TestLazyLocalTag`) run hermetically in `tests/test_routing_calibration.py` (22 tests, green). Rig driver behavior (`TestRigModelId`, `TestFailFast`, `TestWaitForNewBaseline`, `TestR3CostBaselines`) runs hermetically in `tests/test_uattest_driver.py` (15 tests, green); the routed-pick fence (`TestRoutedPickNoPersist`) in `tests/test_loop_routing.py` (3 tests, green).*
+
+*Live-transcript caveat: `/tmp/uatr8/r2.log`–`r4.log` on this host are the pre-fix failure transcripts (no PASS lines; predate the 08-07 runs), so the recorded R2/R3/R4 PASS acceptance rests on 08-07-SUMMARY.md plus 08-VERIFICATION.md (31/31), not on re-readable transcripts. Not re-run here (billed calls); re-runs remain human-owned per the row above.*
 
 ### BLOCKER (RESOLVED — closed by gap plan 08-06, verified by automated tests)
 
@@ -109,7 +114,7 @@ runs are human-owned via 08-UAT.md.
 - [x] Feedback latency < 41s (quick ~5s)
 - [ ] `nyquist_compliant: true` set in frontmatter — PARTIAL: 0 blocked, 0 escalated; remaining manual-only rows are inherently live-engine runs (tmux + keys + spend) human-owned via 08-UAT.md #1–3
 
-**Approval:** partial 2026-10-12 (generic-agent workaround audit, second pass — nothing blocked)
+**Approval:** partial 2026-10-12 (generic-agent workaround audit, third pass — 08-07 covered, nothing blocked)
 
 ---
 
@@ -153,3 +158,34 @@ confirms the raising resolver fires on the local path. Full suite:
 1256 passed, 8 deselected. Live-engine items (rig r1–r4, probe
 run/compare) recorded as Manual-Only, human-owned via 08-UAT.md —
 not re-escalated.
+
+## Validation Audit 2026-10-12 (third pass, after 08-07 gap closure)
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 4 |
+| Resolved | 4 |
+| Escalated | 0 |
+
+08-07 audited against D1–D5 (read 08-07-PLAN/SUMMARY, driver.py,
+loop.py fence, `TestRigModelId`/`TestFailFast`/baseline classes,
+`TestRoutedPickNoPersist`): shipped coverage was COVERED on every
+happy path (12 rig tests + migrated fence assertions, all green)
+with four durability gaps, all filled hermetically this pass —
+`test_docs_example_uses_profile_form` (D1: the docs cheap-default
+example had only a plan-time grep gate, no durable pin),
+`test_fail_fast_diagnostic_truncates_long_failed_line` (D2: the
+200-char diagnostic cap was unpinned),
+`test_cost_line_shape_contract` (D5: COST_RE had positive
+`%`/`(n/a)` coverage but no false-positive guard),
+`test_sole_persist_call_site_is_inside_model_branch` (D3: the
+sole-call-site gate counted occurrences without verifying the
+remaining site is the explicit /model branch). Vacuity controls
+confirm the new pins fail on regression (bare-form scan flags a
+mutated line; guard sits 12 lines above the single call site).
+Full suite: 1274 passed, 8 deselected. Live R2/R3/R4 PASS
+accepted as Manual-Only evidence from 08-07-SUMMARY +
+08-VERIFICATION (31/31) — billed calls not re-run; note the
+stale-/tmp-transcript caveat above. 08-UAT.md test 1 still reads
+`result: issue` (pre-closure state); updating it is UAT
+re-verification work, out of scope for this audit.

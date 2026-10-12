@@ -25,12 +25,14 @@ created: "2026-10-11"
 | Hook ↔ switch machinery | Routed model id + level applied pre-turn at idle | Validated pick only |
 | CLI ↔ transcript/cost | Routing notes + decision spend | Choice, confidences, tokens, reported cost; never keys |
 | Probe runner ↔ live engines | Fixed labeled asks leave the machine (cloud path only) | Asks, tables, snapshots; never secret values |
+| Routed verdict ↔ global default | FENCED: per-ask picks apply in memory only; only explicit /model crosses into the config file | Explicit choice string only |
+| Rig waits ↔ tmux transcript | Rendered pane text crosses into scripted wait/fail decisions | Transcript lines; fail-fast echoes one failed line locally |
 
 ---
 
 ## Threat Register
 
-Plan-authored register (08-01..08-06 `<threat_model>` blocks): 21 unique threats, all verified against current source 2026-10-12.
+Plan-authored register (08-01..08-07 `<threat_model>` blocks): 24 unique threats, all verified against current source 2026-10-12.
 
 | Threat ID | Category | Component | Severity | Disposition | Mitigation | Status |
 |-----------|----------|-----------|----------|-------------|------------|--------|
@@ -55,6 +57,9 @@ Plan-authored register (08-01..08-06 `<threat_model>` blocks): 21 unique threats
 | T-08-39 | Tampering | _candidate_skip_reason + _parse_candidate | low | mitigate | Bool fold covers levels entries only, `is True/False` identity excludes ints (routing.py:171-227); validate_strategy reports through the shared gate so reports stay truthful | closed |
 | T-08-40 | Denial of service | _validate_choice_shape + validate_choice_answer | low | mitigate | Non-string choice returns None and holds (routing.py:1314,1335); no TypeError escapes; effort inherits via shared check (routing.py:1347); pinned by TestUnhashableChoiceHolds | closed |
 | T-08-SC | Tampering | supply chain | high | accept | Zero new dependencies (stdlib urllib only; pyproject untouched by Phase 8); promptfoo optional with compare-mode fallback (route-probe.py:17-28). See R-08-04. | closed |
+| T-08-41 | Tampering | loop.py routed-pick persist | medium | mitigate | Routed branch applies in memory only (loop.py:1546-1554, FENCE comment); `save_model_choice` sole call site is the explicit `/model` branch (loop.py:2183, gated on `action == "model"`); `apply_model_action` persist-free (no save/config refs); `explicit_save`→session snapshot, `index.ensure`→recency only, `rich.save`→sidecar stash; side path assigns `kwargs["model"]` in memory (loop.py:734-735); every failed/unvalidated pick returns before the switch block; locked by `TestRoutedPickNoPersist` sole-call-site tripwire (test_loop_routing.py:1520-1537) | closed |
+| T-08-42 | Denial of service | driver.py wait_main_end + wait_routed | low | mitigate | `FAIL_RE` (`Turn failed[^\n]*`, driver.py:39) checked each poll iteration in both turn waits, raising a diagnostic naming the wait + failed line (driver.py:127-131,300-304); clean-flow behavior unchanged; tmux via argv list, no shell (driver.py:42-43); no key material in rig (grep clean; strategy save asserted key-free, driver.py:362) | closed |
+| T-08-43 | Information disclosure | Fail-fast diagnostic text | low | accept | The diagnostic echoes ≤200 chars of one failed-turn line into local /tmp rig transcripts with the same visibility as the transcript itself; no new exfiltration path. See R-08-05. | closed |
 
 *Status: open · closed · open — below {block_on} threshold (non-blocking)*
 *Severity: critical > high > medium > low — only open threats at or above workflow.security_block_on count toward threats_open*
@@ -93,6 +98,7 @@ Retired threats do not resurface in future audit runs.
 | R-08-02 | T-08-SC (chat-era) | Chat-era supply-chain acceptance; superseded by R-08-04. | secure-phase audit (generic-agent workaround) | 2026-10-11 |
 | R-08-03 | T-08-35 | Doc examples are labeled starting points with dates; setup enumerates the live catalogs and validate judges the real file, so stale docs cannot silently misconfigure. | secure-phase audit (generic-agent workaround) | 2026-10-12 |
 | R-08-04 | T-08-SC | Phase 8 added no new dependencies (stdlib urllib + already-declared pyyaml/prompt-toolkit/platformdirs); promptfoo is optional with a built-in compare fallback, so no install-channel risk lands in-repo. | secure-phase audit (generic-agent workaround) | 2026-10-12 |
+| R-08-05 | T-08-43 | Fail-fast diagnostics echo at most 200 chars of one failed-turn transcript line into local /tmp rig logs — same visibility as the transcript the rig already captures; no network path, no secret values (turn-failure lines carry provider error text, never keys). | secure-phase audit (generic-agent workaround) | 2026-10-12 |
 
 *Accepted risks do not resurface in future audit runs.*
 
@@ -105,6 +111,7 @@ Retired threats do not resurface in future audit runs.
 | 2026-10-11 | 13 | 12 | 1 (T-08-07, non-blocking medium) | gsd-security-auditor via generic-agent workaround (typed dispatch unavailable) — plan-driven audit, ASVS L1, block_on high |
 | 2026-10-11 | 13 | 13 | 0 | Gap fix: directives truncated to ASK_TRUNCATE_CHARS in `build_routing_prompt` + `test_prompt_truncates_long_directives` (suite 1067 passed) |
 | 2026-10-12 | 21 | 21 | 0 | gsd-security-auditor via generic-agent workaround (typed dispatch unavailable) — Decision-API rework re-audit: retired T-08-01..T-08-12, verified T-08-21..T-08-40 + T-08-SC against current source, ASVS L1, block_on high; routing suite 306 passed / 2 deselected (integration) |
+| 2026-10-12 | 24 | 24 | 0 | gsd-security-auditor via generic-agent workaround (typed dispatch unavailable) — 08-07 refresh: verified T-08-41 fence (global default truly untouched; sole writer explicit /model), T-08-42 fail-fast, T-08-43 accepted (R-08-05); prior 21 unaffected (ROUTING.md labels intact); ASVS L1, block_on high; 70 passed (test_loop_routing + test_uattest_driver) |
 
 ---
 

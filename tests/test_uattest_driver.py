@@ -47,6 +47,16 @@ class TestRigModelId:
             assert "RIG_NOVA_MICRO" in src, f"{name} does not use the shared constant"
             assert BARE_FORM not in src, f"{name} still hardcodes the bare id"
 
+    def test_docs_example_uses_profile_form(self):
+        docs = (REPO_ROOT / "docs" / "ROUTING.md").read_text()
+        assert PROFILE_FORM in docs
+        hits = [
+            ln
+            for ln in docs.splitlines()
+            if BARE_FORM in ln and not ln.strip().startswith("#")
+        ]
+        assert hits == []
+
 
 FAILED_TURN = (
     "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n"
@@ -98,6 +108,22 @@ class TestFailFast:
         text, marker = driver.wait_routed("sess", 1, "routed-line")
         assert text == CLEAN_ROUTED
         assert marker is None
+
+    def test_fail_fast_diagnostic_truncates_long_failed_line(self, monkeypatch):
+        long_line = "Turn failed (" + "E" * 300 + ")"
+        monkeypatch.setattr(driver, "pane_text", lambda sess: long_line + "\n> ")
+        with pytest.raises(AssertionError) as excinfo:
+            driver.wait_main_end("sess", timeout=1)
+        echoed = str(excinfo.value).split("main-end: ", 1)[1]
+        assert echoed == long_line[:200]
+        assert len(echoed) == 200
+
+    def test_cost_line_shape_contract(self):
+        assert driver.COST_RE.findall(CLEAN_MAIN_END) != []
+        assert driver.COST_RE.findall(NA_WINDOW_MAIN_END) != []
+        assert driver.COST_RE.findall("turn output\n> ") == []
+        assert driver.COST_RE.findall("estimate (soon) $5\n> ") == []
+        assert driver.COST_RE.findall("(12) $0.0012\n> ") == []
 
 
 class TestWaitForNewBaseline:
