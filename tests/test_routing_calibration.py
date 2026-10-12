@@ -144,9 +144,32 @@ class TestRegressionPath:
             assert "--compare" in docstring
 
 
+def _load_runner():
+    spec = importlib.util.spec_from_file_location("route_probe", RUNNER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _canned_record(probe_id):
+    return {
+        "probe": probe_id,
+        "gated": None,
+        "detail": "hold for test",
+        "top1": "candidate-x",
+        "fault": None,
+        "had_answers": True,
+    }
+
+
 @pytest.fixture(scope="module")
 def driver():
     return _load_driver()
+
+
+@pytest.fixture(scope="module")
+def runner():
+    return _load_runner()
 
 
 class TestRigScenarioContracts:
@@ -187,3 +210,73 @@ class TestRigScenarioContracts:
     def test_rig_rejects_key_material_in_strategy_files(self, driver):
         source = inspect.getsource(driver.scenario_r1)
         assert '"api_key" not in saved' in source
+
+
+class TestLazyLocalTag:
+    """GAP-03: cloud runs never touch local-tag resolution (D-06).
+
+    Commits the 08-06 /tmp scratch check as a durable hermetic test:
+    a cloud run must complete with a raising resolver. Fails on the
+    pre-fix unconditional ``resolve_local_model()`` call in ``cmd_run``.
+    """
+
+    def _stub_probes(self, runner, monkeypatch):
+        seen = []
+
+        def _fake_run(probe, *, engine, decision_model, local_model):
+            seen.append(local_model)
+            return _canned_record(probe["id"])
+
+        monkeypatch.setattr(runner, "load_probes", lambda: [{"id": "p1"}, {"id": "p2"}])
+        monkeypatch.setattr(runner, "run_probe", _fake_run)
+        return seen
+
+    def test_cloud_run_completes_with_raising_resolver(
+        self, runner, tmp_path, monkeypatch
+    ):
+        def _boom(base_url=None):
+            raise SystemExit("no decision model pulled")
+
+        monkeypatch.setattr(runner, "resolve_local_model", _boom)
+        seen = self._stub_probes(runner, monkeypatch)
+        out = tmp_path / "cloud.jsonl"
+        rc = runner.cmd_run(
+            "openrouter", out=out, decision_model="decider", local_model=None
+        )
+        assert rc == 0
+        assert len(out.read_text().splitlines()) == 2
+        assert seen == [runner.LOCAL_MODEL_PIN] * 2
+
+    def test_explicit_local_model_honored_on_cloud_path(
+        self, runner, tmp_path, monkeypatch
+    ):
+        def _boom(base_url=None):
+            raise SystemExit("resolver must not fire")
+
+        monkeypatch.setattr(runner, "resolve_local_model", _boom)
+        seen = self._stub_probes(runner, monkeypatch)
+        rc = runner.cmd_run(
+            "openrouter",
+            out=tmp_path / "cloud.jsonl",
+            decision_model="decider",
+            local_model="custom:tag",
+        )
+        assert rc == 0
+        assert seen == ["custom:tag"] * 2
+
+    def test_local_run_still_resolves_and_warms(self, runner, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            runner, "resolve_local_model", lambda base_url=None: "resolved:tag"
+        )
+        warmed = []
+        monkeypatch.setattr(runner, "_warm_local", warmed.append)
+        seen = self._stub_probes(runner, monkeypatch)
+        rc = runner.cmd_run(
+            "local",
+            out=tmp_path / "local.jsonl",
+            decision_model="decider",
+            local_model=None,
+        )
+        assert rc == 0
+        assert warmed == ["resolved:tag"]
+        assert seen == ["resolved:tag"] * 2
