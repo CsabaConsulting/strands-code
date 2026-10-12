@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 08-model-routing-with-decision-models
 source: [08-VERIFICATION.md]
 started: 2026-10-12T08:05:00Z
-updated: 2026-10-12T09:30:00Z
+updated: 2026-10-12T10:00:00Z
 ---
 
 ## Current Test
@@ -43,8 +43,15 @@ blocked: 0
   reason: "User reported: r3 TIMEOUT waiting for main-end; r4 TIMEOUT waiting for side-spawn"
   severity: blocker
   test: 1
-  artifacts: [scripts/uattest/driver.py]
-  missing: []
+  root_cause: "Rig strategies hardcode bedrock/amazon.nova-micro-v1:0, whose base id supports only INFERENCE_PROFILE throughput in us-west-2 (confirmed via get-foundation-model); every routed turn to it fails at ConverseStream. r3 hung because wait_main_end watches only the cost line that failed turns never print (loop.py break skips record_turn_metrics). r4's main turn failed before the /btw stagger so the side ask landed on idle, where /btw is by design a main turn (router D-01). No product bug."
+  artifacts:
+    - path: "scripts/uattest/driver.py"
+      issue: "write_strategy blocks (r2/r3/r4) hardcode throughput-incompatible Bedrock id; wait_main_end/wait_routed lack fail-fast on 'Turn failed'"
+  missing:
+    - "Replace rig candidate with bedrock/us.amazon.nova-micro-v1:0 (ACTIVE SYSTEM_DEFINED profile, validated invokable-form)"
+    - "Fail fast in rig on 'Turn failed' instead of hanging to timeout"
+    - "Restore poisoned global default model (done during diagnosis)"
+  debug_session: .planning/debug/rig-bedrock-model-id.md
   diagnosis: >-
     Single root cause, rig/env-side, no product bug. Rig strategies hardcode
     candidate bedrock/amazon.nova-micro-v1:0, which Bedrock rejects in this
