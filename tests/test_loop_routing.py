@@ -2,7 +2,7 @@
 
 Drives run_loop end to end with a mocked OpenRouter decision: the
 urllib-adjacent seam patched is decide_via_openrouter (canned
-EngineResult), while decide/parse/prompt and apply_model_action run
+EngineResult), while decide/validate/gate and apply_model_action run
 for real.
 """
 
@@ -36,6 +36,7 @@ from strands_code_cli.skills import SkillIndex
 
 HAIKU = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_MICRO = "bedrock/amazon.nova-micro-v1:0"
+SONNET = "bedrock/anthropic.claude-sonnet-4-6"
 
 
 def _strategy(candidates=None) -> RoutingStrategy:
@@ -53,13 +54,26 @@ def _strategy(candidates=None) -> RoutingStrategy:
     )
 
 
-def _pick_result(
-    model: str, effort: str = "high", usage: tuple[int, int] = (0, 0)
+def _table_result(
+    choice: str = HAIKU,
+    probs: dict | None = None,
+    usage: tuple = (0, 0, None),
+    confidence: float = 0.85,
 ) -> EngineResult:
+    table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
     return EngineResult(
-        text=json.dumps({"model": model, "effort": effort, "why": "cheap and fast"}),
+        answers={
+            "pick_model": {
+                "type": "choice",
+                "choice": choice,
+                "probabilities": dict(table),
+                "confidence": confidence,
+            }
+        },
         input_tokens=usage[0],
         output_tokens=usage[1],
+        cost=usage[2],
+        model="typesafe/jev-1.13-20260917",
     )
 
 
@@ -157,7 +171,7 @@ class TestPreTurnHook:
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -174,15 +188,19 @@ class TestPreTurnHook:
         lines = _routed_lines(out)
         assert len(lines) == 1  # exactly one transcript line
         flat = " ".join(out.split())  # console width may wrap the line
-        assert HAIKU in flat and "(high)" in flat
-        assert "cheap and fast" in flat and "/ask vs" in flat
+        assert HAIKU in flat and "(low)" in flat  # first advertised level
+        assert "85%" in flat and "~$" in flat and "/ask vs" in flat
 
     def test_same_model_pick_skips_switch_but_prints_line(
         self, tmp_path, monkeypatch, capsys
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(NOVA_MICRO, "low")
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: _table_result(
+                NOVA_MICRO, probs={HAIKU: 0.15, NOVA_MICRO: 0.85}
+            ),
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -201,7 +219,7 @@ class TestPreTurnHook:
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: EngineResult(text=None)
+            routing_mod, "decide_via_openrouter", lambda **kw: EngineResult(answers=None)
         )
         seed = [
             {"role": "user", "content": [{"text": "earlier"}]},
@@ -229,13 +247,18 @@ class TestPreTurnHook:
     ):
         bad = "frobnicate/xx"
         strategy = _strategy(
-            candidates=[RoutingCandidate(id=bad), RoutingCandidate(id=NOVA_MICRO)]
+            candidates=[
+                RoutingCandidate(id=bad, levels=["off"]),
+                RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
+            ]
         )
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
         # "off" passes effort validation so the pick reaches the resolve
         # guard, which must still hold with history untouched.
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(bad, "off")
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: _table_result(bad, probs={bad: 0.9, NOVA_MICRO: 0.1}),
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -256,7 +279,7 @@ class TestPreTurnHook:
         strategy.quiet = True
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -273,12 +296,14 @@ class TestPreTurnHook:
         self, tmp_path, monkeypatch, capsys
     ):
         # nova-micro advertises "low" but supports no thinking: the pick
-        # parses yet the pre-mutation gate rejects it.
+        # gates yet the passthrough effort fails validation.
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
             routing_mod,
             "decide_via_openrouter",
-            lambda **kw: _pick_result(NOVA_MICRO, "low"),
+            lambda **kw: _table_result(
+                NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
+            ),
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -292,7 +317,10 @@ class TestPreTurnHook:
         assert agent.model == "sentinel"
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the note
-        assert f"Routing held on {HAIKU} (openrouter failed; retrying next ask)" in flat
+        assert (
+            f"Routing held on {HAIKU} "
+            f"(effort 'low' unsupported by {NOVA_MICRO}; retrying next ask)"
+        ) in flat
         assert "Routed \u2192" not in out
 
     def test_accepted_effort_reaches_resolved_model(
@@ -302,7 +330,7 @@ class TestPreTurnHook:
 
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
         )
         real_resolve = harness_models.resolve_model
         efforts: list = []
@@ -321,8 +349,76 @@ class TestPreTurnHook:
             monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
         )
         assert saved == [HAIKU]
-        assert efforts == ["high"]  # routed level reached the resolved model
+        assert efforts == ["low"]  # first advertised level reached the model
         assert len(_routed_lines(capsys.readouterr().out)) == 1
+
+    def test_threshold_hold_prints_confidence_note(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, levels=["low", "high"]),
+                RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
+                RoutingCandidate(id=SONNET, levels=["low", "high"]),
+            ]
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: _table_result(
+                HAIKU, probs={HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}
+            ),
+        )
+        seed = [{"role": "user", "content": [{"text": "earlier"}]}]
+        agent = SimpleNamespace(
+            messages=[dict(m) for m in seed], model="sentinel", _session_manager=None
+        )
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(monkeypatch, ["hello"], agent, index, HAIKU, _quiet_invoke(calls))
+        assert calls  # the turn still runs, on the current model
+        assert agent.messages == seed
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert (
+            f"Routing held on {HAIKU} (confidence 41% < 70%; retrying next ask)"
+            in flat
+        )
+        assert "Routed \u2192" not in out
+
+    def test_near_tie_routes_cheaper_with_marker(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, levels=["low", "high"]),
+                RoutingCandidate(id=SONNET, levels=["low", "high"]),
+            ]
+        )
+        strategy.confidence_threshold = 0.4
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        prices = {HAIKU: (3.0, 15.0), SONNET: (0.5, 2.0)}
+        monkeypatch.setattr(routing_mod, "price_for", lambda mid: prices.get(mid))
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: _table_result(
+                HAIKU, probs={HAIKU: 0.52, SONNET: 0.48}
+            ),
+        )
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
+        )
+        assert saved == [SONNET]  # near-tie substituted the cheaper candidate
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the line
+        assert SONNET in flat and "tie-break" in flat
 
     def test_empty_candidates_skip_silently(self, tmp_path, monkeypatch, capsys):
         strategy = _strategy(candidates=[])
@@ -388,7 +484,7 @@ class TestRoutingToggle:
     def test_route_on_re_enables_hook(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: _pick_result(HAIKU)
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
@@ -659,7 +755,7 @@ class TestCostRouting:
             tmp_path,
             monkeypatch,
             _strategy(),
-            _pick_result(HAIKU, usage=(120, 25)),
+            _table_result(HAIKU, usage=(120, 25, 0.0002)),
             events,
         )
         assert served == HAIKU
@@ -669,11 +765,14 @@ class TestCostRouting:
                 "ask": 1,
                 "side": False,
                 "model": HAIKU,
-                "effort": "high",
-                "why": "cheap and fast",
+                "effort": "low",
+                "model_confidence": 0.85,
+                "effort_confidence": None,
+                "tie_break": False,
                 "engine": "openrouter",
                 "input_tokens": 120,
                 "output_tokens": 25,
+                "decision_cost": 0.0002,
                 "held": False,
                 "decision_model": "cheap/decider",
             }
@@ -760,7 +859,7 @@ class TestCostRouting:
         strategy.quiet = True
         events: list = []
         served, _ = _hook(
-            tmp_path, monkeypatch, strategy, EngineResult(text=None), events
+            tmp_path, monkeypatch, strategy, EngineResult(answers=None), events
         )
         assert served == NOVA_MICRO  # held current
         out = capsys.readouterr().out
@@ -774,7 +873,7 @@ class TestCostRouting:
     def test_held_ask_appends_held_event(self, tmp_path, monkeypatch):
         events: list = []
         served, _ = _hook(
-            tmp_path, monkeypatch, _strategy(), EngineResult(text=None), events
+            tmp_path, monkeypatch, _strategy(), EngineResult(answers=None), events
         )
         assert served == NOVA_MICRO
         assert events == [
@@ -783,10 +882,13 @@ class TestCostRouting:
                 "side": False,
                 "model": NOVA_MICRO,
                 "effort": "",
-                "why": "",
+                "model_confidence": None,
+                "effort_confidence": None,
+                "tie_break": False,
                 "engine": "openrouter",
                 "input_tokens": 0,
                 "output_tokens": 0,
+                "decision_cost": None,
                 "held": True,
                 "decision_model": "cheap/decider",
             }
@@ -852,18 +954,19 @@ class TestSideRouting:
 
         def _engine(**kwargs):
             seen.append(kwargs)
-            return _pick_result(HAIKU, usage=(40, 8))
+            return _table_result(HAIKU, usage=(40, 8, 0.0001))
 
         events: list = []
         ctx, builds = _side_ctx(monkeypatch, _side_agent(), _engine, events)
         ctx.build("why is the sky blue?")
         assert len(seen) == 1  # one decision per spawn
-        assert "Side ask: true" in seen[0]["user"]
-        assert "why is the sky blue?" in seen[0]["user"]
+        assert seen[0]["state"]["side"] is True
+        assert seen[0]["state"]["ask"] == "why is the sky blue?"
         assert len(builds) == 1
         assert events[0]["side"] is True
         assert events[0]["held"] is False
         assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (40, 8)
+        assert events[0]["decision_cost"] == 0.0001
 
     def test_pick_reaches_build_with_resolved_model_and_effort(
         self, monkeypatch, capsys
@@ -883,7 +986,7 @@ class TestSideRouting:
         events: list = []
         agent = _side_agent()
         ctx, builds = _side_ctx(
-            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events
+            monkeypatch, agent, lambda **kw: _table_result(HAIKU), events
         )
         ctx.build("deep refactor?")
         assert len(builds) == 1
@@ -893,8 +996,8 @@ class TestSideRouting:
         assert model_id_of(kwargs["model"], "?").endswith(
             "anthropic.claude-haiku-4-5-20251001-v1:0"
         )
-        assert kwargs["effort"] == "high"
-        assert seen == [((HAIKU, HAIKU), {"effort": "high"})]
+        assert kwargs["effort"] == "low"  # first advertised level
+        assert seen == [((HAIKU, HAIKU), {"effort": "low"})]
         out = capsys.readouterr().out
         assert "Routed (btw)" in out
         assert "haiku" in " ".join(out.split())
@@ -905,7 +1008,7 @@ class TestSideRouting:
         events: list = []
         agent = _side_agent()
         ctx, builds = _side_ctx(
-            monkeypatch, agent, lambda **kw: EngineResult(text=None), events
+            monkeypatch, agent, lambda **kw: EngineResult(answers=None), events
         )
         ctx.build("quick question")
         assert len(builds) == 1
@@ -957,7 +1060,7 @@ class TestSideRouting:
 
         def _engine(**kwargs):
             calls.append(kwargs)
-            return _pick_result(HAIKU)
+            return _table_result(HAIKU)
 
         events: list = []
         agent = _side_agent()
@@ -977,7 +1080,7 @@ class TestSideRouting:
         events: list = []
         agent = _side_agent()
         ctx, builds = _side_ctx(
-            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events, strategy
+            monkeypatch, agent, lambda **kw: _table_result(HAIKU), events, strategy
         )
         ctx.build("deep refactor?")
         assert builds[0][0]["model"] is not agent.model  # pick still applies
@@ -993,7 +1096,7 @@ class TestSideRouting:
         events: list = []
         agent = _side_agent()
         ctx, builds = _side_ctx(
-            monkeypatch, agent, lambda **kw: _pick_result(HAIKU), events
+            monkeypatch, agent, lambda **kw: _table_result(HAIKU), events
         )
         ctx.build("deep refactor?")
         assert builds[0][0]["model"] is agent.model
@@ -1006,8 +1109,8 @@ class TestSideRouting:
     def test_same_model_pick_skips_resolve_and_still_routes(
         self, monkeypatch, capsys
     ):
-        # UAT R4: live deciders return junk efforts ("?") on stay picks;
-        # like the main hook, the side path must not resolve those.
+        # Same-model stay picks never resolve: the hook applies no
+        # switch and no effort, so there is nothing to judge.
         import strands_harness.models as harness_models
 
         def _boom(*args, **kwargs):
@@ -1016,8 +1119,8 @@ class TestSideRouting:
         monkeypatch.setattr(harness_models, "resolve_model", _boom)
         strategy = _strategy(
             candidates=[
-                RoutingCandidate(id=HAIKU, tier="small"),
-                RoutingCandidate(id=NOVA_MICRO, tier="tiny"),
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low", "high"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
             ]
         )
         events: list = []
@@ -1025,7 +1128,9 @@ class TestSideRouting:
         ctx, builds = _side_ctx(
             monkeypatch,
             agent,
-            lambda **kw: _pick_result(NOVA_MICRO, effort="?"),
+            lambda **kw: _table_result(
+                NOVA_MICRO, probs={HAIKU: 0.15, NOVA_MICRO: 0.85}
+            ),
             events,
             strategy,
         )
@@ -1039,8 +1144,8 @@ class TestSideRouting:
     def test_unreasoned_effort_holds_to_parent_silently(
         self, monkeypatch, capsys
     ):
-        # Thinking effort on a non-reasoning candidate passes the parse
-        # (level advertised) but the effort gate must still hold.
+        # Thinking effort on a non-reasoning candidate passes the gate
+        # but the fast-path effort check must still hold.
         strategy = _strategy(
             candidates=[
                 RoutingCandidate(
@@ -1050,15 +1155,14 @@ class TestSideRouting:
         )
         events: list = []
         agent = _side_agent()
-        ctx, builds = _side_ctx(
-            monkeypatch,
-            agent,
-            lambda **kw: _pick_result("openrouter/some-chat", effort="high"),
-            events,
-            strategy,
-        )
+
+        def _boom(**kwargs):
+            raise AssertionError("single candidate: no engine call")
+
+        ctx, builds = _side_ctx(monkeypatch, agent, _boom, events, strategy)
         ctx.build("deep refactor?")
         assert builds[0][0]["model"] is agent.model
         out = capsys.readouterr().out
         assert "Routed" not in out
         assert events[0]["held"] is True
+        assert events[0]["engine"] == "none"

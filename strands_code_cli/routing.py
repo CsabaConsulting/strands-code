@@ -3,11 +3,13 @@
 A routing strategy (candidate model set + freeform directives, global or
 repo file with repo winning whole-file) arms routing; without one the
 CLI behaves exactly as before (D-01). Each configured ask routes
-pre-turn at idle through an ordered engine registry — OpenRouter chat
-completions first, the local Ollama daemon second, hold-current
-last — and the pick applies through the existing switch machinery.
-No heuristic ever picks a model: every engine, parse, or resolve
-failure holds the current model with history byte-identical (D-08).
+pre-turn at idle through an ordered engine registry — the OpenRouter
+Decisions API first, the local Ollama System One daemon second,
+hold-current last — and the pick applies through the existing switch
+machinery. The model judges (typed probability tables); code gates
+(threshold plus tie-margin) and computes. No heuristic ever picks a
+model: every engine, validation, gate, or resolve failure holds the
+current model with history byte-identical (D-08).
 """
 
 from __future__ import annotations
@@ -26,7 +28,6 @@ from strands_code_cli.cost_context import (
     cost_for,
     estimate_messages_tokens,
     price_for,
-    window_for,
 )
 from strands_code_cli.model_switch import supports_reasoning
 
@@ -42,8 +43,26 @@ ASK_TRUNCATE_CHARS = 2000
 DECISION_TIMEOUT_SECONDS = 10
 """Per-engine network ceiling; a slow decision call holds, never blocks."""
 
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 """Default decision engine transport (D-06)."""
+
+DEFAULT_TIE_MARGIN = 0.05
+"""Provisional near-tie gap: top-two within this routes the cheaper one.
+
+Shipped placeholder — plan 08-05 re-derives it from real probe
+distributions, never round numbers (Pitfall 2 floors the grid at 0.01).
+"""
+
+DEFAULT_CONFIDENCE_THRESHOLD = 0.70
+"""Provisional model gate: top-1 probability below this holds current.
+
+Shipped placeholder — plan 08-05 re-derives it from real probe
+distributions, never round numbers. Always compared against the
+pick's top-1 probability, never the vendor confidence field (D-16).
+"""
+
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 524, 529})
+"""Decision-API codes worth one retry; every 4xx holds immediately."""
 
 OLLAMA_DEFAULT_HOST = "http://127.0.0.1:11434"
 """Default local daemon address (the harness ``OLLAMA_HOST`` default)."""
@@ -54,8 +73,15 @@ OLLAMA_TIMEOUT_SECONDS = 30
 OLLAMA_KEEP_ALIVE = "5m"
 """Keep the decision model warm between asks (one daemon round trip)."""
 
-_TOP_LEVEL_KEYS = {"candidates", "directives", "engine", "quiet"}
-_CANDIDATE_KEYS = {"id", "tier", "note", "levels", "benchmarks"}
+_TOP_LEVEL_KEYS = {
+    "candidates",
+    "directives",
+    "engine",
+    "quiet",
+    "tie_margin",
+    "confidence_threshold",
+}
+_CANDIDATE_KEYS = {"id", "tier", "note", "levels", "benchmarks", "criteria"}
 _BENCHMARK_KEYS = {"swe_verified", "lmarena_coding", "aa_index", "pulled"}
 _ENGINE_KEYS = {"primary", "decision_model", "local_model", "local_base_url"}
 
@@ -69,6 +95,7 @@ class RoutingCandidate:
     note: str | None = None
     levels: list[str] | None = None
     benchmarks: dict[str, Any] | None = None
+    criteria: str | None = None
 
 
 @dataclass
@@ -83,22 +110,32 @@ class RoutingEngine:
 
 @dataclass
 class RoutingStrategy:
-    """Parsed strategy: candidates + directives + engine + source path."""
+    """Parsed strategy: candidates + directives + engine + gate knobs."""
 
     candidates: list[RoutingCandidate] = field(default_factory=list)
     directives: str = ""
     engine: RoutingEngine = field(default_factory=RoutingEngine)
     quiet: bool = False
+    tie_margin: float = DEFAULT_TIE_MARGIN
+    confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
     source: Path | None = None
 
 
 @dataclass(frozen=True)
 class RoutingPick:
-    """One parsed decision: model id + thinking level + one-line why."""
+    """One gated decision: model id + thinking level + confidences.
+
+    ``model_confidence`` is the routed model's own table probability
+    (the tie-break runner-up read when substituted, never the vendor
+    confidence field); ``effort_confidence`` stays None until the
+    effort decision call lands in plan 08-02.
+    """
 
     model: str
     effort: str
-    why: str
+    model_confidence: float | None = None
+    effort_confidence: float | None = None
+    tie_break: bool = False
 
 
 def default_global_strategy_path() -> Path:
@@ -145,6 +182,9 @@ def _candidate_skip_reason(entry: object, pos: int) -> str | None:
         unknown_bench = set(benchmarks) - _BENCHMARK_KEYS
         if unknown_bench:
             return f"unknown benchmark keys: {sorted(unknown_bench)}"
+    criteria = entry.get("criteria")
+    if criteria is not None and not isinstance(criteria, str):
+        return "'criteria' not a string"
     return None
 
 
@@ -164,6 +204,7 @@ def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
         note=entry.get("note"),
         levels=list(levels) if levels is not None else None,
         benchmarks=dict(benchmarks) if benchmarks is not None else None,
+        criteria=entry.get("criteria"),
     )
 
 
@@ -223,6 +264,27 @@ def _parse_engine(raw: object) -> RoutingEngine:
     return engine
 
 
+def _parse_knob(value: object, name: str, default: float) -> float:
+    """One gate knob: missing defaults silently, wrong warns and defaults.
+
+    The loader stays fail-soft (routing keeps running on the default);
+    ``validate_strategy`` is the strict judge that fails out-of-range
+    knobs with a fix line.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        logger.warning("Ignoring routing %r (not a number); using %s", name, default)
+        return default
+    number = float(value)
+    if not 0.0 <= number <= 1.0:
+        logger.warning(
+            "Ignoring routing %r (%s outside 0..1); using %s", name, value, default
+        )
+        return default
+    return number
+
+
 def _parse_strategy(data: dict[str, Any], source: Path) -> RoutingStrategy:
     """Normalize one parsed YAML mapping (unknown top-level keys default)."""
     unknown = set(data) - _TOP_LEVEL_KEYS
@@ -254,6 +316,12 @@ def _parse_strategy(data: dict[str, Any], source: Path) -> RoutingStrategy:
         directives=directives,
         engine=_parse_engine(data.get("engine")),
         quiet=quiet,
+        tie_margin=_parse_knob(data.get("tie_margin"), "tie_margin", DEFAULT_TIE_MARGIN),
+        confidence_threshold=_parse_knob(
+            data.get("confidence_threshold"),
+            "confidence_threshold",
+            DEFAULT_CONFIDENCE_THRESHOLD,
+        ),
         source=source,
     )
 
@@ -441,7 +509,7 @@ def _candidate_fix(reason: str, pos: int) -> str:
     if reason.startswith("unknown keys:"):
         return (
             f"remove the unknown keys from candidates[{pos}] "
-            "(allowed: id, tier, note, levels, benchmarks)"
+            "(allowed: id, tier, note, levels, benchmarks, criteria)"
         )
     if reason == "missing id":
         return f"add id: <provider/model> to candidates[{pos}]"
@@ -458,6 +526,8 @@ def _candidate_fix(reason: str, pos: int) -> str:
             f"remove the unknown keys from candidates[{pos}].benchmarks "
             "(allowed: swe_verified, lmarena_coding, aa_index, pulled)"
         )
+    if reason == "'criteria' not a string":
+        return f"make candidates[{pos}].criteria a string"
     return f"repair candidates[{pos}] ({reason})"
 
 
@@ -680,77 +750,78 @@ def validate_strategy(
     return ValidationReport(valid=valid, source=source, lines=lines)
 
 
-_SYSTEM_PROMPT = """You route coding asks to exactly one candidate model. Reply with JSON only: {"model": "<candidate id>", "effort": "<level>", "why": "<=12 words>"}.
-Rules:
-- "model" MUST be one id from the candidate table verbatim.
-- "effort" MUST be one of the candidate's advertised levels.
-- Prefer STAYING on the current model unless another is clearly better."""
+_MODEL_INSTRUCTIONS_BASE = (
+    "Which candidate model should serve the ask in `ask`? "
+    "Judge the ask, not its length. "
+)
 
 
-def _candidate_row(candidate: RoutingCandidate) -> str:
-    """One candidate table line with live price and window values."""
-    try:
-        prices = price_for(candidate.id)
-    except Exception:
-        prices = None
-    if prices is None:
-        price_cell = "n/a per 1M"
-    else:
-        price_cell = f"${prices[0]:g}/${prices[1]:g} per 1M"
-    try:
-        window = window_for(candidate.id)
-    except Exception:
-        window = None
-    window_cell = str(window) if window is not None else "n/a"
-    tier_cell = candidate.tier if candidate.tier else "-"
-    levels_cell = ",".join(candidate.levels) if candidate.levels else "-"
-    return f"{candidate.id} | {price_cell} | {window_cell} | {tier_cell} | {levels_cell}"
+def build_decision_state(*, ask: str, directives: str, side: bool) -> dict[str, Any]:
+    """Build the Decision-API state for one ask (T-08-23).
 
-
-def build_routing_prompt(
-    *,
-    directives: str,
-    candidates: list[RoutingCandidate],
-    current_model: str,
-    side: bool,
-    ask: str,
-) -> tuple[str, str]:
-    """Build the (system, user) decision prompt for one ask.
-
-    The user message carries directives, one candidate table line per
-    model, the current model plus the side flag, then the ask text.
-    Directives and ask are each truncated to ASK_TRUNCATE_CHARS so a
-    malicious repo strategy file cannot inject unbounded text into the
-    paid decision call (T-08-07). No history, tool results, file
-    contents, or catalog descriptions ever enter the prompt (T-08-02).
+    Ask plus directives plus the side flag only — no history, tool
+    results, file contents, or candidate stats. Ask and directives are
+    each truncated to ASK_TRUNCATE_CHARS so a malicious repo strategy
+    file cannot inject unbounded text into the paid decision call.
     """
-    lines = [
-        "User directives:",
-        directives[:ASK_TRUNCATE_CHARS] if directives else "(none)",
-        "",
-    ]
-    lines.append("Candidate table (id | $in/$out per 1M | window | tier | levels):")
-    lines.extend(_candidate_row(candidate) for candidate in candidates)
-    lines.append("")
-    lines.append(f"Current model: {current_model}. Side ask: {str(side).lower()}.")
-    lines.append("")
-    lines.append(ask[:ASK_TRUNCATE_CHARS])
-    return (_SYSTEM_PROMPT, "\n".join(lines))
+    return {
+        "ask": ask[:ASK_TRUNCATE_CHARS],
+        "directives": directives[:ASK_TRUNCATE_CHARS] if directives else "",
+        "side": side,
+    }
+
+
+def _criteria_text(candidate: RoutingCandidate) -> str:
+    """One criteria prose line: criteria, else note, tier, or the id.
+
+    The option name describing itself is the last resort (the Clef
+    ``criteria: null`` precedent); blank strings count as missing.
+    """
+    for field in (candidate.criteria, candidate.note, candidate.tier):
+        if isinstance(field, str) and field.strip():
+            return field
+    return candidate.id
+
+
+def build_model_question(
+    *, candidates: list[RoutingCandidate], directives: str
+) -> dict[str, Any]:
+    """Build the pick_model choice question (D-02, D-07).
+
+    Criteria map each candidate id to its criteria prose; directives
+    append to the instructions so they shape the judgment directly.
+    Prices, windows, and benchmarks never enter the call — decision
+    models do no quantities, so they stay code-side (the tie-break
+    reads the almanac instead). No ``none`` criterion: below-threshold
+    tables hold code-side (D-16).
+    """
+    shaped = directives[:ASK_TRUNCATE_CHARS] if directives else ""
+    return {
+        "type": "choice",
+        "instructions": _MODEL_INSTRUCTIONS_BASE + shaped,
+        "criteria": {
+            candidate.id: _criteria_text(candidate) for candidate in candidates
+        },
+    }
 
 
 @dataclass(frozen=True)
 class EngineResult:
-    """One engine try: raw assistant text plus decision-call token usage.
+    """One engine try: typed answers plus usage triple plus snapshot.
 
-    ``text`` is None on any failure (no key, network, timeout,
+    ``answers`` is None on any failure (no key, network, timeout,
     malformed payload); the token counts come from the engine
-    response usage fields and default to zeros when absent, feeding
-    the /cost routing section (T-08-08).
+    response usage fields and default to zeros when absent, ``cost``
+    carries the reported USD spend (None when the shape omits it, as
+    local calls do), and ``model`` names the dated snapshot that
+    served the request for drift tracing.
     """
 
-    text: str | None
+    answers: dict[str, Any] | None
     input_tokens: int = 0
     output_tokens: int = 0
+    cost: float | None = None
+    model: str | None = None
 
 
 def _count(value: object) -> int:
@@ -763,74 +834,102 @@ def _count(value: object) -> int:
         return 0
 
 
+def _cost(value: object) -> float | None:
+    """Reported USD spend verbatim (None when absent or non-numeric)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _retryable_error(exc: BaseException) -> bool:
+    """True for the one-retry class: retryable codes plus timeouts.
+
+    4xx, refused connections, and malformed bodies hold immediately —
+    retrying the same call cannot help (T-08-24).
+    """
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in _RETRYABLE_STATUS
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, TimeoutError)
+    return False
+
+
+def _post_decision(
+    url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
+) -> dict[str, Any] | None:
+    """POST one Decision-API request; parsed mapping or None on failure.
+
+    Retries at most once on retryable codes and timeouts, never on
+    4xx or schema failures — a wrong-shaped 200 is its own outcome,
+    never a reason to re-ask. Shared by both engines (T-08-24).
+    """
+    import urllib.request
+
+    body = json.dumps(payload).encode("utf-8")
+    for attempt_no in range(2):
+        request = urllib.request.Request(url, data=body, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001 — every failure class holds
+            if attempt_no == 0 and _retryable_error(exc):
+                continue
+            return None
+        return data if isinstance(data, dict) else None
+    return None  # unreachable: the loop always returns first
+
+
 def decide_via_openrouter(
     *,
     decision_model: str,
-    system: str,
-    user: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
     timeout: float = DECISION_TIMEOUT_SECONDS,
 ) -> EngineResult:
-    """One routing decision via OpenRouter chat completions.
+    """One routing decision via the OpenRouter Decisions API (T-08-22).
 
     The ``OPENROUTER_API_KEY`` is read at call time inside this engine
     function only (runtime-supplied credential, never persisted, sent
     header-only, never logged — the harness ``OLLAMA_API_KEY``
     precedent). Any failure (no key, network, timeout, malformed
-    payload) yields a text-None result and the chain tries the next
-    engine.
+    payload) yields an answers-None result and the chain tries the
+    next engine. Usage carries the reported input/output tokens plus
+    the reported USD cost (input-tokens-only billing, free outputs).
     """
-    import urllib.request
-
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key or not decision_model:
-        return EngineResult(text=None)
-    body = json.dumps(
+        return EngineResult(answers=None)
+    data = _post_decision(
+        OPENROUTER_DECISIONS_URL,
+        {"model": decision_model, "state": state, "questions": questions},
         {
-            "model": decision_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "response_format": {"type": "json_object"},
-            "max_tokens": 300,
-            "temperature": 0,
-            "stream": False,
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        OPENROUTER_CHAT_URL,
-        data=body,
-        headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "User-Agent": "strands-code",
         },
+        timeout,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return EngineResult(text=None)
-    if not isinstance(payload, dict):
-        return EngineResult(text=None)
-    choices = payload.get("choices", [])
-    if not isinstance(choices, list) or not choices:
-        return EngineResult(text=None)
-    first = choices[0]
-    if not isinstance(first, dict):
-        return EngineResult(text=None)
-    message = first.get("message", {})
-    if not isinstance(message, dict):
-        return EngineResult(text=None)
-    content = message.get("content")
-    text = content if isinstance(content, str) and content.strip() else None
-    usage = payload.get("usage", {})
+    if data is None:
+        return EngineResult(answers=None)
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return EngineResult(answers=None)
+    usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
+    model = data.get("model")
     return EngineResult(
-        text=text,
-        input_tokens=_count(usage.get("prompt_tokens")),
-        output_tokens=_count(usage.get("completion_tokens")),
+        answers=answers,
+        input_tokens=_count(usage.get("input_tokens")),
+        output_tokens=_count(usage.get("output_tokens")),
+        cost=_cost(usage.get("cost")),
+        model=model if isinstance(model, str) else None,
     )
 
 
@@ -857,105 +956,147 @@ def decide_via_ollama(
     *,
     local_model: str,
     local_base_url: str | None = None,
-    system: str,
-    user: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
     timeout: float = OLLAMA_TIMEOUT_SECONDS,
 ) -> EngineResult:
-    """One routing decision via the local Ollama daemon (``/api/chat``).
+    """One routing decision via Ollama System One (``/v1/systemone``).
 
     The base URL resolves strategy-first, then the harness
     ``OLLAMA_HOST`` default; only http/https addresses with a host are
-    called. The request is non-streaming with a JSON object format
-    over model/effort/why and a 5m keep-alive; the usage pair comes
-    from the response eval counts. Any failure yields a text-None
-    result — offline with no daemon simply holds current (D-09).
+    called (T-08-25). Decision models must never run through
+    ``/api/chat`` (filler-token runaway). The local usage shape
+    carries no cost, so spend records as None (rendered as zero, never
+    estimated). Any failure yields an answers-None result — offline
+    with no daemon simply holds current (D-09).
     """
-    import urllib.request
-
     if not local_model:
-        return EngineResult(text=None)
+        return EngineResult(answers=None)
     base = local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
     if not _valid_base_url(base):
-        return EngineResult(text=None)
-    body = json.dumps(
+        return EngineResult(answers=None)
+    data = _post_decision(
+        f"{base.rstrip('/')}/v1/systemone",
         {
             "model": local_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "stream": False,
-            "format": {
-                "type": "object",
-                "properties": {
-                    "model": {"type": "string"},
-                    "effort": {"type": "string"},
-                    "why": {"type": "string"},
-                },
-                "required": ["model", "effort", "why"],
-            },
+            "state": state,
+            "questions": questions,
             "keep_alive": OLLAMA_KEEP_ALIVE,
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base.rstrip('/')}/api/chat", data=body, headers=_ollama_headers(base)
+        },
+        _ollama_headers(base),
+        timeout,
     )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return EngineResult(text=None)
-    if not isinstance(payload, dict):
-        return EngineResult(text=None)
-    message = payload.get("message", {})
-    if not isinstance(message, dict):
-        return EngineResult(text=None)
-    content = message.get("content")
-    return EngineResult(
-        text=content if isinstance(content, str) and content.strip() else None,
-        input_tokens=_count(payload.get("prompt_eval_count")),
-        output_tokens=_count(payload.get("eval_count")),
-    )
-
-
-def parse_pick(
-    text: str | None, candidates: list[RoutingCandidate]
-) -> RoutingPick | None:
-    """Parse one engine response strictly; None holds the current model.
-
-    ``model`` must equal a candidate id verbatim (no normalization, no
-    fuzzy match — fuzzy matching is heuristic picking), ``effort`` must
-    be a string inside that candidate's advertised levels when levels
-    are advertised, and ``why`` truncates to one line. Anything else —
-    malformed JSON, unknown ids, wrong levels — holds current (T-08-01).
-    """
-    if not isinstance(text, str) or not text.strip():
-        return None
-    try:
-        data = json.loads(text)
-    except ValueError:
-        return None
-    if not isinstance(data, dict):
-        return None
+    if data is None:
+        return EngineResult(answers=None)
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return EngineResult(answers=None)
+    usage = data.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
     model = data.get("model")
-    if not isinstance(model, str):
-        return None
-    candidate = next((entry for entry in candidates if entry.id == model), None)
-    if candidate is None:
-        return None
-    effort = data.get("effort")
-    if not isinstance(effort, str) or not effort:
-        return None
-    if candidate.levels is not None and effort not in candidate.levels:
-        return None
-    why = data.get("why", "")
-    if not isinstance(why, str):
-        why = ""
-    return RoutingPick(model=model, effort=effort, why=why.splitlines()[0][:200] if why else "")
+    return EngineResult(
+        answers=answers,
+        input_tokens=_count(usage.get("input_tokens")),
+        output_tokens=_count(usage.get("output_tokens")),
+        cost=None,
+        model=model if isinstance(model, str) else None,
+    )
 
 
-EngineAttempt = Callable[[RoutingStrategy, str, str], EngineResult | None]
-"""One engine try: (strategy, system, user) -> result or None when skipped."""
+def validate_choice_answer(
+    answer: object, candidates: list[RoutingCandidate]
+) -> dict[str, Any] | None:
+    """Validate one typed choice answer; None holds the current model.
+
+    The answer must be a dict with ``type`` exactly ``choice``, a
+    non-empty ``probabilities`` mapping of 0..1 numbers summing to 1
+    within 1e-6, and a ``choice`` that sits both in the table and in
+    the live candidate ids (a stale pick after a strategy edit must
+    never route — no normalization, no fuzzy match). The vendor
+    ``confidence`` field may be absent; it is logged, never gated on
+    (T-08-21).
+    """
+    if not isinstance(answer, dict):
+        return None
+    if answer.get("type") != "choice":
+        return None
+    probs = answer.get("probabilities")
+    if not isinstance(probs, dict) or not probs:
+        return None
+    for prob in probs.values():
+        if isinstance(prob, bool) or not isinstance(prob, (int, float)):
+            return None
+        if not 0.0 <= prob <= 1.0:
+            return None
+    if abs(sum(probs.values()) - 1.0) > 1e-6:
+        return None
+    choice = answer.get("choice")
+    if choice not in probs:
+        return None
+    live = {candidate.id for candidate in candidates}
+    if choice not in live:
+        return None
+    return answer
+
+
+def _price_total(model_id: str) -> float | None:
+    """Almanac in+out price for one id (None when unpriced — D-14)."""
+    try:
+        prices = price_for(model_id)
+    except Exception:
+        return None
+    if prices is None:
+        return None
+    return prices[0] + prices[1]
+
+
+def gate_model(
+    answer: dict[str, Any], strategy: RoutingStrategy
+) -> tuple[str | None, bool, str]:
+    """Gate one validated model table: (model|None, tie_break, detail).
+
+    Below-threshold top-1 probabilities hold (D-16); near-tie top-two
+    gaps route the cheaper candidate per almanac prices with a detail
+    note (D-14). The gate reads the probability table only — never
+    the vendor confidence field (Pitfall 1) and never the ``choice``
+    field (the argmax is the source of truth). Unpriced or
+    equal-priced pairs keep the argmax with no tie marker.
+    """
+    ranked = sorted(
+        answer["probabilities"].items(), key=lambda item: (-item[1], item[0])
+    )
+    top, top_prob = ranked[0]
+    if top_prob < strategy.confidence_threshold:
+        return (
+            None,
+            False,
+            f"confidence {top_prob:.0%} < {strategy.confidence_threshold:.0%}",
+        )
+    if len(ranked) == 1:
+        return (top, False, "")
+    second, second_prob = ranked[1]
+    if top_prob - second_prob > strategy.tie_margin:
+        return (top, False, "")
+    top_price = _price_total(top)
+    second_price = _price_total(second)
+    if (
+        top_price is None
+        or second_price is None
+        or second_price >= top_price
+    ):
+        return (top, False, "")
+    return (
+        second,
+        True,
+        f"tie {top_prob:.0%} vs {second_prob:.0%} → {second} (cheaper)",
+    )
+
+
+EngineAttempt = Callable[
+    [RoutingStrategy, dict[str, Any], dict[str, Any]], EngineResult | None
+]
+"""One engine try: (strategy, state, questions) -> result or None when skipped."""
 
 _ENGINE_REGISTRY: list[tuple[str, EngineAttempt]] = []
 """Ordered engine chain; each engine is tried once per ask."""
@@ -967,17 +1108,19 @@ def register_engine(name: str, attempt: EngineAttempt) -> None:
 
 
 def _openrouter_attempt(
-    strategy: RoutingStrategy, system: str, user: str
+    strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
 ) -> EngineResult | None:
     """OpenRouter chain link: None without a configured decision model."""
     decision_model = strategy.engine.decision_model
     if not decision_model:
         return None
-    return decide_via_openrouter(decision_model=decision_model, system=system, user=user)
+    return decide_via_openrouter(
+        decision_model=decision_model, state=state, questions=questions
+    )
 
 
 def _ollama_attempt(
-    strategy: RoutingStrategy, system: str, user: str
+    strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
 ) -> EngineResult | None:
     """Local chain link: None without a configured local model (skipped)."""
     local_model = strategy.engine.local_model
@@ -986,8 +1129,8 @@ def _ollama_attempt(
     return decide_via_ollama(
         local_model=local_model,
         local_base_url=strategy.engine.local_base_url,
-        system=system,
-        user=user,
+        state=state,
+        questions=questions,
     )
 
 
@@ -1025,58 +1168,120 @@ def decide(
     current_model: str,
     side: bool = False,
     ask: str,
-) -> tuple[RoutingPick | None, str, tuple[int, int]]:
-    """Route one ask: prompt build, engine chain, strict parse.
+) -> tuple[RoutingPick | None, str, tuple[int, int, float | None], str]:
+    """Route one ask: state build, engine chain, validate, gate.
 
-    Returns ``(pick, engine, usage)`` where engine names the producing
-    engine on success and the last attempted engine on hold, and usage
-    is the decision-call ``(input, output)`` token pair (zeros on
-    hold). Total failure — every engine empty or unparseable — yields
-    ``(None, engine, (0, 0))`` and the caller holds current (D-08).
-    One attempt per engine per ask; never any in-ask retry.
+    Returns ``(pick, engine, usage, detail)`` where engine names the
+    producing engine on success and the last attempted engine on hold,
+    usage is the decision-call ``(input, output, reported cost)``
+    triple (zeros plus None on hold), and detail feeds the hold/route
+    notes (empty on a clean route). Total failure — every engine down
+    or schema-invalid — yields a None pick and the caller holds
+    current (D-08). One chain pass per ask; each engine retries at
+    most once on retryable failures only.
+
+    A below-threshold table holds immediately without trying the next
+    engine: the ask itself is ambiguous, so the retry happens next
+    ask (D-16). Effort rides the picked candidate's first advertised
+    level through ``validate_routed_effort`` with effort_confidence
+    None — the effort decision call lands in plan 08-02. Same-model
+    picks skip that validation (the no-op fast path wins: the hook
+    applies no switch and no effort, so there is nothing to judge).
 
     A single candidate advertising at least one level skips every
     engine (nothing to choose): the verdict names the candidate with
-    its first advertised level, engine ``none``, and zero usage, so
-    the unchanged hook takes its pick branch with the standard Routed
-    line (D-08). A lone candidate with no levels, an empty set, and
-    multi-candidate sets keep their existing behavior exactly.
+    its first advertised level, engine ``none``, and zero usage.
+    A lone candidate with no levels holds with no engine call — a
+    one-option choice is invalid (2-26) and there is no effort to
+    pass through.
     """
     if strategy.engine.primary != "off" and len(strategy.candidates) == 1:
         only = strategy.candidates[0]
         if only.levels:
-            return (
-                RoutingPick(
-                    model=only.id, effort=only.levels[0], why="only candidate"
-                ),
-                "none",
-                (0, 0),
+            fast = RoutingPick(
+                model=only.id,
+                effort=only.levels[0],
+                model_confidence=None,
+                effort_confidence=None,
+                tie_break=False,
             )
-    system, user = build_routing_prompt(
-        directives=strategy.directives,
-        candidates=strategy.candidates,
-        current_model=current_model,
-        side=side,
-        ask=ask,
+            if only.id != current_model and not validate_routed_effort(
+                fast, strategy.candidates
+            ):
+                return (
+                    None,
+                    "none",
+                    (0, 0, None),
+                    f"effort {only.levels[0]!r} unsupported by {only.id}",
+                )
+            return (fast, "none", (0, 0, None), "")
+        return (None, "none", (0, 0, None), "only candidate advertises no levels")
+    state = build_decision_state(
+        ask=ask, directives=strategy.directives, side=side
     )
+    questions = {
+        "pick_model": build_model_question(
+            candidates=strategy.candidates, directives=strategy.directives
+        )
+    }
     chain = _chain_for(strategy)
     if not chain:
-        return (None, strategy.engine.primary or "openrouter", (0, 0))
+        primary = strategy.engine.primary or "openrouter"
+        return (None, primary, (0, 0, None), f"{primary} failed")
     failed = chain[0][0]
+    detail = f"{failed} failed"
     for name, attempt in chain:
         try:
-            result = attempt(strategy, system, user)
+            result = attempt(strategy, state, questions)
         except Exception:
             result = None
-        if result is None or result.text is None:
-            failed = name
+        if result is None or result.answers is None:
+            failed, detail = name, f"{name} failed"
             continue
-        pick = parse_pick(result.text, strategy.candidates)
-        if pick is None:
-            failed = name
+        if result.model:
+            logger.debug("Routing decision via %s served by %s", name, result.model)
+        answer = validate_choice_answer(
+            result.answers.get("pick_model"), strategy.candidates
+        )
+        if answer is None:
+            failed, detail = name, f"{name} failed"
             continue
-        return (pick, name, (result.input_tokens, result.output_tokens))
-    return (None, failed, (0, 0))
+        model_id, tie_break, gate_detail = gate_model(answer, strategy)
+        if model_id is None:
+            return (None, name, (0, 0, None), gate_detail)
+        candidate = next(
+            entry for entry in strategy.candidates if entry.id == model_id
+        )
+        if not candidate.levels:
+            return (
+                None,
+                name,
+                (0, 0, None),
+                f"picked candidate {model_id} advertises no levels",
+            )
+        pick = RoutingPick(
+            model=model_id,
+            effort=candidate.levels[0],
+            model_confidence=float(answer["probabilities"][model_id]),
+            effort_confidence=None,
+            tie_break=tie_break,
+        )
+        if model_id != current_model and not validate_routed_effort(
+            pick, strategy.candidates
+        ):
+            return (
+                None,
+                name,
+                (0, 0, None),
+                f"effort {pick.effort!r} unsupported by {model_id}",
+            )
+        return (
+            pick,
+            name,
+            (result.input_tokens, result.output_tokens, result.cost),
+            gate_detail,
+        )
+    return (None, failed, (0, 0, None), detail)
 
 
 _EFFORT_NO_THINKING = ("auto", "off")
@@ -1137,22 +1342,50 @@ def route_cost_delta(new_model: str, prev_model: str, ask: str) -> str:
     return f"{new_cost - prev_cost:+.4f}"
 
 
-def format_routed_line(
-    *, model: str, effort: str, why: str, prev_model: str, ask: str, side: bool = False
-) -> str:
-    """One transcript line for a routed ask (model, why, cost impact).
+def _confidence_cell(value: float | None) -> str:
+    """Percent cell for one confidence (n/a when no read exists)."""
+    return f"{value:.0%}" if value is not None else "n/a"
 
-    Side asks print the ``Routed (btw)`` head so the transcript tells
+
+def format_routed_line(
+    *,
+    model: str,
+    effort: str,
+    model_confidence: float | None,
+    effort_confidence: float | None = None,
+    tie_break: bool = False,
+    prev_model: str,
+    ask: str,
+    side: bool = False,
+) -> str:
+    """One transcript line for a routed ask (D-12).
+
+    Choice plus both confidences plus the code-computed ``~$/ask``
+    delta, with the tie-break substitution noted on the line. Side
+    asks print the ``Routed (btw)`` head so the transcript tells
     spawn-time side picks apart from main-turn picks.
     """
     delta = route_cost_delta(model, prev_model, ask)
     head = "Routed (btw)" if side else "Routed"
-    return f"{head} \u2192 {model} ({effort}): {why} \u00b7 ~${delta}/ask vs {prev_model}"
+    line = (
+        f"{head} \u2192 {model} ({effort}): "
+        f"model {_confidence_cell(model_confidence)}, "
+        f"effort {_confidence_cell(effort_confidence)} "
+        f"\u00b7 ~${delta}/ask vs {prev_model}"
+    )
+    if tie_break:
+        line += " \u00b7 tie-break (cheaper of near-tie)"
+    return line
 
 
-def format_hold_line(*, current: str, engine: str) -> str:
-    """Hold-current failure note naming the failed engine (D-08)."""
-    return f"Routing held on {current} ({engine} failed; retrying next ask)"
+def format_hold_line(*, current: str, detail: str) -> str:
+    """Hold-current note with the reason detail (D-08, D-16).
+
+    Engine failures pass ``"<engine> failed"`` (the long-standing
+    shape); the threshold gate passes its ``confidence <read> <
+    <threshold>`` read so the note names both numbers.
+    """
+    return f"Routing held on {current} ({detail}; retrying next ask)"
 
 
 ROUTING_ON_REPLY = "Routing on — asks route pre-turn through the decision model."

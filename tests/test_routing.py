@@ -1,7 +1,7 @@
-"""Routing prompt, strict parse, and engine chain tests (MODEL-03 tracer).
+"""Decision-API transports, answer validation, gate, and chain tests (MODEL-03).
 
-No live decision calls: the urllib seam serves canned JSON and the
-prompt tests use canned or static-table prices only.
+No live decision calls: the urllib seam serves canned Decision-API
+payloads and the gate tests use stubbed almanac prices.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import pytest
 
 from strands_code_cli.routing import (
     OLLAMA_DEFAULT_HOST,
+    OPENROUTER_DECISIONS_URL,
     EngineResult,
     RoutingCandidate,
     RoutingEngine,
@@ -20,12 +21,14 @@ from strands_code_cli.routing import (
     RoutingState,
     RoutingStrategy,
     _ENGINE_REGISTRY,
-    build_routing_prompt,
+    build_decision_state,
+    build_model_question,
     decide,
     decide_via_ollama,
     decide_via_openrouter,
+    gate_model,
     load_strategy,
-    parse_pick,
+    validate_choice_answer,
     validate_routed_effort,
 )
 
@@ -36,8 +39,19 @@ SONNET = "bedrock/anthropic.claude-sonnet-4-6"
 
 def _candidates() -> list[RoutingCandidate]:
     return [
-        RoutingCandidate(id=HAIKU, tier="small", note="cheap", levels=["low", "high"]),
-        RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+        RoutingCandidate(
+            id=HAIKU,
+            tier="small",
+            note="cheap",
+            levels=["low", "high"],
+            criteria="Cheap small model for trivial asks",
+        ),
+        RoutingCandidate(
+            id=NOVA_MICRO,
+            tier="tiny",
+            levels=["low"],
+            criteria="Tiny model for one-line lookups",
+        ),
         RoutingCandidate(id=SONNET, tier="mid"),
     ]
 
@@ -51,138 +65,27 @@ def _strategy(**kwargs) -> RoutingStrategy:
     )
 
 
-class TestRoutingPrompt:
-    def test_prompt_carries_directives_table_current_side_and_ask(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
-
-        monkeypatch.setattr(routing_mod, "price_for", lambda model: (3.0, 15.0))
-        monkeypatch.setattr(routing_mod, "window_for", lambda model: 200000)
-        system, user = build_routing_prompt(
-            directives="trivial asks go cheap",
-            candidates=_candidates()[:2],
-            current_model=HAIKU,
-            side=False,
-            ask="fix the typo",
-        )
-        assert "JSON only" in system
-        assert "verbatim" in system
-        assert "trivial asks go cheap" in user  # directives verbatim
-        assert HAIKU in user and NOVA_MICRO in user  # one line per candidate
-        assert "$3/$15 per 1M" in user  # live price values
-        assert "200000" in user  # live window values
-        assert "low,high" in user  # advertised levels
-        assert f"Current model: {HAIKU}" in user
-        assert "Side ask: false" in user
-        assert "fix the typo" in user
-
-    def test_prompt_marks_side_asks(self):
-        _, user = build_routing_prompt(
-            directives="",
-            candidates=_candidates()[:1],
-            current_model=HAIKU,
-            side=True,
-            ask="quick question",
-        )
-        assert "Side ask: true" in user
-
-    def test_prompt_truncates_long_asks(self):
-        long_ask = "x" * 5000
-        _, user = build_routing_prompt(
-            directives="d",
-            candidates=_candidates()[:1],
-            current_model=HAIKU,
-            side=False,
-            ask=long_ask,
-        )
-        tail = user.rsplit("\n", 1)[-1]
-        assert tail == "x" * 2000
-        assert long_ask not in user
-
-    def test_prompt_truncates_long_directives(self):
-        # T-08-07: unbounded repo directives must not reach the paid call.
-        long_directives = "d" * 5000
-        _, user = build_routing_prompt(
-            directives=long_directives,
-            candidates=_candidates()[:1],
-            current_model=HAIKU,
-            side=False,
-            ask="hi",
-        )
-        assert "d" * 2000 in user
-        assert long_directives not in user
-
-    def test_prompt_uses_static_prices_without_monkeypatch(self):
-        # Static table hit: nova-micro is priced at 0.035/0.14 per 1M.
-        _, user = build_routing_prompt(
-            directives="d",
-            candidates=[RoutingCandidate(id=NOVA_MICRO)],
-            current_model=HAIKU,
-            side=False,
-            ask="hi",
-        )
-        assert "$0.035/$0.14 per 1M" in user
-
-    def test_prompt_never_carries_history_or_tool_text(self):
-        _, user = build_routing_prompt(
-            directives="d",
-            candidates=_candidates()[:1],
-            current_model=HAIKU,
-            side=False,
-            ask="plain ask",
-        )
-        assert "toolUse" not in user
-        assert "toolResult" not in user
-        assert "reasoningContent" not in user
+def _answer(choice: str, probs: dict[str, float], confidence: float = 0.8) -> dict:
+    return {
+        "type": "choice",
+        "choice": choice,
+        "probabilities": dict(probs),
+        "confidence": confidence,
+    }
 
 
-class TestParsePick:
-    def test_well_formed_pick_returns_model_effort_why(self):
-        pick = parse_pick(
-            json.dumps({"model": HAIKU, "effort": "high", "why": "cheap and fast"}),
-            _candidates(),
-        )
-        assert pick == RoutingPick(model=HAIKU, effort="high", why="cheap and fast")
-
-    def test_unknown_model_id_holds_with_no_fuzzy_match(self):
-        near_miss = HAIKU + "x"  # one char off: must NOT fuzzy-match
-        assert parse_pick(
-            json.dumps({"model": near_miss, "effort": "high", "why": "close"}),
-            _candidates(),
-        ) is None
-
-    def test_non_listed_effort_holds(self):
-        assert parse_pick(
-            json.dumps({"model": HAIKU, "effort": "max", "why": "too much"}),
-            _candidates(),
-        ) is None
-
-    def test_malformed_json_holds(self):
-        assert parse_pick("{not json", _candidates()) is None
-        assert parse_pick('["model"]', _candidates()) is None
-        assert parse_pick("", _candidates()) is None
-        assert parse_pick(None, _candidates()) is None
-
-    def test_missing_model_key_holds(self):
-        assert parse_pick(
-            json.dumps({"effort": "high", "why": "no model"}), _candidates()
-        ) is None
-
-    def test_why_truncates_to_one_line(self):
-        pick = parse_pick(
-            json.dumps(
-                {"model": HAIKU, "effort": "low", "why": "first line\nsecond line"}
-            ),
-            _candidates(),
-        )
-        assert pick is not None
-        assert pick.why == "first line"
-
-    def test_effort_without_advertised_levels_accepts_any_string(self):
-        pick = parse_pick(
-            json.dumps({"model": SONNET, "effort": "medium", "why": "mid work"}),
-            _candidates(),
-        )
-        assert pick == RoutingPick(model=SONNET, effort="medium", why="mid work")
+def _decision_payload(
+    answer: dict,
+    *,
+    input_tokens: int = 384,
+    output_tokens: int = 41,
+    cost: float | None = 0.000016128,
+    model: str = "typesafe/jev-1.13-20260917",
+) -> dict:
+    usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    if cost is not None:
+        usage["cost"] = cost
+    return {"model": model, "answers": {"pick_model": answer}, "usage": usage}
 
 
 class _FakeResponse:
@@ -201,12 +104,300 @@ class _FakeResponse:
         return False
 
 
-def _chat_payload(content: str | None) -> dict:
-    return {"choices": [{"message": {"content": content}}]}
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(OPENROUTER_DECISIONS_URL, code, "boom", {}, None)
 
 
-def _pick_json(model: str = HAIKU, effort: str = "high") -> str:
-    return json.dumps({"model": model, "effort": effort, "why": "cheap and fast"})
+class TestDecisionBuilders:
+    def test_state_carries_ask_directives_and_side(self):
+        state = build_decision_state(
+            ask="fix the typo", directives="trivial asks go cheap", side=False
+        )
+        assert state == {
+            "ask": "fix the typo",
+            "directives": "trivial asks go cheap",
+            "side": False,
+        }
+
+    def test_state_marks_side_asks(self):
+        state = build_decision_state(ask="quick question", directives="", side=True)
+        assert state["side"] is True
+        assert state["ask"] == "quick question"
+
+    def test_state_truncates_long_ask_and_directives(self):
+        # T-08-23: unbounded repo text must not reach the paid call.
+        state = build_decision_state(
+            ask="x" * 5000, directives="d" * 5000, side=False
+        )
+        assert state["ask"] == "x" * 2000
+        assert state["directives"] == "d" * 2000
+
+    def test_state_never_carries_history_or_tool_text(self):
+        state = build_decision_state(ask="plain ask", directives="d", side=False)
+        assert set(state) == {"ask", "directives", "side"}
+        blob = json.dumps(state)
+        assert "toolUse" not in blob
+        assert "toolResult" not in blob
+        assert "reasoningContent" not in blob
+
+    def test_question_maps_candidate_ids_to_criteria(self):
+        question = build_model_question(
+            candidates=_candidates(),
+            directives="trivial asks go cheap",
+        )
+        assert question["type"] == "choice"
+        assert question["criteria"] == {
+            HAIKU: "Cheap small model for trivial asks",
+            NOVA_MICRO: "Tiny model for one-line lookups",
+            SONNET: "mid",  # no criteria: tier fallback
+        }
+
+    def test_question_appends_directives_to_instructions(self):
+        question = build_model_question(
+            candidates=_candidates()[:1], directives="trivial asks go cheap"
+        )
+        assert question["instructions"].startswith("Which candidate model")
+        assert question["instructions"].endswith("trivial asks go cheap")
+        bare = build_model_question(candidates=_candidates()[:1], directives="")
+        assert bare["instructions"] == (
+            "Which candidate model should serve the ask in `ask`? "
+            "Judge the ask, not its length. "
+        )
+
+    def test_question_truncates_long_directives(self):
+        question = build_model_question(
+            candidates=_candidates()[:1], directives="d" * 5000
+        )
+        assert "d" * 2000 in question["instructions"]
+        assert "d" * 5000 not in question["instructions"]
+
+    def test_question_falls_back_for_missing_criteria(self):
+        noted = RoutingCandidate(id="a/noted", note="note prose")
+        bare = RoutingCandidate(id="a/bare")
+        question = build_model_question(candidates=[noted, bare], directives="")
+        assert question["criteria"] == {"a/noted": "note prose", "a/bare": "a/bare"}
+
+    def test_question_never_touches_prices_or_stats(self, monkeypatch):
+        # D-02: quantities stay code-side; building the question must
+        # not consult the almanac at all.
+        import strands_code_cli.routing as routing_mod
+
+        def _boom(model_id):
+            raise AssertionError("question building must not price candidates")
+
+        monkeypatch.setattr(routing_mod, "price_for", _boom)
+        question = build_model_question(
+            candidates=_candidates(), directives="trivial asks go cheap"
+        )
+        assert set(question["criteria"]) == {HAIKU, NOVA_MICRO, SONNET}
+
+
+class TestValidateChoiceAnswer:
+    def test_valid_table_returns_the_answer(self):
+        answer = _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15})
+        assert validate_choice_answer(answer, _candidates()) is answer
+
+    def test_wrong_type_holds(self):
+        base = {HAIKU: 0.85, NOVA_MICRO: 0.15}
+        for bad in (
+            _answer(HAIKU, base) | {"type": "score"},
+            _answer(HAIKU, base) | {"type": "bool"},
+            {"choice": HAIKU, "probabilities": base},  # missing type
+        ):
+            assert validate_choice_answer(bad, _candidates()) is None
+
+    def test_missing_or_empty_probabilities_holds(self):
+        for bad in (
+            {"type": "choice", "choice": HAIKU},  # missing key
+            _answer(HAIKU, {}),  # empty table
+            _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15})
+            | {"probabilities": [0.85, 0.15]},  # not a mapping
+        ):
+            assert validate_choice_answer(bad, _candidates()) is None
+
+    def test_out_of_range_or_non_numeric_values_hold(self):
+        for probs in (
+            {HAIKU: 1.5, NOVA_MICRO: -0.5},  # out of range, sums to 1
+            {HAIKU: 0.85, NOVA_MICRO: "0.15"},  # non-numeric
+            {HAIKU: 0.85, NOVA_MICRO: True},  # bool is not a probability
+        ):
+            assert (
+                validate_choice_answer(_answer(HAIKU, probs), _candidates()) is None
+            )
+
+    def test_bad_probability_sum_holds(self):
+        assert (
+            validate_choice_answer(
+                _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5, SONNET: 0.5}),
+                _candidates(),
+            )
+            is None
+        )
+        assert (
+            validate_choice_answer(
+                _answer(HAIKU, {HAIKU: 0.34, NOVA_MICRO: 0.33, SONNET: 0.32}),
+                _candidates(),
+            )
+            is None
+        )
+
+    def test_near_sum_within_tolerance_passes(self):
+        third = 1 / 3  # float thirds sum to 1 within 1e-6
+        answer = _answer(
+            HAIKU, {HAIKU: third, NOVA_MICRO: third, SONNET: third}
+        )
+        assert validate_choice_answer(answer, _candidates()) is answer
+
+    def test_choice_outside_table_holds(self):
+        table = {HAIKU: 0.5, NOVA_MICRO: 0.5}
+        assert (
+            validate_choice_answer(_answer(SONNET, table), _candidates()) is None
+        )
+        answer = _answer(HAIKU, table)
+        del answer["choice"]
+        assert validate_choice_answer(answer, _candidates()) is None
+
+    def test_stale_choice_holds_with_no_fuzzy_match(self):
+        near_miss = HAIKU + "x"  # one char off: must NOT fuzzy-match
+        table = {HAIKU: 0.5, near_miss: 0.5}
+        assert (
+            validate_choice_answer(_answer(near_miss, table), _candidates()) is None
+        )
+        ghost = {HAIKU: 0.5, "ghost/model": 0.5}
+        assert (
+            validate_choice_answer(_answer("ghost/model", ghost), _candidates())
+            is None
+        )
+
+    def test_non_dict_answer_holds(self):
+        for bad in (None, "", "choice", ["choice"], 42):
+            assert validate_choice_answer(bad, _candidates()) is None
+
+    def test_missing_confidence_still_validates(self):
+        # The vendor confidence field is optional: logged, never gated.
+        answer = _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15})
+        del answer["confidence"]
+        assert validate_choice_answer(answer, _candidates()) is answer
+
+
+class TestGateModel:
+    def _priced(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        prices = {HAIKU: (3.0, 15.0), NOVA_MICRO: (0.035, 0.14)}
+        monkeypatch.setattr(routing_mod, "price_for", lambda mid: prices.get(mid))
+
+    def test_clear_winner_routes_top_with_empty_detail(self):
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15}), _strategy()
+        )
+        assert (model, tie_break, detail) == (HAIKU, False, "")
+
+    def test_below_threshold_holds_naming_both_percents(self):
+        model, tie_break, detail = gate_model(
+            _answer(
+                HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}
+            ),
+            _strategy(candidates=_candidates()),
+        )
+        assert model is None
+        assert tie_break is False
+        assert detail == "confidence 41% < 70%"
+
+    def test_threshold_boundary_routes(self):
+        model, _, _ = gate_model(
+            _answer(HAIKU, {HAIKU: 0.70, NOVA_MICRO: 0.30}), _strategy()
+        )
+        assert model == HAIKU  # exactly at the threshold still routes
+
+    def test_near_tie_substitutes_cheaper_with_note(self, monkeypatch):
+        self._priced(monkeypatch)
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 0.52, NOVA_MICRO: 0.48}),
+            _strategy(confidence_threshold=0.4),
+        )
+        assert model == NOVA_MICRO
+        assert tie_break is True
+        assert detail == f"tie 52% vs 48% → {NOVA_MICRO} (cheaper)"
+
+    def test_exact_tie_routes_cheaper(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        # Exact ties break alphabetically (NOVA_MICRO sorts first), so
+        # price it dearer to force the substitution the other way.
+        prices = {HAIKU: (0.035, 0.14), NOVA_MICRO: (3.0, 15.0)}
+        monkeypatch.setattr(routing_mod, "price_for", lambda mid: prices.get(mid))
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5}),
+            _strategy(confidence_threshold=0.4),
+        )
+        assert model == HAIKU
+        assert tie_break is True
+        assert detail == f"tie 50% vs 50% → {HAIKU} (cheaper)"
+
+    def test_outside_margin_keeps_top_without_lookup(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        def _boom(model_id):
+            raise AssertionError("clear winners must not price candidates")
+
+        monkeypatch.setattr(routing_mod, "price_for", _boom)
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15}), _strategy()
+        )
+        assert (model, tie_break, detail) == (HAIKU, False, "")
+
+    def test_equal_prices_keep_top_without_marker(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        monkeypatch.setattr(routing_mod, "price_for", lambda mid: (1.0, 1.0))
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 0.52, NOVA_MICRO: 0.48}),
+            _strategy(confidence_threshold=0.4),
+        )
+        assert (model, tie_break, detail) == (HAIKU, False, "")
+
+    def test_missing_or_raising_prices_keep_top(self, monkeypatch):
+        import strands_code_cli.routing as routing_mod
+
+        monkeypatch.setattr(routing_mod, "price_for", lambda mid: None)
+        table = _answer(HAIKU, {HAIKU: 0.52, NOVA_MICRO: 0.48})
+        low = _strategy(confidence_threshold=0.4)
+        assert gate_model(table, low) == (HAIKU, False, "")
+
+        def _boom(model_id):
+            raise RuntimeError("almanac down")
+
+        monkeypatch.setattr(routing_mod, "price_for", _boom)
+        assert gate_model(table, low) == (HAIKU, False, "")
+
+    def test_single_entry_table_routes_top(self):
+        model, tie_break, detail = gate_model(
+            _answer(HAIKU, {HAIKU: 1.0}), _strategy()
+        )
+        assert (model, tie_break, detail) == (HAIKU, False, "")
+
+    def test_vendor_confidence_never_gates(self):
+        # Pitfall 1: the gate reads the table, never .confidence.
+        strategy = _strategy()
+        confident_hold = _answer(
+            HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5}, confidence=0.99
+        )
+        assert gate_model(confident_hold, strategy)[0] is None
+        timid_route = _answer(
+            HAIKU, {HAIKU: 0.9, NOVA_MICRO: 0.1}, confidence=0.01
+        )
+        assert gate_model(timid_route, strategy) == (HAIKU, False, "")
+
+    def test_gate_reads_argmax_not_choice_field(self):
+        answer = _answer(NOVA_MICRO, {HAIKU: 0.9, NOVA_MICRO: 0.1})
+        assert validate_choice_answer(answer, _candidates()) is answer
+        assert gate_model(answer, _strategy()) == (HAIKU, False, "")
+
+
+def _route_payload(choice=HAIKU, probs=None, **usage) -> dict:
+    table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
+    return _decision_payload(_answer(choice, table), **usage)
 
 
 class TestEngineChain:
@@ -214,25 +405,32 @@ class TestEngineChain:
     def _key(self, monkeypatch):
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
-    def test_openrouter_success_short_circuits_with_one_call(self, monkeypatch):
+    def test_openrouter_success_routes_with_usage_triple(self, monkeypatch):
         import urllib.request
 
         calls: list = []
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
-            return _FakeResponse(_chat_payload(_pick_json()))
+            return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, engine, usage = decide(
+        pick, engine, usage, detail = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
         assert len(calls) == 1
-        assert pick == RoutingPick(model=HAIKU, effort="high", why="cheap and fast")
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="low",  # first advertised level passthrough
+            model_confidence=0.85,
+            effort_confidence=None,
+            tie_break=False,
+        )
         assert engine == "openrouter"
-        assert usage == (0, 0)  # no usage fields: zeros, not absence
+        assert usage == (384, 41, 0.000016128)  # reported triple, cost verbatim
+        assert detail == ""
 
-    def test_openrouter_posts_json_contract(self, monkeypatch):
+    def test_openrouter_posts_decision_contract(self, monkeypatch):
         import urllib.request
 
         seen: dict = {}
@@ -241,56 +439,45 @@ class TestEngineChain:
             seen["url"] = request.full_url
             seen["body"] = json.loads(request.data.decode("utf-8"))
             seen["auth"] = request.get_header("Authorization")
-            return _FakeResponse(_chat_payload(_pick_json()))
+            seen["timeout"] = timeout
+            return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
-        assert seen["body"]["response_format"] == {"type": "json_object"}
-        assert seen["body"]["max_tokens"] == 300
-        assert seen["body"]["temperature"] == 0
-        assert seen["body"]["model"] == "cheap/decider"
-        assert seen["auth"] == "Bearer test-key"  # header-only, never in the URL
+        assert seen["url"] == OPENROUTER_DECISIONS_URL
+        assert seen["url"] == "https://openrouter.ai/api/alpha/decisions"
+        body = seen["body"]
+        assert body["model"] == "cheap/decider"
+        assert body["state"] == {
+            "ask": "hi",
+            "directives": "trivial asks go cheap",
+            "side": False,
+        }
+        assert body["questions"]["pick_model"]["type"] == "choice"
+        assert set(body["questions"]["pick_model"]["criteria"]) == {
+            HAIKU,
+            NOVA_MICRO,
+        }
+        assert "response_format" not in body  # no legacy JSON mode
+        assert "messages" not in body and "max_tokens" not in body
+        assert seen["auth"] == "Bearer " + "test-key"  # header-only, not in URL
+        assert seen["timeout"] == 10
 
-    def test_openrouter_failure_yields_hold_current(self, monkeypatch):
+    def test_openrouter_reports_snapshot_and_cost(self, monkeypatch):
         import urllib.request
 
         def _fake_urlopen(request, timeout=None):
-            return _FakeResponse({"choices": []})  # empty choices: no content
+            return _FakeResponse(_route_payload(cost=0.00002))
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, engine, usage = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
+        result = decide_via_openrouter(
+            decision_model="m", state={"ask": "hi"}, questions={"pick_model": {}}
         )
-        assert pick is None
-        assert engine == "openrouter"
-        assert usage == (0, 0)
-
-    def test_url_error_yields_hold_current(self, monkeypatch):
-        import urllib.request
-
-        def _boom(request, timeout=None):
-            raise urllib.error.URLError("offline")
-
-        monkeypatch.setattr(urllib.request, "urlopen", _boom)
-        assert (
-            decide_via_openrouter(decision_model="m", system="s", user="u").text is None
-        )
-        pick, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert pick is None
-
-    def test_timeout_yields_hold_current(self, monkeypatch):
-        import urllib.request
-
-        def _slow(request, timeout=None):
-            raise TimeoutError("slow engine")
-
-        monkeypatch.setattr(urllib.request, "urlopen", _slow)
-        assert (
-            decide_via_openrouter(decision_model="m", system="s", user="u").text is None
-        )
-        pick, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert pick is None
+        assert result.answers is not None
+        assert result.answers["pick_model"]["choice"] == HAIKU
+        assert (result.input_tokens, result.output_tokens) == (384, 41)
+        assert result.cost == 0.00002
+        assert result.model == "typesafe/jev-1.13-20260917"
 
     def test_missing_key_yields_hold_without_network(self, monkeypatch):
         import urllib.request
@@ -301,21 +488,13 @@ class TestEngineChain:
             raise AssertionError("must not call the network without a key")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
-        pick, engine, _ = decide(
+        pick, engine, usage, detail = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "openrouter"
-
-    def test_unparseable_engine_output_yields_hold(self, monkeypatch):
-        import urllib.request
-
-        def _fake_urlopen(request, timeout=None):
-            return _FakeResponse(_chat_payload("definitely not json"))
-
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert pick is None
+        assert usage == (0, 0, None)
+        assert detail == "openrouter failed"
 
     def test_missing_decision_model_skips_openrouter(self, monkeypatch):
         import urllib.request
@@ -325,24 +504,304 @@ class TestEngineChain:
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = _strategy(engine=RoutingEngine())
-        pick, engine, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert pick is None
         assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == "openrouter failed"
 
-    def test_openrouter_usage_fields_feed_the_usage_pair(self, monkeypatch):
+    @pytest.mark.parametrize("code", [429, 500, 502, 503, 524, 529])
+    def test_retryable_status_retries_once_then_routes(self, monkeypatch, code):
         import urllib.request
 
-        payload = _chat_payload(_pick_json())
-        payload["usage"] = {"prompt_tokens": 120, "completion_tokens": 25}
+        calls: list = []
+        script: list = [_http_error(code)]
 
         def _fake_urlopen(request, timeout=None):
-            return _FakeResponse(payload)
+            calls.append(request)
+            step = script.pop(0) if script else None
+            if isinstance(step, Exception):
+                raise step
+            return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        result = decide_via_openrouter(decision_model="m", system="s", user="u")
-        assert (result.input_tokens, result.output_tokens) == (120, 25)
-        _, _, usage = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert usage == (120, 25)
+        pick, engine, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 2  # at most one retry
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "openrouter"
+
+    def test_retry_exhaustion_holds(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            raise _http_error(503)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 2
+        assert pick is None
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == "openrouter failed"
+
+    @pytest.mark.parametrize("code", [400, 401, 402, 403, 404, 413])
+    def test_4xx_never_retries(self, monkeypatch, code):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            raise _http_error(code)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1  # the request itself is wrong: hold
+        assert pick is None
+
+    def test_timeout_retries_once_then_routes(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+        script: list = [TimeoutError("slow engine")]
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            step = script.pop(0) if script else None
+            if isinstance(step, Exception):
+                raise step
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 2
+        assert pick is not None and pick.model == HAIKU
+
+    def test_timeout_exhaustion_holds(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _slow(request, timeout=None):
+            calls.append(request)
+            raise TimeoutError("slow engine")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _slow)
+        assert (
+            decide_via_openrouter(
+                decision_model="m", state={}, questions={}
+            ).answers
+            is None
+        )
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 4  # one retry per call site, then hold
+        assert pick is None
+
+    def test_url_error_holds_without_retry(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _boom(request, timeout=None):
+            calls.append(request)
+            raise urllib.error.URLError("offline")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        assert (
+            decide_via_openrouter(
+                decision_model="m", state={}, questions={}
+            ).answers
+            is None
+        )
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 2  # refused connections never retry
+        assert pick is None
+
+    def test_wrapped_timeout_error_retries_once(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+        script: list = [urllib.error.URLError(TimeoutError("timed out"))]
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            step = script.pop(0) if script else None
+            if isinstance(step, Exception):
+                raise step
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 2
+        assert pick is not None
+
+    def test_schema_failures_hold_without_retry(self, monkeypatch):
+        import urllib.request
+
+        for payload in (
+            {"model": "m", "usage": {}},  # answers key missing
+            {"model": "m", "answers": [], "usage": {}},  # answers not a dict
+            {"model": "m", "answers": {"other": {}}, "usage": {}},  # key missing
+            ["not", "a", "mapping"],  # body not a mapping
+        ):
+            calls: list = []
+
+            def _fake_urlopen(request, timeout=None):
+                calls.append(request)
+                return _FakeResponse(payload)
+
+            monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+            pick, engine, _, _ = decide(
+                _strategy(), current_model=SONNET, side=False, ask="hi"
+            )
+            assert pick is None
+            assert engine == "openrouter"
+            assert len(calls) == 1  # schema misses never re-ask
+
+    def test_malformed_table_falls_through_to_next_engine(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if "openrouter" in request.full_url:
+                bad = _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5, SONNET: 0.5})
+                return _FakeResponse(_decision_payload(bad))
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="nimble"
+            )
+        )
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "local"  # schema-invalid openrouter yields to local
+
+    def test_stale_choice_holds(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            ghost = {HAIKU: 0.5, "ghost/model": 0.5}
+            return _FakeResponse(_decision_payload(_answer("ghost/model", ghost)))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == "openrouter failed"
+
+    def test_threshold_hold_short_circuits_chain(self, monkeypatch):
+        import urllib.request
+
+        urls: list[str] = []
+        weak = _answer(
+            HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}
+        )
+
+        def _fake_urlopen(request, timeout=None):
+            urls.append(request.full_url)
+            return _FakeResponse(_decision_payload(weak))
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=_candidates(),
+            engine=RoutingEngine(
+                decision_model="cheap/decider", local_model="nimble"
+            ),
+        )
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None  # ambiguous ask: hold, retry next ask
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == "confidence 41% < 70%"
+        assert urls == [OPENROUTER_DECISIONS_URL]  # local never tried
+
+    def test_first_advertised_level_rejection_holds(self, monkeypatch):
+        # The picked candidate's first advertised level rides through
+        # validate_routed_effort: nova-micro advertises "low" but
+        # supports no thinking, so the route holds.
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(
+                _route_payload(
+                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
+                )
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == f"effort 'low' unsupported by {NOVA_MICRO}"
+
+    def test_picked_candidate_without_levels_holds(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU),
+                RoutingCandidate(id=NOVA_MICRO),
+            ]
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "openrouter"
+        assert detail == f"picked candidate {HAIKU} advertises no levels"
+
+    def test_same_model_pick_skips_effort_validation(self, monkeypatch):
+        # No-op fast path: the hook applies no switch and no effort,
+        # so an unsupported passthrough level still yields a pick.
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(
+                _route_payload(
+                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
+                )
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, _, detail = decide(
+            _strategy(), current_model=NOVA_MICRO, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == NOVA_MICRO
+        assert pick.effort == "low"
+        assert engine == "openrouter"
+        assert detail == ""
 
     def test_registry_orders_openrouter_first(self):
         assert _ENGINE_REGISTRY and _ENGINE_REGISTRY[0][0] == "openrouter"
@@ -352,21 +811,12 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             body = json.loads(request.data.decode("utf-8"))
-            assert "Side ask: false" in body["messages"][1]["content"]
-            return _FakeResponse(_chat_payload(_pick_json()))
+            assert body["state"]["side"] is False
+            return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _ = decide(_strategy(), current_model=SONNET, ask="hi")
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, ask="hi")
         assert pick is not None
-
-
-def _ollama_payload(content: str | None, prompt_eval: int = 0, eval_count: int = 0) -> dict:
-    return {
-        "message": {"content": content},
-        "prompt_eval_count": prompt_eval,
-        "eval_count": eval_count,
-        "done": True,
-    }
 
 
 class TestLocalEngine:
@@ -377,10 +827,14 @@ class TestLocalEngine:
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
 
     def _dual(self, **engine_kwargs) -> RoutingStrategy:
-        engine = RoutingEngine(decision_model="cheap/decider", local_model="qwen3:8b")
+        engine = RoutingEngine(decision_model="cheap/decider", local_model="nimble")
         for key, value in engine_kwargs.items():
             setattr(engine, key, value)
         return _strategy(engine=engine)
+
+    def _local_payload(self, **usage) -> dict:
+        usage.setdefault("cost", None)  # local shape carries no cost
+        return _route_payload(**usage)
 
     def test_openrouter_success_short_circuits_with_no_local_call(self, monkeypatch):
         import urllib.request
@@ -389,12 +843,20 @@ class TestLocalEngine:
 
         def _fake_urlopen(request, timeout=None):
             urls.append(request.full_url)
-            return _FakeResponse(_chat_payload(_pick_json()))
+            return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, engine, _ = decide(self._dual(), current_model=SONNET, side=False, ask="hi")
-        assert urls == ["https://openrouter.ai/api/v1/chat/completions"]
-        assert pick == RoutingPick(model=HAIKU, effort="high", why="cheap and fast")
+        pick, engine, _, _ = decide(
+            self._dual(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert urls == [OPENROUTER_DECISIONS_URL]
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="low",
+            model_confidence=0.85,
+            effort_confidence=None,
+            tie_break=False,
+        )
         assert engine == "openrouter"
 
     def test_openrouter_failure_falls_back_to_local_pick(self, monkeypatch):
@@ -406,14 +868,18 @@ class TestLocalEngine:
             urls.append(request.full_url)
             if "openrouter" in request.full_url:
                 raise urllib.error.URLError("api down")
-            return _FakeResponse(_ollama_payload(_pick_json(NOVA_MICRO, "low")))
+            return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, engine, _ = decide(self._dual(), current_model=SONNET, side=False, ask="hi")
+        pick, engine, usage, _ = decide(
+            self._dual(), current_model=SONNET, side=False, ask="hi"
+        )
         assert len(urls) == 2  # one attempt per engine, no in-ask retry
         assert urls[1].startswith(OLLAMA_DEFAULT_HOST)
-        assert pick == RoutingPick(model=NOVA_MICRO, effort="low", why="cheap and fast")
+        assert urls[1] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
+        assert pick is not None and pick.model == HAIKU
         assert engine == "local"
+        assert usage == (384, 41, None)  # local spend records as None
 
     def test_both_failing_holds_current(self, monkeypatch):
         import urllib.request
@@ -422,12 +888,13 @@ class TestLocalEngine:
             raise urllib.error.URLError("offline")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
-        pick, engine, usage = decide(
+        pick, engine, usage, detail = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "local"  # last attempted engine
-        assert usage == (0, 0)
+        assert usage == (0, 0, None)
+        assert detail == "local failed"
 
     def test_primary_local_skips_the_api(self, monkeypatch):
         import urllib.request
@@ -437,11 +904,13 @@ class TestLocalEngine:
         def _fake_urlopen(request, timeout=None):
             urls.append(request.full_url)
             assert "openrouter" not in request.full_url
-            return _FakeResponse(_ollama_payload(_pick_json()))
+            return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = self._dual(primary="local")
-        pick, engine, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert len(urls) == 1
         assert pick is not None and engine == "local"
 
@@ -449,11 +918,13 @@ class TestLocalEngine:
         import urllib.request
 
         def _boom(request, timeout=None):
-            raise TimeoutError("cold daemon")
+            raise urllib.error.URLError("daemon down")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = self._dual(primary="local")
-        pick, engine, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert pick is None
         assert engine == "local"
 
@@ -521,10 +992,12 @@ class TestLocalEngine:
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = _strategy(engine=RoutingEngine(decision_model="cheap/decider"))
-        pick, engine, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert pick is None
         assert engine == "openrouter"  # local skipped, not failed
-        assert urls == ["https://openrouter.ai/api/v1/chat/completions"]
+        assert urls == [OPENROUTER_DECISIONS_URL]
 
     def test_no_engine_configured_makes_zero_calls(self, monkeypatch):
         import urllib.request
@@ -534,8 +1007,15 @@ class TestLocalEngine:
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = _strategy(engine=RoutingEngine())
-        pick, engine, usage = decide(strategy, current_model=SONNET, side=False, ask="hi")
-        assert (pick, engine, usage) == (None, "openrouter", (0, 0))
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert (pick, engine, usage, detail) == (
+            None,
+            "openrouter",
+            (0, 0, None),
+            "openrouter failed",
+        )
 
     def test_non_http_base_url_warns_and_uses_default_host(
         self, tmp_path, monkeypatch, caplog
@@ -544,7 +1024,7 @@ class TestLocalEngine:
         path.write_text(
             "candidates:\n"
             f"  - id: {HAIKU}\n"
-            "engine: {primary: local, local_model: qwen3:8b, "
+            "engine: {primary: local, local_model: nimble, "
             "local_base_url: 'ftp://files.local/ollama'}\n",
             encoding="utf-8",
         )
@@ -562,51 +1042,62 @@ class TestLocalEngine:
         def _fake_urlopen(request, timeout=None):
             seen["url"] = request.full_url
             seen["timeout"] = timeout
-            return _FakeResponse(_ollama_payload(_pick_json()))
+            return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = self._dual(primary="local")
-        pick, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, _, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert pick is not None
-        assert seen["url"] == f"{OLLAMA_DEFAULT_HOST}/api/chat"
+        assert seen["url"] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
         assert seen["timeout"] == 30
 
-    def test_ollama_posts_chat_contract(self, monkeypatch):
+    def test_ollama_posts_systemone_contract(self, monkeypatch):
         import urllib.request
 
         seen: dict = {}
 
         def _fake_urlopen(request, timeout=None):
+            seen["url"] = request.full_url
             seen["body"] = json.loads(request.data.decode("utf-8"))
             seen["auth"] = request.get_header("Authorization")
-            return _FakeResponse(_ollama_payload(_pick_json()))
+            return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        result = decide_via_ollama(local_model="qwen3:8b", system="s", user="u")
-        assert result.text == _pick_json()
+        result = decide_via_ollama(
+            local_model="nimble", state={"ask": "hi"}, questions={"pick_model": {}}
+        )
+        assert result.answers is not None
+        assert result.answers["pick_model"]["choice"] == HAIKU
+        assert seen["url"] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
         body = seen["body"]
-        assert body["model"] == "qwen3:8b"
-        assert body["stream"] is False
+        assert body["model"] == "nimble"
         assert body["keep_alive"] == "5m"
-        assert [m["role"] for m in body["messages"]] == ["system", "user"]
-        fmt = body["format"]
-        assert fmt["type"] == "object"
-        assert set(fmt["properties"]) == {"model", "effort", "why"}
+        assert set(body) == {"model", "state", "questions", "keep_alive"}
         assert seen["auth"] is None  # localhost never carries key material
 
-    def test_ollama_usage_comes_from_eval_counts(self, monkeypatch):
+    def test_ollama_usage_comes_from_token_counts(self, monkeypatch):
         import urllib.request
 
         def _fake_urlopen(request, timeout=None):
-            return _FakeResponse(_ollama_payload(_pick_json(), 90, 12))
+            return _FakeResponse(
+                _decision_payload(
+                    _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15}),
+                    input_tokens=90,
+                    output_tokens=12,
+                    cost=None,
+                )
+            )
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        result = decide_via_ollama(local_model="qwen3:8b", system="s", user="u")
+        result = decide_via_ollama(
+            local_model="nimble", state={}, questions={}
+        )
         assert (result.input_tokens, result.output_tokens) == (90, 12)
-        _, _, usage = decide(
+        assert result.cost is None
+        _, _, usage, _ = decide(
             self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
         )
-        assert usage == (90, 12)
+        assert usage == (90, 12, None)
 
     def test_proxied_host_carries_bearer_key(self, monkeypatch):
         import urllib.request
@@ -617,17 +1108,17 @@ class TestLocalEngine:
         def _fake_urlopen(request, timeout=None):
             seen["url"] = request.full_url
             seen["auth"] = request.get_header("Authorization")
-            return _FakeResponse(_ollama_payload(_pick_json()))
+            return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         result = decide_via_ollama(
-            local_model="qwen3:8b",
+            local_model="nimble",
             local_base_url="http://gpu-box.example:11434",
-            system="s",
-            user="u",
+            state={},
+            questions={},
         )
-        assert result.text == _pick_json()
-        assert seen["url"] == "http://gpu-box.example:11434/api/chat"
+        assert result.answers is not None
+        assert seen["url"] == "http://gpu-box.example:11434/v1/systemone"
         assert seen["auth"] == "Bearer " + "proxy-secret"
 
     def test_invalid_base_url_at_call_time_fails_soft(self, monkeypatch):
@@ -640,20 +1131,23 @@ class TestLocalEngine:
         strategy = self._dual(
             primary="local", local_base_url="gopher://daemon.local/"
         )
-        pick, engine, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert pick is None
         assert engine == "local"
 
-    def test_local_non_candidate_pick_holds_without_fuzzy_match(self, monkeypatch):
+    def test_local_stale_choice_holds(self, monkeypatch):
         import urllib.request
 
         near_miss = HAIKU + "x"  # one char off: must NOT fuzzy-match
 
         def _fake_urlopen(request, timeout=None):
-            return _FakeResponse(_ollama_payload(_pick_json(near_miss)))
+            table = {HAIKU: 0.2, near_miss: 0.8}
+            return _FakeResponse(_decision_payload(_answer(near_miss, table)))
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, engine, _ = decide(
+        pick, engine, _, _ = decide(
             self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
@@ -663,8 +1157,8 @@ class TestLocalEngine:
         assert [name for name, _ in _ENGINE_REGISTRY] == ["openrouter", "local"]
 
     def test_engine_result_defaults_to_zero_usage(self):
-        assert EngineResult(text=None) == EngineResult(
-            text=None, input_tokens=0, output_tokens=0
+        assert EngineResult(answers=None) == EngineResult(
+            answers=None, input_tokens=0, output_tokens=0, cost=None, model=None
         )
 
 
@@ -704,28 +1198,28 @@ class TestRoutedEffort:
         assert calls == [((HAIKU, HAIKU), {})]  # byte-identical two-arg call
 
     def test_validate_accepts_listed_level_on_reasoning_candidate(self):
-        pick = RoutingPick(model=HAIKU, effort="high", why="deep work")
+        pick = RoutingPick(model=HAIKU, effort="high")
         assert validate_routed_effort(pick, _candidates()) is True
 
     def test_validate_rejects_unlisted_level(self):
-        pick = RoutingPick(model=HAIKU, effort="max", why="too much")
+        pick = RoutingPick(model=HAIKU, effort="max")
         assert validate_routed_effort(pick, _candidates()) is False
 
     def test_validate_rejects_listed_level_on_incapable_candidate(self):
         # nova-micro advertises "low" but supports no thinking: mismatch
         # holds current, never coerces the level.
-        pick = RoutingPick(model=NOVA_MICRO, effort="low", why="cheap")
+        pick = RoutingPick(model=NOVA_MICRO, effort="low")
         assert validate_routed_effort(pick, _candidates()) is False
 
     def test_validate_accepts_auto_and_off_without_advertised_levels(self):
         # SONNET advertises no levels, so any string effort passes the
         # levels gate; auto/off need no thinking support either.
         for effort in ("auto", "off"):
-            pick = RoutingPick(model=SONNET, effort=effort, why="default")
+            pick = RoutingPick(model=SONNET, effort=effort)
             assert validate_routed_effort(pick, _candidates()) is True
 
     def test_validate_rejects_unknown_model(self):
-        pick = RoutingPick(model="ghost/1", effort="low", why="ghost")
+        pick = RoutingPick(model="ghost/1", effort="low")
         assert validate_routed_effort(pick, _candidates()) is False
 
     def test_apply_model_action_without_effort_resolves_as_before(self, monkeypatch):
@@ -751,7 +1245,10 @@ class TestRoutedEffort:
 
 
 class TestSingleCandidateFastPath:
-    def test_single_candidate_with_levels_skips_all_engines(self, monkeypatch):
+    def test_single_candidate_passes_first_advertised_level(self, monkeypatch):
+        # Interim 08-01 shape: nothing to choose, so the first
+        # advertised level rides through with zero engine calls; the
+        # effort decision call lands in plan 08-02.
         import urllib.request
 
         def _boom(request, timeout=None):
@@ -761,59 +1258,87 @@ class TestSingleCandidateFastPath:
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
             engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="qwen3:8b"
+                decision_model="cheap/decider", local_model="nimble"
             ),
         )
-        pick, engine, usage = decide(
+        pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
-        assert pick == RoutingPick(model=HAIKU, effort="low", why="only candidate")
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="low",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+        )
         assert engine == "none"
-        assert usage == (0, 0)
+        assert usage == (0, 0, None)
+        assert detail == ""
 
-    def test_single_candidate_without_levels_calls_engine_chain(self, monkeypatch):
+    def test_single_candidate_without_levels_holds_with_no_call(self, monkeypatch):
         import urllib.request
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-        calls: list = []
 
-        def _fake_urlopen(request, timeout=None):
-            calls.append(request)
-            return _FakeResponse(_chat_payload(_pick_json()))
+        def _boom(request, timeout=None):
+            raise AssertionError("no levels to pass: no engine call")
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU)],
             engine=RoutingEngine(decision_model="cheap/decider"),
         )
-        pick, engine, _ = decide(
+        pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
-        assert calls  # no advertised levels: the engine chain runs
-        assert engine == "openrouter"
-        assert pick == RoutingPick(model=HAIKU, effort="high", why="cheap and fast")
+        assert pick is None  # a one-option choice is invalid: hold
+        assert engine == "none"
+        assert usage == (0, 0, None)
+        assert detail == "only candidate advertises no levels"
 
-    def test_single_candidate_with_empty_levels_falls_through(self, monkeypatch):
+    def test_single_candidate_with_empty_levels_holds_with_no_call(
+        self, monkeypatch
+    ):
         import urllib.request
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-        calls: list = []
 
-        def _fake_urlopen(request, timeout=None):
-            calls.append(request)
-            return _FakeResponse(_chat_payload(_pick_json()))
+        def _boom(request, timeout=None):
+            raise AssertionError("no levels to pass: no engine call")
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU, levels=[])],
             engine=RoutingEngine(decision_model="cheap/decider"),
         )
-        pick, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
-        assert calls  # empty levels advertise nothing: the chain runs
-        # ...and the strict parse then rejects every effort (not a fast path).
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
         assert pick is None
+        assert engine == "none"
+        assert detail == "only candidate advertises no levels"
 
-    def test_hook_prints_standard_routed_line_with_zero_token_event(
+    def test_single_candidate_with_rejected_first_level_holds(
+        self, monkeypatch
+    ):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("fast path must not call any engine")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        strategy = _strategy(
+            candidates=[RoutingCandidate(id=NOVA_MICRO, levels=["low"])],
+            engine=RoutingEngine(decision_model="cheap/decider"),
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "none"
+        assert detail == f"effort 'low' unsupported by {NOVA_MICRO}"
+
+    def test_hook_prints_routed_line_with_zero_token_event(
         self, monkeypatch, capsys
     ):
         import urllib.request
@@ -849,25 +1374,34 @@ class TestSingleCandidateFastPath:
                 "side": False,
                 "model": HAIKU,
                 "effort": "low",
-                "why": "only candidate",
+                "model_confidence": None,
+                "effort_confidence": None,
+                "tie_break": False,
                 "engine": "none",
                 "input_tokens": 0,
                 "output_tokens": 0,
+                "decision_cost": None,
                 "held": False,
                 "decision_model": None,
             }
         ]
         shown = " ".join(capsys.readouterr().out.split())
-        assert f"Routed → {HAIKU} (low): only candidate" in shown
+        assert f"Routed → {HAIKU} (low): model n/a, effort n/a" in shown
 
 
 class TestLiveEngines:
-    def test_stub_server_ollama_decision_parses_pick(self):
+    def test_stub_server_systemone_decision_routes(self):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
         seen: dict = {}
-        canned = _ollama_payload(_pick_json(NOVA_MICRO, "low"), 90, 12)
+        canned = _decision_payload(
+            _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15}),
+            input_tokens=90,
+            output_tokens=12,
+            cost=None,
+            model="nimble",
+        )
 
         class _Handler(BaseHTTPRequestHandler):
             def do_POST(self):
@@ -897,7 +1431,7 @@ class TestLiveEngines:
                     local_base_url=f"http://127.0.0.1:{port}",
                 ),
             )
-            pick, engine, usage = decide(
+            pick, engine, usage, _ = decide(
                 strategy, current_model=SONNET, side=False, ask="hi"
             )
         finally:
@@ -905,50 +1439,54 @@ class TestLiveEngines:
             thread.join(timeout=10)
             server.server_close()
         assert pick == RoutingPick(
-            model=NOVA_MICRO, effort="low", why="cheap and fast"
+            model=HAIKU,
+            effort="low",
+            model_confidence=0.85,
+            effort_confidence=None,
+            tie_break=False,
         )
         assert engine == "local"
-        assert usage == (90, 12)
-        assert seen["path"] == "/api/chat"
+        assert usage == (90, 12, None)
+        assert seen["path"] == "/v1/systemone"
         body = seen["body"]
         assert body["model"] == "stub-model"
-        assert body["stream"] is False
-        assert [m["role"] for m in body["messages"]] == ["system", "user"]
-        assert set(body["format"]["properties"]) == {"model", "effort", "why"}
+        assert body["keep_alive"] == "5m"
+        assert set(body["state"]) == {"ask", "directives", "side"}
+        assert body["questions"]["pick_model"]["type"] == "choice"
 
     @pytest.mark.integration
-    def test_openrouter_live_decision_returns_text(self):
+    def test_openrouter_live_decision_returns_answers(self):
         import os
 
         if not os.environ.get("OPENROUTER_API_KEY"):
             pytest.skip("OPENROUTER_API_KEY not set")
-        from strands_code_cli.live_pricing import fetch_openrouter_models
-        from strands_code_cli.router import _setup_catalog_entries
+        # Pinned id re-verified against the live decisions catalog at
+        # implementation time (2026-10-12: 19 entries, jev ctx 64000).
+        decision_model = "typesafe/jev-1.13"
+        from strands_code_cli.routing import (
+            build_decision_state,
+            build_model_question,
+        )
 
-        models = fetch_openrouter_models()
-        if not models:
-            pytest.skip("OpenRouter catalog unreachable")
-        entries = [e for e in _setup_catalog_entries(models) if e["structured"]]
-        if not entries:
-            pytest.skip("no structured-output decision model in the catalog")
-        decision_model = entries[0]["id"]  # cheapest structured-capable
-        system, user = build_routing_prompt(
-            directives="live probe",
-            candidates=[RoutingCandidate(id=e["id"]) for e in entries[:2]],
-            current_model=entries[0]["id"],
-            side=False,
-            ask="live probe",
+        candidates = [RoutingCandidate(id="live/a"), RoutingCandidate(id="live/b")]
+        state = build_decision_state(
+            ask="live probe", directives="live probe", side=False
         )
+        questions = {
+            "pick_model": build_model_question(
+                candidates=candidates, directives="live probe"
+            )
+        }
         result = decide_via_openrouter(
-            decision_model=decision_model, system=system, user=user
+            decision_model=decision_model, state=state, questions=questions
         )
-        assert result.text is not None, (
+        assert result.answers is not None, (
             "live decision call failed — check key, quota, and network"
         )
         assert result.input_tokens >= 0 and result.output_tokens >= 0
 
     @pytest.mark.integration
-    def test_ollama_live_daemon_decision_returns_text(self):
+    def test_ollama_live_daemon_decision_returns_answers(self):
         import os
         import urllib.request
 
@@ -976,18 +1514,23 @@ class TestLiveEngines:
             if wanted not in names:
                 pytest.skip(f"OLLAMA_TEST_MODEL {wanted} not pulled")
             model = wanted
-        elif names:
-            model = names[0]
+        elif "tev1:0.8b" in names:
+            model = "tev1:0.8b"
         else:
-            pytest.skip("no models pulled in the daemon")
-        system, user = build_routing_prompt(
-            directives="live probe",
-            candidates=[RoutingCandidate(id="live/a"), RoutingCandidate(id="live/b")],
-            current_model="live/a",
-            side=False,
-            ask="live probe",
+            pytest.skip("no decision model pulled in the daemon")
+        state = build_decision_state(
+            ask="live probe", directives="live probe", side=False
         )
+        questions = {
+            "pick_model": build_model_question(
+                candidates=[
+                    RoutingCandidate(id="live/a"),
+                    RoutingCandidate(id="live/b"),
+                ],
+                directives="live probe",
+            )
+        }
         result = decide_via_ollama(
-            local_model=model, system=system, user=user, timeout=120
+            local_model=model, state=state, questions=questions, timeout=120
         )
-        assert result.text is not None, f"live Ollama decision failed on {model}"
+        assert result.answers is not None, f"live Ollama decision failed on {model}"

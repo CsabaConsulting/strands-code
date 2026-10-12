@@ -613,17 +613,15 @@ def _route_side_spawn(
     """One spawn-time side decision mutating the replayed kwargs (D-04).
 
     Runs synchronously on the pump (main) thread inside the build
-    closure, once per spawn, before :func:`build_btw_agent`. A parsed
+    closure, once per spawn, before :func:`build_btw_agent`. A gated
     pick for another model validates its effort and resolves through
     ``resolve_model``, re-pointing the replayed ``model`` plus
     ``effort``; a same-model pick skips validation and resolve like
-    the main hook's no-op fast path (live deciders return junk
-    efforts on stay picks — resolving those would hold every stay).
-    Any hold or failure keeps the parent live model with no side
-    note. The shared strategy, toggle, and quiet rules apply:
-    routing off or unconfigured spawns exactly as before. Every
-    side decision, routed or held, appends one side-flagged routing
-    event.
+    the main hook's no-op fast path. Any hold or failure keeps the
+    parent live model with no side note. The shared strategy, toggle,
+    and quiet rules apply: routing off or unconfigured spawns
+    exactly as before. Every side decision, routed or held, appends
+    one side-flagged routing event.
     """
     if routing is not None and not routing.is_on():
         return
@@ -637,7 +635,7 @@ def _route_side_spawn(
 
     kwargs["model"] = live_model
     try:
-        pick, engine, usage = routing_mod.decide(
+        pick, engine, usage, _detail = routing_mod.decide(
             strategy, current_model=current_model, side=True, ask=question
         )
     except Exception:  # noqa: BLE001 — side holds stay silent on the live model
@@ -647,10 +645,12 @@ def _route_side_spawn(
             side=True,
             model=current_model,
             effort="",
-            why="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
             engine="decide",
             decision_engine="decide",
-            usage=(0, 0),
+            usage=(0, 0, None),
             held=True,
         )
         return
@@ -661,7 +661,9 @@ def _route_side_spawn(
             side=True,
             model=current_model,
             effort="",
-            why="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
             engine=engine,
             decision_engine=engine,
             usage=usage,
@@ -682,7 +684,9 @@ def _route_side_spawn(
                 side=True,
                 model=current_model,
                 effort="",
-                why="",
+                model_confidence=None,
+                effort_confidence=None,
+                tie_break=False,
                 engine=engine,
                 decision_engine=engine,
                 usage=usage,
@@ -698,7 +702,9 @@ def _route_side_spawn(
                 side=True,
                 model=current_model,
                 effort="",
-                why="",
+                model_confidence=None,
+                effort_confidence=None,
+                tie_break=False,
                 engine="resolve",
                 decision_engine=engine,
                 usage=usage,
@@ -713,7 +719,9 @@ def _route_side_spawn(
         side=True,
         model=pick.model,
         effort=pick.effort,
-        why=pick.why,
+        model_confidence=pick.model_confidence,
+        effort_confidence=pick.effort_confidence,
+        tie_break=pick.tie_break,
         engine=engine,
         decision_engine=engine,
         usage=usage,
@@ -725,7 +733,9 @@ def _route_side_spawn(
             routing_mod.format_routed_line(
                 model=pick.model,
                 effort=pick.effort,
-                why=pick.why,
+                model_confidence=pick.model_confidence,
+                effort_confidence=pick.effort_confidence,
+                tie_break=pick.tie_break,
                 prev_model=current_model,
                 ask=question,
                 side=True,
@@ -1313,19 +1323,23 @@ def _record_routing_event(
     side: bool,
     model: str,
     effort: str,
-    why: str,
+    model_confidence: float | None,
+    effort_confidence: float | None,
+    tie_break: bool,
     engine: str,
     decision_engine: str,
-    usage: tuple[int, int],
+    usage: tuple[int, int, float | None],
     held: bool,
 ) -> None:
     """Append one routing event for a decided ask (None list skips).
 
     The record carries the 1-based ask number, the side flag, the
-    serving (or picked) model plus routed effort/why, the producing
-    (or failed) engine, the decision-call token pair, the held marker,
-    and the decision model id behind ``decision_engine`` for /cost
-    pricing. Held asks record the serving model with empty effort/why.
+    serving (or picked) model plus routed effort and confidences, the
+    tie-break marker, the producing (or failed) engine, the
+    decision-call token pair plus reported cost, the held marker, and
+    the decision model id behind ``decision_engine`` for /cost
+    pricing. Held asks record the serving model with empty effort and
+    no confidences.
     """
     if routing_events is None:
         return
@@ -1335,10 +1349,13 @@ def _record_routing_event(
             "side": side,
             "model": model,
             "effort": effort,
-            "why": why,
+            "model_confidence": model_confidence,
+            "effort_confidence": effort_confidence,
+            "tie_break": tie_break,
             "engine": engine,
             "input_tokens": usage[0],
             "output_tokens": usage[1],
+            "decision_cost": usage[2],
             "held": held,
             "decision_model": routing_mod.decision_model_for(
                 strategy, decision_engine
@@ -1363,18 +1380,18 @@ def _route_pre_turn(
 
     Runs after dispatch plus the plan prefix and before the retry loop.
     A toggled-off session or an unconfigured one (no strategy, or zero
-    candidates) skips silently; a parsed pick validates its routed
+    candidates) skips silently; a gated pick validates its routed
     effort (levels plus reasoning support) and then applies through
     :func:`apply_model_action` with the same persistence as the
     model-action site, and every routed ask prints one transcript line
     (suppressed when the strategy sets ``quiet``). A same-model pick
     skips the switch (no-op fast path) but still prints the line.
-    Every engine, parse, validation, or resolve failure holds current
-    with history untouched and prints the hold note (D-08) — hold and
-    failure notes always print, even under ``quiet``. Every decided
-    ask, held included, appends one routing event for /cost (T-08-08).
-    Effort is per-ask: nothing persists, and manual switches keep the
-    default.
+    Every engine, validation, gate, or resolve failure holds current
+    with history untouched and prints the hold note with its reason
+    detail (D-08, D-16) — hold and failure notes always print, even
+    under ``quiet``. Every decided ask, held included, appends one
+    routing event for /cost (T-08-08). Effort is per-ask: nothing
+    persists, and manual switches keep the default.
     """
     if routing is not None and not routing.is_on():
         return current_model
@@ -1387,7 +1404,7 @@ def _route_pre_turn(
     if strategy is None or not strategy.candidates:
         return current_model
     try:
-        pick, engine, usage = routing_mod.decide(
+        pick, engine, usage, detail = routing_mod.decide(
             strategy, current_model=current_model, side=False, ask=ask_text
         )
     except Exception as exc:  # noqa: BLE001 — pricing/validation failure holds, never kills
@@ -1398,14 +1415,17 @@ def _route_pre_turn(
             side=False,
             model=current_model,
             effort="",
-            why="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
             engine="decide",
             decision_engine="decide",
-            usage=(0, 0),
+            usage=(0, 0, None),
             held=True,
         )
         print_plain(
-            console, routing_mod.format_hold_line(current=current_model, engine="decide")
+            console,
+            routing_mod.format_hold_line(current=current_model, detail="decide failed"),
         )
         return current_model
     if pick is None:
@@ -1415,14 +1435,16 @@ def _route_pre_turn(
             side=False,
             model=current_model,
             effort="",
-            why="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
             engine=engine,
             decision_engine=engine,
             usage=usage,
             held=True,
         )
         print_plain(
-            console, routing_mod.format_hold_line(current=current_model, engine=engine)
+            console, routing_mod.format_hold_line(current=current_model, detail=detail)
         )
         return current_model
     prev_model = current_model
@@ -1447,7 +1469,9 @@ def _route_pre_turn(
                 side=False,
                 model=current_model,
                 effort="",
-                why="",
+                model_confidence=None,
+                effort_confidence=None,
+                tie_break=False,
                 engine=engine,
                 decision_engine=engine,
                 usage=usage,
@@ -1455,7 +1479,10 @@ def _route_pre_turn(
             )
             print_plain(
                 console,
-                routing_mod.format_hold_line(current=current_model, engine=engine),
+                routing_mod.format_hold_line(
+                    current=current_model,
+                    detail=f"effort {pick.effort!r} unsupported by {pick.model}",
+                ),
             )
             return current_model
         try:
@@ -1475,7 +1502,9 @@ def _route_pre_turn(
                 side=False,
                 model=current_model,
                 effort="",
-                why="",
+                model_confidence=None,
+                effort_confidence=None,
+                tie_break=False,
                 engine="resolve",
                 decision_engine=engine,
                 usage=usage,
@@ -1483,7 +1512,9 @@ def _route_pre_turn(
             )
             print_plain(
                 console,
-                routing_mod.format_hold_line(current=current_model, engine="resolve"),
+                routing_mod.format_hold_line(
+                    current=current_model, detail="resolve failed"
+                ),
             )
             return current_model
         if resolved_id is not None:
@@ -1511,7 +1542,9 @@ def _route_pre_turn(
         side=False,
         model=pick.model,
         effort=pick.effort,
-        why=pick.why,
+        model_confidence=pick.model_confidence,
+        effort_confidence=pick.effort_confidence,
+        tie_break=pick.tie_break,
         engine=engine,
         decision_engine=engine,
         usage=usage,
@@ -1522,7 +1555,9 @@ def _route_pre_turn(
             routed_line = routing_mod.format_routed_line(
                 model=pick.model,
                 effort=pick.effort,
-                why=pick.why,
+                model_confidence=pick.model_confidence,
+                effort_confidence=pick.effort_confidence,
+                tie_break=pick.tie_break,
                 prev_model=prev_model,
                 ask=ask_text,
             )
