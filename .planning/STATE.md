@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 09
 current_phase_name: native-typesafe-decision-engine
-status: executing
-stopped_at: Completed 09-02-PLAN.md
-last_updated: "2026-10-12T20:38:41.106Z"
+status: verifying
+stopped_at: Completed 09-03-PLAN.md
+last_updated: "2026-10-12T21:08:09.175Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 09 execution started
-state_head: ec469383ed975434d7b60c7b20346979854737dc
+state_head: 7e60ac7300e262e47a5bbb4c687fba930303e83a
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 26
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 
 Phase: 09 (native-typesafe-decision-engine) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-12 — Phase 09 execution started
 
 Progress: [███████░░░] 73%
@@ -85,6 +85,7 @@ Progress: [███████░░░] 73%
 | Phase 08 P07 | 24min | 3 tasks | 5 files |
 | Phase 09 P01 | 15min | 3 tasks | 5 files |
 | Phase 09 P02 | 17min | 3 tasks | 8 files |
+| Phase 09 P03 | 25min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -149,6 +150,11 @@ Recent decisions affecting current work:
 - [Phase 09]: Validate ping flips the report head to INVALID on key/model failures — appended lines alone would not fail bad keys
 - [Phase 09]: Ping gate reads strategy.engine.order directly — the loader coerces primary, so native reaches the effective order only via explicit order
 - [Phase 09]: Off-tty order builder aborts on the second unknown engine — an order is positional, so a partial write would silently reorder the chain
+- [Phase 09]: Native fault keys added to the probes.jsonl fault maps — Without native keys _fault_for returns None, the fault arms never fire live, and fault probes record routed verdicts (mirrors the local-keys precedent)
+- [Phase 09]: Fresh openrouter plus local runs precede compare — Compare diffs all three run files and reports missing ones as drift, so a native-only run can never exit 0; the fresh runs double as a drift check
+- [Phase 09]: N4 asks the debug ask, not the r2 trivial ask — Jev holds the trivial ask 2/2 at 50 percent under the rig strategy while the debug ask routes current at 0.92-0.95 (genuine model judgment, reproduced)
+- [Phase 09]: N4 asserts the via-native spend cell, not the Prices marker — Live turns fold the unit-pinned single-source marker into Prices mixed (shipped 09-01 behavior)
+- [Phase 09]: R1 branches on the native radio — Alternation wait keeps r1 green key-present and key-absent
 
 ### Pending Todos
 
@@ -180,6 +186,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T20:38:41.015Z
-Stopped at: Completed 09-02-PLAN.md
+Last session: 2026-10-12T21:07:31.878Z
+Stopped at: Completed 09-03-PLAN.md
 Resume file: None
