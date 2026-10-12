@@ -115,3 +115,15 @@ class TestWaitForNewBaseline:
         )
         text = driver.wait_for_new("sess", r"Routing on", 5, "on", poll=0)
         assert "Routing on" in text
+
+
+class TestR3CostBaselines:
+    def test_no_post_wait_cost_snapshot(self):
+        src = inspect.getsource(driver.scenario_r3)
+        assert "after=len(COST_RE.findall(pane_text(sess)))" not in src
+
+    def test_off_baseline_is_pre_send(self):
+        src = inspect.getsource(driver.scenario_r3)
+        assert src.index("after_cost = ") < src.index(
+            '"Reply with exactly: offcheck"'
+        )

@@ -489,28 +489,31 @@ def scenario_r3():
         off_before = len(re.findall(r"Routing off", pane_text(sess)))
         send(sess, "/route off", "Enter")
         wait_for_new(sess, r"Routing off", 60, "off", before=off_before)
-        send(sess, "Reply with exactly: offcheck", "Enter")
         after_cost = len(COST_RE.findall(pane_text(sess)))
+        send(sess, "Reply with exactly: offcheck", "Enter")
         text, _ = wait_main_end(sess, after=after_cost)
         assert text.count("Routed \u2192") == routed_before, "routed while off"
         on_before = len(re.findall(r"Routing on", pane_text(sess)))
         send(sess, "/route on", "Enter")
         wait_for_new(sess, r"Routing on", 60, "on", before=on_before)
+        oncheck_cost_before = len(COST_RE.findall(pane_text(sess)))
         send(sess, "Reply with exactly: oncheck", "Enter")
         marked = text.count("Routed \u2192") + text.count("Routing held")
         text, _ = wait_routed(sess, 120, "routed-again", after=marked)
+        final_cost_before = oncheck_cost_before
         if text.count("Routed \u2192") != routed_before + 1:
             # Transient decision-API failure holds (D-08); the product
             # retries next ask, so the rig gets one retry too.
             print("[r3] held once, retrying the ask", flush=True)
             assert HOLD_NOTE_RE.search(text), "hold note shape mismatch"
-            wait_main_end(sess, after=len(COST_RE.findall(pane_text(sess))))
+            held_text, _ = wait_main_end(sess, after=oncheck_cost_before)
+            final_cost_before = len(COST_RE.findall(held_text))
             send(sess, "Reply with exactly: oncheck again", "Enter")
             marked = text.count("Routed \u2192") + text.count("Routing held")
             text, _ = wait_routed(sess, 120, "routed-retry", after=marked)
             assert text.count("Routed \u2192") == routed_before + 1, "no route after on"
         routed_line_with_confidences(text)
-        wait_main_end(sess, after=len(COST_RE.findall(pane_text(sess))))
+        wait_main_end(sess, after=final_cost_before)
         print("R3 PASS", flush=True)
     finally:
         save(sess, "r3", LOGDIR8)
