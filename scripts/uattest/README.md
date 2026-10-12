@@ -16,13 +16,14 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   strategy round-tripping the enumerated id with no key material, and
   `/route validate` reporting VALID.
 - **r2** — Phase 8 local engine: hand-written strategy with
-  `primary: local` routes an ask through a real Ollama daemon (needs
-  `qwen3:1.7b` pulled): expects a `Routed →` line with measured latency,
-  a served turn, and `/cost` showing `via local` with no hold.
-- **r3** — Phase 8 end-to-end on Bedrock: decision via the live catalog's
-  cheapest structured id, routed turn served, `/cost` Routing section
-  with real decision tokens; then `/route off` suppresses routing for a
-  turn and `/route on` restores it.
+  `primary: local` routes an ask through a real Ollama daemon over
+  `/v1/systemone` (needs a decision-capable pull such as `tev1:0.8b`):
+  expects a `Routed →` line with measured latency, a served turn, and
+  `/cost` showing `via local` with zero decision spend and no hold.
+- **r3** — Phase 8 end-to-end on Bedrock: decision via the live decisions
+  catalog's cheapest id, routed turn served with both confidences on the
+  `Routed →` line, `/cost` Routing entry with reported spend; then
+  `/route off` suppresses routing for a turn and `/route on` restores it.
 - **r4** — Phase 8 live `/btw` side ask: mid-turn spawn routes through
   the shared strategy, expects a `Routed (btw)` line and a side-flagged
   `/cost` Routing entry.
@@ -30,7 +31,7 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
 ## Usage
 
 Requires `tmux`, `uv`, and model credentials in the environment (`r2`
-also needs an Ollama daemon with structured-output support):
+also needs an Ollama daemon ≥0.35 with a decision-capable pull):
 
 ```sh
 cd /tmp && python3 /path/to/scripts/uattest/driver.py s1 --runs 2
