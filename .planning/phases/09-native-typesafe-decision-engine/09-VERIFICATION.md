@@ -35,7 +35,7 @@ prohibitions:
     evidence: "cost=in_tok*0.042/1e6 whenever input_tokens>0 (routing.py:1352); TestNativeSpend + live spend-identity tests pass"
   - statement: "MUST NOT silently substitute a different Jev build than pinned"
     verification: judgment
-    status: unverified-prohibition — human review recommended (NON-AUTHORITATIVE LLM-judge: mechanically supported)
+    status: "unverified-prohibition — human review recommended (NON-AUTHORITATIVE LLM-judge: mechanically supported)"
     evidence: "Pin-first radio, alias drift warning (router.py:1079-1084), per-verdict snapshot (routing.py:1353), compare flags moves; cross-release drift unprovable in one run"
   - statement: "MUST NOT send beyond shared decision state to the native endpoint"
     verification: test
