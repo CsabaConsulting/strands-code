@@ -162,10 +162,22 @@ def format_usage(input_tokens: int, window: int | None) -> str:
     return f"{base} ({input_tokens / window * 100:.0f}%)"
 
 
-def usage_line(input_tokens: int, output_tokens: int, model_id: str) -> str:
-    """Post-turn usage line: tokens + % with money appended only on hit."""
+def usage_line(
+    input_tokens: int,
+    output_tokens: int,
+    model_id: str,
+    reported_cost: float | None = None,
+) -> str:
+    """Post-turn usage line: tokens + % with money appended only on hit.
+
+    A present reported cost renders as a marked actual and wins over
+    the estimate (``is not None``: a present 0.0 stays an actual).
+    """
     window = window_for(model_id)
     line = format_usage(input_tokens, window)
+    if reported_cost is not None:
+        line += f" ${reported_cost:.2f} actual"
+        return line
     cost = cost_for(input_tokens, output_tokens, model_id)
     if cost is not None:
         line += f" ${cost:.2f}"

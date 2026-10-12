@@ -22,7 +22,7 @@ try:
 except ImportError:  # harness predates supports_thinking: static fallback below
     _harness_supports_thinking = None
 
-from strands_code_cli import model_capabilities
+from strands_code_cli import model_capabilities, reported_cost
 
 MODEL_REFUSAL = "Model switches apply at the idle prompt — wait for the turn to finish."
 
@@ -653,5 +653,6 @@ def apply_switch(
         model = resolve_model(new_string, default or new_string)
     else:
         model = resolve_model(new_string, default or new_string, effort=effort)
+    model = reported_cost.wrap_for_openrouter(new_string, model)
     agent.model = model
     return (model, model_id_of(model, new_string))

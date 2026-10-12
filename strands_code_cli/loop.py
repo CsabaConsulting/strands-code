@@ -275,8 +275,21 @@ def _poll_live(broker: Any) -> Any:
         return req
 
 
+def _drain_reported_cost(model: Any) -> float | None:
+    """Reported turn spend from a cost-aware model, else None (fail soft)."""
+    take = getattr(model, "take_reported_costs", None)
+    if not callable(take):
+        return None
+    try:
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        return sum_reported_costs(take())
+    except Exception:
+        return None
+
+
 def record_turn_metrics(
-    result: Any, current_model: str, session_turns: list
+    result: Any, current_model: str, session_turns: list, model: Any = None
 ) -> str | None:
     """Append one per-turn token row; return the usage line when computable.
 
@@ -285,6 +298,8 @@ def record_turn_metrics(
     """
     from strands_code_agent.utils import get_response_metrics
 
+    # Drain first: a failed turn must never bleed costs into the next turn.
+    reported = _drain_reported_cost(model)
     try:
         metrics = get_response_metrics(
             result, model_id=current_model, price_table=MODEL_PRICING
@@ -296,15 +311,16 @@ def record_turn_metrics(
         out_tok = int(metrics.get("output_tokens", 0))
     except (TypeError, ValueError):
         return None
-    session_turns.append(
-        {
-            "turn": len(session_turns) + 1,
-            "input_tokens": in_tok,
-            "output_tokens": out_tok,
-            "model": current_model,
-        }
-    )
-    return usage_line(in_tok, out_tok, current_model)
+    row = {
+        "turn": len(session_turns) + 1,
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "model": current_model,
+    }
+    if reported is not None:
+        row["reported_cost"] = reported
+    session_turns.append(row)
+    return usage_line(in_tok, out_tok, current_model, reported_cost=reported)
 
 
 def maybe_auto_compact(agent: Any, current_model: str) -> str | None:
@@ -1872,7 +1888,9 @@ def _drain_revise_rounds(
             console.print("Revise round dropped — the turn failed.")
             revise_state.disarm()
             break
-        usage = record_turn_metrics(follow_result, current_model, session_turns)
+        usage = record_turn_metrics(
+            follow_result, current_model, session_turns, model=agent
+        )
         if usage is not None:
             print_plain(console, usage, style="dim")
         text = _result_text(agent, follow_result)
@@ -2291,7 +2309,9 @@ def run_loop(
                         if btw_usage is not None:
                             print_plain(console, btw_usage, style="dim")
                     btw.pending.clear()
-                    usage = record_turn_metrics(result, current_model, session_turns)
+                    usage = record_turn_metrics(
+                        result, current_model, session_turns, model=agent
+                    )
                     if usage is not None:
                         print_plain(console, usage, style="dim")
                     history = getattr(agent, "messages", None)
