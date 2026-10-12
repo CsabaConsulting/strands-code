@@ -470,7 +470,13 @@ def cmd_run(
 ) -> int:
     """Execute the probe set through one engine; write JSONL verdicts."""
     probes = load_probes()
-    tag = local_model or resolve_local_model()
+    # Cloud runs never touch the daemon: the OpenRouter transport
+    # ignores the local tag, so resolve lazily on the local path only
+    # and keep the pin populated from the constant otherwise (D-06).
+    if engine == "local":
+        tag = local_model or resolve_local_model()
+    else:
+        tag = local_model or LOCAL_MODEL_PIN
     if engine == "local":
         _warm_local(tag)
     out_path = out or Path(f"/tmp/route-probe-{engine}.jsonl")
