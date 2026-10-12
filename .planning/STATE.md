@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 08
 current_phase_name: Model Routing with Decision Models
-status: executing
-stopped_at: Completed 08-04-PLAN.md
-last_updated: "2026-10-12T06:27:31.469Z"
+status: verifying
+stopped_at: Completed 08-05-PLAN.md
+last_updated: "2026-10-12T06:53:51.822Z"
 last_activity: 2026-10-11
 last_activity_desc: Phase 08 execution started
-state_head: a38ac95fcbdb0532779639e19bd4902a3f2bcd27
+state_head: ec46f650fa949b29393ea712a0b6cd43a9043b9a
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 21
-  completed_plans: 20
+  completed_plans: 21
 ---
 
 # Project State
@@ -29,7 +29,7 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 
 Phase: 08 (Model Routing with Decision Models) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-11 — Phase 08 execution started
 
 Progress: [████████░░] 78%
@@ -79,6 +79,7 @@ Progress: [████████░░] 78%
 | Phase 08 P02 | 11min | 3 tasks | 3 files |
 | Phase 08 P03 | 25min | 3 tasks | 5 files |
 | Phase 08 P04 | 17min | 3 tasks | 8 files |
+| Phase 08 P05 | 24min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,7 @@ Recent decisions affecting current work:
 - [Phase 08]: [Phase 08-03]: Unready daemons yield an inert zero-POST link; 4xx/schema keep falling through; pause fires only when every attempted link fails at connection level — Inert link keeps the _chain_for signature while the distinct detail flows through the error channel; fall-through is the existing tested contract the plan does not revoke; neutral skipped/unready/errorless links keep mixed failures informative
 - [Phase 08]: [Phase 08-03]: Pause is turn-scoped on RoutingState and only the ask tightens under the 64 KiB body cap — Pre-turn resumes every ask per D-08 retry-next-ask while side spawns skip with zero POSTs; ask-only tightening keeps the guard simple and criteria overshoot degrades to a 413 hold with the engine-plus-code detail
 - [Phase 08]: [Phase 08-04]: Split-catalog setup with decisions-cache validate; empty local tag takes nimble; rig levels [auto, off] — Decisions catalog drives the decider pick and the validate check (D-06); nimble is the RESEARCH default local tag; reasoning-free levels keep scripted live runs deterministic on any boot model
+- [Phase 08]: [Phase 08-05]: Probe-derived gate defaults 0.62/0.04 ship with recorded baseline; one shared threshold, compare-mode regression, env-gated live tests — Threshold 0.62 is the midpoint of the observed 0.51/0.73 gap and tie margin 0.04 is the max near-tie margin plus one grid step; neither engine misfires dangerously so no per-engine split; effort flips warn since weak effort reads route ungated
 
 ### Pending Todos
 
@@ -162,6 +164,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T06:27:27.154Z
-Stopped at: Completed 08-04-PLAN.md
+Last session: 2026-10-12T06:53:40.266Z
+Stopped at: Completed 08-05-PLAN.md
 Resume file: None
