@@ -5,7 +5,7 @@
     "note": "Live decisions catalog re-fetched at calibration time: 19 entries, typesafe/jev-1.13 still listed \u2014 no re-pin.",
     "reverified": "2026-10-12"
   },
-  "derivation": "confidence_threshold 0.62 = midpoint of the observed (0.51 wrong-catchable max [Jev e-long-ask], 0.73 correct min [e-short-deep-1 both engines]) gap, 0.11 margin each side. One shared value: neither engine misfires in the dangerous direction \u2014 every routed verdict is correct-tier except the two a-length-trap under-routes (0.94/0.88), confident misroutes no threshold catches (directives follow-up, not a knob failure). Holds are all safe-direction (current serves, retry next ask). tie_margin 0.04 = max observed near-tie margin 0.03 (Jev 0.51-vs-0.48 split) plus one 0.01 grid step of headroom; the grid floor is Jev's observed 2-decimal rounding (Pitfall 2). Below every routed margin (0.34 min), so the tie-break is armed but silent on the probe set.",
+  "derivation": "confidence_threshold 0.62 = midpoint of the observed (0.51 wrong-catchable max [Jev e-long-ask], 0.73 correct min [e-short-deep-1 both engines]) gap, 0.11 margin each side. One shared value: neither engine misfires in the dangerous direction \u2014 every routed verdict is correct-tier except the two a-length-trap under-routes (0.94/0.88), confident misroutes no threshold catches (directives follow-up, not a knob failure). Holds are all safe-direction (current serves, retry next ask). tie_margin 0.04 = max observed near-tie margin 0.03 (Jev 0.51-vs-0.48 split) plus one 0.01 grid step of headroom; the grid floor is Jev's observed 2-decimal rounding (Pitfall 2). Below every routed margin (0.34 min), so the tie-break is armed but silent on the probe set. Native calibration 2026-10-12 (pin jev-1.13.0, snapshot jev-1.13.0): 19/20 gated verdicts identical to the OpenRouter run; the single flip is the ungated c-single-candidate effort read (OpenRouter low 0.53/0.47 vs native medium 0.51/0.49, D-16 jitter inside 2-decimal rounding, both match). Shared 0.62/0.04 knobs STAND: no routed-but-wrong above threshold, no mass hold where OpenRouter routes (D-09).",
   "derived": {
     "confidence_threshold": 0.62,
     "tie_margin": 0.04
@@ -51,6 +51,46 @@
         0.7576633193181703
       ]
     },
+    "native": {
+      "margin": [
+        1.0,
+        1.0,
+        0.81,
+        0.96,
+        1.0,
+        0.020000000000000018,
+        0.48,
+        0.13000000000000006,
+        0.9199999999999999,
+        0.9299999999999999,
+        0.08000000000000002,
+        0.8600000000000001,
+        0.94,
+        0.98,
+        0.8999999999999999,
+        0.24,
+        0.8700000000000001
+      ],
+      "top1": [
+        1.0,
+        1.0,
+        0.9,
+        0.98,
+        1.0,
+        0.51,
+        0.71,
+        0.56,
+        0.96,
+        0.96,
+        0.54,
+        0.93,
+        0.97,
+        0.99,
+        0.95,
+        0.62,
+        0.93
+      ]
+    },
     "openrouter": {
       "margin": [
         1,
@@ -94,14 +134,17 @@
   },
   "generated": "2026-10-12T06:46:31Z",
   "local_note": "nimble was absent at calibration start; pulled 2026-10-12 (9.5GB) per plan. No tev1 fallback needed; tev1:0.8b stays the documented low-resource fallback.",
+  "native_note": "Native run 2026-10-12 via --run native (pin jev-1.13.0): 20 verdicts, snapshot jev-1.13.0 on all 17 answered probes; fault probes hold (401 bad key, no-creds, timeout).",
   "pins": {
     "local": "nimble",
+    "native": "jev-1.13.0",
     "openrouter": "typesafe/jev-1.13"
   },
   "probe_count": 20,
   "probe_file": "evals/routing-probe/probes.jsonl",
   "snapshots": {
     "local": "nimble",
+    "native": "jev-1.13.0",
     "openrouter": "typesafe/jev-1.13-20260917"
   },
   "verdicts": {
@@ -460,6 +503,374 @@
       },
       "f-timeout": {
         "error": "timeout",
+        "expected": "hold",
+        "fault": "timeout",
+        "gated": null,
+        "margin": null,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": null,
+        "table": null,
+        "tie_break": false,
+        "top1": null,
+        "top1_prob": null
+      }
+    },
+    "native": {
+      "a-injected-instruction": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.8700000000000001,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.93,
+          "anthropic/claude-opus-4-5": 0.06,
+          "anthropic/claude-sonnet-4-5": 0.01
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.93
+      },
+      "a-length-trap": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.8999999999999999,
+        "match": false,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.95,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.05
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.95
+      },
+      "a-near-tie": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-sonnet-4-5",
+        "margin": 0.24,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.38,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.62
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-sonnet-4-5",
+        "top1_prob": 0.62
+      },
+      "c-deep-refactor": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-opus-4-5",
+        "margin": 1.0,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.0,
+          "anthropic/claude-opus-4-5": 1.0,
+          "anthropic/claude-sonnet-4-5": 0.0
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-opus-4-5",
+        "top1_prob": 1.0
+      },
+      "c-everyday-debug": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-sonnet-4-5",
+        "margin": 0.96,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.0,
+          "anthropic/claude-opus-4-5": 0.02,
+          "anthropic/claude-sonnet-4-5": 0.98
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-sonnet-4-5",
+        "top1_prob": 0.98
+      },
+      "c-everyday-implement": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-sonnet-4-5",
+        "margin": 0.81,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.09,
+          "anthropic/claude-opus-4-5": 0.01,
+          "anthropic/claude-sonnet-4-5": 0.9
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-sonnet-4-5",
+        "top1_prob": 0.9
+      },
+      "c-oneline-edit": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 1.0,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 1.0,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.0
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 1.0
+      },
+      "c-single-candidate": {
+        "error": null,
+        "expected": "effort-route",
+        "fault": null,
+        "gated": "medium",
+        "margin": 0.020000000000000018,
+        "match": true,
+        "question": "pick_effort",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "auto": 0.0,
+          "high": 0.0,
+          "low": 0.49,
+          "medium": 0.51,
+          "off": 0.0
+        },
+        "tie_break": false,
+        "top1": "medium",
+        "top1_prob": 0.51
+      },
+      "c-trivial-lookup": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 1.0,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 1.0,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.0
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 1.0
+      },
+      "e-borderline": {
+        "detail": "",
+        "error": null,
+        "expected": "route-or-hold",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.8600000000000001,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.93,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.07
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.93
+      },
+      "e-long-ask": {
+        "detail": "confidence 54% < 62%",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": null,
+        "margin": 0.08000000000000002,
+        "match": false,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.54,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.46
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.54
+      },
+      "e-mentions-model": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.9299999999999999,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.96,
+          "anthropic/claude-opus-4-5": 0.03,
+          "anthropic/claude-sonnet-4-5": 0.01
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.96
+      },
+      "e-short-deep-1": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-sonnet-4-5",
+        "margin": 0.48,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.06,
+          "anthropic/claude-opus-4-5": 0.23,
+          "anthropic/claude-sonnet-4-5": 0.71
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-sonnet-4-5",
+        "top1_prob": 0.71
+      },
+      "e-short-deep-2": {
+        "detail": "confidence 56% < 62%",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": null,
+        "margin": 0.13000000000000006,
+        "match": false,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.43,
+          "anthropic/claude-opus-4-5": 0.01,
+          "anthropic/claude-sonnet-4-5": 0.56
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-sonnet-4-5",
+        "top1_prob": 0.56
+      },
+      "e-side-ask": {
+        "detail": "",
+        "error": null,
+        "expected": "route",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.9199999999999999,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.96,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.04
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.96
+      },
+      "f-ambiguous-hold": {
+        "detail": "",
+        "error": null,
+        "expected": "hold",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.94,
+        "match": false,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.97,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.03
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.97
+      },
+      "f-bad-key-401": {
+        "error": "HTTP 401",
+        "expected": "hold",
+        "fault": "bad-key",
+        "gated": null,
+        "margin": null,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": null,
+        "table": null,
+        "tie_break": false,
+        "top1": null,
+        "top1_prob": null
+      },
+      "f-no-creds": {
+        "error": null,
+        "expected": "hold",
+        "fault": "no-key",
+        "gated": null,
+        "margin": null,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": null,
+        "table": null,
+        "tie_break": false,
+        "top1": null,
+        "top1_prob": null
+      },
+      "f-oversize-ask": {
+        "detail": "",
+        "error": null,
+        "expected": "route-or-hold",
+        "fault": null,
+        "gated": "anthropic/claude-haiku-4-5",
+        "margin": 0.98,
+        "match": true,
+        "question": "pick_model",
+        "snapshot": "jev-1.13.0",
+        "table": {
+          "anthropic/claude-haiku-4-5": 0.99,
+          "anthropic/claude-opus-4-5": 0.0,
+          "anthropic/claude-sonnet-4-5": 0.01
+        },
+        "tie_break": false,
+        "top1": "anthropic/claude-haiku-4-5",
+        "top1_prob": 0.99
+      },
+      "f-timeout": {
+        "error": "unreachable",
         "expected": "hold",
         "fault": "timeout",
         "gated": null,

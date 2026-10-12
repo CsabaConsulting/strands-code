@@ -107,19 +107,24 @@ class TestCalibrationBaseline:
 
     def test_baseline_records_snapshots_distributions_and_derivation(self):
         baseline = _load_baseline()
-        assert set(baseline["snapshots"]) == {"local", "openrouter"}
+        assert set(baseline["snapshots"]) == {"local", "openrouter", "native"}
         assert all(baseline["snapshots"].values())
-        assert set(baseline["distributions"]) == {"local", "openrouter"}
+        assert baseline["pins"]["native"] == "jev-1.13.0"
+        assert set(baseline["distributions"]) == {"local", "openrouter", "native"}
         assert "derivation" in baseline and len(baseline["derivation"]) > 50
         assert baseline["probe_count"] == 20
 
-    def test_baseline_verdicts_cover_every_probe_on_both_engines(self):
+    def test_baseline_verdicts_cover_every_probe_on_every_engine(self):
         probe_ids = {p["id"] for p in _load_probes()}
         verdicts = _load_baseline()["verdicts"]
-        assert set(verdicts) == {"local", "openrouter"}
+        assert set(verdicts) == {"local", "openrouter", "native"}
         for engine, records in verdicts.items():
             assert len(records) == 20, f"{engine}: {len(records)} verdicts"
             assert set(records) == probe_ids, f"{engine}: id drift"
+        for pid in probe_ids:
+            assert sorted(verdicts["native"][pid]) == sorted(
+                verdicts["openrouter"][pid]
+            ), f"{pid}: native record shape drift"
 
     def test_no_provisional_markers_remain_in_routing(self):
         for line in routing_mod.__file__ and Path(routing_mod.__file__).read_text().splitlines():
