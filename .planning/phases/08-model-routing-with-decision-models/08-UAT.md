@@ -1,5 +1,5 @@
 ---
-status: diagnosed
+status: complete
 phase: 08-model-routing-with-decision-models
 source: [08-VERIFICATION.md]
 started: 2026-10-12T08:05:00Z
@@ -14,9 +14,8 @@ updated: 2026-10-12T10:00:00Z
 
 ### 1. Run `python3 scripts/uattest/driver.py r2`, `r3`, `r4` (tmux + OPENROUTER_API_KEY + Ollama + Bedrock)
 expected: R2/R3/R4 PASS — live local-engine route, /model override respect, side-ask parity against real engines
-result: issue
-reported: "r3 TIMEOUT waiting for main-end; r4 TIMEOUT waiting for side-spawn 'Side question noted' (tracebacks in chat; transcripts /tmp/uatr8/r3.log, r4.log)"
-severity: blocker
+result: pass
+reported: "initial run: r3 TIMEOUT waiting for main-end; r4 TIMEOUT waiting for side-spawn (G-08-1, fixed by 08-07). Re-test after fix: R2 PASS, R3 PASS (held once, retried), R4 PASS (side-spawn seen). Transcripts /tmp/uatr8/r2.log, r3.log, r4.log"
 
 ### 2. Re-run `python3 scripts/uattest/driver.py r1` after the GAP-01 loader fix (regression)
 expected: R1 PASS (was green pre-fix; confirms the loader change did not regress the cloud path)
@@ -29,8 +28,8 @@ result: pass
 ## Summary
 
 total: 3
-passed: 2
-issues: 1
+passed: 3
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
@@ -39,7 +38,7 @@ blocked: 0
 
 - gap_id: G-08-1
   truth: "R2/R3/R4 PASS — live local-engine route, /model override respect, side-ask parity against real engines"
-  status: failed
+  status: resolved (08-07 executed; user re-test R2/R3/R4 PASS)
   reason: "User reported: r3 TIMEOUT waiting for main-end; r4 TIMEOUT waiting for side-spawn"
   severity: blocker
   test: 1
