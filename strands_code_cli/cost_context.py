@@ -231,7 +231,9 @@ def _routing_line(event: dict[str, Any]) -> str:
     if event.get("held"):
         head += " [held]"
     spend = _reported_spend(event)
-    return f"{head} ${spend if spend is not None else 0.0:.4f}"
+    if spend is not None:
+        return f"{head} ${spend:.4f} actual"
+    return f"{head} $0.0000"
 
 
 def cost_report(
@@ -259,8 +261,10 @@ def cost_report(
     """
     lines = [f"Cost — {model_id}"]
     total_in = total_out = 0
-    total_cost = 0.0
-    any_priced = False
+    total_actual = 0.0
+    total_estimated = 0.0
+    has_actual = False
+    has_estimated = False
     provenances: list[str] = []
     for row in session_turns:
         turn = row.get("turn", "?")
@@ -273,14 +277,14 @@ def cost_report(
         reported = row.get("reported_cost")
         if reported is not None:
             # Actual-wins (D-09): exactly one money lane per row, never both.
-            any_priced = True
-            total_cost += reported
+            has_actual = True
+            total_actual += reported
             cell += f", ${reported:.4f} actual"
         else:
             turn_cost = cost_for(in_tok, out_tok, row_model)
             if turn_cost is not None:
-                any_priced = True
-                total_cost += turn_cost
+                has_estimated = True
+                total_estimated += turn_cost
                 cell += f", ${turn_cost:.4f}"
                 provenance = price_provenance(row_model)
                 if provenance not in provenances:
@@ -301,8 +305,10 @@ def cost_report(
             total_out += out_tok
             spend = _reported_spend(event)
             if spend is not None:
-                any_priced = True
-                total_cost += spend
+                # Reported routing spend lands in the actuals lane (D-10);
+                # derived zeros from absent costs never open it.
+                has_actual = True
+                total_actual += spend
                 decision_model = event.get("decision_model")
                 if decision_model:
                     provenance = price_provenance(decision_model)
@@ -314,9 +320,11 @@ def cost_report(
                     if provenance not in provenances:
                         provenances.append(provenance)
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"
-    if any_priced:
-        total += f", ${total_cost:.4f}"
+    if has_actual or has_estimated:
+        total += f", ${total_actual + total_estimated:.4f}"
     lines.append(total)
+    if has_actual and has_estimated:
+        lines.append(f"  (actual ${total_actual:.4f} + estimated ${total_estimated:.4f})")
     if len(provenances) > 1:
         lines.append("Prices: mixed (per-turn model).")
     elif provenances:

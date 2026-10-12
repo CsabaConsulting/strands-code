@@ -408,7 +408,7 @@ class TestRoutingEntries:
         report = cost_report([], "a/routed", routing=[_routed_event()])
         assert _routing_lines(report) == [
             "  ask 1: a/routed (low) [model 85%, effort n/a]"
-            " via openrouter $0.0002"
+            " via openrouter $0.0002 actual"
         ]
 
     def test_routed_entry_renders_exact_reported_cost(self):
@@ -423,7 +423,7 @@ class TestRoutingEntries:
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
             "  ask 1: a/routed (low) [model 85%, effort n/a]"
-            " via openrouter $0.0002"
+            " via openrouter $0.0002 actual"
         ]
 
     def test_local_entry_renders_zero_spend(self):
@@ -453,7 +453,7 @@ class TestRoutingEntries:
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
             "  ask 1: a/routed (low) [model 85%, effort n/a]"
-            " via native $0.0420"
+            " via native $0.0420 actual"
         ]
         assert "Prices: native computed input rate." in report
 
@@ -485,7 +485,7 @@ class TestRoutingEntries:
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
             "  ask 1 (btw): a/routed (low) [model 85%, effort n/a]"
-            " via openrouter [tie-break] $0.0002"
+            " via openrouter [tie-break] $0.0002 actual"
         ]
 
     def test_totals_fold_reported_spend(self):
