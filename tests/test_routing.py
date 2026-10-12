@@ -2440,20 +2440,18 @@ class TestLiveEngines:
         assert set(seen["bodies"][1]["questions"]) == {"pick_effort"}
 
     @pytest.mark.integration
-    def test_openrouter_live_decision_returns_answers(self):
+    def test_openrouter_live_decision_returns_typed_table(self):
         import os
 
         if not os.environ.get("OPENROUTER_API_KEY"):
             pytest.skip("OPENROUTER_API_KEY not set")
         # Pinned id re-verified against the live decisions catalog at
-        # implementation time (2026-10-12: 19 entries, jev ctx 64000).
+        # 08-05 calibration (2026-10-12: 19 entries, no drift).
         decision_model = "typesafe/jev-1.13"
-        from strands_code_cli.routing import (
-            build_decision_state,
-            build_model_question,
-        )
-
-        candidates = [RoutingCandidate(id="live/a"), RoutingCandidate(id="live/b")]
+        candidates = [
+            RoutingCandidate(id="live/a"),
+            RoutingCandidate(id="live/b"),
+        ]
         state = build_decision_state(
             ask="live probe", directives="live probe", side=False
         )
@@ -2465,18 +2463,29 @@ class TestLiveEngines:
         result = decide_via_openrouter(
             decision_model=decision_model, state=state, questions=questions
         )
+        # Present-but-rejecting endpoints fail here, never skip: a
+        # set key with a failing call is contract drift, not absence.
         assert result.answers is not None, (
-            "live decision call failed — check key, quota, and network"
+            f"live decision call failed ({result.error}) — check key, "
+            "quota, and network"
         )
-        assert result.input_tokens >= 0 and result.output_tokens >= 0
+        answer = validate_choice_answer(
+            result.answers.get("pick_model"), candidates
+        )
+        assert answer is not None, "live answer failed typed validation"
+        probs = answer["probabilities"]
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+        assert result.model, "live response logged no serving snapshot"
+        assert result.model.startswith(decision_model), result.model
+        assert result.cost is not None and result.cost > 0, (
+            "live decision reported no positive cost"
+        )
 
     @pytest.mark.integration
-    def test_ollama_live_daemon_decision_returns_answers(self):
+    def test_ollama_live_daemon_decision_returns_typed_table(self):
         import os
         import urllib.request
 
-        if not os.environ.get("OLLAMA_LIVE"):
-            pytest.skip("OLLAMA_LIVE not set")
         base = os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
         try:
             with urllib.request.urlopen(
@@ -2496,26 +2505,43 @@ class TestLiveEngines:
         ]
         wanted = os.environ.get("OLLAMA_TEST_MODEL")
         if wanted:
-            if wanted not in names:
-                pytest.skip(f"OLLAMA_TEST_MODEL {wanted} not pulled")
+            assert wanted in names, (
+                f"OLLAMA_TEST_MODEL {wanted} not pulled "
+                f"(daemon has {sorted(names)})"
+            )
             model = wanted
+        elif any(
+            name == "nimble" or name.startswith("nimble:") for name in names
+        ):
+            model = "nimble"
         elif "tev1:0.8b" in names:
             model = "tev1:0.8b"
         else:
             pytest.skip("no decision model pulled in the daemon")
+        candidates = [
+            RoutingCandidate(id="live/a"),
+            RoutingCandidate(id="live/b"),
+        ]
         state = build_decision_state(
             ask="live probe", directives="live probe", side=False
         )
         questions = {
             "pick_model": build_model_question(
-                candidates=[
-                    RoutingCandidate(id="live/a"),
-                    RoutingCandidate(id="live/b"),
-                ],
+                candidates=candidates,
                 directives="live probe",
             )
         }
         result = decide_via_ollama(
             local_model=model, state=state, questions=questions, timeout=120
         )
-        assert result.answers is not None, f"live Ollama decision failed on {model}"
+        assert result.answers is not None, (
+            f"live Ollama decision failed on {model} ({result.error})"
+        )
+        answer = validate_choice_answer(
+            result.answers.get("pick_model"), candidates
+        )
+        assert answer is not None, "live answer failed typed validation"
+        probs = answer["probabilities"]
+        assert abs(sum(probs.values()) - 1.0) < 1e-6
+        assert result.model, "live response logged no serving snapshot"
+        assert result.cost is None, "local decisions report zero spend"
