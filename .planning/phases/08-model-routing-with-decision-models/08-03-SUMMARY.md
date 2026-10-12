@@ -1,195 +1,175 @@
 ---
 phase: 08-model-routing-with-decision-models
-plan: 03
+plan: "03"
 subsystem: routing
-tags: [model-routing, guided-setup, strategy-validation, fast-path, integration-tests]
+tags: [decision-api, preflight, ollama, fault-matrix, pause, truncation, pytest]
 
 requires:
-  - phase: 08-model-routing-with-decision-models
-    provides: 08-01 tracer (routing.py strategy/decide/hook, /route toggle) plus 08-02 local engine, /cost Routing section, side routing
-  - phase: 05-model-cost-context-commands
-    provides: /cost refresh populating the OpenRouter disk cache validate reads
+  - phase: 08-02
+    provides: Sequential two-call verdict, effort-only fast path, side-ask parity
 provides:
-  - Guided /route setup over the live OpenRouter catalog with atomic scoped save
-  - /route validate judging the winning strategy per failure class with fixes
-  - docs/ROUTING.md operator guide with two example strategies
-  - Single-candidate fast path skipping all decision engines
-  - Stub-server plus env-gated live engine integration tests
-affects: [verify-work, cost-visibility, onboarding-docs]
+  - Local preflight gating (local_engine_ready) with inert-link skip and unready detail
+  - Pinned per-code retry matrix with engine-plus-cause details and validation holds
+  - Offline pause verdict with turn-scoped same-turn skip and pause notes
+  - Serialized-body 64 KiB bound with truncation markers and directives warning
+affects: [08-04, 08-05, model-routing, cost-display]
 
 actuals:
-  tokens: 19356
+  tokens: 19735
   tasks: 3
-  commits: 3
+  commits: 4
 
 tech-stack:
   added: []
-  patterns: [guided-setup-radio-with-typed-fallback, shared-loader-skip-reasons, single-candidate-fast-path, stub-server-wire-proof]
+  patterns: [failure-class-error-channel, inert-unready-link, turn-scoped-pause-flag]
 
 key-files:
-  created:
-    - docs/ROUTING.md
+  created: []
   modified:
     - strands_code_cli/routing.py
-    - strands_code_cli/router.py
-    - tests/test_routing_strategy.py
+    - strands_code_cli/loop.py
     - tests/test_routing.py
     - tests/test_loop_routing.py
+    - tests/test_routing_strategy.py
 
 key-decisions:
-  - "Stub-server Ollama test runs unmarked in the default suite; only the credential/daemon-gated tests carry the integration marker"
-  - "Skipped candidate entries fail validation (strict judge vs fail-soft loader); unknown top-level keys, empty directives, and primary-off stay valid notes"
-  - "Unknown decision model in a present cache fails validation; an absent cache reports unchecked and never fails"
-  - "Live tests skip on absence (no key/daemon/models/catalog) but fail loudly when a present endpoint rejects the call"
-  - "Missing-price catalog entries sort last with price n/a; true zero-price free-tier rows still sort first"
-  - "Decision pick constrained to structured-output advertisers; an empty eligible set falls back to a typed id"
+  - "Unready daemons yield an inert zero-POST link (not a dropped link) so the distinct detail flows through the error channel"
+  - "4xx and schema-invalid answers keep falling through; the plan pins retry counts plus details, not chain short-circuit"
+  - "Pause fires only when every attempted link fails at connection level; skipped, unready, and errorless links are neutral"
+  - "Pause is turn-scoped on RoutingState: pre-turn resumes, both hooks pause and skip with zero POSTs"
+  - "Only the ask tightens under the body cap; criteria overshoot still ships and the server judges (413 holds)"
 
 patterns-established:
-  - "Setup choice helper: radio_choice on tty, numbered typed prompt off-tty, every unclear answer aborts unchanged"
-  - "ValidationReport: valid flag plus winning source plus ordered lines, rendered by format() as the slash reply"
+  - "EngineResult.error failure classes: unready, HTTP <code>, timeout, refused, unreachable, invalid body, invalid table"
+  - "Verdict details name engine plus cause; pause details start with 'paused:' and the hooks detect them via is_pause_detail"
+  - "TRUNCATION_MARKER rides the verdict detail; hooks render it on routed lines, holds carry it inline"
 
-requirements-completed: [MODEL-03]
+requirements-completed:
+  - MODEL-03
 
 coverage:
   - id: D1
-    description: "Guided /route setup enumerating the live catalog and writing a valid global or repo strategy, plus docs/ROUTING.md examples"
+    description: "Local preflight gating with floor/tag checks and unready skip"
     requirement: "MODEL-03"
     verification:
       - kind: unit
-        ref: "tests/test_routing_strategy.py#TestRouteSetup"
+        ref: "tests/test_routing.py#TestLocalEngine"
         status: pass
     human_judgment: false
   - id: D2
-    description: "/route validate reporting strategy validity per failure class with the winning source file"
+    description: "Per-code retry matrix with engine-plus-cause and validation details"
     requirement: "MODEL-03"
     verification:
       - kind: unit
-        ref: "tests/test_routing_strategy.py#TestRouteValidate"
+        ref: "tests/test_routing.py#TestEngineChain"
         status: pass
     human_judgment: false
   - id: D3
-    description: "Single-candidate fast path skipping all engines with the standard Routed line and zero-token event"
+    description: "Offline pause verdict with turn-scoped same-turn skip"
     requirement: "MODEL-03"
     verification:
       - kind: unit
-        ref: "tests/test_routing.py#TestSingleCandidateFastPath"
-        status: pass
-      - kind: unit
-        ref: "tests/test_routing.py#TestLiveEngines stub-server Ollama test"
+        ref: "tests/test_routing.py#TestEngineChain pause cases + tests/test_loop_routing.py#TestSideRouting pause cases"
         status: pass
     human_judgment: false
   - id: D4
-    description: "Live engine proof against real endpoints (OpenRouter decision call, Ollama daemon decision)"
+    description: "Hold/pause/failure notes print under quiet while routed lines suppress"
     requirement: "MODEL-03"
     verification:
-      - kind: integration
-        ref: "tests/test_routing.py#TestLiveEngines::test_openrouter_live_decision_returns_text"
+      - kind: unit
+        ref: "tests/test_loop_routing.py#TestPreTurnHook quiet cases"
         status: pass
-      - kind: integration
-        ref: "tests/test_routing.py#TestLiveEngines::test_ollama_live_daemon_decision_returns_text"
-        status: unknown
-    human_judgment: true
-    rationale: "OpenRouter passed live this run (env key present); Ollama needs a daemon plus a pulled model, absent here — verifier must run with OLLAMA_LIVE set"
+    human_judgment: false
   - id: D5
-    description: "Guided setup against the live catalog plus a routed turn on the picked model"
+    description: "64 KiB body bound with truncation markers plus directives warning"
     requirement: "MODEL-03"
-    verification: []
-    human_judgment: true
-    rationale: "Needs interactive setup with a real key plus live spend, per the plan's manual live check"
+    verification:
+      - kind: unit
+        ref: "tests/test_routing.py#TestBodyBound + tests/test_routing_strategy.py#TestRouteValidate warning cases"
+        status: pass
+    human_judgment: false
 
-duration: 16min
-completed: 2026-10-11
+duration: 25min
+completed: 2026-10-12
 status: complete
 ---
 
-# Phase 08 Plan 03: Setup plus Validate Summary
+# Phase 08 Plan 03: Chain-Hardening Summary
 
-**Guided /route setup over the live OpenRouter catalog with atomic scoped saves, /route validate judging every failure class with fixes, routing docs with working examples, a zero-engine single-candidate fast path, and live engine proof (OpenRouter passed live, Ollama gated).**
-
-Executed as gsd-executor-08-03 (generic-agent workaround: typed gsd-executor dispatch is unavailable in this runtime).
+**Local preflight gating, pinned per-code retry matrix with engine-plus-cause details, offline pause with turn-scoped skip, 64 KiB body bound with truncation markers, and quiet-proof hold/pause/failure notes.**
 
 ## Performance
 
-- **Duration:** 16 min
-- **Started:** 2026-10-11T04:52:00Z
-- **Completed:** 2026-10-11T05:08:00Z
+- **Duration:** 25 min
+- **Started:** 2026-10-12T05:39:52Z
+- **Completed:** 2026-10-12T06:05:09Z
 - **Tasks:** 3
-- **Files modified:** 6
+- **Files modified:** 5
+- **Execution mode:** SEQUENTIAL via generic-agent workaround (typed GSD dispatch unavailable in this session)
 
 ## Accomplishments
 
-- Guided `/route setup`: scope then engine then candidate picks then decision-model pick then local-model text then directives, over `fetch_openrouter_models` filtered to chat-capable ids and sorted by price ascending, with radio on tty plus typed fallbacks off-tty and a typed-id path when the catalog fetch fails; every ESC, empty, or unclear answer aborts with the filesystem untouched.
-- `save_strategy`: scope-selected atomic write (tmp plus `os.replace`, parent dir 0700), symlink refusal, api_key-shaped key drop with a warning at top level and inside `engine`, and zero-usable-candidate refusal.
-- `/route validate` plus `validate_strategy`: winning source file, one line per candidate with the exact loader skip reason, engine checks (decision model against the cached catalog only — known, unknown, or unchecked), directives note, and a manual-edit fix per failure class; never writes, never fetches, never calls an engine.
-- `docs/ROUTING.md`: concepts, quick start, cheap-default plus tiered example strategies (both parse as valid YAML with required keys), manual-edit rules, repo-wins and never-keys notes, stay-on-current tie-break, troubleshooting.
-- Single-candidate fast path: one candidate advertising levels returns the pick verdict (`only candidate`, engine `none`, zero usage) with zero engine calls through the unchanged hook; lone candidates without levels, empty sets, and multi-candidate sets behave exactly as before.
-- Live proof: stub-server Ollama test asserts the `/api/chat` request shape plus response parsing in the default suite; the OpenRouter live test ran against the real endpoint with the env key and passed; the Ollama live test skips cleanly without `OLLAMA_LIVE`.
-- Full suite green at 1066 passed, 8 deselected (6 pre-existing plus the 2 gated live tests).
+- Added `local_engine_ready(base, tag)` probing `GET /api/version` for the 0.35 floor (0.35.1 for `clef*` tags) and `GET /api/tags` for the tag (exact or `:latest`-suffixed), failing closed to False on any transport or parse failure; `_chain_for` consults it and offers an inert zero-POST link with the distinct `local unready (daemon version or tag not ready)` detail when the daemon is not ready.
+- Pinned the fault matrix across both transports: 400/401/402/403/404/413 hold with zero retries and `engine code` details; 429/500/502/503/524/529 plus timeouts retry once then fall through, holding with the last engine plus code only when the chain exhausts; schema-invalid and non-JSON bodies hold with zero retries and `engine invalid table/body` validation details.
+- Added the offline pause verdict: connection-level failure (`refused`/`unreachable`) on every attempted link pauses with `paused: all engines unreachable (...)` while the current model serves; skipped, unready, and errorless links stay neutral so mixed failures still hold with the informative detail.
+- Added the turn-scoped pause flag on `RoutingState`: the pre-turn hook resumes each ask and pauses on a pause verdict, and both hooks skip same-turn decisions with zero POSTs once paused (side spawns record a held `paused` event silently).
+- Added the serialized-body bound (`DECISION_BODY_MAX_BYTES = 64 * 1024`) in both transports: over-cap payloads tighten only the ask and flag `TRUNCATION_MARKER` on the verdict detail, rendered on routed lines in both hooks and inline on hold lines; `validate_strategy` warns (never fails) when directives exceed ~4K chars.
+- Extended the suites to 268 routing tests green (full repo suite 1211 green): preflight floor/tag/refused cases, per-code POST-count matrices on both transports, pause and quiet-override hook cases, body-bound unit cases, and the directives-warning boundary.
 
 ## Task Commits
 
 Each task was committed atomically:
 
-1. **Task 1: Guided /route setup enumerating the live catalog plus routing docs with examples** - `dd1ba88` (feat)
-2. **Task 2: /route validate reporting strategy validity per failure class** - `e6f5193` (feat)
-3. **Task 3: Single-candidate fast path plus env-gated live engine integration tests** - `765a1f7` (feat)
+1. **Task 1: Local-engine preflight gating the chain link** - `1f3d9ca` (feat)
+2. **Task 2: Retry matrix plus offline pause plus note discipline** - `b574b25` (feat)
+3. **Task 3: Serialized-body bound with truncation notes** - `10585ff` (feat)
 
 ## Files Created/Modified
 
-- `strands_code_cli/routing.py` (MOD) - `save_strategy` plus `validate_strategy`/`ValidationReport` plus `_candidate_skip_reason` shared by the loader plus the `decide` fast path plus `ROUTE_USAGE` with the new verbs.
-- `strands_code_cli/router.py` (MOD) - `/route setup` guided flow (catalog filter, tty/off-tty pickers, typed fallback) plus `/route validate` branch plus `USAGE_HINT` update.
-- `docs/ROUTING.md` (NEW) - Routing guide with the two example strategies.
-- `tests/test_routing_strategy.py` (MOD) - `TestRouteSetup` (12 tests), `TestRouteValidate` (16 tests).
-- `tests/test_routing.py` (MOD) - `TestSingleCandidateFastPath` (4 tests), `TestLiveEngines` (stub plus 2 gated live tests).
-- `tests/test_loop_routing.py` (MOD) - One-line usage-hint assertion update for the new verbs (consequential).
+- `strands_code_cli/routing.py` - Preflight helper plus chain consult and inert link, failure-class error channel, pause classification, body-fit guard plus marker plumbing, directives warning, pause flag on RoutingState
+- `strands_code_cli/loop.py` - Pause resume/set/skip in both hooks, truncation marker on both routed lines
+- `tests/test_routing.py` - Preflight-aware URL-seam wrapper, extended TestLocalEngine, fault-matrix TestEngineChain cases, TestBodyBound
+- `tests/test_loop_routing.py` - Pause, transport-hold, quiet-override, truncation-marker, and paused-side-spawn cases
+- `tests/test_routing_strategy.py` - Directives-length warning plus boundary cases
 
 ## Decisions Made
 
-- Stub-server Ollama test runs unmarked in the default suite; only the credential/daemon-gated tests carry the `integration` marker — the plan verification requires stub-server tests passing in the full suite while gated live tests skip.
-- Skipped candidate entries fail validation (validate is the strict judge, load stays fail-soft); unknown top-level keys, empty directives, and `primary: off` stay valid notes since the loader degrades gracefully and the config means what it says.
-- Unknown decision model in a present cache fails validation (the decision call would 404 at runtime); an absent cache reports unchecked and never fails — setup never populates the cache, so failing there would punish fresh setups.
-- Live tests skip on absence (no key, daemon, pulled models, or catalog) but fail loudly when a present endpoint rejects the call, so contract drift surfaces instead of hiding behind a skip.
-- Missing-price catalog entries sort last with `price n/a`; true zero-price `:free` rows still sort first as the cheapest options.
-- Decision pick constrained to entries advertising `response_format`/`structured_outputs`; an empty eligible set falls back to a typed id with a note rather than blocking setup.
-- Off-tty decision pick re-prompts once on an unknown id then aborts (no valid-subset concept for a single choice); off-tty candidates write the valid subset on the second attempt.
+- Unready daemons yield an inert link (offered but zero-POST) rather than a dropped link, so the distinct unready detail flows through the existing error channel with no `_chain_for` signature change; `_ollama_attempt` itself stays attempt-only and ready daemons route normally.
+- 4xx and schema-invalid answers keep falling through to the next link (the existing tested contract): the plan pins retry counts plus details, not chain short-circuit, and rewriting the fall-through test would violate the existing contract without an explicit mandate.
+- Pause fires only when at least one link reports a connection-level error and no attempted link reports anything else; skipped, unready, and errorless (missing-key) links are neutral, and the pause engine is the last refused link.
+- Pause is turn-scoped, not session-sticky: the pre-turn hook resumes every ask (D-08 retries next ask), the side hook skips while paused, and the paused side event prices nothing (`decision_model_for("paused")` is None).
+- Only the ask tightens under the body cap: criteria overshoot ships after the ask empties and the server judges, where a real 413 holds with the engine-plus-code detail; the marker appends once per verdict even when both calls shrink.
+- `format_hold_line` needed no change: pause, transport-hold, validation, unready, and truncation notes all render through the existing hold shape with their distinct details, which already print under quiet.
 
 ## Deviations from Plan
 
 ### Auto-fixed Issues
 
-**1. [Rule 3 - Blocking] Usage-hint test asserted the pre-setup verb list**
-- **Found during:** Task 1 (USAGE_HINT advertises the new `/route setup` verb)
-- **Issue:** `test_usage_hint_advertises_route` asserted the literal `/route [on|off|status]`, which the feature legitimately extends; leaving the hint stale would mislead users.
-- **Fix:** Updated the one-line assertion to the prefix form `/route [on|off|status|setup`, which also survives task 2's `|validate]` extension with no further churn.
-- **Files modified:** tests/test_loop_routing.py
-- **Verification:** Routing trio green (110 passed) after the commit.
-- **Committed in:** dd1ba88 (part of task commit)
+**1. [Rule 3 - Blocking] Dual-engine test fakes moved to the preflight-aware contract**
+- **Found during:** Task 1 (chain consults `local_engine_ready`)
+- **Issue:** Every dual-engine `urlopen` fake plus the stub HTTP server only spoke decision POSTs, so preflight GETs 404'd/AttributeError'd and ready-daemon tests skipped the local link (9 failures).
+- **Fix:** Added the `_with_preflight` test-seam wrapper serving `/api/version` plus `/api/tags` around the POST fakes (GETs bypass the POST recorders, so exact POST-count assertions stand), and added `do_GET` handlers to the stub server with a preflight-first assertion.
+- **Files modified:** tests/test_routing.py
+- **Verification:** TestLocalEngine 39 passed plus full routing files green
+- **Committed in:** 1f3d9ca (part of task commit)
+
+**2. [Rule 3 - Blocking] Plan-mandated detail-contract updates to existing tests**
+- **Found during:** Tasks 1-2 (unready skip plus engine-plus-cause details plus pause)
+- **Issue:** The plan revises hold details the old tests pinned byte-identically: retry exhaustion (`openrouter 503`), stale choice and failed effort reads (`openrouter invalid table`), and the both-failing case (pause verdict).
+- **Fix:** Re-aimed the four assertions at the mandated details and renamed the both-failing test to `test_offline_dual_strategy_pauses_routing`; the missing-key and decide-level `openrouter failed` byte-identical shapes are preserved via the errorless fallback.
+- **Files modified:** tests/test_routing.py
+- **Verification:** Full routing files green plus full repo suite green
+- **Committed in:** 1f3d9ca, b574b25 (part of task commits)
 
 ---
 
-**Total deviations:** 1 auto-fixed (1 blocking/consequential)
-**Impact on plan:** One-line test literal keeping the tree green; no scope creep. All flagged edge-probe assumptions carried visibly, never auto-resolved.
+**Total deviations:** 2 auto-fixed (2 blocking)
+**Impact on plan:** Both keep the suite truthful across the mandated contract changes. No scope creep.
 
 ## Issues Encountered
 
-- Missing-price catalog entries first defaulted to $0 (sorting first as if free); fixed to sort last with `price n/a` while true `:free` zero-price rows still sort first. Found by the price-order assertion, fixed inside the task-1 commit.
-- Empty-levels subtlety: `levels: []` falls through to the engine chain (not a fast path) and the strict parse then rejects every effort — locked by test rather than special-cased.
-
-## Threat Flags
-
-Threat-register mitigations verified in this plan:
-
-- T-08-10 (key persistence via setup): setup never prompts for keys and `save_strategy` drops api_key-shaped keys (every case/separator spelling) at top level and inside `engine` with a warning; locked by the drop test plus the no-key-material file assertion.
-- T-08-11 (malformed live catalog payload): field-by-field type checks, chat-capable filter mirroring `_is_chat_model`, unknown shapes skipped, catalog failure falls back to the typed-id path; locked by the fixture-catalog test (embed/rerank/malformed rows excluded, unpriced chat rows offered last).
-- T-08-12 (stale doc examples): examples labeled starting points with a written date plus setup/validate pointers and no live claims (benchmark values marked illustrative).
-- T-08-SC (package installs): no new dependencies; setup and validate reuse pyyaml, prompt_toolkit, and stdlib urllib.
-- Transparency prohibition: setup copy states manual `/model` always wins; routed switches never fire mid-turn (no loop.py changes — the hook path is untouched).
-- Privacy prohibition: setup sends nothing anywhere; the decision path still carries ask-only truncated text per 08-01.
-- Disclosure prohibition: validate surfaces every failure class with fixes, and the fast path records a zero-token event so `/cost` stays truthful.
-
-## Known Stubs
-
-Stub scan over the touched source and test files found no new stubs: the three `pass` hits in `router.py` are pre-existing lines outside this plan's hunks, and the `pass` in `test_routing.py` is the stub HTTP server's deliberate `log_message` silence override. No `.planning/WINDOWS.md` exists and there is nothing to append.
+- The directives-warning test initially asserted a bare `"warning" in text`, which false-hit on the tmp path: pytest embeds the test name (`test_directives_warning_boundary`) in the path and the report echoes the source path. Fixed by matching the full warning line content (`warning: directives exceed ~4K chars`).
+- The `clef` preflight test initially failed because the shared fake only pulled `nimble`: the tag-membership check correctly rejected `clef`. Fixed by pulling `clef`/`clef-flash` in that fake, which also documents that floor and tag checks compose.
 
 ## User Setup Required
 
@@ -197,12 +177,10 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-- Phase 8 is complete: MODEL-03 closes here (strategy, both engines, hook, toggle, /cost visibility, side routing, setup, validate, docs, fast path, live proof).
-- Manual live checks (gate verify-work, not this plan): run `/route setup` against the live catalog with a real key, confirm `/route validate` reports clean plus a routed turn serves on the picked model; run the Ollama live test with `OLLAMA_LIVE` set against a daemon with a pulled model.
-- Phase 9 (CodeAct) inherits the finished routing surface; no routing follow-ups remain.
+- Ready for 08-04 (builds on the hardened chain, pause flag, and truncation discipline): `decide()` verdicts carry pause/unready/truncation details the setup/docs work can quote, and the `paused`/`unready`/`invalid` detail vocabulary is stable.
+- Calibration debt carries forward unchanged: provisional `0.70`/`0.05` defaults still await 08-05 probe distributions; fault-injection coverage here is hermetic (stubbed `urlopen`), with live-engine behavior unchanged from the 08-01 verification.
+- No live verification in this plan beyond the hermetic suite: preflight, fault, pause, and truncation paths are all covered by stubbed tests; the stub-server test pins the real-HTTP preflight order (`/api/version` then `/api/tags`).
 
 ---
 *Phase: 08-model-routing-with-decision-models*
-*Completed: 2026-10-11*
-
-## Self-Check: PASSED
+*Completed: 2026-10-12*
