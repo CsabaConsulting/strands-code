@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 08
 current_phase_name: Model Routing with Decision Models
 status: verifying
-stopped_at: Completed 08-06-PLAN.md
-last_updated: "2026-10-12T07:29:59.000Z"
+stopped_at: Completed 08-07-PLAN.md
+last_updated: "2026-10-12T08:59:58.557Z"
 last_activity: 2026-10-11
 last_activity_desc: Phase 08 execution started
-state_head: 0109ef692c119e631b0c2e3d1fa86a2e342d4fcd
+state_head: 2dad781ecb4a7619ce9548026b8028519ce4f472
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 23
+  completed_plans: 23
 ---
 
 # Project State
@@ -81,6 +81,7 @@ Progress: [████████░░] 78%
 | Phase 08 P04 | 17min | 3 tasks | 8 files |
 | Phase 08 P05 | 24min | 3 tasks | 8 files |
 | Phase 08 P06 | 4min | 3 tasks | 4 files |
+| Phase 08 P07 | 24min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,8 @@ Recent decisions affecting current work:
 - [Phase 08]: [Phase 08-04]: Split-catalog setup with decisions-cache validate; empty local tag takes nimble; rig levels [auto, off] — Decisions catalog drives the decider pick and the validate check (D-06); nimble is the RESEARCH default local tag; reasoning-free levels keep scripted live runs deterministic on any boot model
 - [Phase 08]: [Phase 08-05]: Probe-derived gate defaults 0.62/0.04 ship with recorded baseline; one shared threshold, compare-mode regression, env-gated live tests — Threshold 0.62 is the midpoint of the observed 0.51/0.73 gap and tie margin 0.04 is the max near-tie margin plus one grid step; neither engine misfires dangerously so no per-engine split; effort flips warn since weak effort reads route ungated
 - [Phase 08]: [Phase 08-06]: GAP-01/02/03 closed — YAML-bool levels fold to on/off strings in the loader (identity checks, int still skips), non-string choice holds at both membership checks, probe local tag resolves on the local path only — Hand-edited unquoted off must parse per D-13, every failure class holds per D-08, and cloud calibration never needs a daemon per D-06
+- [Phase 08]: [Phase 08-07]: FENCE — routed picks never persist the global default; only explicit /model choices persist
+- [Phase 08]: [Phase 08-07]: Rig waits match (n/a) cost lines and snapshot all baselines pre-send; live R2/R3/R4 PASS closes G-08-1
 
 ### Pending Todos
 
@@ -166,6 +169,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T07:29:59.000Z
-Stopped at: Completed 08-06-PLAN.md
+Last session: 2026-10-12T08:59:58.472Z
+Stopped at: Completed 08-07-PLAN.md
 Resume file: None
