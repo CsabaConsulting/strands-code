@@ -405,3 +405,63 @@ class TestWrapScope:
             if key != "_reported_costs"
         }
         assert after == before
+
+
+@pytest.mark.integration
+class TestLiveReportedCost:
+    """Live proof: real usage.cost flows through capture to display."""
+
+    def test_live_openrouter_turn_captures_reported_cost(self):
+        import asyncio
+        import os
+
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            pytest.skip("OPENROUTER_API_KEY not set")
+        try:
+            from strands.models.litellm import LiteLLMModel
+        except ImportError:
+            pytest.skip("litellm extra not installed")
+        from strands_code_cli.cost_context import cost_report
+        from strands_code_cli.reported_cost import (
+            sum_reported_costs,
+            wrap_for_openrouter,
+        )
+
+        # Pinned cheap id: 10-RESEARCH.md verified positive inline
+        # usage.cost for gpt-4o-mini through this exact shape.
+        model_id = "openrouter/openai/gpt-4o-mini"
+        model = wrap_for_openrouter(
+            model_id,
+            LiteLLMModel(client_args={"api_key": key}, model_id=model_id),
+        )
+
+        async def _one_turn():
+            async for _chunk in model.stream(
+                [
+                    {
+                        "role": "user",
+                        "content": [{"text": "Reply with the single word: ok"}],
+                    }
+                ]
+            ):
+                pass
+
+        asyncio.run(asyncio.wait_for(_one_turn(), timeout=50))
+        reported = sum_reported_costs(model.take_reported_costs())
+        assert isinstance(reported, float) and reported > 0, (
+            "live turn reported no positive cost"
+        )
+        report = cost_report(
+            [
+                {
+                    "turn": 1,
+                    "input_tokens": 12,
+                    "output_tokens": 1,
+                    "model": model_id,
+                    "reported_cost": reported,
+                }
+            ],
+            model_id,
+        )
+        assert "actual" in report
