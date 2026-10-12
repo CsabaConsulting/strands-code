@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 10
 current_phase_name: provider-reported-turn-spend
 status: executing
-stopped_at: Phase 10 context gathered
-last_updated: "2026-10-12T22:14:25.495Z"
+stopped_at: Completed 10-01-PLAN.md
+last_updated: "2026-10-12T23:14:05.632Z"
 last_activity: 2026-10-12
-last_activity_desc: Phase 09 complete, transitioned to Phase 10
-state_head: d0b8cda771889a01cbcb9e0f007b6f633553dfa2
+last_activity_desc: Phase 10 execution started
+state_head: 21da6cdbbfe32a925e989c0ce19689bbcbb1cf43
 progress:
   total_phases: 11
   completed_phases: 9
   total_plans: 29
-  completed_plans: 26
+  completed_plans: 27
 ---
 
 # Project State
@@ -27,10 +27,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 
 ## Current Position
 
-Phase: 10 (provider-reported-turn-spend) — READY TO EXECUTE
-Plan: Not started
+Phase: 10 (provider-reported-turn-spend) — EXECUTING
+Plan: 2 of 3
 Status: Ready to execute
-Last activity: 2026-10-12 — Phase 09 complete, transitioned to Phase 10
+Last activity: 2026-10-12 — Phase 10 execution started
 
 Progress: [████████░░] 82%
 
@@ -87,6 +87,7 @@ Progress: [████████░░] 82%
 | Phase 09 P01 | 15min | 3 tasks | 5 files |
 | Phase 09 P02 | 17min | 3 tasks | 8 files |
 | Phase 09 P03 | 25min | 3 tasks | 7 files |
+| Phase 10 P01 | 7min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -156,6 +157,7 @@ Recent decisions affecting current work:
 - [Phase 09]: N4 asks the debug ask, not the r2 trivial ask — Jev holds the trivial ask 2/2 at 50 percent under the rig strategy while the debug ask routes current at 0.92-0.95 (genuine model judgment, reproduced)
 - [Phase 09]: N4 asserts the via-native spend cell, not the Prices marker — Live turns fold the unit-pinned single-source marker into Prices mixed (shipped 09-01 behavior)
 - [Phase 09]: R1 branches on the native radio — Alternation wait keeps r1 green key-present and key-absent
+- [Phase 10]: Tracer: reported_cost row key stored only when present; actual-wins branches check is-not-None; marker text is the literal word actual — Conditional key keeps the existing exact-dict row assertion green without weakening it; is-not-None keeps a present 0.0 an actual per Ruling 1; literal-word marker matches the D-08 split vocabulary with one marker everywhere
 
 ### Pending Todos
 
@@ -187,6 +189,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T21:46:58.746Z
-Stopped at: Phase 10 context gathered
-Resume file: .planning/phases/10-provider-reported-turn-spend/10-CONTEXT.md
+Last session: 2026-10-12T23:14:00.321Z
+Stopped at: Completed 10-01-PLAN.md
+Resume file: None

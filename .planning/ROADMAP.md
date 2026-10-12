@@ -257,6 +257,10 @@ Plans:
 
 **Plans**: TBD (not yet planned)
 
+- [x] 10-01-PLAN.md
+- [ ] 10-02-PLAN.md
+- [ ] 10-03-PLAN.md
+
 ### Phase 11: CodeAct Action Interface
 
 **Goal**: Users can opt into code-generation-first actions where they beat gated tool-calling; tool-calling stays the default and CodeAct is never mandatory
@@ -287,7 +291,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
 | 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
 | 9. Native TypeSafe Decision Engine | 3/3 | In Progress|  |
-| 10. Provider-Reported Turn Spend | 0/TBD | Not started | - |
+| 10. Provider-Reported Turn Spend | 1/3 | In Progress|  |
 | 11. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)
