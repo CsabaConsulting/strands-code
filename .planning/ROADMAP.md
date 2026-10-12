@@ -192,7 +192,7 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: 5/5 plans executed (Decision-API rework; prior chat-JSON plans archived)
+**Plans**: 6/6 plans executed (Decision-API rework; prior chat-JSON plans archived; 08-06 gap closure complete)
 
 Plans:
 **Wave 1**
@@ -214,6 +214,10 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [x] 08-05-PLAN.md — Probe runner plus calibration plus live engine tests
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 08-06-PLAN.md — Gap closure: YAML-bool levels fix plus choice str-guard plus lazy probe tag (gap_closure)
 
 ### Phase 9: CodeAct Action Interface
 
@@ -243,7 +247,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
-| 8. Model Routing with Decision Models | 5/5 | In Progress|  |
+| 8. Model Routing with Decision Models | 6/6 | In Progress|  |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)
