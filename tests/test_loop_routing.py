@@ -712,10 +712,13 @@ def _event(**overrides):
         "side": False,
         "model": HAIKU,
         "effort": "high",
-        "why": "cheap and fast",
+        "model_confidence": 0.85,
+        "effort_confidence": None,
+        "tie_break": False,
         "engine": "openrouter",
         "input_tokens": 2000,
         "output_tokens": 100,
+        "decision_cost": 0.000625,  # == cost_for(2000, 100, DECIDER)
         "held": False,
         "decision_model": DECIDER,
     }
@@ -791,9 +794,9 @@ class TestCostRouting:
         ]
         report = cost_report(turns, NOVA_MICRO, routing=[_event()])
         assert "Routing:" in report
-        assert HAIKU in report and "cheap and fast" in report
+        assert HAIKU in report and "85%" in report
         assert "openrouter" in report
-        expected = cost_for(1000, 500, NOVA_MICRO) + cost_for(2000, 100, DECIDER)
+        expected = cost_for(1000, 500, NOVA_MICRO) + 0.000625  # reported spend
         assert expected is not None
         total = next(line for line in report.splitlines() if line.startswith("Total:"))
         assert total == (
@@ -821,7 +824,7 @@ class TestCostRouting:
         assert action == "reply"
         assert message is not None
         assert "Routing:" in message
-        assert HAIKU in message and "cheap and fast" in message
+        assert HAIKU in message and "85%" in message
 
     def test_cost_report_without_routing_is_byte_identical(self):
         from strands_code_cli.cost_context import cost_report

@@ -64,6 +64,9 @@ pick's top-1 probability, never the vendor confidence field (D-16).
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 524, 529})
 """Decision-API codes worth one retry; every 4xx holds immediately."""
 
+MAX_CANDIDATES = 26
+"""Hard candidate cap: the binding ``choice`` option limit is 26."""
+
 OLLAMA_DEFAULT_HOST = "http://127.0.0.1:11434"
 """Default local daemon address (the harness ``OLLAMA_HOST`` default)."""
 
@@ -473,7 +476,7 @@ class ValidationReport:
     valid: bool
     source: Path | None
     lines: list[str] = field(default_factory=list)
-    """Detail lines in display order: candidates, engine, directives, notes."""
+    """Detail lines in display order: candidates, knobs, engine, directives."""
 
     def format(self) -> str:
         """Render the full report as the ``/route validate`` reply."""
@@ -580,10 +583,12 @@ def validate_strategy(
 
     Mirrors ``load_strategy`` precedence (repo wins whole-file, broken
     files fall back with a note) and reports the winning source, one
-    line per candidate (ok or the exact loader skip reason), engine
-    checks with the decision model looked up in the cached catalog only
-    (unchecked when the cache is unreachable), and the directives
-    presence note. Every failure class carries a manual-edit fix.
+    line per candidate (ok or the exact loader skip reason), the
+    26-candidate cap, the effective gate knobs (explicit or default),
+    engine checks with the decision model looked up in the cached
+    catalog only (unchecked when the cache is unreachable), and the
+    directives presence note. Every failure class carries a
+    manual-edit fix.
     """
     repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
     home = (
@@ -654,6 +659,16 @@ def validate_strategy(
                 valid = False
                 lines.append(f"candidate #{pos}: SKIP — {reason}")
                 lines.append(f"fix: {_candidate_fix(reason, pos)}")
+        if len(raw_candidates) > MAX_CANDIDATES:
+            valid = False
+            lines.append(
+                f"candidates: INVALID — {len(raw_candidates)} entries "
+                f"exceeds the {MAX_CANDIDATES}-candidate cap"
+            )
+            lines.append(
+                f"fix: keep at most {MAX_CANDIDATES} candidates "
+                "(the choice call caps at 26 options)"
+            )
         if usable == 0:
             valid = False
             lines.append("no usable candidates — routing stays off")
@@ -661,6 +676,23 @@ def validate_strategy(
                 "fix: add at least one candidates entry with a model id, "
                 "or re-run /route setup"
             )
+    for knob, default in (
+        ("tie_margin", DEFAULT_TIE_MARGIN),
+        ("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+    ):
+        raw_knob = data.get(knob)
+        if raw_knob is None:
+            lines.append(f"{knob}: {default} (default)")
+        elif isinstance(raw_knob, bool) or not isinstance(raw_knob, (int, float)):
+            valid = False
+            lines.append(f"{knob}: INVALID — {raw_knob!r} is not a number")
+            lines.append(f"fix: set {knob} to a number between 0 and 1")
+        elif not 0.0 <= float(raw_knob) <= 1.0:
+            valid = False
+            lines.append(f"{knob}: INVALID — {raw_knob} is outside 0..1")
+            lines.append(f"fix: set {knob} to a number between 0 and 1")
+        else:
+            lines.append(f"{knob}: {float(raw_knob)}")
     engine = _parse_engine(data.get("engine"))
     raw_engine = data.get("engine")
     raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None

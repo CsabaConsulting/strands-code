@@ -172,12 +172,28 @@ def usage_line(input_tokens: int, output_tokens: int, model_id: str) -> str:
     return line
 
 
+def _confidence_cell(value: object) -> str:
+    """Percent cell for one routing confidence (n/a when unread)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "n/a"
+    return f"{value:.0%}"
+
+
+def _reported_spend(event: dict[str, Any]) -> float | None:
+    """Reported decision USD spend (None when absent or non-numeric)."""
+    spend = event.get("decision_cost")
+    if isinstance(spend, bool) or not isinstance(spend, (int, float)):
+        return None
+    return float(spend)
+
+
 def _routing_line(event: dict[str, Any]) -> str:
     """One ``/cost`` routing line for a decided ask (never raises).
 
-    ``ask {n}{side}: {model} ({effort}) via {engine} — {why} [held]``
-    plus the decision token cost at the decision model id; held asks
-    name the serving model with empty effort/why and the ``[held]``
+    Compact D-12 entry: ask number, side marker, model, both
+    confidences, and decision spend — the reported event cost, or
+    zero when the engine reports none (local calls), never an
+    estimate. Held asks name the serving model with the ``[held]``
     marker. Missing keys degrade to placeholders — display only.
     """
     try:
@@ -185,30 +201,25 @@ def _routing_line(event: dict[str, Any]) -> str:
         side = " (btw)" if event.get("side") else ""
         model = event.get("model", "?")
         effort = event.get("effort", "") or ""
-        why = event.get("why", "") or ""
         engine = event.get("engine", "?")
-        in_tok = int(event.get("input_tokens", 0))
-        out_tok = int(event.get("output_tokens", 0))
+        int(event.get("input_tokens", 0))
+        int(event.get("output_tokens", 0))
     except (TypeError, ValueError):
         return "  ask ?: unparseable routing event"
     head = f"  ask {ask}{side}: {model}"
     if effort:
         head += f" ({effort})"
+    head += (
+        f" [model {_confidence_cell(event.get('model_confidence'))}, "
+        f"effort {_confidence_cell(event.get('effort_confidence'))}]"
+    )
     head += f" via {engine}"
-    if why:
-        head += f" — {why}"
+    if event.get("tie_break"):
+        head += " [tie-break]"
     if event.get("held"):
         head += " [held]"
-    cell = f"{head} (decision in {in_tok}, out {out_tok}"
-    decision_model = event.get("decision_model")
-    if decision_model and (in_tok or out_tok):
-        try:
-            decision_cost = cost_for(in_tok, out_tok, decision_model)
-        except Exception:
-            decision_cost = None
-        if decision_cost is not None:
-            cell += f", ${decision_cost:.4f}"
-    return cell + ")"
+    spend = _reported_spend(event)
+    return f"{head} ${spend if spend is not None else 0.0:.4f}"
 
 
 def cost_report(
@@ -226,11 +237,13 @@ def cost_report(
         session_turns: One row per agent turn: turn #, input/output
             tokens, turn model.
         model_id: Active model id string (header + row fallback).
-        routing: Routing event records (ask, side, model, effort, why,
-            engine, token counts, held, decision model). None renders
+        routing: Routing event records (ask, side, model, effort,
+            confidences, tie-break, engine, token counts, reported
+            decision cost, held, decision model). None renders
             byte-identical output to the pre-routing report; with
-            events a Routing section lists one line per ask and the
-            decision tokens plus cost fold into the session totals.
+            events a Routing section lists one compact line per ask
+            and the decision tokens plus reported spend fold into
+            the session totals.
     """
     lines = [f"Cost — {model_id}"]
     total_in = total_out = 0
@@ -267,15 +280,12 @@ def cost_report(
                 continue
             total_in += in_tok
             total_out += out_tok
-            decision_model = event.get("decision_model")
-            if decision_model and (in_tok or out_tok):
-                try:
-                    decision_cost = cost_for(in_tok, out_tok, decision_model)
-                except Exception:
-                    decision_cost = None
-                if decision_cost is not None:
-                    any_priced = True
-                    total_cost += decision_cost
+            spend = _reported_spend(event)
+            if spend is not None:
+                any_priced = True
+                total_cost += spend
+                decision_model = event.get("decision_model")
+                if decision_model:
                     provenance = price_provenance(decision_model)
                     if provenance not in provenances:
                         provenances.append(provenance)

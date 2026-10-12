@@ -144,6 +144,104 @@ class TestStrategyLoad:
         assert strategy is not None
         assert strategy.candidates == []
 
+    def test_knobs_default_when_absent(self, tmp_path):
+        path = _write(tmp_path / "routing.yaml", _strategy_yaml())
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
+        assert strategy is not None
+        assert strategy.tie_margin == routing_mod.DEFAULT_TIE_MARGIN
+        assert strategy.confidence_threshold == routing_mod.DEFAULT_CONFIDENCE_THRESHOLD
+
+    def test_knobs_load_explicit_values(self, tmp_path):
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(extra="tie_margin: 0.1\nconfidence_threshold: 0.6\n"),
+        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
+        assert strategy is not None
+        assert strategy.tie_margin == 0.1
+        assert strategy.confidence_threshold == 0.6
+
+    def test_knob_wrong_type_warns_and_defaults(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(
+                extra="tie_margin: wide\nconfidence_threshold: true\n"
+            ),
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.tie_margin == routing_mod.DEFAULT_TIE_MARGIN
+        # YAML bools are not numbers: true must not become 1.0.
+        assert strategy.confidence_threshold == (
+            routing_mod.DEFAULT_CONFIDENCE_THRESHOLD
+        )
+        assert "tie_margin" in caplog.text
+        assert "confidence_threshold" in caplog.text
+
+    def test_knob_out_of_range_warns_and_defaults(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(extra="tie_margin: 2.0\nconfidence_threshold: -1.0\n"),
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.tie_margin == routing_mod.DEFAULT_TIE_MARGIN
+        assert strategy.confidence_threshold == (
+            routing_mod.DEFAULT_CONFIDENCE_THRESHOLD
+        )
+        assert "outside 0..1" in caplog.text
+
+    def test_criteria_loads_onto_candidate(self, tmp_path):
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(
+                candidates="[{id: a/1, criteria: 'Cheap small model'}]"
+            ),
+        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
+        assert strategy is not None
+        assert strategy.candidates[0].criteria == "Cheap small model"
+        bare = _write(tmp_path / "bare.yaml", _strategy_yaml())
+        plain = load_strategy(global_path=bare, repo_path=tmp_path / "absent.yaml")
+        assert plain is not None
+        assert plain.candidates[0].criteria is None
+
+    def test_criteria_wrong_type_skips_entry(self, tmp_path):
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(candidates="[{id: a/1, criteria: [not, prose]}]"),
+        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
+        assert strategy is not None
+        assert strategy.candidates == []
+
+    def test_save_round_trips_new_keys(self, tmp_path):
+        data = {
+            "candidates": [{"id": "a/1", "criteria": "Cheap small model"}],
+            "directives": "d",
+            "tie_margin": 0.1,
+            "confidence_threshold": 0.6,
+            "engine": {"primary": "openrouter", "decision_model": "c/d"},
+        }
+        path = save_strategy(data, "repo", repo_path=tmp_path / "r.yaml")
+        strategy = load_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert strategy is not None
+        assert strategy.tie_margin == 0.1
+        assert strategy.confidence_threshold == 0.6
+        assert strategy.candidates[0].criteria == "Cheap small model"
+
 
 _SETUP_CATALOG = [
     {
@@ -750,3 +848,107 @@ class TestRouteValidate:
         assert message.startswith("Routing strategy VALID")
         assert str(repo) in message
         assert after == before
+
+    def test_27_candidates_fail_naming_cap(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(27))
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "27 entries" in text
+        assert "26-candidate cap" in text
+        assert "fix: keep at most 26 candidates" in text
+
+    def test_26_candidates_pass_cap(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(26))
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+
+    def test_knob_out_of_range_fails_with_fix(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(extra="tie_margin: 2.0\nconfidence_threshold: -1.0\n"),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "tie_margin: INVALID — 2.0 is outside 0..1" in text
+        assert "confidence_threshold: INVALID — -1.0 is outside 0..1" in text
+        assert "fix: set tie_margin to a number between 0 and 1" in text
+        assert "fix: set confidence_threshold to a number between 0 and 1" in text
+
+    def test_knob_wrong_type_fails_with_fix(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(extra="tie_margin: wide\n"),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "tie_margin: INVALID — 'wide' is not a number" in text
+        assert "fix: set tie_margin to a number between 0 and 1" in text
+
+    def test_knob_defaults_reported(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        text = report.format()
+        assert "tie_margin: 0.05 (default)" in text
+        assert "confidence_threshold: 0.7 (default)" in text
+
+    def test_explicit_knobs_reported(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(extra="tie_margin: 0.1\nconfidence_threshold: 0.6\n"),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        text = report.format()
+        assert "tie_margin: 0.1" in text
+        assert "confidence_threshold: 0.6" in text
+        assert "(default)" not in text
+
+    def test_criteria_wrong_type_fails_with_fix(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(candidates="[{id: a/1, criteria: [not, prose]}]"),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "candidate #0: SKIP — 'criteria' not a string" in text
+        assert "fix: make candidates[0].criteria a string" in text
+
+    def test_criteria_present_passes(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            _strategy_yaml(
+                candidates="[{id: a/1, criteria: 'Cheap small model'}]"
+            ),
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "candidate #0 a/1: ok" in report.format()

@@ -276,6 +276,126 @@ class TestCostReport:
         assert "Total: in 3.00M, out 2.00M, $1.9250" in report
 
 
+def _routed_event(**overrides):
+    base = {
+        "ask": 1,
+        "side": False,
+        "model": "a/routed",
+        "effort": "low",
+        "model_confidence": 0.85,
+        "effort_confidence": None,
+        "tie_break": False,
+        "engine": "openrouter",
+        "input_tokens": 384,
+        "output_tokens": 41,
+        "decision_cost": 0.0002,
+        "held": False,
+        "decision_model": "cheap/decider",
+    }
+    base.update(overrides)
+    return base
+
+
+def _routing_lines(report: str) -> list[str]:
+    return [line for line in report.splitlines() if line.startswith("  ask ")]
+
+
+class TestRoutingEntries:
+    def test_compact_routed_entry(self):
+        report = cost_report([], "a/routed", routing=[_routed_event()])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model 85%, effort n/a]"
+            " via openrouter $0.0002"
+        ]
+
+    def test_routed_entry_renders_exact_reported_cost(self):
+        # The spend is verbatim, never estimated from tokens: huge
+        # usage on an unpriced model still prints the reported cents.
+        event = _routed_event(
+            input_tokens=1000000,
+            output_tokens=1000000,
+            decision_cost=0.0002,
+            decision_model="mystery/x",
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model 85%, effort n/a]"
+            " via openrouter $0.0002"
+        ]
+
+    def test_local_entry_renders_zero_spend(self):
+        event = _routed_event(
+            engine="local",
+            input_tokens=1000000,
+            output_tokens=1000000,
+            decision_cost=None,
+            decision_model="nimble",
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model 85%, effort n/a]"
+            " via local $0.0000"
+        ]
+
+    def test_held_entry_names_serving_model(self):
+        event = _routed_event(
+            ask=2,
+            model="a/serving",
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            input_tokens=0,
+            output_tokens=0,
+            decision_cost=None,
+            held=True,
+        )
+        report = cost_report([], "a/serving", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 2: a/serving [model n/a, effort n/a]"
+            " via openrouter [held] $0.0000"
+        ]
+
+    def test_side_marker_and_tie_break(self):
+        event = _routed_event(side=True, tie_break=True)
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1 (btw): a/routed (low) [model 85%, effort n/a]"
+            " via openrouter [tie-break] $0.0002"
+        ]
+
+    def test_totals_fold_reported_spend(self):
+        from strands_code_cli.cost_context import cost_for
+
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "model": "amazon.nova-micro-v1:0",
+            }
+        ]
+        report = cost_report(
+            turns, "amazon.nova-micro-v1:0", routing=[_routed_event()]
+        )
+        expected = cost_for(1000, 500, "amazon.nova-micro-v1:0") + 0.0002
+        assert expected is not None
+        total = next(line for line in report.splitlines() if line.startswith("Total:"))
+        assert total == f"Total: in 1.38K, out 541, ${expected:.4f}"
+
+    def test_unparseable_event_falls_back(self):
+        event = _routed_event(input_tokens="xx")
+        report = cost_report([], "a/routed", routing=[event, "not-a-dict"])
+        assert "  ask ?: unparseable routing event" in report
+        total = next(line for line in report.splitlines() if line.startswith("Total:"))
+        assert total == "Total: in 0, out 0"
+
+    def test_missing_keys_degrade(self):
+        report = cost_report([], "a/routed", routing=[{}])
+        assert _routing_lines(report) == [
+            "  ask ?: ? [model n/a, effort n/a] via ? $0.0000"
+        ]
+
+
 # ----------------------------------------------------------------------
 # /context + compact + clear spike on the replay model
 # ----------------------------------------------------------------------
