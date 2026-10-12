@@ -13,6 +13,8 @@ import importlib.util
 import inspect
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
 
@@ -44,3 +46,48 @@ class TestRigModelId:
             src = inspect.getsource(getattr(driver, name))
             assert "RIG_NOVA_MICRO" in src, f"{name} does not use the shared constant"
             assert BARE_FORM not in src, f"{name} still hardcodes the bare id"
+
+
+FAILED_TURN = (
+    "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n"
+    "Turn failed (ValidationException): Invocation of model ID "
+    "amazon.nova-micro-v1:0 with on-demand throughput isn't supported.\n"
+    "> "
+)
+CLEAN_MAIN_END = "turn output\n(12%) $0.0012\n> "
+CLEAN_ROUTED = (
+    "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n"
+    "> "
+)
+
+
+class TestFailFast:
+    def test_wait_main_end_aborts_on_failed_turn(self, monkeypatch):
+        monkeypatch.setattr(driver, "pane_text", lambda sess: FAILED_TURN)
+        with pytest.raises(AssertionError) as excinfo:
+            driver.wait_main_end("sess", timeout=1)
+        msg = str(excinfo.value)
+        assert "main-end" in msg
+        assert "Turn failed (ValidationException)" in msg
+        assert "TIMEOUT" not in msg
+
+    def test_wait_routed_aborts_on_failed_turn(self, monkeypatch):
+        monkeypatch.setattr(driver, "pane_text", lambda sess: FAILED_TURN)
+        with pytest.raises(AssertionError) as excinfo:
+            driver.wait_routed("sess", 1, "routed-line")
+        msg = str(excinfo.value)
+        assert "routed-line" in msg
+        assert "Turn failed (ValidationException)" in msg
+        assert "TIMEOUT" not in msg
+
+    def test_wait_main_end_clean_transcript_unchanged(self, monkeypatch):
+        monkeypatch.setattr(driver, "pane_text", lambda sess: CLEAN_MAIN_END)
+        text, served = driver.wait_main_end("sess", timeout=1)
+        assert text == CLEAN_MAIN_END
+        assert served is False
+
+    def test_wait_routed_clean_transcript_unchanged(self, monkeypatch):
+        monkeypatch.setattr(driver, "pane_text", lambda sess: CLEAN_ROUTED)
+        text, marker = driver.wait_routed("sess", 1, "routed-line")
+        assert text == CLEAN_ROUTED
+        assert marker is None

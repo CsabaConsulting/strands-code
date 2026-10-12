@@ -30,6 +30,10 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # at ConverseStream (G-08-1). All rig strategies build from this one
 # constant so the sites cannot drift again.
 RIG_NOVA_MICRO = "bedrock/us.amazon.nova-micro-v1:0"
+# Literal "Turn failed ..." line the loop prints on provider errors;
+# failed turns never print a cost line, so waits matching only success
+# markers would hang to timeout without this fail-fast check (G-08-1).
+FAIL_RE = re.compile(r"Turn failed[^\n]*")
 
 
 def tmux(*args):
@@ -114,6 +118,11 @@ def wait_main_end(sess, timeout=240, after=0):
     end = time.time() + timeout
     while time.time() < end:
         text = pane_text(sess)
+        failed = FAIL_RE.search(text)
+        if failed:
+            raise AssertionError(
+                f"Turn failed during main-end: {failed.group(0)[:200]}"
+            )
         if len(COST_RE.findall(text)) > after:
             return text, served
         if re.search(r"Approve\?", text):
@@ -282,6 +291,11 @@ def wait_routed(sess, timeout, label, after=0, side=False):
     end = time.time() + timeout
     while time.time() < end:
         text = pane_text(sess)
+        failed = FAIL_RE.search(text)
+        if failed:
+            raise AssertionError(
+                f"Turn failed during {label}: {failed.group(0)[:200]}"
+            )
         fresh = text.count(marker) + text.count("Routing held") > after
         if fresh:
             return text, None
