@@ -25,6 +25,8 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Repo memory file: dual `STRANDS.md` + `.agent/MEMORY.md` auto-load, `/init` scan-draft, `/memory` curate/approve + NL revise rounds — Phase 6 (.agent wins, curate-by-default, auto-reload, flush on exit)
 - ✓ Markup-safe transcript: hostile `[...]` content renders literally, never crashes — Phase 6 UAT (print_plain, markup off; supersedes WR-06 escape)
 - ✓ Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched — Phase 7 (parallel side agent, shared tagged deny-first gate, fenced blocks, FIFO queue, Ctrl-C chooser, multiplexed idle delivery)
+- ✓ Decision-model routing with manual override kept — Phase 8 (per-ask model + effort selection via OpenRouter/Ollama engines, calibration, chain/preflight/retry)
+- ✓ Native TypeSafe Jev decision engine alongside OpenRouter and Ollama — Phase 9 (user-ordered engines, live-ping validate, computed $0.042/1M spend, 20-probe calibration)
 
 ### Active
 
@@ -36,7 +38,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
 - [ ] Skills marketplace commands: add marketplace, install skills (local load/invoke validated Phase 6)
 - [ ] Session resume by UUID across runs
-- [ ] Decision-model routing with manual override kept — Phase 8
+- [ ] Provider-reported turn spend for main turns (OpenRouter actuals; Phase 10)
 - [ ] Harness can run GSD workflows (skills + gsd-tools + shell) — emerged Phase 7 (user goal; placement TBD: roadmap phase vs future)
 - [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
 
@@ -84,6 +86,8 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 | Side channel shares the main deny-first gate (tagged [main]/[btw]) | Separate gates would double-prompt and split batch coverage; tags from event.agent identity keep attribution on every prompt | ✓ Good (live-verified, Phase 7) |
 | Side agent via create_harness rebuild, not agents-as-tools | Helper-agent pattern couldn't share gate/model/memory; rebuild over stashed kwargs + forked history keeps one policy surface | ✓ Good (Phase 7) |
 | D-14 append-back: side exchange lands in main history at boundary | One conversation matches the user mental model; fences + /btw identity preserve attribution | ✓ Good (live-verified, Phase 7) |
+| User-ordered decision engines, native-first when keyed | Fixed priority couldn't express key-absent fallback; ordered list + live-ping validate keeps setup honest | ✓ Good (Phase 9) |
+| Native spend computed code-side at published rate | Native usage carries no cost field; input×$0.042/1M with a computed-rate marker beats silent $0 | ✓ Good (Phase 9) |
 
 ## Evolution
 
@@ -103,4 +107,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-11 after Phase 7*
+*Last updated: 2026-10-12 after Phase 9*

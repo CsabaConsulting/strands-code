@@ -21,10 +21,10 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-10-11)
+See: .planning/PROJECT.md (updated 2026-10-12)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 09 — native-typesafe-decision-engine
+**Current focus:** Phase 10 — provider-reported-turn-spend
 
 ## Current Position
 
@@ -33,7 +33,7 @@ Plan: Not started
 Status: Ready to plan
 Last activity: 2026-10-12 — Phase 09 complete, transitioned to Phase 10
 
-Progress: [███████░░░] 73%
+Progress: [████████░░] 82%
 
 ## Performance Metrics
 
@@ -188,6 +188,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T21:07:31.878Z
+Last session: 2026-10-12T21:23:58Z
 Stopped at: Phase 09 complete, ready to plan Phase 10
 Resume file: None
