@@ -1,204 +1,252 @@
 ---
 phase: 08-model-routing-with-decision-models
-reviewed: 2026-10-11T00:00:00Z
+reviewed: 2026-10-12T07:34:08Z
 depth: standard
 reviewer: gsd-code-reviewer (generic-agent workaround — typed gsd-code-reviewer dispatch unavailable in this runtime)
-files_reviewed: 11
+files_reviewed: 4
 files_reviewed_list:
-  - docs/ROUTING.md
-  - strands_code_cli/cost_context.py
-  - strands_code_cli/loop.py
-  - strands_code_cli/model_switch.py
-  - strands_code_cli/router.py
   - strands_code_cli/routing.py
-  - strands_code_cli/skills.py
-  - tests/test_loop_routing.py
+  - scripts/route-probe.py
   - tests/test_routing.py
   - tests/test_routing_strategy.py
-  - AGENTS.md
 findings:
-  critical: 1
-  warning: 6
-  info: 7
-  total: 14
+  critical: 0
+  warning: 0
+  info: 6
+  total: 6
 status: issues_found
 ---
 
 # Phase 8: Code Review Report
 
-- Phase: 08-model-routing-with-decision-models
-- Reviewed: 2026-10-11T00:00:00Z
-- Depth: standard
-- Reviewer: gsd-code-reviewer (generic-agent workaround — typed gsd-code-reviewer dispatch unavailable in this runtime)
-- Scope: 7 source files + ROUTING.md read fully; 3 test files read for behavior confirmation only (no test-style findings per scope)
-- Cross-referenced (read-only, out-of-scope context): `strands_code_cli/live_pricing.py`, `strands_code_cli/model_capabilities.py`, `strands_code_cli/btw.py`, installed `strands_harness` signatures
+**Reviewed:** 2026-10-12T07:34:08Z (scoped gap-closure re-review; full-phase review 2026-10-12T07:01:22Z below)
+**Depth:** standard
+**Files Reviewed:** 4 (gap-commit scope; prior full review covered 16)
+**Status:** issues_found
 
 ## Summary
 
-The routing implementation is well-structured: strict parse, hold-on-failure semantics, symlink refusal on strategy load/save, `yaml.safe_load` throughout, no hardcoded secrets, and the API key stays header-only at call time. The test suite covers the main/hook/side/cost paths credibly.
+**Re-review (2026-10-12T07:34:08Z, generic-agent workaround):** scoped
+re-review of the 08-06 gap-closure commits (`08d6d4a..0109ef6`: GAP-01
+YAML-bool level fold, GAP-02 unhashable-choice guard, GAP-03 lazy local
+tag) across the 4 gap-commit files. Both prior warnings verified fixed
+by source inspection plus execution (see Resolved Warnings). The 5
+prior infos carry over unchanged — their regions/files are untouched by
+the gap diff (verified via `git diff`; IN-04 line ref shifted +6). One
+new info (IN-06) on the fresh GAP-01 diff. Supporting evidence: 231
+passed, 2 deselected (integration) across `tests/test_routing.py` and
+`tests/test_routing_strategy.py`.
 
-One critical security defect was proven by execution: `save_strategy` follows a symlinked temp file, so a planted `./.agent/routing.yaml.tmp` symlink turns `/route setup` (repo scope) into an arbitrary file overwrite. Six warnings follow, the most important being that the pre-turn hook lets pricing/validation exceptions escape and kill the session (proven with a poisoned cache), and that composed prompts carrying untrusted skill instructions and memory content are sent to the external decision model despite the documented "ask text only" guarantee. Seven info notes cover docs nits and latent traps. All findings cite `file:line` and carry concrete fixes.
+**Full-phase review (2026-10-12T07:01:22Z):** reviewed the phase 08
+Decision-API rework (5 plans, commits `5683d8d..HEAD`):
+typed Decision-API transports plus one-retry policy, answer validation with the
+code-side threshold/tie gate, sequential two-call routing, preflight gating,
+the retry matrix with turn-scoped pause, the 64 KiB body bound, split-catalog
+setup, the compact `/cost` routing entry, and the probe runner with its
+20-probe set and recorded baseline.
 
-Checks run clean and not reported: no bare `except`, no `eval`/`exec`, no mutable defaults, `with` used for network/file ops, no unused imports in new code, absolute imports per AGENTS.md, `print` only in the CLI prompt layer (established router pattern).
+Library code (`strands_code_cli/`) and scripts received full standard-depth
+review against the diff; tests received reliability-scoped checks (live-test
+gating, fixture consistency); docs and eval data received targeted accuracy
+and validity checks. No critical issues. The two warnings are a contract
+violation in choice validation (proven by execution: unhashable `choice`
+raises `TypeError` instead of holding) and a local-daemon prerequisite that
+needlessly blocks cloud-only probe runs. Supporting evidence: 366 passed,
+2 deselected (integration) across the five routing test files; probe data
+validated (20 unique ids, 20+20 baseline verdicts); no stale references to
+the removed chat-JSON surface (`parse_pick`, `build_routing_prompt`,
+`OPENROUTER_CHAT_URL`, `why`) remain in source.
 
-## Critical Issues
+## Resolved Warnings
 
-### CR-01: `save_strategy` follows a symlinked temp file — arbitrary file overwrite
+### WR-01: Unhashable `choice` raises TypeError instead of holding — RESOLVED
 
-`strands_code_cli/routing.py:386-388` refuses a symlinked strategy target (`resolved.is_symlink()`, line 350) but writes through an unchecked temp path:
+**File:** `strands_code_cli/routing.py:1305`
 
-```python
-tmp = resolved.with_suffix(".yaml.tmp")
-tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
-os.replace(tmp, resolved)
-```
+**Issue:** `_validate_choice_shape` tests `answer.get("choice") not in probs`
+where `probs` is a dict. A malformed vendor answer with a non-string
+`choice` (`["a"]`, `{"x": 1}`) raises `TypeError: unhashable type` instead
+of returning None as the "None holds" contract promises. The same shape
+flows through `validate_choice_answer` (`routing.py:1325`, `not in live`
+against a set) and `_validate_effort_answer`, so both decision calls are
+affected. Verified by execution: list and dict choices raise, while None
+and int choices correctly return None. Production impact is muted because
+both hook call sites catch broad `Exception` around `decide()`, but the
+hold is then misreported as `decide failed` and any direct caller of
+`decide()` / `validate_choice_answer` (e.g. `run_probe` in
+`scripts/route-probe.py`) crashes outright.
 
-`Path.write_text` follows symlinks. Proven by execution: with `/tmp/probe/w/r.yaml.tmp` symlinked to a victim file, `save_strategy(..., repo_path="/tmp/probe/w/r.yaml")` overwrote the victim with the strategy YAML. Attack shape: a malicious repo ships `./.agent/routing.yaml.tmp` as a symlink (e.g. to `~/.bashrc`); the victim runs `/route setup` with repo scope and any user-owned file gets clobbered. This contradicts the module's own fail-loud symlink policy (same file, lines 256-257, 350-351).
-
-Fix — refuse (or unlink) a symlinked temp path before writing:
-
-```python
-tmp = resolved.with_suffix(".yaml.tmp")
-if tmp.is_symlink() or tmp.exists():
-    raise ValueError(f"Refusing to write through existing temp file: {tmp}")
-tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
-os.replace(tmp, resolved)
-```
-
-(Alternative: `os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL)` + `os.fdopen`.)
-
-## Warnings
-
-### WR-01: Pre-turn hook lets pricing/validation exceptions escape and kill the session
-
-`strands_code_cli/loop.py:1349` (`decide`), `loop.py:1371` (`validate_routed_effort`), and `loop.py:1450` (`format_routed_line`) run outside any `try`, and the enclosing `run_loop` turn `try` (`loop.py:2077`) only handles `KeyboardInterrupt` (`loop.py:2198`). Any exception here propagates out of `run_loop` and ends the session with a traceback — violating the D-08 hold-on-failure contract.
-
-Concrete trigger, proven by execution: `strands_code_cli/routing.py:646-657` (`_candidate_row`) and `routing.py:1065-1076` (`route_cost_delta`) call the live-pricing layer unguarded, and that layer raises `ValueError` on valid-JSON-but-wrong-typed caches (unguarded `float(payload.get("fetched_at", 0))` and `float(slot["in"])` in `live_pricing.py`), despite its "nothing here ever raises … corrupt cache yields None" contract. Probe output with a poisoned `openrouter-models.json`:
-
-```text
-RAISED: ValueError could not convert string to float: 'not-a-number'
-```
-
-A second trigger by code reading: `validate_routed_effort` → `supports_reasoning` → `active_overrides` raises `ValueError` when the capability-overrides file is a symlink (`model_capabilities.py:62-63`, deliberate fail-loud) — uncaught at `loop.py:1371`. Note `cost_context.py:205-208,272-275` already wraps `cost_for` in `try/except Exception`; the routing call sites should follow that precedent.
-
-Fix — hold instead of crash in the hook:
-
-```python
-try:
-    pick, engine, usage = routing_mod.decide(...)
-except Exception as exc:
-    logger.warning("Routing decision failed (%s); holding %s", exc, current_model)
-    # record held event + print hold note, return current_model
-```
-
-and/or wrap the price/window lookups inside `_candidate_row` and `route_cost_delta` to degrade to `n/a` cells.
-
-### WR-02: Composed prompts with untrusted content are sent to the external decision model
-
-`docs/ROUTING.md:15-16` promises the decision prompt carries "the current ask text only (truncated) — never history, tool results, or file contents." But `strands_code_cli/loop.py:2089-2092` routes on the composed agent message, not the raw typed line:
+**Fix:**
 
 ```python
-ask_text=message if message is not None else text,
+choice = answer.get("choice")
+if not isinstance(choice, str) or choice not in probs:
+    return None
 ```
 
-Three composed paths violate the guarantee: skill invocations prepend untrusted repo `SKILL.md` instructions (`strands_code_cli/router.py:240-248`); `/memory revise` rounds send the memory section text (`strands_code_cli/loop.py:2000-2001`, template built from `read_memory_section`); `/init` turns send the repo scan report (`strands_code_cli/router.py:1236`). Consequences: (a) repo/memory content the user never typed is exfiltrated to the OpenRouter decision call; (b) a malicious skill's instructions can steer routing picks (e.g. force the priciest tier) within the candidate-id constraint.
+(JSON object keys are always strings, and both membership sets — candidate
+ids and effort levels — are strings, so the `str` guard rejects nothing
+legitimate. Apply the same guard at the `not in live` check, or rely on
+the shape check alone since `validate_choice_answer` runs after it.)
 
-Fix — route on the raw typed text:
+**Resolution (verified 2026-10-12T07:34:08Z):** fixed by `e27b322`
+(GAP-02) exactly as suggested — `str` guard added in both
+`_validate_choice_shape` (`strands_code_cli/routing.py:1313-1315`) and
+`validate_choice_answer` (`strands_code_cli/routing.py:1334-1335`); the
+effort path inherits the fix via `_validate_choice_shape`
+(`routing.py:1347`). Verified by execution: list, dict, tuple, None,
+and int choices all return None (hold) with no raise through both
+`validate_choice_answer` and `_validate_effort_answer`. New
+`TestUnhashableChoiceHolds` (`tests/test_routing.py:352-368`) locks the
+contract. (The second `isinstance` is strictly redundant given the
+shape check runs first, but harmless defense-in-depth — not flagged.)
+
+### WR-02: `--run openrouter` aborts without a local Ollama daemon — RESOLVED
+
+**File:** `scripts/route-probe.py:473`
+
+**Issue:** `cmd_run` unconditionally resolves the local tag (`tag =
+local_model or resolve_local_model()`) before dispatching on engine, and
+`resolve_local_model` raises `SystemExit` when neither `nimble` nor
+`tev1:0.8b` is ready. For `--run openrouter` the local tag is unused (the
+OpenRouter transport never reads it; the record `pin` is the decision
+model), so a cloud-only calibration machine fails with the misleading "no
+decision model pulled" error despite needing no daemon at all.
+
+**Fix:**
 
 ```python
-current_model = _route_pre_turn(
-    ...
-    ask_text=text,  # raw user input; never the composed skill/revise/init message
-    ...
+tag = local_model or (
+    resolve_local_model() if engine == "local" else LOCAL_MODEL_PIN
 )
 ```
 
-(or pass both and let the hook prefer the raw line), and re-verify the skill/revise/init tests still route sensibly.
+(Resolve lazily for local runs only; record the pin constant or an
+explicit `"n/a"` for cloud runs.)
 
-### WR-03: Routed switch discards the streaming-tools advisory reply
-
-`strands_code_cli/loop.py:1396` throws away the reply from `apply_model_action`, which is where the "rejects tool use in streaming mode" warning lives (`strands_code_cli/model_switch.py:1257-1262`). The manual `/model` path prints it (`strands_code_cli/loop.py:2046`); the routed path never does — so routing onto a Llama-class model proceeds silently and subsequent turns fail without the designed warning.
-
-Fix — surface the advisory on the routed path:
-
-```python
-if not supports_streaming_tools(pick.model):
-    print_plain(console,
-        f"Warning: {pick.model} rejects tool use in streaming mode — turns "
-        "will fail until a non-streaming fallback lands upstream (/model to switch back).",
-        style="yellow")
-```
-
-(`supports_streaming_tools` is already imported in `loop.py`.)
-
-### WR-04: Unknown `engine.primary` values are silently accepted as openrouter
-
-`strands_code_cli/routing.py:192-204` (`_parse_engine`) accepts any string for `primary`, `strands_code_cli/routing.py:951-954` (`_chain_for`) maps anything that is not `local`/`off` to the openrouter-first chain, and `strands_code_cli/routing.py:594-626` (`validate_strategy`) reports a bogus primary with a valid decision model as clean. A typo such as `primary: open_route` therefore validates yet silently behaves as `openrouter`.
-
-Fix — reject unknown primaries at parse and validate:
-
-```python
-if engine.primary not in ("openrouter", "local", "off"):
-    # _parse_engine: logger.warning(...) + fall back to "openrouter"
-    # validate_strategy: valid = False + "fix: set engine.primary to openrouter|local|off"
-```
-
-### WR-05: Invalid `local_base_url` silently overrides the env chain with the default
-
-`strands_code_cli/routing.py:205-215` replaces a non-http(s) `local_base_url` with `OLLAMA_DEFAULT_HOST` (log warning only), so a typo'd strategy URL discards a working `OLLAMA_HOST` env instead of falling through to it — and `validate_strategy` (`strands_code_cli/routing.py:577-593`) never checks `local_base_url` at all, so `/route validate` stays silent.
-
-Fix — either fall through to the env chain:
-
-```python
-engine.local_base_url = None  # invalid entry ignored; OLLAMA_HOST/default applies
-```
-
-or keep the default but add a validate line: `engine: INVALID — local_base_url is not an http/https URL` with a manual-edit fix.
-
-### WR-06: `/route setup` does not catch `OSError` from the strategy save
-
-`strands_code_cli/router.py:946-949` catches only `ValueError` around `save_strategy`, but `strands_code_cli/routing.py:384-388` can raise `OSError` (`mkdir`, `chmod`, temp write, `os.replace`) on read-only filesystems, permission errors, or full disks. Since `dispatch` runs outside the turn `try` (`strands_code_cli/loop.py:2003`), the traceback escapes `run_loop` and ends the session.
-
-Fix:
-
-```python
-try:
-    path = save_strategy(payload, scope)
-except (ValueError, OSError) as exc:
-    return f"Setup failed — {exc} (nothing written)."
-```
+**Resolution (verified 2026-10-12T07:34:08Z):** fixed by `eb7db12`
+(GAP-03) as suggested — `cmd_run` (`scripts/route-probe.py:476-479`)
+resolves via `resolve_local_model()` on the local path only and falls
+back to `LOCAL_MODEL_PIN` otherwise; `_warm_local` stays local-gated
+(`route-probe.py:480-481`). Verified by execution: `cmd_run('openrouter',
+...)` with `resolve_local_model` stubbed to raise completes rc=0
+without touching the daemon, an explicit `--local-model` is still
+honored on the cloud path, and the local path still resolves (raises
+through the stub). The openrouter transport path
+(`decide_via_openrouter`, `route-probe.py:313-318`) takes no local tag
+and the record `pin` uses the decision model (`route-probe.py:335`),
+so the pin-valued tag is inert there.
 
 ## Info
 
-### IN-01: Two ROUTING.md sentences over-claim vs intended behavior
+_Carry-over note (2026-10-12T07:34:08Z re-review): IN-01–IN-05 remain
+open with their prior dispositions — none of their regions changed in
+the gap diff (`08d6d4a..0109ef6` touches only the WR-01/WR-02/GAP-01
+hunks plus tests). IN-04's line ref is updated for the +6 shift from
+the GAP-03 hunk; all other refs verified current._
 
-- `docs/ROUTING.md:17-20`: "The chain is API, then local, then hold" ignores `primary: local`, which deliberately skips the API entirely (fully offline, `strands_code_cli/routing.py:954`). Suggest: "The default chain is API, then local, then hold; `primary: local` tries only the daemon."
-- `docs/ROUTING.md:25-26`: "hold and failure notes always print" ignores side-spawn holds, which are intentionally silent (`strands_code_cli/loop.py:638-651`, asserted by `test_engine_failure_spawns_on_parent_model_silently`). Suggest scoping the sentence to main-turn asks.
+### IN-01: Dead `structured` field on chat-catalog entries
 
-### IN-02: Hold note mislabels effort-validation failure as engine failure
+**File:** `strands_code_cli/router.py:634-644`
 
-`strands_code_cli/loop.py:1390-1393` prints `"(openrouter failed; retrying next ask)"` when the effort gate — not the engine — rejected the pick. Consider a distinct note (e.g. `Routing held on {current} (routed effort unsupported; retrying next ask)`) so users do not chase engine connectivity for a strategy-leveling problem.
+**Issue:** `_setup_catalog_entries` still scans `supported_parameters` and
+stores a `"structured"` key per entry, but the split-catalog rework removed
+its only reader (the `_setup_pick_decision` eligibility filter now takes
+pre-filtered decisions-catalog entries). No remaining readers in source,
+scripts, or tests — the key is computed and carried for nothing.
 
-### IN-03: Held-ask usage is dropped, hiding failed decision spend from /cost
+**Fix:** Drop the `structured` computation and key (and the
+`supported_parameters` scan) from `_setup_catalog_entries`; if kept
+deliberately as a debugging aid, note why in a comment.
 
-`strands_code_cli/routing.py:1015-1023` returns `(0, 0)` usage on every hold path even when the engine response carried token counts, so failed decision calls never appear in the `/cost` Routing section. This matches the documented "zeros on hold" contract, so no behavior change is required — but consider threading the last-attempt usage through so real spend stays visible.
+### IN-02: Duplicated OpenRouter fetch transport
 
-### IN-04: Repo-scope save chmods `./.agent` to 0700
+**File:** `strands_code_cli/live_pricing.py:387-399`
 
-`strands_code_cli/routing.py:384-385` applies `os.chmod(resolved.parent, 0o700)` unconditionally, including for repo scope where `./.agent` may be shared or team-visible. Documented and harmless in most cases, but consider chmodding only the global dir or only when the directory was newly created.
+**Issue:** `fetch_openrouter_decision_models` duplicates the request/parse
+body of `fetch_openrouter_models` (~14 lines: Request build, urlopen,
+decode, `data`-list extraction, blanket-None failure). Timeout, header, or
+payload-shape changes must now land twice to stay consistent.
 
-### IN-05: `/route status` reports a symlinked strategy as "none configured"
+**Fix:** Extract a shared `_fetch_openrouter_models(url)` helper taking the
+endpoint URL, with both public fetchers delegating to it.
 
-`strands_code_cli/router.py:980-984` swallows the fail-loud symlink `ValueError` from `load_strategy` and falls through to "Strategy: none configured", while `/route validate` names the symlink properly. Consider surfacing the symlink reason in the status reply for consistency.
+### IN-03: Discarded `int()` results read as dead expressions
 
-### IN-06: Side-spawn path relies on `resolve_model` instead of the explicit effort gate
+**File:** `strands_code_cli/cost_context.py:205-206`
 
-`strands_code_cli/loop.py:635-669` (`_route_side_spawn`) never calls `validate_routed_effort`, unlike the main hook (`strands_code_cli/loop.py:1371`). Verified against the installed harness that `resolve_model` raises `ValueError` for both unsupported levels (`Effort 'low' is not supported by Bedrock model amazon.nova-micro-v1:0`) and unknown literals, and the side path catches that into a silent hold — so behavior converges and no live bug results. Suggest calling `validate_routed_effort` explicitly before resolving anyway, for one obvious gate and stable event naming.
+**Issue:** `_routing_line` calls `int(...)` on both token fields purely for
+their `TypeError`/`ValueError` side effect inside the `try`, discarding the
+results. Correct, but bare expression-statements trip B018-style
+"useless expression" linters and read as leftover code.
 
-### IN-07: `routing=None` means ON in the loop hook but OFF in the router holder
+**Fix:** Assign to `_` with a brief comment, e.g. `_ = int(...)  #
+validate shape; values unused in the compact entry`.
 
-`strands_code_cli/loop.py:1339` (`_route_pre_turn`) and `loop.py:624` (`_route_side_spawn`) treat a `None` toggle as enabled, while `strands_code_cli/router.py:520-524` (`_routing_holder`) substitutes a throwaway `off` holder. No live path hits this (`run_loop` always wires a holder), but a future caller passing `None` would get routing without the `/model` warn dialog. Consider making the loop treat `None` as off to match the router.
+### IN-04: `--compare` ignores `--out`
+
+**File:** `scripts/route-probe.py:658-664`
+
+**Issue:** `cmd_compare` hardcodes both run paths to
+`/tmp/route-probe-<engine>.jsonl` while `--run` accepts `--out`. A
+`--run --out custom.jsonl` + `--compare` workflow silently diffs stale
+`/tmp` files (or reports them missing) instead of the just-written run.
+
+**Fix:** Derive the compare input from `--out` when given (or document that
+`--compare` only reads the default paths).
+
+### IN-05: `expand_ask` crashes the run on malformed pad specs
+
+**File:** `scripts/route-probe.py:158-164`
+
+**Issue:** `pad["target_chars"]` / `pad["filler"]` raise bare `KeyError` on
+a malformed probe row, and an empty `filler` raises `ZeroDivisionError` in
+the repeat computation — aborting the whole run with no probe id context,
+unlike `load_probes`, which reports file and line. Risk is low (versioned
+data), but the failure mode is needlessly opaque.
+
+**Fix:** Validate `ask_pad` inside `load_probes` (or wrap per-probe
+expansion errors in `SystemExit` naming the probe id), matching the
+existing invalid-JSON handling.
+
+### IN-06: Bool-level fold maps every YAML-bool spelling to on/off (new in re-review)
+
+**File:** `strands_code_cli/routing.py:224-227`
+
+**Issue:** The GAP-01 fold (`08d6d4a`) maps `True`/`False` to
+`"on"`/`"off"`, but `yaml.safe_load` (`routing.py:364`) folds every
+YAML 1.1 bool spelling — `yes`/`no`, `true`/`false`, `y`/`n` as well
+as `on`/`off` — so a level spelled `yes` silently becomes `"on"` and
+`no` becomes `"off"`. The parser discards the original spelling, so
+the fold cannot distinguish them. Risk is negligible (level
+vocabularies are `low`/`high`/`auto`-shaped; a `yes`/`no` level name
+is implausible) and the gate/parser stay consistent
+(`_candidate_skip_reason` accepts the same `(str, bool)` set at
+`routing.py:195`, `validate_strategy` shares the gate so its report
+stays truthful, and the `is True`/`is False` identity checks correctly
+exclude ints like `1`). Flagged only so the lossy corner is on record.
+
+**Fix:** Document that only `on`/`off` spellings round-trip (or quote
+anything else) in the strategy docs; no code change required.
 
 ---
 
-*End of Phase 8 code review. READ-ONLY on sources; this report is the only file written. No commit — orchestrator handles that.*
+_Checked but not flagged: threshold-hold verdicts intentionally record zero
+usage (pre-existing hold contract, unchanged); `_version_tuple` fails
+closed on suffixed versions (conservative, correct); pause/resume ordering
+across pre-turn and side hooks matches D-09; `decision_model_for` safely
+returns None for synthetic engines (`paused`, `decide`, `resolve`,
+`none`); tie-break keeps the argmax on unpriced or equal-priced pairs per
+D-14; live engine tests are env-gated plus `integration`-marked and fail
+loudly on drift by design._
+
+_Re-review checked but not flagged: the second `isinstance` in
+`validate_choice_answer` is redundant post-shape-check but harmless;
+the doubled `if engine == "local"` in `cmd_run` is trivially
+mergeable but clear; new tests (`TestUnhashableChoiceHolds`,
+`TestBoolLevelNormalization`, incl. the YAML round-trip) assert
+directly on return values with no flaky patterns._
+
+_Reviewed: 2026-10-12T07:34:08Z (re-review; full review 2026-10-12T07:01:22Z)_
+_Reviewer: gsd-code-reviewer (generic-agent workaround — typed gsd-code-reviewer dispatch unavailable in this runtime)_
+_Depth: standard_
