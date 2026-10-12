@@ -755,6 +755,7 @@ def _route_side_spawn(
                 model_confidence=pick.model_confidence,
                 effort_confidence=pick.effort_confidence,
                 tie_break=pick.tie_break,
+                truncated=routing_mod.TRUNCATION_MARKER in detail,
                 prev_model=current_model,
                 ask=question,
                 side=True,
@@ -1583,6 +1584,7 @@ def _route_pre_turn(
                 model_confidence=pick.model_confidence,
                 effort_confidence=pick.effort_confidence,
                 tie_break=pick.tie_break,
+                truncated=routing_mod.TRUNCATION_MARKER in detail,
                 prev_model=prev_model,
                 ask=ask_text,
             )

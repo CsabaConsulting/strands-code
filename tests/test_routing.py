@@ -12,8 +12,10 @@ import urllib.error
 import pytest
 
 from strands_code_cli.routing import (
+    DECISION_BODY_MAX_BYTES,
     OLLAMA_DEFAULT_HOST,
     OPENROUTER_DECISIONS_URL,
+    TRUNCATION_MARKER,
     EngineResult,
     RoutingCandidate,
     RoutingEngine,
@@ -21,6 +23,7 @@ from strands_code_cli.routing import (
     RoutingState,
     RoutingStrategy,
     _ENGINE_REGISTRY,
+    _fit_decision_payload,
     build_decision_state,
     build_effort_question,
     build_model_question,
@@ -463,6 +466,56 @@ class TestGateModel:
 def _route_payload(choice=HAIKU, probs=None, **usage) -> dict:
     table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
     return _decision_payload(_answer(choice, table), **usage)
+
+
+class TestBodyBound:
+    def _payload(self, ask: str, criteria: str = "short") -> dict:
+        return {
+            "model": "m",
+            "state": {"ask": ask, "directives": "d", "side": False},
+            "questions": {
+                "pick_model": {
+                    "type": "choice",
+                    "instructions": "pick one",
+                    "criteria": {"a/1": criteria},
+                }
+            },
+        }
+
+    def test_fit_passes_small_payload_through_untouched(self):
+        payload = self._payload("hi")
+        fitted, truncated = _fit_decision_payload(payload)
+        assert truncated is False
+        assert fitted is payload  # no copy when nothing shrinks
+
+    def test_fit_shrinks_only_the_ask(self):
+        payload = self._payload("x" * 200_000)
+        fitted, truncated = _fit_decision_payload(payload)
+        assert truncated is True
+        assert len(json.dumps(fitted).encode("utf-8")) <= DECISION_BODY_MAX_BYTES
+        assert fitted["state"]["ask"] != ""  # absorbed, not emptied
+        assert len(fitted["state"]["ask"]) < 200_000
+        assert fitted["state"]["directives"] == "d"  # only the ask moves
+        assert fitted["questions"]["pick_model"]["criteria"] == {"a/1": "short"}
+        assert payload["state"]["ask"] == "x" * 200_000  # input never mutates
+
+    def test_fit_with_empty_ask_reports_no_shrink(self):
+        payload = self._payload("", criteria="c" * 70_000)
+        fitted, truncated = _fit_decision_payload(payload)
+        assert truncated is False  # nothing left to tighten
+        assert fitted is payload
+
+    def test_fit_handles_multibyte_ask(self):
+        payload = self._payload("é" * 40_000)  # 80 KiB on the wire
+        fitted, truncated = _fit_decision_payload(payload)
+        assert truncated is True
+        assert len(json.dumps(fitted).encode("utf-8")) <= DECISION_BODY_MAX_BYTES
+
+    def test_fit_ignores_missing_state(self):
+        payload = {"model": "m", "blob": "x" * 70_000}
+        fitted, truncated = _fit_decision_payload(payload)
+        assert truncated is False
+        assert fitted is payload
 
 
 class TestEngineChain:
@@ -1149,6 +1202,88 @@ class TestEngineChain:
         assert detail == "local unreachable"
         assert not detail.startswith("paused:")
 
+    def test_oversized_ask_posts_truncated_body(self, monkeypatch):
+        import urllib.request
+
+        bodies: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            bodies.append(request.data)
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        state = {"ask": "x" * 200_000, "directives": "", "side": False}
+        result = decide_via_openrouter(
+            decision_model="m", state=state, questions={"pick_model": {}}
+        )
+        assert result.answers is not None
+        assert result.truncated is True
+        assert len(bodies) == 1
+        assert len(bodies[0]) <= DECISION_BODY_MAX_BYTES  # never sent to 413
+        sent = json.loads(bodies[0].decode("utf-8"))
+        assert sent["state"]["ask"] != ""  # tightened, not dropped
+
+    def test_normal_body_reports_no_truncation(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        result = decide_via_openrouter(
+            decision_model="m",
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions={"pick_model": {}},
+        )
+        assert result.answers is not None
+        assert result.truncated is False
+
+    def test_oversized_criteria_routes_with_marker(self, monkeypatch):
+        import urllib.request
+
+        posts: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(json.loads(request.data.decode("utf-8")))
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(
+                    id=HAIKU,
+                    levels=["low", "high"],
+                    criteria="c" * 70_000,
+                ),
+                RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
+            ]
+        )
+        pick, engine, _, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "openrouter"
+        assert detail == TRUNCATION_MARKER  # flagged once, never doubled
+        assert posts[0]["state"]["ask"] == ""  # ask fully absorbed first
+
+    def test_normal_ask_routes_without_marker(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None
+        assert detail == ""
+        assert TRUNCATION_MARKER not in detail
+
 
 class TestLocalEngine:
     @pytest.fixture(autouse=True)
@@ -1726,6 +1861,25 @@ class TestLocalEngine:
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         assert local_engine_ready("", "nimble") is False
         assert local_engine_ready(OLLAMA_DEFAULT_HOST, "") is False
+
+    def test_ollama_transport_truncates_to_cap(self, monkeypatch):
+        import urllib.request
+
+        bodies: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            bodies.append(request.data)
+            return _FakeResponse(self._local_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        state = {"ask": "x" * 200_000, "directives": "", "side": False}
+        result = decide_via_ollama(
+            local_model="nimble", state=state, questions={"pick_model": {}}
+        )
+        assert result.answers is not None
+        assert result.truncated is True
+        assert len(bodies) == 1
+        assert len(bodies[0]) <= DECISION_BODY_MAX_BYTES  # local cap honored
 
 
 class TestRoutedEffort:

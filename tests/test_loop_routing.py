@@ -418,6 +418,47 @@ class TestPreTurnHook:
         assert routing.is_paused() is False
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
+    def test_routed_line_carries_truncation_marker(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import dataclasses
+
+        events: list = []
+        shrunk = dataclasses.replace(_table_result(HAIKU), truncated=True)
+        served, _ = _hook(tmp_path, monkeypatch, _strategy(), shrunk, events)
+        assert served == HAIKU
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the line
+        assert len(_routed_lines(out)) == 1
+        assert routing_mod.TRUNCATION_MARKER in flat
+
+    def test_hold_line_carries_truncation_marker(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        events: list = []
+        served, _ = _hook(
+            tmp_path,
+            monkeypatch,
+            _strategy(),
+            EngineResult(answers=None, error="HTTP 400", truncated=True),
+            events,
+        )
+        assert served == NOVA_MICRO
+        out = capsys.readouterr().out
+        flat = " ".join(out.split())  # console width may wrap the note
+        assert "openrouter 400" in flat
+        assert routing_mod.TRUNCATION_MARKER in flat
+
+    def test_normal_routed_line_has_no_marker(self, tmp_path, monkeypatch, capsys):
+        events: list = []
+        served, _ = _hook(
+            tmp_path, monkeypatch, _strategy(), _table_result(HAIKU), events
+        )
+        assert served == HAIKU
+        out = capsys.readouterr().out
+        assert len(_routed_lines(out)) == 1
+        assert "truncated" not in out
+
     def test_rejected_effort_holds_current_byte_identical(
         self, tmp_path, monkeypatch, capsys
     ):

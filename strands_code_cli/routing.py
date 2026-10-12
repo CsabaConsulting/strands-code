@@ -79,6 +79,12 @@ OLLAMA_KEEP_ALIVE = "5m"
 OLLAMA_PREFLIGHT_TIMEOUT_SECONDS = 5
 """Per-GET ceiling for daemon preflight; the chain runs two per ask."""
 
+DECISION_BODY_MAX_BYTES = 64 * 1024
+"""Serialized decision-payload ceiling (the Ollama 64 KiB frame)."""
+
+TRUNCATION_MARKER = "ask truncated to fit the decision cap"
+"""Verdict-detail flag the hooks render as the truncation marker."""
+
 _TOP_LEVEL_KEYS = {
     "candidates",
     "directives",
@@ -781,6 +787,11 @@ def validate_strategy(
         lines.append("note: directives is not a string (the loader ignores it)")
     elif directives.strip():
         lines.append(f"directives: present ({len(directives)} chars)")
+        if len(directives) > 4096:
+            lines.append(
+                "warning: directives exceed ~4K chars — they ride every "
+                "decision call twice, so trim for cost and accuracy"
+            )
     else:
         lines.append("note: no directives — the decider picks without guidance")
     return ValidationReport(valid=valid, source=source, lines=lines)
@@ -896,6 +907,8 @@ class EngineResult:
     failure class (``unready`` for a skipped local link, HTTP and
     transport classes otherwise); None means no information, which
     the verdict renders as the legacy ``<engine> failed`` detail.
+    ``truncated`` reports that the transport shrank the ask to fit
+    the body cap; the verdict carries the marker on its detail.
     """
 
     answers: dict[str, Any] | None
@@ -904,6 +917,7 @@ class EngineResult:
     cost: float | None = None
     model: str | None = None
     error: str | None = None
+    truncated: bool = False
 
 
 def _count(value: object) -> int:
@@ -989,6 +1003,43 @@ def _failure_reason(exc: BaseException) -> str:
     return "error"
 
 
+def _fit_decision_payload(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Shrink state.ask until the serialized body fits the 64 KiB cap.
+
+    Returns the (possibly copied) payload plus whether the ask
+    shrank. Only the ask tightens — directives and criteria ride as
+    built; when the ask alone cannot absorb the overshoot the
+    shrunken body still ships and the server judges (an Ollama 413
+    holds with the engine-plus-code detail).
+    """
+    body = json.dumps(payload).encode("utf-8")
+    if len(body) <= DECISION_BODY_MAX_BYTES:
+        return payload, False
+    state = payload.get("state")
+    if not isinstance(state, dict):
+        return payload, False
+    ask = state.get("ask")
+    if not isinstance(ask, str) or not ask:
+        return payload, False
+    over = len(body) - DECISION_BODY_MAX_BYTES
+    ask = ask[: max(0, len(ask) - over - 16)]
+    shrunk = dict(payload)
+    shrunk["state"] = {**state, "ask": ask}
+    while ask and len(json.dumps(shrunk).encode("utf-8")) > DECISION_BODY_MAX_BYTES:
+        ask = ask[: len(ask) // 2]
+        shrunk["state"] = {**state, "ask": ask}
+    return shrunk, True
+
+
+def _with_truncation(detail: str, truncated: bool) -> str:
+    """Append the truncation marker once when the payload shrank."""
+    if not truncated or TRUNCATION_MARKER in detail:
+        return detail
+    return f"{detail}; {TRUNCATION_MARKER}" if detail else TRUNCATION_MARKER
+
+
 def _post_decision(
     url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -1038,9 +1089,12 @@ def decide_via_openrouter(
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key or not decision_model:
         return EngineResult(answers=None)
+    payload, truncated = _fit_decision_payload(
+        {"model": decision_model, "state": state, "questions": questions}
+    )
     data, error = _post_decision(
         OPENROUTER_DECISIONS_URL,
-        {"model": decision_model, "state": state, "questions": questions},
+        payload,
         {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -1049,10 +1103,12 @@ def decide_via_openrouter(
         timeout,
     )
     if data is None:
-        return EngineResult(answers=None, error=error)
+        return EngineResult(answers=None, error=error, truncated=truncated)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(answers=None, error="invalid body")
+        return EngineResult(
+            answers=None, error="invalid body", truncated=truncated
+        )
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1063,6 +1119,7 @@ def decide_via_openrouter(
         output_tokens=_count(usage.get("output_tokens")),
         cost=_cost(usage.get("cost")),
         model=model if isinstance(model, str) else None,
+        truncated=truncated,
     )
 
 
@@ -1179,22 +1236,27 @@ def decide_via_ollama(
     base = _ollama_base(local_base_url)
     if not _valid_base_url(base):
         return EngineResult(answers=None)
-    data, error = _post_decision(
-        f"{base.rstrip('/')}/v1/systemone",
+    payload, truncated = _fit_decision_payload(
         {
             "model": local_model,
             "state": state,
             "questions": questions,
             "keep_alive": OLLAMA_KEEP_ALIVE,
-        },
+        }
+    )
+    data, error = _post_decision(
+        f"{base.rstrip('/')}/v1/systemone",
+        payload,
         _ollama_headers(base),
         timeout,
     )
     if data is None:
-        return EngineResult(answers=None, error=error)
+        return EngineResult(answers=None, error=error, truncated=truncated)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(answers=None, error="invalid body")
+        return EngineResult(
+            answers=None, error="invalid body", truncated=truncated
+        )
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1205,6 +1267,7 @@ def decide_via_ollama(
         output_tokens=_count(usage.get("output_tokens")),
         cost=None,
         model=model if isinstance(model, str) else None,
+        truncated=truncated,
     )
 
 
@@ -1457,17 +1520,18 @@ def _decide_effort(
     candidate: RoutingCandidate,
     state: dict[str, Any],
     chain: list[tuple[str, EngineAttempt]],
-) -> tuple[str | None, float | None, tuple[int, int, float | None], str, str]:
+) -> tuple[str | None, float | None, tuple[int, int, float | None], str, str, bool]:
     """Second sequential choice over the picked levels (D-15).
 
     Runs the pick_effort question through the same engine chain on
     the same state — never parallel with call 1, whose answer scopes
     the criteria. Returns ``(effort, confidence, usage, engine,
-    detail)`` with the top choice taken ungated (a weak effort read
-    still routes, D-16); a None effort holds the ask, since a failed
-    or unparseable effort read carries no level to route. The detail
-    mirrors call 1 (engine plus cause, pause when every link went
-    down at connection level).
+    detail, truncated)`` with the top choice taken ungated (a weak
+    effort read still routes, D-16); a None effort holds the ask,
+    since a failed or unparseable effort read carries no level to
+    route. The detail mirrors call 1 (engine plus cause, pause when
+    every link went down at connection level); ``truncated`` ORs
+    every attempted call so the verdict flags a shrunken payload.
     """
     questions = {
         "pick_effort": build_effort_question(
@@ -1478,6 +1542,7 @@ def _decide_effort(
     detail = f"{failed} failed"
     down: list[str] = []
     informative = False
+    truncated = False
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -1485,6 +1550,7 @@ def _decide_effort(
             result = None
         if result is None:
             continue  # skipped link: unconfigured, never attempted
+        truncated = truncated or result.truncated
         if result.answers is None:
             failed, detail = name, _link_detail(name, result.error)
             if result.error in _CONNECTION_ERRORS:
@@ -1511,10 +1577,11 @@ def _decide_effort(
             (result.input_tokens, result.output_tokens, result.cost),
             name,
             "",
+            truncated,
         )
     if down and not informative:
-        return (None, None, (0, 0, None), down[-1], _pause_detail(down))
-    return (None, None, (0, 0, None), failed, detail)
+        return (None, None, (0, 0, None), down[-1], _pause_detail(down), truncated)
+    return (None, None, (0, 0, None), failed, detail, truncated)
 
 
 def decide(
@@ -1536,7 +1603,8 @@ def decide(
     call; each engine retries at most once on retryable failures
     only. Connection-level failure on every attempted link pauses
     routing for the ask with a distinct pause detail (D-09); other
-    holds name engine plus cause.
+    holds name engine plus cause. When either call shrank the ask to
+    fit the body cap, the detail carries the truncation marker.
 
     A below-threshold table holds immediately without trying the next
     engine: the ask itself is ambiguous, so the retry happens next
@@ -1596,11 +1664,21 @@ def decide(
         if not chain:
             primary = strategy.engine.primary or "openrouter"
             return (None, primary, (0, 0, None), f"{primary} failed")
-        effort, effort_confidence, usage, name, effort_detail = _decide_effort(
-            strategy, only, state, chain
-        )
+        (
+            effort,
+            effort_confidence,
+            usage,
+            name,
+            effort_detail,
+            effort_truncated,
+        ) = _decide_effort(strategy, only, state, chain)
         if effort is None:
-            return (None, name, (0, 0, None), effort_detail)
+            return (
+                None,
+                name,
+                (0, 0, None),
+                _with_truncation(effort_detail, effort_truncated),
+            )
         fast = RoutingPick(
             model=only.id,
             effort=effort,
@@ -1615,9 +1693,17 @@ def decide(
                 None,
                 name,
                 (0, 0, None),
-                f"effort {effort!r} unsupported by {only.id}",
+                _with_truncation(
+                    f"effort {effort!r} unsupported by {only.id}",
+                    effort_truncated,
+                ),
             )
-        return (fast, name, usage, "")
+        return (
+            fast,
+            name,
+            usage,
+            _with_truncation("", effort_truncated),
+        )
     state = build_decision_state(
         ask=ask, directives=strategy.directives, side=side
     )
@@ -1634,6 +1720,7 @@ def decide(
     detail = f"{failed} failed"
     down: list[str] = []
     informative = False
+    truncated_any = False
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -1641,6 +1728,7 @@ def decide(
             result = None
         if result is None:
             continue  # skipped link: unconfigured, never attempted
+        truncated_any = truncated_any or result.truncated
         if result.answers is None:
             failed, detail = name, _link_detail(name, result.error)
             if result.error in _CONNECTION_ERRORS:
@@ -1661,7 +1749,12 @@ def decide(
             continue
         model_id, tie_break, gate_detail = gate_model(answer, strategy)
         if model_id is None:
-            return (None, name, (0, 0, None), gate_detail)
+            return (
+                None,
+                name,
+                (0, 0, None),
+                _with_truncation(gate_detail, truncated_any),
+            )
         candidate = next(
             entry for entry in strategy.candidates if entry.id == model_id
         )
@@ -1672,6 +1765,7 @@ def decide(
                 (0, 0, None),
                 f"picked candidate {model_id} advertises no levels",
             )
+        effort_truncated = False
         if len(candidate.levels) == 1:
             # Degenerate choice: nothing to judge, and a one-option
             # question violates the 2-26 floor — the lone level rides
@@ -1679,15 +1773,22 @@ def decide(
             effort, effort_confidence = candidate.levels[0], None
             total = (result.input_tokens, result.output_tokens, result.cost)
         else:
-            effort, effort_confidence, effort_usage, effort_engine, effort_detail = (
-                _decide_effort(strategy, candidate, state, chain)
-            )
+            (
+                effort,
+                effort_confidence,
+                effort_usage,
+                effort_engine,
+                effort_detail,
+                effort_truncated,
+            ) = _decide_effort(strategy, candidate, state, chain)
             if effort is None:
                 return (
                     None,
                     effort_engine,
                     (0, 0, None),
-                    effort_detail,
+                    _with_truncation(
+                        effort_detail, truncated_any or effort_truncated
+                    ),
                 )
             total = (
                 result.input_tokens + effort_usage[0],
@@ -1701,6 +1802,7 @@ def decide(
             effort_confidence=effort_confidence,
             tie_break=tie_break,
         )
+        shrunk = truncated_any or effort_truncated
         if model_id != current_model and not validate_routed_effort(
             pick, strategy.candidates
         ):
@@ -1708,17 +1810,24 @@ def decide(
                 None,
                 name,
                 (0, 0, None),
-                f"effort {pick.effort!r} unsupported by {model_id}",
+                _with_truncation(
+                    f"effort {pick.effort!r} unsupported by {model_id}", shrunk
+                ),
             )
         return (
             pick,
             name,
             total,
-            gate_detail,
+            _with_truncation(gate_detail, shrunk),
         )
     if down and not informative:
-        return (None, down[-1], (0, 0, None), _pause_detail(down))
-    return (None, failed, (0, 0, None), detail)
+        return (
+            None,
+            down[-1],
+            (0, 0, None),
+            _with_truncation(_pause_detail(down), truncated_any),
+        )
+    return (None, failed, (0, 0, None), _with_truncation(detail, truncated_any))
 
 
 _EFFORT_NO_THINKING = ("auto", "off")
@@ -1791,6 +1900,7 @@ def format_routed_line(
     model_confidence: float | None,
     effort_confidence: float | None = None,
     tie_break: bool = False,
+    truncated: bool = False,
     prev_model: str,
     ask: str,
     side: bool = False,
@@ -1800,7 +1910,8 @@ def format_routed_line(
     Choice plus both confidences plus the code-computed ``~$/ask``
     delta, with the tie-break substitution noted on the line. Side
     asks print the ``Routed (btw)`` head so the transcript tells
-    spawn-time side picks apart from main-turn picks.
+    spawn-time side picks apart from main-turn picks. A shrunken
+    payload appends the truncation marker.
     """
     delta = route_cost_delta(model, prev_model, ask)
     head = "Routed (btw)" if side else "Routed"
@@ -1812,6 +1923,8 @@ def format_routed_line(
     )
     if tie_break:
         line += " \u00b7 tie-break (cheaper of near-tie)"
+    if truncated:
+        line += f" \u00b7 {TRUNCATION_MARKER}"
     return line
 
 

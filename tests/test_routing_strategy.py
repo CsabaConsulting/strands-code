@@ -619,6 +619,43 @@ class TestRouteValidate:
         text = report.format()
         assert "unchecked" in text and "/cost refresh" in text
 
+    def test_long_directives_validate_with_warning(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            f"directives: {'d' * 5000}\n"
+            "engine: {primary: openrouter, decision_model: cheap/decider}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True  # a warning, never a failure
+        text = report.format()
+        assert "directives: present (5000 chars)" in text
+        # Match the line content: the tmp path itself carries the
+        # test name, so a bare "warning" substring would false-hit.
+        assert "warning: directives exceed ~4K chars" in text
+
+    def test_directives_warning_boundary(self, tmp_path):
+        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+
+        def _validate_with(directives: str) -> str:
+            path = _write(
+                tmp_path / "repo.yaml",
+                "candidates: [{id: a/1}]\n"
+                f"directives: {directives}\n"
+                "engine: {primary: openrouter, decision_model: cheap/decider}\n",
+            )
+            report = validate_strategy(
+                global_path=tmp_path / "absent.yaml", repo_path=path
+            )
+            assert report.valid is True
+            return report.format()
+
+        assert "exceed ~4K chars" not in _validate_with("d" * 4096)
+        assert "exceed ~4K chars" in _validate_with("d" * 4097)
+
     def test_openrouter_prefixed_id_matches_verbatim(self, tmp_path):
         # UAT R1: openrouter/auto is a genuine catalog id — the
         # aggregator-prefix strip must not mangle it into "auto".
