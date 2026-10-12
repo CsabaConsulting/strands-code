@@ -192,20 +192,28 @@ Plans:
   2. Deterministic heuristic fallback plus manual `/model` override when the decision call fails or is disabled
   3. Routing decisions are visible (which model, why, cost impact) in the turn transcript or `/cost`
 
-**Plans**: 3/3 plans executed
+**Plans**: 0/5 plans (Decision-API rework; prior chat-JSON plans archived)
 
 Plans:
 **Wave 1**
 
-- [x] 08-01-PLAN.md — Tracer: strategy plus OpenRouter decision plus pre-turn hook plus transcript note, routed effort threading, toggle plus /model warn plus /route on/off/status
+- [ ] 08-01-PLAN.md — Tracer: Decision-API transports plus gate plus hook plus /cost entry, model-choice end to end
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [x] 08-02-PLAN.md — Local Ollama engine plus offline chain, /cost routing section plus decision spend plus quiet flag, side-ask routing
+- [ ] 08-02-PLAN.md — Effort call-2 plus fast-path rewrite plus both confidences plus side-ask parity
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [x] 08-03-PLAN.md — Guided /route setup plus docs, /route validate, single-candidate fast path plus env-gated live engine tests
+- [ ] 08-03-PLAN.md — Local preflight plus retry matrix plus offline pause plus body guards
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 08-04-PLAN.md — Split-catalog setup plus validate plus docs plus uattest r1-r4
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 08-05-PLAN.md — Probe runner plus calibration plus live engine tests
 
 ### Phase 9: CodeAct Action Interface
 
@@ -235,7 +243,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
-| 8. Model Routing with Decision Models | 3/3 | In Progress|  |
+| 8. Model Routing with Decision Models | 0/5 | In Progress|  |
 | 9. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)

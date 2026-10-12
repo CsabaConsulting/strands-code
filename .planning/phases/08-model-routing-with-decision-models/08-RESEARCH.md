@@ -1,34 +1,47 @@
-# Phase 8: Model Routing with Decision Models — Research
+# Phase 8: Model Routing with Decision Models - Research
 
 **Researched:** 2026-10-11
-**Domain:** Per-ask model + thinking-budget routing via a cheap decision model (OpenRouter API default, local-model alternative), pre-turn decision point, models-only fallback, transcript + /cost visibility
-**Confidence:** HIGH
-**Researcher note:** Typed `gsd-phase-researcher` dispatch is unavailable in this runtime; this file was produced by a generic-agent workaround following the researcher contract.
+**Domain:** Decision-model APIs (OpenRouter Decisions, Ollama System One) + per-ask model routing in a Python CLI
+**Confidence:** HIGH (every API claim verified live this session: real catalog fetch + real calls to both engines)
+**Rework note:** This overwrites the superseded chat-completions-JSON research. The phase was already implemented on chat JSON mode (`strands_code_cli/routing.py`); the revisit (D-14..D-16) replaces both engines with true Decision APIs. This document researches the NEW design and marks exactly what survives vs what gets rebuilt.
 
-<user_constraints>
+## Summary
 
-## User Constraints (Locked Decisions + Agent's Discretion + Deferred Ideas copied VERBATIM from CONTEXT.md)
+Per ask, the CLI routes to the right model and thinking budget via a cheap decision model through true Decision APIs: OpenRouter `POST /api/alpha/decisions` (default) and Ollama `POST /v1/systemone` (local alternative), with manual override kept. I verified every API claim live this session: the decision-model catalog (19 entries, no key needed), a real Jev model-choice call (200 in 0.33s, correct deep-refactor route at 0.85, cost $0.000016), a real local `tev1:0.8b` call through `/v1/systemone`, the Ollama 2–26 option cap (40 options rejected live), and Jev accepting 30 options.
+
+Two findings shape the plan most. First, the `confidence` field is vendor-specific and opaque: Ollama/tev1 matches the entropy formula `1-H/ln(N)` while Jev provably does not (it matches a normalized top-probability margin), so the D-16 threshold gate MUST compare the pick's top-1 probability, never `confidence`. Second, the binding `choice` cap is 26 (Ollama enforces 2–26 uniformly, verified live; OpenRouter caps are model-dependent), so the strategy enforces max 26 candidates code-side and the setup flow caps selection there.
+
+**Primary recommendation:** Rebuild the two engine transports on the Decision APIs with shared typed `state`+`questions` builders, gate in code on top-1 probability (threshold + tie-margin), keep all surviving scaffolding (strategy load/validate shape, chain/hold, toggle, transcript/cost plumbing, rig), and derive the `confidence_threshold`/`tie_margin` defaults from a real probe run at implementation time — never ship round-number defaults.
+
+## User Constraints (from CONTEXT.md)
+
+### Locked Decisions
 
 ### Routing scope and strategy config
 - **D-01:** Routing is auto-on only when a strategy is configured (candidate model set + directives). Without config there is not enough information to route, so routing stays off. — **Reversibility:** costly — the default posture shapes the turn loop and config surface; flipping it later changes every-turn behavior and the setup contract.
-- **D-02:** Strategy shape is candidate models plus freeform scenario directives (e.g. "trivial asks go cheap, deep refactors go big"). Candidate entries may carry model descriptors — relative size/role notes (Sol=mega / Terra=mid / Luna=small; Opus/Sonnet/Haiku tiers) — potentially with pulled compound benchmarks to help ranking.
+- **D-02:** Strategy shape is candidate models plus freeform scenario directives (e.g. "trivial asks go cheap, deep refactors go big"). Candidate entries carry user-editable criteria prose — cost words ("cheapest", "premium") plus role notes (Sol=mega / Terra=mid / Luna=small; Opus/Sonnet/Haiku tiers) — pre-computed at config time; this prose becomes the `choice` criteria. Prices, windows, and benchmarks never enter the decision call (decision models do no quantities); they stay code-side. — **Revisit 2026-10-11:** descriptors repositioned from decision-call stats to config-time criteria.
 - **D-03:** Strategy lives both globally and per workspace; repo wins on conflict (Phase 3 D-08 policy precedence).
 - **D-04:** Main turns and `/btw` side questions both route through the same strategy; side asks are flagged as side so directives can discriminate (closes the Phase 7 D-07 revisit).
-- **D-05:** Thinking-level routing within thinking-capable models is in scope: the router picks a thinking level automatically, not just the model.
+- **D-05:** Thinking-level routing within thinking-capable models is in scope: the router picks a thinking level automatically via a second sequential `choice` over the picked model's advertised levels — not just the model. Single-candidate strategies skip the model call but still ask the effort question.
 
 ### Decision engine and fallback
-- **D-06:** OpenRouter's decision-model API is the default decision engine until Bedrock offers decision models; local models are supported as the alternative. Setup enumerates OpenRouter's open-model selection for user choice (Laya/Kev are candidates within it, not the whole menu).
-- **D-07:** Directives plus candidate stats feed every decision call, API or local. Directives shape all decisions; they never sit idle while the model decides without them.
-- **D-08:** Fallback chain is models-only: decision API → local model → pause and hold the current model, retrying next ask. No heuristic ever picks a model. Roadmap SC2's "deterministic heuristic fallback" is satisfied by deterministic hold-current (a fixed rule, not a heuristic pick) — planner/researcher note this reinterpretation.
+- **D-06:** True Decision APIs are the engines: OpenRouter `/api/alpha/decisions` is the default until Bedrock offers decision models; Ollama `/v1/systemone` is the local alternative (requires Ollama ≥0.35 and a decision-capable pull such as tev1/nimble/clef). Generic chat LLMs in JSON mode are NOT decision engines. Setup enumerates chat models for routing candidates and `output_modalities=decisions` models for the decision pick, separately.
+- **D-07:** Directives feed every decision call twice — once in `state` as data, once shaping the question instructions. Candidate stats (prices, windows, benchmarks) do NOT feed the call; directives shape all decisions, and they never sit idle while the model decides without them.
+- **D-08:** Fallback chain is models-only: decision API → local model → pause and hold the current model, retrying next ask. Below-confidence-threshold picks also hold and retry (D-16). No heuristic ever picks a model. Roadmap SC2's "deterministic heuristic fallback" is satisfied by deterministic hold-current (a fixed rule, not a heuristic pick) — planner/researcher note this reinterpretation.
 - **D-09:** Fully offline behavior is local decision model if configured, otherwise routing pauses and the current model is used (AWS-optional posture holds: no network, no API, no guessing).
 
 ### Override and visibility
 - **D-10:** Routing has a session-sticky toggle (Phase 4/6 precedent). `/model` re-points immediately but warns the switch turns routing off and offers cancel to keep routing; a slash command turns routing back on. More routing slash commands are expected (planner scopes them).
 - **D-11:** Routed switches are silent plus a transcript note; model choice never raises an approval prompt. Deny-first stays for tool side effects, not for routing.
-- **D-12:** Every routed ask gets one transcript line (model, why, cost impact), suppressible via config to cut noise; `/cost` carries the fuller routing detail.
+- **D-12:** Every routed ask gets one transcript line — choice plus BOTH confidences (model + effort) inline plus the code-computed `~$/ask` delta — suppressible via config to cut noise; `/cost` carries a compact entry (choice, confidences, decision spend) with the full probability table in verbose/debug only. Code tie-break substitutions are noted on the line. There is no free-text `why` (decision APIs return probabilities, not prose).
 
 ### Strategy setup
 - **D-13:** Guided setup flow creates the strategy (enumerate OpenRouter models, capture directives). Example strategies ship in the docs, manual file edits are allowed, and a slash command validates the configuration's validity.
+
+### Decision-API rework (revisit 2026-10-11)
+- **D-14:** Cost-awareness is a mash-up: cost words ride in the criteria prose (D-02), AND code substitutes the cheaper candidate when the top two probabilities fall within a `tie_margin` strategy knob (ships with a reasonable default; almanac prices decide "cheaper").
+- **D-15:** Each routed ask makes up to two sequential decision calls — model `choice` first, then effort `choice` over only the picked model's levels. Single-candidate strategies skip call one but still ask call two.
+- **D-16:** A `confidence_threshold` strategy knob (ships with a default) gates routing: a model pick below it holds current and retries next ask with its own distinct note (`Routing held (confidence 41% < 70%)`). Only the model confidence gates; a weak effort read still routes.
 
 ### the agent's Discretion
 - Routing slash command names and subcommand shapes (toggle on/off, setup, validate, status).
@@ -37,476 +50,510 @@
 - Hold-current retry/notify behavior (silent hold vs transcript note on failure).
 - Descriptor/benchmark schema for candidate entries (researcher confirms sources first).
 - Side-ask decision-call mechanics (per-ask call vs derived) within D-04.
+- Decision-model selection and pinning (which OpenRouter decision id ships as default; which local tag; researcher re-verifies the live catalog — never hardcode from memory).
+- Handling the `choice` 2–26 option cap against candidate scale (cap candidates, tiered pre-filter, or paged choices).
+- `tie_margin` and `confidence_threshold` default values (researcher probes real models first).
 
-### Deferred Ideas
+### Deferred Ideas (OUT OF SCOPE)
 - CodeAct action interface (Phase 9).
 - Cost budgets/enforcement (locked: display only).
 - Heuristic model-picking — rejected, not deferred: directives + models only.
 - Fully automatic routing with no override — locked out; manual switching + toggle always win.
 
-</user_constraints>
+## Phase Requirements
 
-<phase_requirements>
-
-| Req | Text | How this research covers it |
-|-----|------|-----------------------------|
-| MODEL-03 | CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override | Decision-call architecture (OpenRouter chat completions on a cheap model with a routing prompt; NOT the `openrouter/auto` turn router), candidate sourcing from strategy + almanac, thinking budget via harness `effort`, manual override via session toggle + `/model` warn-and-cancel, visibility via transcript line + `/cost` |
-
-Notes on MODEL-03 wording: "Jev/Kev/Laya class" names a *class* of cheap small models, not literal ids — live catalog verification found zero models matching `laya`, `kev`, or `jevi` substrings [VERIFIED: live `curl https://openrouter.ai/api/v1/models`, 458 models, 2026-10-11]. Setup MUST enumerate the live catalog; never hardcode these names. The roadmap's "deterministic heuristic fallback" is reinterpreted per D-08 as deterministic hold-current (fixed rule, not a heuristic pick).
-
-</phase_requirements>
-
-## Summary
-
-Phase 8 routes each ask pre-turn through a cheap decision model that returns a structured pick (candidate model + thinking level + one-line why). The decision engine is a plain OpenRouter chat-completions call on a user-chosen cheap model — there is no separate "decision-model API" product; D-06's "OpenRouter decision-model API" maps to `POST https://openrouter.ai/api/v1/chat/completions` with a routing prompt and `response_format: json_object`, plus the public `GET /models` catalog for setup enumeration. This is deliberately NOT `openrouter/auto`: the Auto Router executes the turn itself on OpenRouter infrastructure and only reveals its pick in the response `model` field, which cannot drive Bedrock-first turns, thinking-budget selection, or user directives. The local alternative is a raw-HTTP call to an Ollama daemon (`POST /api/chat` with `stream: false` and a JSON `format`), which needs no new dependency; the `ollama`, `openai`, and `litellm` Python packages are all absent from the project venv, and the codebase precedent (`live_pricing.py`) already does HTTP via stdlib `urllib`.
-
-All application seams already exist. The harness resolves thinking budgets today: `resolve_model(model, default, effort=...)` maps one `effort` value onto each provider's native fields (`additional_request_fields` on Bedrock, `params` on Anthropic-direct, `reasoning.effort` on OpenAI-family), with `EFFORT_LEVELS = ("auto", "off", "minimal", "low", "medium", "high", "xhigh", "max")`. The CLI never passes `effort` today, so the planner must thread a routed level from the decision call through the switch path (`apply_switch` → `resolve_model`) and into `/btw` side-agent rebuilds. The decision point sits in `run_loop` after `dispatch` returns `"agent"` and the plan-prefix is applied, before the retry loop calls `_invoke_agent`; the switch itself reuses `apply_model_action` (restore-then-convert, convert-when-fits, in-place swap), which keeps Phase 5's one-model-per-turn and idle-only-switches contracts intact. Fallback is models-only per D-08: decision API → local model → pause-and-hold-current with retry next ask; every layer fails soft exactly like the `live_pricing` layering precedent, and nothing in this phase may pick a model by heuristic.
-
-**Primary recommendation:** Build a `routing.py` decision-call module (stdlib `urllib` to OpenRouter chat completions with a JSON routing prompt; Ollama `/api/chat` as the local engine), a fail-soft YAML strategy file (global + repo, repo wins) holding candidates + directives + descriptor/benchmark snapshot, a pre-turn hook in `run_loop` that reuses `apply_model_action`, and visibility via one `print_plain` transcript line plus a `/cost` routing section — with zero new dependencies.
+| ID | Description | Research Support |
+|----|-------------|------------------|
+| MODEL-03 | CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override | Decision-API engine section (request/response/error shapes, pinning, caps); question-shaping; calibration method; gate logic; surviving toggle/override/switch machinery |
 
 ## Project Constraints (from AGENTS.md)
 
-Same authority as locked decisions [VERIFIED: `AGENTS.md:11-16`, read this session]:
-
-- **Tech stack:** "Python >=3.10, `uv` toolchain, Strands SDK + harness — pad the CLI, don't fork the platform". Routing pads `resolve_model`/`create_harness` seams; it must not reimplement vendor request formats.
-- **AWS posture:** "AWS-optional, never AWS-required; `agentcore` stays an optional extra with lazy imports". D-09 offline behavior (local-or-pause, no network, no guessing) is this constraint restated; the decision path must lazy-import `boto3` exactly like `fetch_bedrock_records` does.
-- **Compatibility:** "no upper pins during the experimental phase; resync upstream deliberately, not continuously". New config/schema must tolerate harness drift (e.g. `supports_thinking` import guard precedent in `model_switch.py:20-23`).
-- **No env sniffing:** "No `.env` files, no `os.environ`/`os.getenv` reads anywhere ... all tuning is constructor kwargs" [VERIFIED: `AGENTS.md:61`]. Strategy and engine choice arrive as constructor kwargs / explicit config paths. Caution: the decision engines inherently need credentials at runtime (OpenRouter key, `OLLAMA_HOST`); the harness itself reads `OLLAMA_API_KEY`/`OLLAMA_HOST` env in `_ollama`, so engine credentials follow the harness precedent (runtime-supplied, never persisted — same rule as `ProviderConfig`: "never keys" [VERIFIED: `provider_config.py:32-33`]).
-- **Naming/style:** `snake_case` modules mirroring `test_<module>.py`, no formatter/linter configured — match surrounding style by hand [VERIFIED: `AGENTS.md:86-101`].
-- **Error handling:** fail-soft read paths ("return formatted 'not found' strings ... instead of raising"), log-and-continue only for best-effort cleanup [VERIFIED: `AGENTS.md:108-116`]. The whole engine chain inherits this: decision failures yield hold-current + transcript note, never raise into the turn.
-- **Output:** "Never use `print()` in library code" for human-facing output; transcript prints go through `print_plain` (markup off) [VERIFIED: `AGENTS.md:121`, `output.py:34-42`].
+Actionable directives the planner must honor (AGENTS.md is stale — it maps `strands_code_agent/` only and says "no CLI exists" — but these survive as project posture; CONTEXT.md §Canonical References supersedes for CLI orientation):
+- Python ≥3.10, `uv` toolchain; stdlib-only HTTP via `urllib` (per phase brief; no `requests` dependency).
+- AWS-optional, never AWS-required; offline default holds (D-09).
+- No upper pins during the experimental phase.
+- `snake_case` modules/functions, `UPPER_SNAKE_CASE` constants, `PascalCase` classes; one import per line, absolute imports.
+- Fail-soft read paths (return degraded values, never raise to callers); log-and-continue for best-effort cleanup only.
+- Module `logger = logging.getLogger(__name__)` with `%s`-style args; no `print()` in library code (transcript prints live in the turn layer via `print_plain`, markup off — WR-06).
+- Why-comments only (1–2 lines); docstrings on public functions/classes.
+- Constructor-kwarg configuration, never env sniffing (exception: runtime credentials `OPENROUTER_API_KEY`/`OLLAMA_API_KEY`/`OLLAMA_HOST` read at call time inside engine functions only — established harness precedent).
+- No keys in repo; API keys header-only, never logged.
+- Reply-only router actions; prompts live in the gate/turn layer.
+- Test files mirror modules: `tests/test_<module>.py`; pytest with `integration` marker deselected by default [VERIFIED: pyproject.toml:63-67] (`markers = [...]`, `addopts = "-m 'not integration'"`).
 
 ## Architectural Responsibility Map
 
-| Piece | Owner (new or existing) | Responsibility |
-|-------|------------------------|----------------|
-| Strategy file (global + repo) | NEW `routing_strategy.py` (name at planner discretion) | Fail-soft YAML load, repo-wins merge, candidate + directive + descriptor schema, `validate` logic for the slash command |
-| Decision call | NEW `routing.py` (name at planner discretion) | Build routing prompt (directives + candidate stats table), call engine, parse strict JSON pick, record spend |
-| OpenRouter engine | `routing.py` (stdlib `urllib`) | `POST /api/v1/chat/completions` on the configured cheap decision model, `response_format` JSON, timeout + fail-soft |
-| Local engine | `routing.py` (stdlib `urllib`) | `POST {OLLAMA_HOST}/api/chat`, `stream:false`, JSON `format`; fail-soft to hold-current |
-| Setup enumeration | NEW setup flow in router/loop | `GET /models` (reuse `fetch_openrouter_models` + cache), `radio_choice` picker, directive capture |
-| Pre-turn hook | `loop.py run_loop` edit | After `"agent"` action + plan-prefix, before retry loop: decide → `apply_model_action` → transcript note |
-| Switch application | EXISTING `apply_model_action` | Restore-then-convert, convert-when-fits, in-place swap; planner threads routed `effort` through it |
-| Thinking budget | EXISTING harness `resolve_model(..., effort=)` | Effort→provider-field mapping; CLI must start passing `effort` explicitly |
-| Session toggle | `loop.py` (session-sticky holder, Phase 4/6 precedent) | Routing on/off; `/model` warn-and-cancel flips it off |
-| Slash commands | EXISTING `router.py dispatch` branches | Toggle/setup/validate/status as reply actions; USAGE_HINT extension |
-| Visibility | `print_plain` + `cost_context.py` | One transcript line per routed ask; `/cost` routing section + decision-call spend rows |
-| Side asks | `loop.py _build` closure + `btw.py` | Same strategy, flagged `side:true`; routed model passes to `build_btw_agent` via parent kwargs |
-| Candidate stats | EXISTING almanac (`live_pricing` + `cost_context` + `model_switch` verdicts) | Price/window/capability rows feeding the decision prompt |
+| Capability | Primary Tier | Secondary Tier | Rationale |
+|------------|-------------|----------------|-----------|
+| Decision-API transport (OpenRouter/Ollama POST) | CLI process (execution layer) | — | Synchronous `urllib` calls pre-turn at idle; no server component exists |
+| Strategy load/validate/setup | CLI process (composition layer) | — | File config + guided prompts; mirrors `ProviderConfig` precedent |
+| Threshold/tie-margin gating + hold-current | CLI process (execution layer) | — | Pure code on typed responses; microseconds, runs pre-turn |
+| Routing toggle + `/model` override | CLI session state (in-memory) | — | Session-sticky `RoutingState`; manual control always wins |
+| Transcript note + `/cost` entry | CLI presentation layer | — | `print_plain` + `cost_context.py`; already built, format changes only |
+| Decision judgment itself | External decision model | — | Only the probability table comes from outside; code owns everything else |
 
 ## Standard Stack
 
-No new dependencies. Every engine call goes over stdlib `urllib`, following the `live_pricing.py` precedent ("Public endpoint: per-model pricing + context_length, no key needed" [VERIFIED: `live_pricing.py:41-42`, verbatim]).
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| stdlib `urllib` + `json` + `dataclasses` | builtin (Python ≥3.10) | Decision-API POSTs, typed answers | Zero-dependency transport is the locked AI-SPEC framework decision; both engines are one JSON POST each |
+| PyYAML | 6.0.3 (locked) | Strategy file load/save | Already used by `routing.py`; fail-soft `ProviderConfig` precedent |
+| platformdirs | (locked) | Global strategy path | Already used by `routing.py` `default_global_strategy_path` |
 
-### Core (already installed — versions verified via `uv pip list` this session)
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| pytest | 9.1.1 (locked) | Hermetic gate/engine/strategy/loop tests | All phase tests; live tests behind `integration` marker |
+| tmux + `scripts/uattest/driver.py` | repo rig | Live UAT scenarios r1–r4 | Real latency/rendering/engine round-trips hermetic tests cannot cover |
+| promptfoo | latest (CLI global) | Probe-set question regression in CI | Per AI-SPEC §5: wraps the labeled probe set, diffs verdicts per decision-model pin |
 
-| Package | Installed | Role in this phase |
-|---------|-----------|--------------------|
-| `strands-harness` | 0.1.2 | `resolve_model(..., effort=)` thinking-budget mapping; `create_harness(model=, effort=)` factory; `supports_thinking` verdicts |
-| `strands-agents` | 1.58.1 | `Model`/`ModelRouter` types (ModelRouter considered and REJECTED — see Architecture Patterns) |
-| `pyyaml` | 6.0.3 | Strategy file parse/dump (same as `ProviderConfig` / `model_capabilities`) |
-| `platformdirs` | 4.12.3 | Global strategy path (`user_config_dir("strands-code")` precedent) |
-| `prompt-toolkit` | 3.0.53 | `radio_choice` guided setup picker (owned-keys control) |
-| `rich` | 15.0.0 | `print_plain` transcript notes |
-| `boto3` | 1.43.109 (optional `agentcore` extra) | Lazy-only Bedrock candidate discovery reuse; never imported at module top |
-| Python | 3.14.8 (`python3 --version`); classifiers cover 3.10–3.13 | `X \| None` syntax OK (repo already uses it) |
-| `uv` | 0.12.23 | Toolchain |
+No new runtime dependency is added. No provider SDK (OpenAI/Anthropic/TypeSafe) — all lack Decision-API coverage or add lock-in for one POST call [CITED: https://openrouter.ai/skills/openrouter-decisions].
 
-### Supporting (no install; runtime services / stdlib)
+**Package Legitimacy Audit:** skipped — this phase installs zero packages (stdlib + locked deps only).
 
-| Piece | Source | Role |
-|-------|--------|------|
-| stdlib `urllib` + `json` | Python stdlib | OpenRouter chat completions + `/models`; Ollama `/api/chat` + `/api/tags`. Precedent: `fetch_openrouter_models` uses `urllib.request.Request(... headers={"User-Agent": "strands-code"})` with `FETCH_TIMEOUT_SECONDS = 15` [VERIFIED: `live_pricing.py:32-33,366-379`] |
-| Ollama daemon | `/usr/local/bin/ollama` installed, daemon NOT running [VERIFIED: `ollama list` → "could not connect to ollama app, is it running?"] | Local decision engine host (`http://127.0.0.1:11434` default) |
-| OpenRouter API | Network reachable, `/models` HTTP 200, 458 models [VERIFIED: live curl] | Default decision engine transport + setup catalog |
-
-### Alternatives (considered, not recommended)
-
-| Alternative | Verdict |
-|-------------|---------|
-| `openrouter/auto` as the decision engine | REJECTED: it executes the turn on OpenRouter's pool and only reveals its pick in the response `model` field — it cannot route Bedrock-first turns, cannot pick thinking budgets, and takes no freeform directives. Its `allowed_models`/`cost_tier` plugin settings are request-scoped turn config, not a decision API [CITED: https://openrouter.ai/docs/features/model-routing]. |
-| `strands.models.ModelRouter` with a custom `RoutingStrategy` | REJECTED: strategies are async (`strategy must implement RoutingStrategy: an async select(context) method` [VERIFIED: harness-adjacent `strands 1.58.1` source via `inspect.getsource` this session]), switching happens mid-invocation on failure (violates Phase 5 D-01 one-model-per-turn / idle-only), and it hides decisions from the transcript contract. Pre-turn `apply_model_action` reuse is strictly simpler. |
-| Bedrock Intelligent Prompt Routing as the engine | REJECTED for now (this is the "until Bedrock offers decision models" future): it routes between two models inside one family via a Bedrock-managed small LM [CITED: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html], which cannot express cross-provider candidate sets, freeform directives, or thinking-level routing. Revisit when Bedrock ships a general decision API. |
-| `ollama` / `openai` / `litellm` Python packages | REJECTED: none installed (`ModuleNotFoundError` on all three [VERIFIED this session]); raw HTTP covers both engines with zero new deps. |
-| llama.cpp server (`llama-server`) | VIABLE fallback local engine: OpenAI-compatible `/v1/chat/completions`, reachable by the same `urllib` POST as OpenRouter with a different base URL [ASSUMED — standard llama.cpp server behavior, not probed here; binary presence not checked]. Recommend supporting it as a base-URL variant of the local engine, not a third engine. |
-| Bedrock-hosted cheap models (Haiku, Nova micro/lite) as decision model | VIABLE alternative engine transport: same routing prompt via Bedrock Converse on e.g. `nova-micro` ($0.035/$0.14 per 1M [VERIFIED: `cost_context.py:37-38`, verbatim rows]). Recommend as a documented strategy option (engine: bedrock + decision model id), reusing `model_summarize`'s direct-`generate` precedent [VERIFIED: `cost_context.py:412-440`]. Costs AWS calls but needs no new key. |
-
-## Package Legitimacy Audit
-
-No new packages are recommended, so no `package-legitimacy` check is required. Audit statement: the decision engines are reached over stdlib `urllib` (OpenRouter HTTPS, Ollama/llama.cpp localhost HTTP) and the harness `resolve_model` seam — the Standard Stack above contains only packages already in `pyproject.toml` / the lockfile. IF the planner later adds an optional local-engine package (e.g. `ollama` PyPI client), that plan MUST run `node /home/csaba/.codex/gsd-core/bin/gsd-tools.cjs query package-legitimacy check --ecosystem pypi ollama` and gate on the verdict before merging.
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| stdlib `urllib` | `requests` / OpenRouter SDK | New dependency for one POST; SDK Decisions path needs `serverURL` override and still lacks Ollama — use `urllib` |
+| Typed dicts + explicit checks | Pydantic models | Pydantic is NOT in the dependency closure; do not add it for one response shape — dataclasses + explicit checks |
 
 ## Architecture Patterns
 
-### Decision flow (per ask, pre-turn)
+### System Architecture Diagram
 
 ```text
-idle prompt → user text → dispatch → "agent"
-    │
-    ▼
-routing enabled? (strategy configured AND session toggle on)
-    │ no → current model, no note (routing stays off per D-01)
-    │ yes
-    ▼
-build decision prompt: directives + candidate table
-(price/window/benchmark/tier from almanac) + ask text (+ side flag)
-    │
-    ▼
-engine chain (fail-soft, first success wins):
-    1. OpenRouter chat completions on decision model → JSON pick
-    2. local model (Ollama /api/chat) → JSON pick
-    3. hold current model (deterministic fallback, D-08)
-    │
-    ▼
-pick parses + names a strategy candidate?
-    │ no → hold current (malformed pick behaves as engine failure)
-    │ yes
-    ▼
-apply_model_action(agent, pick.model, effort=pick.level, ...)
-(reuses restore/convert/fit/swap; no-op fast path when pick == current)
-    │
-    ▼
-transcript note (print_plain, suppressible) → _invoke_agent → record spend
-(decision-call tokens recorded as routing rows in session_turns for /cost)
+                    ┌──────────────── strategy.yaml ────────────────┐
+                    │ candidates + criteria prose + directives      │
+                    │ + tie_margin + confidence_threshold + pins   │
+                    └──────────────┬────────────────┬───────────────┘
+                    global (platformdirs)    repo (./.agent, wins whole-file)
+                                   ▼
+User ask ──► pre-turn @ idle ──► load_strategy ──► toggle on? ──► manual /model pin?
+ (loop.py)        (D-01)              │                │ no            │ yes
+                                     │                ▼               ▼
+                                     │           serve current   serve pinned
+                                     │           (no line)       (no routing line)
+                                     ▼ yes / configured
+                          ┌───── Call 1: model choice ─────┐
+                          │ state={ask,directives,side}    │
+                          │ questions={pick_model: choice} │
+                          │ criteria=candidate prose (D-02)│
+                          │ (SKIP if 1 candidate — D-15)   │
+                          └──────────────┬─────────────────┘
+                          OpenRouter /api/alpha/decisions ──► 4xx/schema-fail ──► HOLD
+                                     │ retryable fail (1 retry)
+                                     ▼
+                          Ollama /v1/systemone ──► fail ──► HOLD current (D-08)
+                                     │ table
+                                     ▼
+                    ┌── gate_model (code, D-14/D-16) ──┐
+                    │ top1 < threshold → HOLD + note   │
+                    │ top1−top2 ≤ margin → cheaper     │
+                    │ (almanac decides cheaper)        │
+                    └──────────────┬──────────────────┘
+                                   ▼ pick
+                          ┌───── Call 2: effort choice ─────┐
+                          │ same state; criteria = picked    │
+                          │ model's advertised levels only  │
+                          │ (same engine chain; weak read    │
+                          │ still routes — D-16)             │
+                          └──────────────┬──────────────────┘
+                                         ▼
+                    validate_routed_effort ──► fail HOLD (survives)
+                                         ▼
+                    apply switch + transcript line (choice +
+                    BOTH confidences + ~$/ask delta) + /cost entry
 ```
 
-### Project structure (recommended; planner owns final names)
+Data flows one way: strategy + ask → up to two sequential decision calls (never parallel — call 2's options depend on call 1's answer [CITED: https://openrouter.ai/skills/openrouter-decisions]) → code gate → switch machinery → transcript/cost surfaces.
+
+### Recommended Project Structure
+
+Keep the single-module shape — do NOT split into a `routing/` package. `routing.py` (1231 lines) already owns strategy/load/validate/engines/hook; the rework swaps function bodies inside it. New code adds two small pure sections, not new files:
 
 ```text
 strands_code_cli/
-  routing.py            # NEW: decision prompt builder, engine calls, pick parser, spend record
-  routing_strategy.py   # NEW (or fold into routing.py): strategy file load/merge/validate
-  loop.py               # EDIT: session toggle holder, pre-turn hook, /model warn path
-  router.py             # EDIT: routing slash branches (reply actions) + USAGE_HINT
-  cost_context.py       # EDIT: /cost routing section + decision-call spend
-  model_switch.py       # EDIT: thread effort through apply_switch (effort kwarg → resolve_model)
-  live_pricing.py       # REUSE: fetch_openrouter_models/_store_openrouter/cache for setup catalog
-  main.py               # REUSE: build_agent kwargs stash carries routed effort to /btw rebuilds
+├── routing.py            # EXTEND: Decision-API engines + gate + question builders
+│   ├── (survives) load/save/validate strategy, RoutingState, cost delta, toggle
+│   ├── (rebuild) decide_via_openrouter/decide_via_ollama transports
+│   ├── (rebuild) build_routing_prompt → build_decision_state + model/effort questions
+│   ├── (rebuild) parse_pick → validate_choice_answer + gate_model (threshold/tie)
+│   └── (new) probe runner for calibration (or scripts/ — planner decides)
+├── router.py             # EXTEND: setup enumerates chat + decisions catalogs separately
+├── loop.py               # TOUCH: hook reads new decide() verdict incl. confidences
+├── cost_context.py       # TOUCH: routing entry adds decision spend (usage.cost) + confidences
+└── btw.py                # TOUCH: side-spawn verdict shape (same as main)
 tests/
-  test_routing.py            # NEW: prompt build, pick parse, chain order, hold-current
-  test_routing_strategy.py   # NEW: fail-soft load, repo-wins merge, validate
-  test_loop_routing.py       # NEW (or extend test_loop_cancel.py): pre-turn hook, toggle, /model warn
+├── test_routing.py             # EXTEND: gate math, answer validation, transports (stubbed)
+├── test_routing_strategy.py    # EXTEND: new knobs/criteria keys, 26-cap validation
+└── test_loop_routing.py        # EXTEND: two-call flow, hold-note variants, transcript lines
 ```
 
-### Patterns to follow
+### Pattern 1: Thin typed Decision-API client (shared shape, two base URLs)
+**What:** One `decide()` helper POSTs `{model, state, questions}` and returns the parsed dict; engine functions differ only in base URL, auth, and usage mapping.
+**When to use:** Both engines — the request/response shapes are identical by design [VERIFIED: live probes both engines this session].
+**Example:**
+```python
+# Source: live probe 2026-10-11 (OpenRouter 200 in 0.33s; Ollama 200 local)
+def decide(model, state, questions, *, base_url, api_key=None, timeout_s, keep_alive=None):
+    payload = {"model": model, "state": state, "questions": questions}
+    if keep_alive:  # Ollama only
+        payload["keep_alive"] = keep_alive
+    req = urllib.request.Request(base_url, data=json.dumps(payload).encode(),
+                                 method="POST", headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        return json.loads(resp.read().decode())  # {model, answers, usage, id?, provider?}
+```
 
-1. **Fail-soft layering** — "Nothing here ever raises to a caller: any failure ... yields None and the next layer is tried" [VERIFIED: `live_pricing.py:14-16`, verbatim]. The engine chain (API → local → hold) and strategy load both inherit this exactly, including the TTL + 10-minute in-process cooldown shape (`CACHE_TTL_SECONDS`, `_COOLDOWN_SECONDS`, `_note_failure` [VERIFIED: `live_pricing.py:29-36,82-83`]).
-2. **Reply-only router actions** — new slashes return `("reply", message)` or `("model", selection)`; "the router never swaps inline" [VERIFIED: `router.py:132-133`, verbatim]. Dispatch contract: "`(action, message)` where action is `"agent"` ..., `"exit"` ..., `"reply"` ..., or `"model"`" [VERIFIED: `router.py:158-163`, verbatim].
-3. **Loop owns session-sticky state** — toggle holder lives in `run_loop` next to `ModeState`/`MemoryModeState` (Phase 4/6 precedent); disk only via config file when explicitly decided.
-4. **Constructor-kwarg configuration, never env sniffing** — engine choice and strategy paths are explicit config; only runtime credentials follow harness env precedent and are never persisted.
-5. **Transcript-first UX** — "silent actions still log visibly"; every routed ask gets one `print_plain` line (markup off, style kwarg) [VERIFIED: `output.py:34-42`].
-6. **Switch-first resolve** — "resolve raises before any history mutation, so a bad selection leaves the session (model AND messages) untouched" [VERIFIED: `loop.py:1095-1096`, verbatim]. The routed pick resolves (model + effort validation) before `convert_history` runs.
-7. **Warn-and-skip config** — "malformed entries warn and skip — a typo here must never break startup or conversion" [VERIFIED: `model_capabilities.py:15-16`, verbatim]; symlink refusal precedent (`ValueError ... must not be a symlink` [VERIFIED: `provider_config.py:47-48`]).
-8. **Pair-atomic history ops + verbatim IDs** — routed switches flow through `convert_history`/`canonical_prefix_hash`, never hand-rolled JSON; "never hand-roll vendor JSON" [VERIFIED: `model_switch.py:7-8`, verbatim].
+### Pattern 2: Code-side gate on the FULL probability table
+**What:** Read `choice`, `probabilities`, `confidence` from the typed answer; threshold compares the pick's top-1 probability; tie-margin compares top1−top2; `confidence` is logged, never gated on (vendor-specific — see Pitfall 1).
+**When to use:** Every model pick (D-14/D-16); effort pick is top-choice only.
+**Example:**
+```python
+# Source: AI-SPEC §4 gate_model + live-probe calibration note (this research)
+def gate_model(table, strategy):
+    top, second = top_two(table.probabilities)
+    if table[top] < strategy.confidence_threshold:  # top-1 PROBABILITY, not .confidence
+        return HOLD(f"confidence {table[top]:.0%} < {strategy.confidence_threshold:.0%}")
+    if table[top] - table[second] <= strategy.tie_margin:
+        cheaper = min([top, second], key=almanac_price)  # almanac decides (D-14)
+        return pick(cheaper, tie_break_note=(top != cheaper))
+    return pick(top)
+```
 
-### Anti-patterns (do not do these)
+### Pattern 3: Fail-soft engine chain with HOLD as the only failure value
+**What:** Keep the existing `_chain_for` + `decide()` shape [VERIFIED: routing.py:998-1079]: primary selects links, unconfigured links skip, every failure class (transport, 4xx, schema-invalid, below-threshold) yields HOLD with a distinct note. Add max-1 retry on retryable codes only (current code never retries — behavior change).
+**When to use:** Both decision calls; call 2 uses the same chain.
 
-- **No heuristic model picking of any kind** — not length-based, not keyword-based, not "obvious trivial ask" shortcuts. "even a short ask can mean deep thinking work" (locked skepticism). A malformed/empty decision response holds current; it never triggers a fallback heuristic.
-- **No mid-turn or mid-invocation switching** — ModelRouter-style failure switching violates idle-only; `/btw` routing resolves at spawn time from the same pre-turn decision, not inside the side run.
-- **No `openrouter/auto` turn execution** — the CLI's turns stay on the resolved model via the harness; OpenRouter only serves the cheap decision call and the setup catalog.
-- **No decision-call spend hidden** — decision tokens are metered rows in `/cost`, not silent overhead.
-- **No keys in repo or strategy files** — OpenRouter key is runtime-supplied (prompt or harness-precedent env at call time); strategy YAML holds model ids, directives, descriptors only.
-- **No blocking the turn on a slow decision call** — hard timeout (15s precedent `FETCH_TIMEOUT_SECONDS`; recommend tighter, ~10s, at planner discretion) then hold-current; never retry the decision call within one ask (one attempt per engine per ask; "retrying next ask" per D-08).
+### Anti-Patterns to Avoid
+- **Gating on `confidence`:** vendor-specific concentration statistic, not correctness (Pitfall 1). Gate on top-1 probability.
+- **Paged/tiered choices to dodge the 26-cap:** probabilities from separate calls are incomparable ("ask each decision one way" [CITED: skill limits ref]); cap candidates at 26 instead.
+- **Two questions in one request for model+effort:** parallel questions cannot see each other's answers [CITED: https://openrouter.ai/skills/openrouter-decisions]; effort MUST be sequential (D-15).
+- **Caching a routing verdict across asks:** strategy/availability can change; each call is stateless — re-send ask + directives every time.
+- **Retrying 4xx:** 400/401/402/403/404/413 mean the request/key/credits/model are wrong — hold, never retry [CITED: OpenAPI error list].
 
 ## Don't Hand-Roll
 
-| Capability | Use instead | Why |
-|------------|-------------|-----|
-| Vendor thinking/request fields | `resolve_model(model, default, effort=...)` | One `effort` maps to Bedrock `additional_request_fields`, Anthropic `params`, OpenAI `reasoning.effort` etc. [VERIFIED: harness `models.py:161-182` `_bedrock_thinking`, `:193-240` provider builders] |
-| Thinking support verdicts | `supports_thinking` (harness) via `supports_reasoning` | Fail-closed, override-aware [VERIFIED: `model_switch.py:140-161`] |
-| History conversion on switch | `convert_history` + `apply_model_action` | Reasoning/media/tool-pair handling with live-probe precedent [VERIFIED: `model_switch.py:265-340`, `loop.py:1064-1148`] |
-| OpenRouter catalog fetch/cache | `fetch_openrouter_models` + `_store_openrouter` + `_openrouter_cache` | TTL + cooldown + fail-soft already built [VERIFIED: `live_pricing.py:366-423`] |
-| Price/window lookups | `price_for` / `window_for` / `price_provenance` | Most-precise-first layering with provenance [VERIFIED: `cost_context.py:110-138`] |
-| Token estimates | `estimate_messages_tokens` | chars/4 offline estimate [VERIFIED: `cost_context.py:330-347`] |
-| Guided setup picker | `radio_choice` (owned-keys control) | Stdin-guard + typeahead-drain choke point [VERIFIED: `choice.py:148-186`] |
-| Transcript printing | `print_plain(console, text, style=...)` | Markup-off, MarkupError-proof [VERIFIED: `output.py:34-42`] |
-| CLI arg parsing for slashes | `dispatch` head/arg split | Lowercased head, reply/model tri-state [VERIFIED: `router.py:164-169`] |
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Decision judgment | Chat-JSON prompt+parse, keyword/regex/length heuristics | Decision APIs (`choice` + code gate) | Prompt-and-parse is the superseded design; length-as-difficulty under-routes ("fix the auth race" → cheapest); heuristics are locked out (D-08) |
+| Confidence math | Own entropy/margin formula | Log the returned `confidence`; gate on top-1 probability | Vendors compute it differently (verified live); recomputing invites silent drift |
+| Price comparison | Model prose ("cheapest") | Almanac `price_for` code-side (D-14) | Decision models do no quantities [CITED: skill limits ref] |
+| Catalog fetch/cache | New fetcher | `live_pricing.fetch_openrouter_models` + `cached_tables` [VERIFIED: live_pricing.py:366,519] | Fail-soft layering already built; add `?output_modalities=decisions` as one more read |
+| Guided-pick UX | New dialog | `_setup_ask`/tty/typed pickers [VERIFIED: router.py:650-860] | Owned-keys radio + off-tty typed paths already handle abort/re-prompt |
+
+**Key insight:** the model judges, code computes. Every deterministic step (prices, thresholds, margins, caps, truncation, validation) stays in code; the model returns only probability tables [CITED: https://openrouter.ai/skills/openrouter-decisions].
+
+## Engine Reference (verified live 2026-10-11)
+
+### OpenRouter `POST /api/alpha/decisions`
+- Auth: `Authorization: Bearer $OPENROUTER_API_KEY`, key server-side only [CITED: OpenAPI page]. Request: `{model, state, questions}` + optional `session_id` (observability grouping, ≤256 chars, never sent to provider), `trace`, `user`, `provider` [CITED: OpenAPI page]. Recommend sending `session_id` only (session UUID groups the two sequential calls); skip the rest.
+- Response: `{id, model, provider, answers, usage}`. `model` is the dated snapshot that served the request (observed `typesafe/jev-1.13-20260917`) — log it with every answer for drift tracing [VERIFIED: live probe]. `usage = {input_tokens, output_tokens, cost}` with `cost` in USD [VERIFIED: live probe: 384 in / 41 out / $0.000016128].
+- Billing is input-tokens-only; output tokens are free [CITED: Jev tutorial FAQ]. Verified arithmetically: 384 × $0.042/1M = $0.000016128 exactly [VERIFIED: live probe + live catalog pricing].
+- Latency: 0.33s per call observed (both probes) [VERIFIED: live probe]; third-party median 0.33s/p95 0.44s over 791 calls [CITED: ayautomate Jev guide]. Keep `DECISION_TIMEOUT_SECONDS = 10` [VERIFIED: routing.py:42] — ~30× headroom.
+- Errors: `{error: {code, message}}` for 400 (invalid params), 401 (missing auth), 402 (no credits), 403 (management keys only), 404 (not found), 413 (payload too large), 429 (rate limit), 500, 502/529 (provider error), 503, 524 (timeout) [CITED: OpenAPI page]. Retryable: 429/500/502/503/524/529 + transport timeouts (max 1 retry). Never retry: 400/401/402/403/404/413.
+- Schema marks `probabilities`, `confidence`, `legend` optional — read through presence checks; check `type` before reading fields; missing key or wrong `type` is an error, never a default [CITED: skill decisions-api ref].
+- Rate limits adjust dynamically without notice (~250K tok/s, 1200 req/min per third-party) — treat 429 as an observed availability signal, not a bug [CITED: ayautomate Jev guide — MEDIUM].
+
+### Ollama `POST /v1/systemone`
+- No key for loopback; `OLLAMA_API_KEY` header only for proxied hosts (existing `_ollama_headers` survives [VERIFIED: routing.py:841-853]). Same `{model, state, questions}` shape + optional `keep_alive` (duration string or seconds; server default 5m) [CITED: Ollama System One API page]. Keep `OLLAMA_KEEP_ALIVE = "5m"` [VERIFIED: routing.py:55].
+- Response: `{model, answers, usage}` with `usage = {input_tokens, output_tokens}` — NO `cost` field (local = $0) [VERIFIED: live probe: 198 in / 1 out]. Cost code must handle cost-absent (record $0, never estimate).
+- Hard limits [CITED: Ollama System One API page + capability guide]: body ≤64 KiB (never truncated — oversize 413s); each rendered prompt must fit the loaded context window with 2 tokens spare; no streaming/images/tools/generation controls; 1–64 questions per request; `choice`/`score` criteria 2–26 [VERIFIED: live probe — 40 options rejected with `criteria must contain 2–26 candidates`].
+- Decision models are NOT in the Ollama CLI or Python/JS libraries — raw HTTP is the interface [CITED: ollama.com/library/clef]. Calling a decision model via `/api/chat` yields filler-token runaway — never do it (observed 2250 empty tokens to exhaustion, CONTEXT).
+- Floor: Ollama ≥0.35 (endpoint does not exist below; `nimble`/`tev1` registry blobs carry `"requires":"0.35.0"`) [CITED: modelfit guide + capability guide]; Clef needs ≥0.35.1 [CITED: ollama.com/library/clef]. Preflight via `GET /api/version` before using the local engine (local daemon here: 0.40.3 [VERIFIED: live probe]).
+
+### Decision-model pinning (live catalog 2026-10-11)
+`GET /api/v1/models?output_modalities=decisions` needs no key and returned 19 entries [VERIFIED: live curl]. Only entries whose `architecture.output_modalities` contains `decisions` accept the endpoint [CITED: skill models ref].
+
+| id | canonical_slug | ctx | prompt $/1M | Verdict |
+|----|---------------|-----|-------------|---------|
+| typesafe/jev-1.13 | typesafe/jev-1.13-20260917 | 64000 | 0.042 | **PIN AS DEFAULT** — reference model in all docs; correct live route (luna 0.85); input-only billing |
+| ~typesafe/jev-latest | (alias — moves) | 64000 | 0.042 | NEVER PIN — alias shifts probabilities silently [CITED: skill models ref] |
+| microsoft/microsoft-decision-1 | …-20261009 | 32768 | 0.042 | Runner-up (same price, smaller ctx) |
+| inception/mercury-decide[:free] | …-20260930 | 65536 | 0.02 / 0 | Budget alt — probe quality first |
+| jaredpalmer/kev-4b | …-20260924 | 8192 | 0.042 | Tight ctx for ask+directives — avoid as default |
+| respan/span-01* (3 entries) | … | **0** | 0–0.02 | AVOID — ctx 0 entries; yes/no-only per third-party |
+| others (drex, clef×3, solar×2, pplx, luna, d1, tev1-4b-exp) | dated | 32K–1M | 0–0.24 | Probe via `--compare` equivalents only if Jev fails calibration |
+
+Pin the versioned `id` (`typesafe/jev-1.13`) in one strategy-config value; re-verify the catalog at implementation time (it changes without notice) and re-probe on any model change — thresholds do not carry between models [CITED: skill models ref]. All completion prices are $0 [VERIFIED: live catalog].
+
+### Local tag choice
+| Tag | Size | Notes | Verdict |
+|-----|------|-------|---------|
+| `nimble` | 9B / 9.5GB, 256K ctx, text-only | Bespoke: choice 81.6% vs Jev 82.9% on 13 public sets [CITED: ollama.com/library/nimble] | **DEFAULT local tag** — closest to Jev on `choice` |
+| `tev1:0.8b` | 0.8B / ~812MB | Already pulled locally; live probe UNDER-ROUTED deep refactor → sol 0.66 [VERIFIED] | Low-resource fallback only; needs its own (higher) threshold calibration |
+| `tev1` / `tev1:4b` | 4B / ~4.5GB, experimental | Mid option | Acceptable alt where 9B does not fit |
+| `clef` / `clef-flash` | 27B/18GB / 9B, multimodal, 256K | Needs ≥0.35.1; images unused here; RouterBench ≈ Jev [CITED: ollama.com/library/clef] | Reject — 18GB + multimodal buys nothing for text routing |
 
 ## Common Pitfalls
 
-1. **Decision latency on every ask** — a 1–3s HTTPS call precedes each turn. Mitigate: cheap fast decision model, tight timeout, skip the call when the strategy has one candidate (nothing to choose; still log nothing — or a debug-level line at planner discretion), and never call during `/btw` queue drains more than once per spawn (D-04 discretion: per-ask call vs derived — researcher recommends ONE decision per side spawn, derived reuse while the side run is live).
-2. **Decision-call cost creep** — small but nonzero per ask; at scale it dominates cheap turns. Mitigate: cap prompt size (candidate table compacted to one line per model; truncate ask to ~2000 chars), prefer `:free` or cheapest-tier decision models, and surface spend in `/cost` so users see it (D-12).
-3. **Malformed picks** — local small models especially may emit non-JSON or name non-candidates. Mitigate: `response_format: {"type": "json_object"}` on OpenRouter [CITED: API reference Request Schema `response_format?: ResponseFormat`], `format` JSON schema on Ollama `/api/chat` [CITED: ollama api.md "Structured outputs ... providing a JSON schema in the `format` parameter"], strict parse (unknown model id → hold-current, never fuzzy-match to a candidate — fuzzy matching is heuristic picking by another name).
-4. **Effort/model mismatch** — a routed `high` effort on a model with no thinking levels raises `ValueError` from `resolve_model` ("Effort ... is not supported by ..." [VERIFIED: harness `models.py:151-158` `_bedrock_effort`]). Mitigate: validate `(model, effort)` with `supports_thinking`-family checks BEFORE `apply_switch` (switch-first rule), and constrain the decision prompt to per-candidate advertised levels.
-5. **Oscillation between models** — per-ask routing can flip A→B→A across turns, churning history conversion (thinking strip/text-ify each hop). Mitigate: the decision prompt includes the current model + a "prefer staying unless clearly better" directive default; `apply_model_action` no-op fast path when pick == current (planner: skip conversion entirely, still emit the transcript line).
-6. **Stale catalog/benchmark data** — `/models` prices drift; benchmark snapshots age. Mitigate: reuse the 24h disk cache for setup enumeration; stamp benchmark snapshots with a `pulled:` date in the strategy file; decision prompt uses live `price_for`/`window_for` at call time (already TTL-cached), not the snapshot, for cost impact.
-7. ** `/model` vs routing race** — user re-points manually while routing is on. Locked answer (D-10): warn + cancel offer + routing-off on confirm; the planner must ensure the warn dialog runs at idle only (mid-turn slashes already refuse via `MODEL_REFUSAL` [VERIFIED: `model_switch.py:27`, verbatim]).
-8. **`reasoningContent` resume hazard (pre-existing)** — "resumed opus history fails validation on non-reasoning Bedrock models" (STATE.md blocker, survives since Phase 4). Routing across vendors amplifies exposure to this; routed switches MUST go through `convert_history` (which strips/text-ifies), never raw assignment.
-9. **Leaking the ask to a third party** — the decision call ships ask text to OpenRouter even for Bedrock-only users. Mitigate: document it in setup (consent-by-config: routing is off until configured, D-01), truncate/redact, and offer the local-only engine chain (D-09). Never send tool results or file contents — ask text only.
-10. **Over-fitting to Laya/Kev names** — they do not exist in the catalog today. Any hardcoded default decision model must be validated against the live catalog at setup; unknown ids warn-and-fall-back to catalog enumeration, never fail startup.
+### Pitfall 1: `confidence` is vendor-specific — never gate on it
+**What goes wrong:** The D-16 threshold compares the wrong number; a threshold calibrated on Ollama misfires on Jev and vice versa.
+**Why it happens:** Each vendor computes `confidence` its own way. Verified live: Ollama/tev1 `p=(0.6631,0.2874,0.0495)` reported 0.2904, matching entropy `1−H/ln(3)=0.2903`; Jev `p=(0.06,0.09,0.85)` reported 0.77, while entropy gives 0.523 — Jev matches a normalized margin `(0.85−1/3)/(2/3)=0.775` instead [VERIFIED: live probes + arithmetic]. TypeSafe documents it only as "collapses that shape into a single number", threshold-from-cost-of-mistakes [CITED: docs.typesafe.ai/confidence].
+**How to avoid:** Threshold and tie-margin operate on the pick's top-1 probability from `probabilities` (model-invariant). Log `confidence` on the transcript line (D-12) but never branch on it.
+**Warning signs:** Threshold "works on one engine, holds everything on the other".
 
-## Code Examples (verified patterns)
+### Pitfall 2: Jev rounds probabilities coarsely
+**What goes wrong:** A `tie_margin` below the rounding granularity fires randomly or never.
+**Why it happens:** Jev returned 2-decimal probabilities (0.06/0.09/0.85) [VERIFIED: live probe]. Margins <0.01 are noise on this engine.
+**How to avoid:** Floor the tie-margin search grid at 0.01 during calibration; hermetic tests use exact ties and ±ε boundaries with ε ≥ 0.005.
+**Warning signs:** Tie-breaks firing on identical tables across engines but not within Jev.
 
-All examples below are verified against code read this session; adapt names to the planner's final module layout.
+### Pitfall 3: Exceeding the `choice` cap fails the whole call
+**What goes wrong:** A 27-candidate strategy 400s/fails every routed ask on Ollama (uniform 2–26 [VERIFIED: live probe]); OpenRouter caps are model-dependent and NOT in the catalog (Solar ≤26, hosted Tev1 ≤20 per third-party measurement [CITED: jev-agent.com/decisions-api — MEDIUM]).
+**Why it happens:** The cap lives server-side per model/engine; the catalog does not advertise it.
+**How to avoid:** Hard code-side cap: max 26 candidates (setup refuses more; validate fails >26 with a fix line). 1-candidate strategies skip call 1, so the 2-minimum never binds. Effort levels likewise ≤26 (never binding in practice; enforce anyway).
+**Warning signs:** Routing holds only when the local engine serves.
 
-### 1. Decision call over stdlib urllib (OpenRouter engine)
+### Pitfall 4: Quantities/dates/negation smuggled into questions
+**What goes wrong:** The model literal-reads ("is this about billing" matches broadly; "does it mention" ignores negation), cannot compare magnitudes, and degrades on contradictory instructions-vs-criteria [CITED: skill limits ref, verified on Jev 1.13].
+**Why it happens:** No scratchpad for arithmetic, no loop for counting, no text output channel.
+**How to avoid:** D-02/D-07 already encode this — prices/windows/benchmarks stay code-side; criteria carry cost WORDS + role prose; ask about the fact ("Which candidate model should serve this ask?"), never the text; one judgment per question; criteria read as an extension of instructions.
+**Warning signs:** Calibration accuracy flat across thresholds; short asks systematically under-routed.
 
-Follows `fetch_openrouter_models` exactly [VERIFIED: `live_pricing.py:366-379`]:
+### Pitfall 5: Oversized state 413s on Ollama (never truncated)
+**What goes wrong:** A long ask + verbose directives exceeds 64 KiB and the local call fails while OpenRouter succeeds.
+**Why it happens:** Ollama never truncates; `ASK_TRUNCATE_CHARS = 2000` [VERIFIED: routing.py:39] already bounds the ask, but directives ride twice (state + instructions, D-07).
+**How to avoid:** Keep the 2000-char ask truncation; bound total serialized body code-side (measure `len(json.dumps(payload))`, truncate ask further if needed) and note truncation on the transcript line. Validate warns when directives exceed ~4K chars.
+**Warning signs:** Local-only holds on long pastes.
 
+### Pitfall 6: Single-candidate fast path must CHANGE (stale behavior)
+**What goes wrong:** Reusing the current fast path (lone candidate + levels → zero-call pick of first level [VERIFIED: routing.py:1045-1054]) violates D-05/D-15: call 2 (effort) must still be asked.
+**Why it happens:** Copy-paste from the chat-JSON implementation.
+**How to avoid:** Rewrite the fast path: skip call 1, still run call 2 over the candidate's levels; record call-2-only usage. Zero-call verdicts are gone.
+**Warning signs:** `/cost` shows routed asks with zero decision spend on single-candidate strategies.
+
+### Pitfall 7: `none`/no-match criterion vs code-side HOLD
+**What goes wrong:** Adding a `none` option "per the skill" creates a second no-match mechanism that fights the D-16 threshold gate.
+**Why it happens:** The skill says to add a no-match option "whenever nothing may fit" [CITED: skill step 4], but here a guessed `none` pick must STILL hold (a pick of nothing is not routable).
+**How to avoid:** Follow AI-SPEC: NO `none` criterion — below-threshold tables hold code-side (one mechanism, D-16). The threshold gate subsumes the no-match case.
+**Warning signs:** `none` wins with 0.4 probability and the code holds anyway — wasted probability mass that skewed the real options.
+
+## Code Examples
+
+### Model-choice call (call 1)
 ```python
-import json
-import urllib.request
-
-OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-def decide_via_openrouter(api_key, decision_model, system, user, timeout=10):
-    """One routing decision; returns the raw assistant text or None."""
-    body = json.dumps({
-        "model": decision_model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "response_format": {"type": "json_object"},
-        "max_tokens": 300,
-        "temperature": 0,
-        "stream": False,
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        OPENROUTER_CHAT_URL,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "strands-code",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        choices = payload.get("choices", [])
-        if not choices:
-            return None
-        return choices[0].get("message", {}).get("content")
-    except Exception:
-        return None  # fail soft: caller tries the next engine
+# Source: live OpenRouter probe 2026-10-11 (200, 0.33s, luna @ 0.85) + D-07
+state = {"ask": ask, "directives": strategy.directives, "side": side}
+questions = {"pick_model": {
+    "type": "choice",
+    "instructions": (
+        "Which candidate model should serve the ask in `ask`? "
+        "Judge the ask, not its length. " + directives_shaping),
+    "criteria": {c.id: c.criteria for c in strategy.candidates}}}  # D-02 prose
+resp = decide(pinned_id, state, questions, base_url=OPENROUTER_DECISIONS_URL,
+              api_key=os.environ["OPENROUTER_API_KEY"], timeout_s=10)
+# resp["model"] -> dated snapshot, log it; resp["answers"]["pick_model"] -> typed table
 ```
 
-Endpoint + auth shape [CITED: https://openrouter.ai/docs/api_reference/overview + auto-router Python example using `requests.post("https://openrouter.ai/api/v1/chat/completions", headers={"Authorization": "Bearer <OPENROUTER_API_KEY>"})`]. `response_format` is a documented Request field [CITED: same]. Usage for spend accounting rides `payload["usage"]` (`prompt_tokens`/`completion_tokens`) [CITED: auto-router Response example].
-
-### 2. Decision call (Ollama local engine)
-
+### Effort-choice call (call 2)
 ```python
-import json
-import os
-import urllib.request
+# Source: D-15 + Ollama score/choice shapes; same state, picked model's levels only
+questions = {"pick_effort": {
+    "type": "choice",
+    "instructions": f"How much thinking budget does the ask in `ask` need on {pick}?",
+    "criteria": {level: describe(level) for level in candidate.levels}}}
+effort = top_choice(decide(...))  # weak read still routes (D-16); then validate_routed_effort
+```
 
-def decide_via_ollama(model, system, user, timeout=30):
-    """One routing decision via a local daemon; None on any failure."""
-    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "format": {
-            "type": "object",
-            "properties": {
-                "model": {"type": "string"},
-                "effort": {"type": "string"},
-                "why": {"type": "string"},
-            },
-            "required": ["model", "effort", "why"],
-        },
-        "stream": False,
-        "keep_alive": "5m",
-    }).encode("utf-8")
-    request = urllib.request.Request(
-        f"{host}/api/chat", data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return (payload.get("message") or {}).get("content")
-    except Exception:
+### Typed answer validation (replaces `parse_pick`)
+```python
+# Source: skill decisions-api ref (type-check, optional-field presence) + AI-SPEC §4b
+def validate_choice_answer(answer, question_key, candidates):
+    if not isinstance(answer, dict) or answer.get("type") != "choice":
+        return None  # HOLD: wrong type or missing key is an error, never a default
+    probs = answer.get("probabilities")
+    if not isinstance(probs, dict) or not probs:
+        return None  # HOLD: schema marks probabilities optional — presence-check
+    if any(not isinstance(p, (int, float)) or not 0.0 <= p <= 1.0 for p in probs.values()):
         return None
+    if abs(sum(probs.values()) - 1.0) > 1e-6:
+        return None
+    if answer.get("choice") not in probs or answer["choice"] not in candidates:
+        return None  # HOLD: stale pick after a strategy edit must never route
+    return answer  # confidence: answer.get("confidence") may be absent — log if present
 ```
 
-`POST /api/chat` with `model`/`messages`/`format`/`stream`/`keep_alive` [CITED: https://github.com/ollama/ollama/blob/main/docs/api.md]. Host default `http://127.0.0.1:11434` matches the harness `_ollama` builder (`os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")` [VERIFIED: harness `models.py` `_ollama`]). Local enumeration for setup: `GET /api/tags` [CITED: same api.md]. Timeout is longer (cold model load); planner may pre-warm or accept first-ask latency with a transcript note.
-
-### 3. Routing prompt skeleton (directives + candidate stats, D-07)
-
-```text
-SYSTEM:
-You route coding asks to exactly one candidate model. Reply with JSON only:
-{"model": "<candidate id>", "effort": "<level>", "why": "<=12 words>"}.
-Rules:
-- "model" MUST be one id from the candidate table verbatim.
-- "effort" MUST be one of the candidate's advertised levels.
-- Prefer STAYING on the current model unless another is clearly better.
-User directives:
-<trivial asks go cheap, deep refactors go big...>
-Candidate table (id | $in/$out per 1M | window | benchmark | tier | levels):
-...
-Current model: <id>. Side ask: <true|false>.
-USER:
-<ask text, truncated>
-```
-
-Strict-parse rule: `pick["model"]` must equal a candidate id exactly (no normalization, no fuzzy match); `pick["effort"]` must be in that candidate's levels; `why` truncated to one line. Anything else → hold-current.
-
-### 4. Threading effort through the switch (planner implements)
-
-Today: `apply_switch` calls `resolve_model(new_string, default or new_string)` with implicit `effort="auto"` [VERIFIED: `model_switch.py:626-646`]. Routed switches need:
-
+### Setup enumeration (split catalogs per D-06)
 ```python
-model = resolve_model(routed_id, routed_id, effort=routed_effort)
-agent.model = model
+# Source: live catalog fetch (no key) + existing _setup_catalog_entries [router.py:586]
+chat_entries = _setup_catalog_entries(fetch_openrouter_models())  # candidates (survives)
+dec = fetch("https://openrouter.ai/api/v1/models?output_modalities=decisions")["data"]
+decision_entries = [m for m in dec
+                    if "decisions" in ((m.get("architecture") or {}).get("output_modalities") or [])
+                    and not m["id"].startswith("~")          # never offer aliases
+                    and (m.get("context_length") or 0) > 0]  # drop ctx-0 entries (respan)
+# sort by prompt price asc, then id; radio/typed pick over decision_entries (rebuild _setup_pick_decision)
 ```
 
-with `routed_effort` validated against the provider levels first (`EFFORT_LEVELS` + `_bedrock_levels`-family behavior [VERIFIED: harness `models.py:307, 151-158`]). Note `resolve_model` raises `ValueError` for unknown providers ("Unknown model provider ... Supported providers: ..." [VERIFIED: harness `models.py:441-446`]) — the switch-first rule means this raise must happen before history mutation, which `apply_model_action` already guarantees by resolving first [VERIFIED: `loop.py:1094-1097`].
-
-### 5. Setup catalog enumeration (reuse, do not re-fetch raw)
-
+### Ollama preflight (version + pull check)
 ```python
-from strands_code_cli import live_pricing
-
-models = live_pricing.fetch_openrouter_models()  # public, no key; None on failure
+# Source: Ollama /api/version + library requires>=0.35 (clef >=0.35.1)
+def local_engine_ready(base, tag):
+    ver = get(base + "/api/version", timeout=5).get("version", "")  # "0.40.3" observed
+    if parse(ver) < (0, 35): return False
+    if tag.startswith("clef") and parse(ver) < (0, 35, 1): return False
+    return tag in {m["name"] for m in get(base + "/api/tags").get("models", [])}
 ```
-
-Entry fields available per model: `id`, `name`, `description`, `context_length`, `pricing.prompt`/`pricing.completion` (per-token strings → ×1M), `architecture.input_modalities`/`output_modalities`, `supported_parameters[]`, `top_provider.max_completion_tokens` [VERIFIED: live `/models` response + keys list this session]. Filter setup choices to chat-capable entries (TEXT in/out analogue: `output_modalities` contains `text`, id not matching rerank/embed) mirroring `_is_chat_model` [VERIFIED: `model_switch.py:354-370`].
-
-### 6. Transcript line + /cost (visibility, D-12)
-
-```python
-from strands_code_cli.output import print_plain
-print_plain(console, f"Routed → {model} ({effort}): {why} · ~${delta}/ask vs {prev}")
-```
-
-`print_plain(console, text, style=...)` — markup off, dynamic-safe [VERIFIED: `output.py:34-42`]. Decision-call spend: append rows to `session_turns` with the decision model id so `cost_report` prices them at their own rates ("Each row prices at its own turn model" [VERIFIED: `cost_context.py:178-179`, verbatim]); the routing section details pick history.
 
 ## State of the Art
 
-- **OpenRouter Auto Router (`openrouter/auto`, `openrouter/auto-beta`)**: market-spend-share ranking over ~30 task types, 7-day trailing window, `cost_tier` bands (low/medium/high/xhigh/max), `allowed_models`/`excluded_models` wildcard plugin settings, per-response `model` field, session stickiness via `session_id`, graceful degradation "to a default model set" when classification is unavailable [CITED: https://openrouter.ai/docs/features/model-routing]. Relevant as prior art for the *concept*, not as this phase's engine (see rejection rationale in Standard Stack).
-- **OpenRouter rankings**: task-spend views at `openrouter.ai/rankings#task-spend` feed the Auto Router [CITED: same]. Candidate for the "compound benchmark" pull at setup time (market-share signal, not a quality benchmark — label it as such).
-- **Bedrock Intelligent Prompt Routing**: Bedrock-managed small-LM routing between two models in one family, up to ~30% cost reduction claimed [CITED: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html and https://aws.amazon.com/blogs/machine-learning/build-generative-ai-solutions-with-amazon-bedrock/]. The "until Bedrock offers decision models" condition in D-06 refers to something more general than this; today's prompt routers cannot express this phase's strategy.
-- **Strands `ModelRouter` (strands-agents 1.58.1)**: candidate-set router with async `RoutingStrategy.select`, `FallbackStrategy` default (fewest-failures-first), `max_switches` cap, `Agent(model=router)` attachment [VERIFIED: `inspect.getsource(ModelRouter)` this session]. Right tool for failure-failover, wrong tool for deliberate pre-turn routing — rejected with rationale above.
-- **Benchmark sources for candidate ranking (plan-time pulls, staleness-stamped)**: SWE-bench Verified / SWE-bench Pro leaderboards [CITED: https://benchlm.ai/benchmarks/swe-bench-pro, https://www.swebench.com], LMArena coding board (blind human votes, coding Elo) [CITED: https://lmarena.ai], Artificial Analysis Intelligence Index [CITED: https://artificialanalysis.ai], OpenRouter rankings [CITED: https://openrouter.ai/rankings]. Researcher recommendation: compound rank = small table in the strategy file (`swe_verified`, `lmarena_coding`, `aa_index` + `pulled:` date), user-editable like capability overrides; the decision prompt carries one compact rank column, not raw scores.
-- **Cheap decision-model class in the live catalog**: 37 `qwen3*` entries, 11 `llama*` entries, 5 `haiku` entries (incl. `anthropic/claude-haiku-4.5`) [VERIFIED: live catalog grep]. Setup should default-sort by price ascending and let the user pick; Laya/Kev are not available names today.
-- **Harness thinking-level single knob**: `EFFORT_LEVELS = ("auto", "off", "minimal", "low", "medium", "high", "xhigh", "max")` with per-provider validation and `recommended_thinking` defaults (`"high"` for bedrock/anthropic/openai/google, `None` for ollama/litellm) [VERIFIED: harness `models.py:81-87, 296-307`]. Claude 4.6+ uses adaptive thinking (`output_config.effort`), older uses extended `budget_tokens` (`_EXTENDED_THINKING_BUDGETS`: low 2048 → max 49152) [VERIFIED: harness `models.py:96-128`].
+| Old Approach (chat-JSON, superseded) | Current Approach (Decision APIs) | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| One chat completion + `response_format: json_object`, parsed `RoutingPick(model, effort, why)` | Up to two sequential typed `choice` calls returning probability tables; code gates | Revisit 2026-10-11 (D-14..D-16) | Transports, question building, parsing all rebuilt; `why` prose is gone (D-12) |
+| Prices/windows/benchmarks in the prompt table | Cost words in criteria prose + almanac tie-break code-side | Revisit (D-02/D-14) | `_candidate_row` price/window table is deleted, not moved |
+| Single threshold-less pick; lone candidate = zero-call first level | Threshold gate + tie-margin; lone candidate still asks effort | Revisit (D-05/D-15/D-16) | Fast path rewritten (Pitfall 6); gate is new code |
+| Setup picks a "cheap JSON-capable chat model" as decider | Setup enumerates chat catalog (candidates) + decisions catalog (decider) separately | Revisit (D-06) | `_setup_pick_decision` rebuilt on the decisions catalog |
+
+**What survives (keep, extend only):** strategy load/save shape + repo-wins + symlink/`off`/YAML-bool handling [VERIFIED: routing.py:104-398]; `validate_strategy` structure (extend keys: `criteria` per candidate, `tie_margin`, `confidence_threshold`, 26-cap, decisions-catalog decider check) [VERIFIED: routing.py:505-680]; `_chain_for` registry + primary select/skip semantics [VERIFIED: routing.py:998-1019]; `decide()` signature shape (internals become two-call + gate) [VERIFIED: routing.py:1022-1079]; `validate_routed_effort` + `_EFFORT_NO_THINKING` [VERIFIED: routing.py:1082-1104]; `route_cost_delta`, `decision_model_for`, `RoutingState`, `warn_applies` [VERIFIED: routing.py:1107-1231]; pre-turn hook + side-spawn hook attachment points [VERIFIED: loop.py:605,1350]; `/cost` routing section + transcript plumbing (format changes per D-12); setup picker UX + directives capture [VERIFIED: router.py:650-876]; uattest rig r1–r4 (scenarios updated for the new flow) [VERIFIED: driver.py:276,331,382,457]; `ASK_TRUNCATE_CHARS`, timeouts, `keep_alive`, `_ollama_headers` loopback rule.
+
+**What gets rebuilt:** `OPENROUTER_CHAT_URL` → `/api/alpha/decisions` + `/v1/systemone` transports; `_SYSTEM_PROMPT`/`build_routing_prompt` → state/question builders; `decide_via_openrouter`/`decide_via_ollama` bodies (payloads, usage mapping incl. `cost` passthrough + response-`model` logging); `parse_pick` + `RoutingPick.why` → typed validation + `gate_model`; `format_routed_line`/`format_hold_line` (both confidences inline, tie-break + threshold-hold notes, no `why`); `_setup_pick_decision` + `_setup_local_model` (decisions catalog + tag default); decision-model validate check (decisions catalog, not chat cache); retry policy (max 1 on retryable codes; current code never retries).
+
+**Calibration method (for `tie_margin` + `confidence_threshold` defaults):** skill step 7 — run the real questions over representative inputs (clear cases, ambiguous, no-match, empty/off-topic, negated, adversarial) through BOTH pinned engines; set thresholds from observed numbers, never round numbers; repeat on any model change [CITED: https://openrouter.ai/skills/openrouter-decisions]. Concretely: run the AI-SPEC 20-probe set, bin accuracy by top-1 probability, put the threshold where wrong picks concentrate below and correct routes above with margin; set the tie-margin from the observed top1−top2 distribution on near-tie probes (grid ≥0.01 — Pitfall 2). Calibration anecdote from this session (n=2, NOT shippable): Jev correct at top-1 0.85, tev1:0.8b wrong at top-1 0.66 on the identical deep-refactor ask — consistent with a threshold in the 0.70–0.75 band, but the planner MUST re-derive from the full probe set. Per-engine thresholds are allowed (local small model may need a higher bar); one shared default only if probes support it.
+
+**Deprecated/outdated:**
+- Chat-completions JSON mode as a decision engine: rejected by D-06 — delete, do not keep as fallback.
+- `RoutingPick.why` free text: decision APIs return no prose (D-12) — remove from the verdict shape.
+- `typesafe/jev-1.13` hardcoded without re-verification: catalog changes silently — re-fetch at implementation.
 
 ## Assumptions Log
 
-| # | Claim | Status |
-|---|-------|--------|
-| A-01 | llama.cpp `llama-server` exposes OpenAI-compatible `POST /v1/chat/completions` usable by the same urllib POST as OpenRouter with a different base URL | [ASSUMED] — not probed; binary presence unchecked. Planner: verify or drop the variant. |
-| A-02 | OpenRouter `response_format: {"type": "json_object"}` is honored by cheap open-weights decision models | [ASSUMED] — field is documented, per-model support varies (`supported_parameters` lists `response_format`/`structured_outputs` per model [VERIFIED in live entry]). Planner: filter decision-model choices by `supported_parameters` containing `response_format` or `structured_outputs`. |
-| A-03 | A ~10s decision timeout keeps turn-start latency acceptable; users tolerate one extra ante-turn pause | [ASSUMED] — UX judgment. Planner: make timeout a strategy constant; note in transcript when the decision call is slow. |
-| A-04 | `session_turns` row shape (`turn`, `input_tokens`, `output_tokens`, `model`) accepts routing rows without report changes | [ASSUMED] — shape inferred from `cost_report` row reads [VERIFIED: `cost_context.py:192-208`]; planner confirms no other consumer breaks. |
-| A-05 | Bedrock-hosted cheap models (Nova micro/lite, Haiku) can serve the decision call via the session model's direct-`generate` path when the engine is `bedrock` | [ASSUMED] — `model_summarize` proves direct `generate(prompt)` works on the session model [VERIFIED: `cost_context.py:412-440`]; planner verifies a *separate* cheap-model handle resolves without disturbing the session model. |
-| A-06 | One decision per `/btw` spawn (derived reuse while live) satisfies D-04's "same strategy" without per-token re-routing | [ASSUMED] — discretion-area recommendation (side-ask mechanics), not a locked reading. |
-| A-07 | Benchmark snapshots (SWE/LMArena/AA) are pullable at setup time in a parseable form | [ASSUMED] — sources verified to exist with leaderboards; exact fetch format (HTML vs API) left to planner spike. If unparseable, fall back to user-entered descriptors only (D-02 "potentially"). |
+| # | Claim | Section | Risk if Wrong |
+|---|-------|---------|---------------|
+| A1 | Jev `choice` accepts up to 255 options [CITED tertiary: ayautomate; live-verified only to 30] | Pitfalls | LOW — code caps at 26 anyway; only matters if the cap is ever raised |
+| A2 | Hosted Tev1 ≤20 / Solar ≤26 option caps [CITED: jev-agent.com — MEDIUM] | Pitfalls | LOW — neither is the pinned default; 26-cap covers Solar, and Ollama-side Tev1 follows the uniform 2–26 rule |
+| A3 | Rate limits ~250K tok/s + 1200 req/min, dynamic [CITED tertiary] | Engine Reference | LOW — per-ask volume is far below; 429 path is hold+note regardless |
+| A4 | No Pydantic in the dependency closure (per AGENTS.md stack; not re-grepped this session) | Standard Stack | LOW — planner verifies with one grep; dataclasses work either way |
+| A5 | `nimble` quality ≈ Jev on `choice` (vendor numbers: 81.6% vs 82.9%) [CITED: ollama.com/library/nimble] | Pinning | MEDIUM — vendor benchmark; implementation probes confirm or the default local tag changes to `tev1:4b` |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **OpenRouter key supply UX**: prompt-at-setup (stored where? never the repo — keychain? `~/.config` with 0700 like `ProviderConfig.save` [VERIFIED: `provider_config.py:100-104`]?) vs runtime env (harness precedent reads `OLLAMA_API_KEY`/`LITELLM_API_KEY` env [VERIFIED: harness `models.py` `_ollama`/`_litellm`]). Planner owns this; researcher leans runtime env + setup-time validation call.
-2. **Routed-effort persistence**: does the routed thinking level persist across turns (sticky per model) or re-decide every ask? D-05 says the router picks it automatically per ask; planner decides whether `current_model` tracking gains an `effort` companion and whether `/model` manual switches reset it.
-3. **`/btw` side-agent effort plumbing**: `build_btw_agent(parent_kwargs, ...)` replays stashed kwargs — routed effort must ride `parent_kwargs["effort"]` [VERIFIED stash: `main.py:130-171`, replay: `loop.py:612-619`]. Planner confirms `create_harness` accepts `effort` through that path (it is a top-level factory param [VERIFIED: signature list this session]).
-4. **Benchmark pull mechanics**: live-scrape at setup vs curated snapshot shipped in docs vs user-entered only. Depends on A-07 spike outcome.
-5. **Decision-model default when the user skips setup choice**: cheapest `structured_outputs`-capable catalog entry, or force explicit choice? Pick the latter if A-02 shows spotty support.
-6. **Transcript suppression granularity**: global boolean vs per-level (routed-switch vs hold-current notes). D-12 says "suppressible via config"; hold/pause notes are the planner's discretion item.
+1. **Per-engine vs shared threshold** — RESOLVED (plan 08-05 task 2 probes both engines, prefers one shared value)
+   - What we know: Thresholds do not transfer across models [CITED: skill]; tev1:0.8b under-routed where Jev routed correctly (live anecdote).
+   - What's unclear: Whether one `confidence_threshold` serves both pinned engines after full probing.
+   - Recommendation: Probe both; ship per-engine knobs only if the shared default misfires on either — prefer one knob.
+
+2. **Effort-level criteria prose source** — RESOLVED (plan 08-02 task 1: fixed code-side map + bare-name fallback)
+   - What we know: Call 2 needs per-level descriptions; `supports_reasoning` gates thinking levels [VERIFIED: routing.py:1102].
+   - What's unclear: Whether level prose is user-authored per candidate, generated from a fixed map (low/medium/high → prose), or bare level names (Clef allows `criteria: null` — option name describes itself [CITED: ollama.com/library/clef]).
+   - Recommendation: Fixed code-side map for known levels + bare-name fallback; user-editable only if probes show the prose matters.
+
+3. **`session_id` value** — RESOLVED (COVERAGE.md OPT-OUT; field not sent)
+   - What we know: Optional OpenRouter grouping field, ≤256 chars, never sent to provider [CITED: OpenAPI page].
+   - What's unclear: Whether the CLI has a stable session UUID at the routing decision point.
+   - Recommendation: Pass the session UUID if reachable from the hook; else omit — pure observability.
 
 ## Environment Availability
 
-Probed this session (2026-10-11):
+| Dependency | Required By | Available | Version | Fallback |
+|------------|------------|-----------|---------|----------|
+| Python + pytest | All tests | ✓ | pytest 9.1.1 (locked) | — |
+| Ollama daemon | Local engine + r2 + calibration | ✓ | 0.40.3 (≥0.35 floor) | Hold-current; skip live tests |
+| `tev1:0.8b` pull | Local probes | ✓ | 811 MB, pulled | `ollama pull nimble` for the default tag |
+| `nimble` pull | Default local tag | ✗ | — | Pull at implementation (`ollama pull nimble`, 9.5GB) |
+| `OPENROUTER_API_KEY` | Cloud engine + r1/r3/r4 + calibration | ✓ | present in env | Hold-current; skip live tests |
+| tmux | uattest rig r1–r4 | presume ✓ (rig ran in Phase 8) | — | Hermetic tests only, note gap |
+| promptfoo | Probe regression in CI | unknown | — | Planner checks; `npm install -g promptfoo` or pip |
 
-| Dependency | Status | Evidence |
-|------------|--------|----------|
-| `python3` | ✅ 3.14.8 | `python3 --version` |
-| `uv` | ✅ 0.12.23 | `uv --version` |
-| `node` (commit tooling) | ✅ v22.17.1 | `which node` |
-| `ollama` binary | ✅ installed, daemon DOWN | `/usr/local/bin/ollama`; `ollama list` → "could not connect to ollama app, is it running?" |
-| Network → `openrouter.ai` | ✅ HTTP 200 | `curl /api/v1/models` → 458 models, full entry shape captured |
-| Network → `pypi.org` | ✅ HTTP 200 | `curl /simple/` |
-| `ollama` PyPI pkg | ❌ missing (OK — not needed) | `ModuleNotFoundError` via `uv run python` |
-| `openai` PyPI pkg | ❌ missing (OK — not needed) | `ModuleNotFoundError` |
-| `litellm` PyPI pkg | ❌ missing (OK — not needed) | `ModuleNotFoundError` |
-| AWS creds / Bedrock | NOT PROBED | Planner's integration tests must gate on live creds like existing `integration` marker tests |
-
-**Missing for full live verification:** running Ollama daemon with at least one small model pulled (`ollama serve` + `ollama pull llama3.2` or a qwen3 small); an `OPENROUTER_API_KEY` for decision-call integration tests; AWS credentials for Bedrock candidate tests. None block unit-testable planning: engines are seam-injectable (`urllib` response fakes) and the chain is fully testable offline with `STRANDS_CODE_NO_LIVE_PRICING=1` precedent [VERIFIED: `live_pricing.py:57-59`, `tests/conftest.py` referenced].
+**Missing dependencies with no fallback:** none (every live layer degrades to hold/skip).
+**Missing dependencies with fallback:** `nimble` pull (fallback: `tev1:0.8b` already local, weaker); promptfoo (fallback: raw probe JSONL diffs).
 
 ## Validation Architecture
 
-Nyquist enabled. Test framework: `pytest>=8` (locked 9.1.1 per AGENTS.md stack section; `addopts = "-m 'not integration'"` deselects live tests by default [VERIFIED: `pyproject.toml:63-67`]).
+Test framework: pytest 9.1.1, `addopts = "-m 'not integration'"` (live tests deselected by default) [VERIFIED: pyproject.toml:63-67].
+Existing routing tests (all survive as extension targets): `tests/test_routing.py` (993 lines), `tests/test_routing_strategy.py` (752), `tests/test_loop_routing.py` (1064) [VERIFIED: wc].
 
-| Framework | Command | Scope |
-|-----------|---------|-------|
-| Unit (offline, default) | `uv run pytest tests/test_routing.py tests/test_routing_strategy.py -q` | Prompt build, strict parse, chain order, fail-soft load, merge precedence |
-| Loop integration (offline) | `uv run pytest tests/test_loop_routing.py -q` | Pre-turn hook, toggle stickiness, `/model` warn path, transcript lines |
-| Regression | `uv run pytest tests/ -q` | Full suite; routing must not change unconfigured behavior (D-01: off without strategy) |
-| Live (gated) | `uv run pytest -m integration -q` | Decision call against OpenRouter/Ollama with real keys; daemon-gated skips when down |
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | pytest 9.1.1 (locked) |
+| Config file | `pyproject.toml` `[tool.pytest.ini_options]` (no conftest changes needed) |
+| Quick run command | `uv run pytest tests/test_routing.py tests/test_routing_strategy.py tests/test_loop_routing.py -q` |
+| Full suite command | `uv run pytest tests/ -q` |
 
-### Req→Test map (MODEL-03)
-
-| Requirement facet | Test |
-|-------------------|------|
-| Per-ask decision selects model + thinking budget from candidates | Decision prompt contains directives + full candidate table; parsed pick applied via `apply_model_action` with routed effort; mocked engines return canned JSON |
-| OpenRouter default engine / local alternative | Engine chain order test: API success short-circuits; API failure → local attempted; both fail → hold-current; offline (`URLError`) → local-or-hold per D-09 |
-| Deterministic fallback + manual `/model` override | Hold-current is byte-identical model + messages; `/model` warns, cancel keeps routing, confirm disables routing (toggle off) |
-| Visibility (which/why/cost) | Transcript-line test (one line, model+why+delta, suppression flag); `/cost` routing section + decision-spend rows test |
-| No heuristic ever picks | Negative tests: malformed JSON → hold; unknown model id → hold (no fuzzy match); empty candidates → routing off; timeout → hold |
-| Side asks route through same strategy | `/btw` spawn passes side-flagged decision; derived reuse while live (A-06) |
+### Phase Requirements → Test Map
+| Req ID | Behavior | Test Type | Automated Command | File Exists? |
+|--------|----------|-----------|-------------------|-------------|
+| MODEL-03 | Two-call route: model table → gate → effort table → switch + transcript line with BOTH confidences + delta | unit (stubbed engines) | `uv run pytest tests/test_loop_routing.py -q` | ✅ extend |
+| MODEL-03 | Threshold hold: top-1 < threshold holds with distinct note, retries next ask | unit (synthetic tables) | `uv run pytest tests/test_routing.py -q` | ✅ extend |
+| MODEL-03 | Tie-margin: top1−top2 ≤ margin substitutes cheaper (almanac) + note; determinism on repeat | unit (stubbed almanac) | `uv run pytest tests/test_routing.py -q` | ✅ extend |
+| MODEL-03 | Answer validation: wrong type / bad sum / stale choice / missing keys → hold, zero retries | unit (fixtures) | `uv run pytest tests/test_routing.py -q` | ✅ extend |
+| MODEL-03 | Transport faults: 4xx→hold zero-retry; 5xx/timeout→1 retry→fallback→hold; offline→pause, current serves | unit (fault injection) | `uv run pytest tests/test_routing.py -q` | ✅ extend |
+| MODEL-03 | Strategy: new knobs/criteria keys load; >26 candidates fail validate; `off`/symlink preserved | unit | `uv run pytest tests/test_routing_strategy.py -q` | ✅ extend |
+| MODEL-03 | Override respect: `/model` pin never re-pointed; toggle round-trip; no mid-turn flip | unit + live | quick cmd + `driver.py r3` | ✅ extend + rig |
+| MODEL-03 | Live engines: real Jev + real nimble round-trips, spend accounting, latency shape | integration (gated) | `uv run pytest -m integration -q` + `driver.py r1 r2 r3 r4` | ✅ rig exists, scenarios updated |
 
 ### Sampling Rate
-
-Every engine boundary gets both a success and a failure test (2× coverage at API/local/parse/validate seams); every fallback transition gets an explicit hold-current assertion. Strategy file tests cover: missing file → routing off; corrupt YAML → warn + off; unknown keys → warn + skip entry (never widen); repo-wins merge with global; `validate` command output for each failure class.
+- **Per task commit:** `uv run pytest tests/test_routing.py tests/test_routing_strategy.py tests/test_loop_routing.py -q`
+- **Per wave merge:** `uv run pytest tests/ -q`
+- **Phase gate:** Full suite green + probe-set calibration recorded before verify
 
 ### Wave 0 Gaps
-
-- No live OpenRouter key in CI → decision-call integration tests must skip cleanly without a key (env-gated), same as AWS-credential gating precedent.
-- No Ollama daemon in CI → local-engine tests use a stub HTTP server (stdlib `http.server` in-test) or URL-mocked `urlopen`; document the manual `ollama serve` verification step.
-- Benchmark-pull format unknown (A-07) → Wave 0 ships descriptors as user-editable snapshot schema with `pulled:` date; live pull is a stretch goal, not a gate.
+- [ ] `tests/test_routing*.py` — extend with gate/validation/transport cases (no new files needed)
+- [ ] Probe set + runner (`routing/probe.py` or `scripts/route-probe.py`) — 20 labeled asks per AI-SPEC §5; planner decides location
+- [ ] `evals/routing-probe/promptfooconfig.yaml` — only if promptfoo is available (else JSONL-diff fallback)
+- [ ] uattest r1–r4 scenario updates for the Decision-API flow (setup split-catalog, confidences lines, hold notes)
 
 ## Security Domain
 
-Enforcement ON. ASVS L1. Block on high.
+ASVS Level 1, `security_enforcement: true`, block on high [VERIFIED: config.json workflow section].
 
-| ASVS L1 category | Applicability | Control |
-|------------------|---------------|---------|
-| V2 Authentication (credential storage) | HIGH — OpenRouter API key | Never persist to repo or strategy YAML; runtime env or 0700-dir secret file; scrub from transcripts via `scrub_credentials` precedent [VERIFIED: `cost_context.py:383-396`]. Recommend extending `_CRED_PATTERNS` with OpenRouter key shapes if observable. |
-| V3 Session / V4 Access Control | LOW — local CLI, single actor | Strategy files: symlink refusal precedent; repo strategy file is read (untrusted content) but never executed — directives are prompt text, never code. |
-| V5 Validation | HIGH — decision JSON, strategy YAML, catalog payloads | `yaml.safe_load` only; strict JSON schema parse (exact id match, level allowlist); catalog entries type-checked field-by-field like `_store_openrouter` [VERIFIED: `live_pricing.py:382-405`]. |
-| V7 Logging | MEDIUM — ask text + keys in logs | Decision prompts contain user ask text: never log full prompts at info; transcript shows only model/why/cost. API keys never in cache files or error strings. |
-| V9 Communications | HIGH — HTTPS + localhost HTTP | OpenRouter over HTTPS with timeout; Ollama over localhost HTTP (document: no secret sent; `OLLAMA_API_KEY` Bearer only for proxied hosts per harness precedent). Fail-soft on TLS/network errors. |
-| V10 Malicious code / prompt injection | MEDIUM — directives + catalog descriptions enter the decision prompt | Treat strategy directives and `/models` descriptions as untrusted prompt content: delimit with clear framing, truncate lengths, and constrain output to the strict JSON schema so injected text cannot widen the pick beyond exact candidate ids. |
-| V14 Configuration | MEDIUM — new config surface | Fail-soft load, warn-and-skip entries, `validate` slash command; repo file wins over global (D-03) — document that cloning a repo can change routing behavior (consent-by-config, same as policy files). |
+### Applicable ASVS Categories
+| ASVS Category | Applies | Standard Control |
+|---------------|---------|-----------------|
+| V2 Authentication | yes (API keys) | `OPENROUTER_API_KEY` env-at-call-time, header-only, never logged/persisted; `save_strategy` drops `api_key`-shaped keys [VERIFIED: routing.py:308-319]; local loopback sends no key [VERIFIED: routing.py:841-853] |
+| V3 Session Management | no | N/A (CLI session, no cookies/tokens) |
+| V4 Access Control | partial | Strategy files 0700 parent dir, symlink refusal [VERIFIED: routing.py:357,391-395]; repo file is user-trusted input — truncate + fail-soft |
+| V5 Input Validation | yes | Strict answer validation (type/sum/range/stale-choice); candidate cap 26; body-size bound; ask truncation 2000 chars; base-URL http(s)-only [VERIFIED: routing.py:170-178] |
+| V6 Cryptography | no | TLS via platform; no crypto code — never hand-roll |
+| V7 Errors/Logging | yes | Failures → hold + note; raw payloads logged at debug only (may contain ask text); never log keys |
+| V10 Malicious Code | yes | Zero new dependencies — no supply-chain delta |
 
-### Known threat patterns for this stack
-
-- **Decision-prompt injection via candidate metadata**: `/models` descriptions are third-party text; a malicious description could steer the pick. Control: exact-id output constraint + truncate descriptions (or exclude them — ids + stats suffice).
-- **Strategy file as an attack surface**: a malicious repo's strategy could list an attacker model id. Control: routed ids still resolve through `resolve_model` (unknown providers raise before mutation); document repo-wins implications in setup; `validate` command flags unknown ids against the catalog.
-- **Key exfiltration via error paths**: `urllib` errors echo URLs — never put the key in the URL (header only, per Example 1).
-- **SSRF-ish base URLs**: custom local-engine base URL is user config, not remote input — acceptable; still validate scheme (`http`/`https` only).
+### Known Threat Patterns for this stack
+| Pattern | STRIDE | Standard Mitigation |
+|---------|--------|---------------------|
+| Malicious repo `routing.yaml` injects unbounded text into paid calls | Tampering | Truncate ask (2000) + directives; bound serialized body; fail-soft entries |
+| Ask text exfiltrated to the wrong engine | Information disclosure | Endpoint allowlist per engine (exact URLs); ask goes only to the configured engine (D-09) |
+| Key material persisted next to strategy | Information disclosure | `_is_secret_shaped_key` drop-on-save (top level + `engine`) [VERIFIED: routing.py:322-380] |
+| Prompt-injection-via-ask skewing the pick | Tampering | State is data; criteria explicit about what counts; adversarial probes in calibration set [CITED: skill limits ref] |
+| Stale pick after strategy edit routes to a removed model | Tampering/Elevation | `choice ∈ live candidates` check in validation — stale holds, never routes |
 
 ## Sources
 
-### Primary (tool-confirmed this session)
+### Primary (HIGH confidence — live-verified this session, 2026-10-11)
+- Live `GET /api/v1/models?output_modalities=decisions` (19 entries, ids/canonical slugs/ctx/pricing) — no key needed
+- Live `POST /api/alpha/decisions` ×2 (model-choice 200/0.33s luna@0.85 + $0.000016128; 30-option 200) — `OPENROUTER_API_KEY` from env
+- Live `POST localhost:11434/v1/systemone` ×2 (tev1:0.8b choice + 40-option 2–26 rejection) + `/api/version` (0.40.3)
+- In-repo reads: `routing.py` (full, 1231 lines), `router.py` setup section (586–960), `pyproject.toml` pytest config, uattest `driver.py` scenarios, AGENTS.md, 08-CONTEXT.md, 08-AI-SPEC.md, REQUIREMENTS.md, STATE.md
 
-- In-repo: `strands_code_cli/live_pricing.py` (full read), `model_switch.py` (full read), `model_capabilities.py` (full read), `provider_config.py` (full read), `cost_context.py` (partial, :1-500), `router.py` (`:1-180`), `loop.py` (run_loop `:1486-1722`, `apply_model_action` `:1064-1148`, `_btw_context_for` `:603-626`, turn block `:1723-1790`), `main.py` (full read), `output.py` (full read), `choice.py` (`radio_choice`), `btw.py` (outline), `pyproject.toml` (full read), `AGENTS.md` (full read), `.planning/REQUIREMENTS.md`, `.planning/STATE.md`, `08-CONTEXT.md`.
-- Installed harness `strands_harness/models.py` 0.1.2 via `uv run python` + `sed`/`grep`: `_PROVIDERS` registry (`:296-306`), `EFFORT_LEVELS` (`:307`), `_bedrock_effort` (`:151-158`), `_bedrock_thinking` (`:161-176`), provider builders (`:178-262`), `supports_thinking` (`:374-383`), `resolve_model` (`:413-474`), `_ollama` host default, `create_harness` signature (`model`, `effort`, ... top-level).
-- Installed `strands-agents` 1.58.1 `ModelRouter` via `inspect.getsource`/`signature`.
-- Live `GET https://openrouter.ai/api/v1/models`: 458 models, entry shape + keys, candidate greps (`qwen3` 37, `llama` 11, `haiku` 5, `laya`/`kev`/`jevi` 0).
-- Environment probes: `python3 3.14.8`, `uv 0.12.23`, `ollama` binary present/daemon down, `node v22.17.1`, `uv pip list` versions, `ModuleNotFoundError` for `ollama`/`openai`/`litellm` packages.
+### Secondary (MEDIUM — official docs, extracted this session)
+- https://openrouter.ai/skills/openrouter-decisions (7-step workflow, gating, probing)
+- Skill refs: decisions-api.md (shapes, optional fields, SDK paths), models.md (pinning criteria, catalog fields), decision-model-limits.md (12 limits, verified on Jev 1.13)
+- https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request (error codes 400–529, session_id/trace/user/provider)
+- https://openrouter.ai/docs/guides/community/jev-tutorial (billing FAQ, response reading, alias guidance)
+- https://docs.ollama.com/capabilities/decision + https://docs.ollama.com/api/systemone (shapes, 64 KiB cap, ≥0.35 floor, keep_alive)
+- https://docs.typesafe.ai/confidence (confidence semantics, risk-scaled thresholds)
+- https://ollama.com/library/nimble + https://ollama.com/library/clef (tags, sizes, requires, benchmarks — vendor numbers)
 
-### Secondary (official docs, fetched)
-
-- [OpenRouter Auto Router](https://openrouter.ai/docs/features/model-routing) — slugs, plugins (`auto-router` id, `allowed_models`, `excluded_models`, `cost_tier`), response `model` field, session stickiness, graceful degradation.
-- [OpenRouter API Reference](https://openrouter.ai/docs/api-reference/overview) — chat-completions schema, `response_format`, OpenAI compatibility.
-- [Ollama API (`api.md`)](https://github.com/ollama/ollama/blob/main/docs/api.md) — `POST /api/chat` params (`model`, `messages`, `format` JSON schema, `stream`, `keep_alive`, `think` levels), `GET /api/tags`.
-
-### Tertiary (web search, cited claims only)
-
-- [Bedrock prompt routing user guide](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-routing.html) + [AWS ML blog](https://aws.amazon.com/blogs/machine-learning/build-generative-ai-solutions-with-amazon-bedrock/) — same-family two-model intelligent routing.
-- [TechCrunch/Bedrock prompt routing + caching](https://techcrunch.com/2024/12/04/aws-brings-prompt-routing-and-caching-to-its-bedrock-llm-service) — small-LM prediction background.
-- Benchmark boards: [SWE-bench Pro leaderboard](https://benchlm.ai/benchmarks/swe-bench-pro), [LMArena](https://lmarena.ai), [Artificial Analysis](https://artificialanalysis.ai), [OpenRouter rankings](https://openrouter.ai/rankings).
+### Tertiary (LOW — third-party, flagged)
+- https://jev-agent.com/decisions-api (model-dependent caps: Solar ≤26, hosted Tev1 ≤20; confidence-accuracy gaps)
+- https://www.ayautomate.com/blog/how-to-use-jev-guide (255 options, latency distribution, rate limits)
+- https://llmconfigurator.com/en/guides/decision-models/ollama-setup + https://modelfit.io/blog/ollama-decision-models-nimble-tev1-mac (setup, requires-0.35.0 blobs)
 
 ## Metadata
 
-| Field | Value |
-|-------|-------|
-| Confidence breakdown | Architecture HIGH (all seams verified in-repo + harness); Standard Stack HIGH (zero new deps, versions pinned by probe); Pitfalls HIGH (drawn from locked decisions + live-probe precedent); Benchmarks MEDIUM (sources exist, pull format unverified — A-07); Local-engine timeouts MEDIUM (daemon down, cold-load behavior unprobed) |
-| Overall | HIGH |
-| Date | 2026-10-11 |
-| Valid until | 2026-11-11 (re-verify: OpenRouter catalog names, `strands-harness` effort levels, Ollama API if daemon behavior matters) |
-| Skills checked | `.agents/skills/`, `.codex/skills/` — both absent [VERIFIED: `ls` this session]; AGENTS.md confirms "No project skills found" |
+**Confidence breakdown:**
+- Standard stack: HIGH — zero new deps; all claims live-verified or locked-file reads
+- Architecture: HIGH — pattern is the locked AI-SPEC design + surviving in-repo machinery, both read this session
+- Pitfalls: HIGH — the two load-bearing findings (vendor-specific confidence, 2–26 binding cap) are live-probe verified
+- Pinning: HIGH for catalog snapshot; MEDIUM for durability — catalog changes silently, must re-verify at implementation
+- Calibration defaults: LOW by design — no defaults ship from n=2 anecdotes; implementation probes produce them
+
+**Research date:** 2026-10-11
+**Valid until:** 2026-10-18 (fast-moving: decision-model catalog + pins; API shapes stable)
+
+## RESEARCH COMPLETE
+
+
+
