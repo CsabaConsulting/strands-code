@@ -52,6 +52,15 @@ TYPESAFE_DECISIONS_URL = "https://api.typesafe.ai/v1/systemone"
 TYPESAFE_INPUT_USD_PER_MTOK = 0.042
 """Native input price per million tokens (flat input-only rate)."""
 
+NATIVE_JEV_PIN = "jev-1.13.0"
+"""Pinned native Jev id (full semver; the minor-only form 400s)."""
+
+NATIVE_JEV_ALIAS = "jev-latest"
+"""Explicit-opt-in native alias (a moving target; setup warns of drift)."""
+
+_NATIVE_MODEL_IDS = frozenset({NATIVE_JEV_PIN, NATIVE_JEV_ALIAS})
+"""Native model strings verified live (D-05 corrected)."""
+
 DEFAULT_TIE_MARGIN = 0.04
 """Near-tie gap: top-two within this routes the cheaper one (D-14).
 
@@ -643,6 +652,32 @@ def _catalog_known(model_id: str, catalog: set[str]) -> bool:
     return model_id in catalog or _bare_catalog_id(model_id) in catalog
 
 
+def _openrouter_catalog_lines(decision_model: str) -> tuple[bool, list[str]]:
+    """Catalog verdict lines for one decision model (both file shapes).
+
+    Shared by the legacy primary branch and the ordered-list branch:
+    unchecked when the cached decisions catalog is unreachable,
+    known when the id matches, INVALID with a fix line otherwise.
+    """
+    catalog = _cached_decision_ids()
+    if catalog is None:
+        return True, [
+            f"engine: decision model {decision_model} — unchecked "
+            "(no cached decisions catalog; run /cost refresh, then re-validate)"
+        ]
+    if _catalog_known(decision_model, catalog):
+        return True, [
+            f"engine: decision model {decision_model} — "
+            "known in the cached decisions catalog"
+        ]
+    return False, [
+        f"engine: INVALID — decision model {decision_model} "
+        "not in the cached decisions catalog",
+        "fix: pick a live id from the decisions listing "
+        "(re-run /route setup), then /cost refresh and re-validate",
+    ]
+
+
 def validate_strategy(
     global_path: str | Path | None = None,
     repo_path: str | Path | None = None,
@@ -764,10 +799,16 @@ def validate_strategy(
     engine = _parse_engine(data.get("engine"))
     raw_engine = data.get("engine")
     raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None
-    if isinstance(raw_primary, str) and raw_primary not in (
-        "openrouter",
-        "local",
-        "off",
+    raw_order = raw_engine.get("order") if isinstance(raw_engine, dict) else None
+    explicit_order = isinstance(raw_engine, dict) and "order" in raw_engine
+    if (
+        isinstance(raw_primary, str)
+        and raw_primary not in (
+            "openrouter",
+            "local",
+            "off",
+        )
+        and not explicit_order
     ):
         valid = False
         lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
@@ -786,58 +827,134 @@ def validate_strategy(
             "is not an http/https URL"
         )
         lines.append("fix: set engine.local_base_url to an http(s) URL or remove it")
-    if engine.primary == "off":
-        lines.append("engine: primary off — routing disabled by config")
-    elif engine.primary == "local":
-        if not engine.local_model:
+    if explicit_order:
+        if isinstance(raw_engine, dict) and "primary" in raw_engine:
+            lines.append(
+                "note: engine.primary is ignored (engine.order drives the chain)"
+            )
+        if not isinstance(raw_order, list):
             valid = False
-            lines.append("engine: INVALID — primary is local with no local_model")
             lines.append(
-                "fix: set engine.local_model to your Ollama tag, "
-                "or switch primary to openrouter"
+                "engine: INVALID — engine.order is not a list "
+                "(the loader ignores it)"
             )
+            lines.append("fix: set engine.order to a list like [native, openrouter]")
         else:
-            lines.append(f"engine: primary local, model {engine.local_model} — ok")
-        if engine.decision_model:
-            lines.append(
-                f"engine: decision model {engine.decision_model} "
-                "(unused while primary is local)"
-            )
+            for entry in raw_order:
+                if entry not in ("native", "openrouter", "local"):
+                    valid = False
+                    lines.append(
+                        f"engine: INVALID — unknown engine {entry!r} in engine.order"
+                    )
+                    lines.append(
+                        f"fix: remove {entry!r} from engine.order "
+                        "(expected native|openrouter|local)"
+                    )
+        order = _effective_order(engine)
+        if not order:
+            lines.append("engine: primary off — routing disabled by config")
         else:
-            lines.append("engine: no decision model (unused while primary is local)")
+            for name in order:
+                if name == "openrouter":
+                    if not engine.decision_model:
+                        valid = False
+                        lines.append(
+                            "engine: INVALID — order lists openrouter "
+                            "with no decision_model"
+                        )
+                        lines.append(
+                            "fix: set engine.decision_model to a decisions-catalog "
+                            "id, or re-run /route setup"
+                        )
+                    else:
+                        ok, extra = _openrouter_catalog_lines(engine.decision_model)
+                        if not ok:
+                            valid = False
+                        lines.extend(extra)
+                elif name == "local":
+                    if not engine.local_model:
+                        valid = False
+                        lines.append(
+                            "engine: INVALID — order lists local with no local_model"
+                        )
+                        lines.append(
+                            "fix: set engine.local_model to your Ollama tag, "
+                            "or drop local from engine.order"
+                        )
+                    else:
+                        lines.append(f"engine: local model {engine.local_model} — ok")
+                elif name == "native":
+                    if not engine.native_model:
+                        valid = False
+                        lines.append(
+                            "engine: INVALID — order lists native with no native_model"
+                        )
+                        lines.append(
+                            f"fix: set engine.native_model to {NATIVE_JEV_PIN}, "
+                            "or re-run /route setup"
+                        )
+                    elif engine.native_model not in _NATIVE_MODEL_IDS:
+                        valid = False
+                        lines.append(
+                            "engine: INVALID — native model "
+                            f"{engine.native_model!r} is not a verified native id"
+                        )
+                        lines.append(
+                            f"fix: set engine.native_model to {NATIVE_JEV_PIN} "
+                            "(full semver pin; minor-only and prefixed "
+                            "forms are rejected)"
+                        )
+                    else:
+                        lines.append(
+                            f"engine: native model {engine.native_model} — ok"
+                        )
     else:
-        if not engine.decision_model:
-            valid = False
+        if isinstance(raw_engine, dict) and "primary" in raw_engine:
             lines.append(
-                f"engine: INVALID — primary is {engine.primary} "
-                "with no decision_model"
+                "note: legacy engine.primary shape — "
+                "re-run /route setup to adopt the engines list"
             )
-            lines.append(
-                "fix: set engine.decision_model to a decisions-catalog id, "
-                "or re-run /route setup"
-            )
-        else:
-            catalog = _cached_decision_ids()
-            if catalog is None:
-                lines.append(
-                    f"engine: decision model {engine.decision_model} — unchecked "
-                    "(no cached decisions catalog; run /cost refresh, then re-validate)"
-                )
-            elif _catalog_known(engine.decision_model, catalog):
-                lines.append(
-                    f"engine: decision model {engine.decision_model} — "
-                    "known in the cached decisions catalog"
-                )
-            else:
+        if engine.primary == "off":
+            lines.append("engine: primary off — routing disabled by config")
+        elif engine.primary == "local":
+            if not engine.local_model:
                 valid = False
                 lines.append(
-                    f"engine: INVALID — decision model {engine.decision_model} "
-                    "not in the cached decisions catalog"
+                    "engine: INVALID — primary is local with no local_model"
                 )
                 lines.append(
-                    "fix: pick a live id from the decisions listing "
-                    "(re-run /route setup), then /cost refresh and re-validate"
+                    "fix: set engine.local_model to your Ollama tag, "
+                    "or switch primary to openrouter"
                 )
+            else:
+                lines.append(
+                    f"engine: primary local, model {engine.local_model} — ok"
+                )
+            if engine.decision_model:
+                lines.append(
+                    f"engine: decision model {engine.decision_model} "
+                    "(unused while primary is local)"
+                )
+            else:
+                lines.append(
+                    "engine: no decision model (unused while primary is local)"
+                )
+        else:
+            if not engine.decision_model:
+                valid = False
+                lines.append(
+                    f"engine: INVALID — primary is {engine.primary} "
+                    "with no decision_model"
+                )
+                lines.append(
+                    "fix: set engine.decision_model to a decisions-catalog id, "
+                    "or re-run /route setup"
+                )
+            else:
+                ok, extra = _openrouter_catalog_lines(engine.decision_model)
+                if not ok:
+                    valid = False
+                lines.extend(extra)
     directives = data.get("directives", "")
     if directives is None:
         directives = ""

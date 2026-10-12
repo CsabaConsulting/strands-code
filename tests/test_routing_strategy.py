@@ -247,6 +247,102 @@ class TestStrategyLoad:
         assert strategy.confidence_threshold == 0.6
         assert strategy.candidates[0].criteria == "Cheap small model"
 
+    def test_ordered_engines_load(self, tmp_path):
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native, openrouter], native_model: jev-1.13.0,"
+            " decision_model: cheap/decider, skip_notes: false}\n",
+        )
+        strategy = load_strategy(
+            global_path=path, repo_path=tmp_path / "absent.yaml"
+        )
+        assert strategy is not None
+        assert strategy.engine.order == ["native", "openrouter"]
+        assert strategy.engine.native_model == "jev-1.13.0"
+        assert strategy.engine.skip_notes is False
+
+    def test_order_defaults_when_absent(self, tmp_path):
+        path = _write(tmp_path / "routing.yaml", _strategy_yaml())
+        strategy = load_strategy(
+            global_path=path, repo_path=tmp_path / "absent.yaml"
+        )
+        assert strategy is not None
+        assert strategy.engine.order is None
+        assert strategy.engine.native_model is None
+        assert strategy.engine.skip_notes is True
+
+    def test_order_dedups_and_drops_unknown(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native, bogus, native, openrouter]}\n",
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.engine.order == ["native", "openrouter"]
+        assert "bogus" in caplog.text
+
+    def test_order_wrong_type_warns_and_defaults(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: local, order: native}\n",
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.engine.order is None  # legacy primary mapping wins
+        assert "'order' (not a list)" in caplog.text
+
+    def test_native_model_wrong_type_warns_and_defaults(self, tmp_path, caplog):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native], native_model: 42}\n",
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.engine.native_model is None
+        assert "'native_model' (not a string)" in caplog.text
+
+    def test_skip_notes_wrong_type_warns_and_defaults_true(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native], skip_notes: sometimes}\n",
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "absent.yaml"
+            )
+        assert strategy is not None
+        assert strategy.engine.skip_notes is True
+        assert "'skip_notes' (not true/false)" in caplog.text
+
 
 _SETUP_CATALOG = [
     {
@@ -752,6 +848,31 @@ class TestRouteSetup:
         assert "sk-live" not in path.read_text(encoding="utf-8")
         assert "secret-shaped" in caplog.text
         assert path.parent.stat().st_mode & 0o777 == 0o700
+
+    def test_save_strategy_drops_typesafe_key_shaped_keys(
+        self, tmp_path, caplog
+    ):
+        import logging
+
+        data = {
+            "candidates": [{"id": "a/1"}],
+            "directives": "d",
+            "TYPESAFE_API_KEY": "ts-[REDACTED]",
+            "engine": {
+                "order": ["native"],
+                "native_model": "jev-1.13.0",
+                "TYPESAFE_API_KEY": "ts-[REDACTED]",
+            },
+        }
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+            path = save_strategy(data, "global", global_path=tmp_path / "cfg" / "g.yaml")
+        saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "TYPESAFE_API_KEY" not in saved
+        assert "TYPESAFE_API_KEY" not in saved.get("engine", {})
+        assert saved["engine"]["native_model"] == "jev-1.13.0"
+        assert saved["engine"]["order"] == ["native"]
+        assert "ts-[REDACTED]" not in path.read_text(encoding="utf-8")
+        assert "secret-shaped" in caplog.text
 
     def test_save_strategy_refuses_zero_usable_candidates(self, tmp_path):
         with pytest.raises(ValueError, match="zero usable candidates"):
@@ -1278,6 +1399,168 @@ class TestRouteValidate:
                 global_path=tmp_path / "absent.yaml", repo_path=path
             )
             assert report.valid is True, report.format()
+
+    @pytest.mark.parametrize("model", ["jev-1.13.0", "jev-latest"])
+    def test_native_verified_ids_validate_with_ok_line(self, tmp_path, model):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            f"engine: {{order: [native], native_model: {model}}}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert f"engine: native model {model} — ok" in report.format()
+
+    @pytest.mark.parametrize(
+        "model", ["jev-1.13", "typesafe/jev-1.13", "no-such-model"]
+    )
+    def test_native_unverified_strings_fail_naming_pin(self, tmp_path, model):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            f"engine: {{order: [native], native_model: {model}}}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "not a verified native id" in text
+        assert "fix: set engine.native_model to jev-1.13.0" in text
+
+    def test_native_missing_model_fails_with_setup_fix(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native]}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "order lists native with no native_model" in text
+        assert "fix: set engine.native_model" in text
+        assert "/route setup" in text
+
+    def test_unknown_order_entry_fails_naming_entry(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [native, bogus], native_model: jev-1.13.0}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "unknown engine 'bogus' in engine.order" in text
+        assert "fix: remove 'bogus' from engine.order" in text
+
+    def test_order_not_a_list_fails_with_fix(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: openrouter, order: native,"
+            " decision_model: cheap/decider}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "engine.order is not a list" in text
+        assert "fix: set engine.order to a list" in text
+
+    def test_legacy_primary_nudges_without_failing(self, tmp_path):
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert (
+            "re-run /route setup to adopt the engines list" in report.format()
+        )
+
+    def test_order_and_primary_notes_primary_ignored(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: local, order: [native],"
+            " native_model: jev-1.13.0}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        text = report.format()
+        assert "engine.primary is ignored" in text
+        assert "engine: native model jev-1.13.0 — ok" in text
+        assert "unused while primary is local" not in text
+        bogus = _write(
+            tmp_path / "bogus.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: bogus, order: [native],"
+            " native_model: jev-1.13.0}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=bogus
+        )
+        assert report.valid is True  # ignored primary judges nothing
+        assert "unknown primary" not in report.format()
+
+    def test_empty_order_matches_legacy_off_line(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: []}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert (
+            "engine: primary off — routing disabled by config" in report.format()
+        )
+
+    def test_ordered_openrouter_and_local_judge_per_engine(self, tmp_path):
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
+        bare = _write(
+            tmp_path / "bare.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [openrouter, local]}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=bare
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "order lists openrouter with no decision_model" in text
+        assert "order lists local with no local_model" in text
+        full = _write(
+            tmp_path / "full.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [openrouter, local],"
+            " decision_model: cheap/decider, local_model: nimble}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=full
+        )
+        assert report.valid is True
+        text = report.format()
+        assert "known in the cached decisions catalog" in text
+        assert "engine: local model nimble — ok" in text
 
 
 class TestBoolLevelNormalization:
