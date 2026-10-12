@@ -227,6 +227,39 @@ class TestTracerEndToEnd:
         assert model.take_reported_costs() == []
 
 
+class TestMainDrainAgentShape:
+    def test_agent_shaped_model_drains_reported_cost(self, _litellm_stub):
+        from strands_code_cli.loop import record_turn_metrics
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0024))
+        turns: list = []
+        line = record_turn_metrics(
+            _Summary(12, 1),
+            "litellm/openrouter/qwen/qwen3-32b",
+            turns,
+            model=SimpleNamespace(model=model),
+        )
+        assert turns[-1]["reported_cost"] == 0.0024
+        assert line is not None and "$0.00 actual" in line
+
+    def test_rewrap_discards_undrained_accumulation(self, _litellm_stub):
+        from strands_code_cli.reported_cost import (
+            sum_reported_costs,
+            wrap_for_openrouter,
+        )
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model._reported_costs.extend([0.005, None])
+        rewrapped = wrap_for_openrouter(
+            "litellm/openrouter/qwen/qwen3-32b", model
+        )
+        assert rewrapped is model
+        assert rewrapped.take_reported_costs() == []
+        rewrapped.format_chunk(_metadata(0.0024))
+        assert sum_reported_costs(rewrapped.take_reported_costs()) == 0.0024
+
+
 class TestFreshSideModel:
     def test_side_builds_from_one_parent_stay_independent(self, _litellm_stub):
         from strands_code_cli.reported_cost import fresh_side_model
