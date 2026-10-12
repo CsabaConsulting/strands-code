@@ -1278,3 +1278,44 @@ class TestRouteValidate:
                 global_path=tmp_path / "absent.yaml", repo_path=path
             )
             assert report.valid is True, report.format()
+
+
+class TestBoolLevelNormalization:
+    def test_false_level_parses_to_off_string(self):
+        candidate = routing_mod._parse_candidate(
+            {"id": "x", "levels": ["auto", False]}, 0
+        )
+        assert candidate is not None
+        assert candidate.levels == ["auto", "off"]
+
+    def test_true_level_parses_to_on_string(self):
+        candidate = routing_mod._parse_candidate({"id": "x", "levels": [True]}, 0)
+        assert candidate is not None
+        assert candidate.levels == ["on"]
+
+    def test_unquoted_off_yaml_loads_usable_candidate(self, tmp_path):
+        path = _write(
+            tmp_path / "routing.yaml",
+            _strategy_yaml(candidates="\n  - {id: x, levels: [auto, off]}\n"),
+        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
+        assert strategy is not None
+        assert [c.id for c in strategy.candidates] == ["x"]
+        assert strategy.candidates[0].levels == ["auto", "off"]
+
+    def test_skip_reason_accepts_bool_levels(self):
+        assert (
+            routing_mod._candidate_skip_reason(
+                {"id": "x", "levels": ["auto", False]}, 0
+            )
+            is None
+        )
+
+    def test_int_level_still_skips(self):
+        assert (
+            routing_mod._candidate_skip_reason({"id": "x", "levels": ["auto", 3]}, 0)
+            == "'levels' not a string list"
+        )
+        assert (
+            routing_mod._parse_candidate({"id": "x", "levels": ["auto", 3]}, 0) is None
+        )

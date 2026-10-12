@@ -192,7 +192,7 @@ def _candidate_skip_reason(entry: object, pos: int) -> str | None:
     levels = entry.get("levels")
     if levels is not None and (
         not isinstance(levels, list)
-        or any(not isinstance(level, str) for level in levels)
+        or any(not isinstance(level, (str, bool)) for level in levels)
     ):
         return "'levels' not a string list"
     benchmarks = entry.get("benchmarks")
@@ -217,6 +217,14 @@ def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
     if not isinstance(entry, dict):  # unreachable: a None reason proves a dict
         return None
     levels = entry.get("levels")
+    if levels is not None:
+        # YAML 1.1 folds unquoted on/off to bools: honor the intent as level
+        # strings so hand-edited strategies load as usable candidates
+        # (mirrors the _parse_engine primary fold).
+        levels = [
+            "on" if level is True else "off" if level is False else level
+            for level in levels
+        ]
     benchmarks = entry.get("benchmarks")
     return RoutingCandidate(
         id=entry["id"],
