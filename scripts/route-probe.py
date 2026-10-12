@@ -12,6 +12,7 @@ Modes::
     route-probe.py --dry-run            # list probe ids, no network
     route-probe.py --run openrouter     # 20 live verdicts via OpenRouter
     route-probe.py --run local          # 20 live verdicts via Ollama
+    route-probe.py --run native         # 20 live verdicts via TypeSafe
     route-probe.py --compare            # diff runs against baseline.json
 
 Regression path (compare-mode fallback): promptfoo is not installed on
@@ -55,6 +56,10 @@ BASELINE_FILE = REPO_ROOT / "evals" / "routing-probe" / "baseline.json"
 DECISION_MODEL_PIN = "typesafe/jev-1.13"
 LOCAL_MODEL_PIN = "nimble"
 LOCAL_MODEL_FALLBACK = "tev1:0.8b"
+NATIVE_MODEL_PIN = "jev-1.13.0"
+
+RUN_ENGINES = ("openrouter", "local", "native")
+"""Engines the runner addresses (--run choices plus dry-run list)."""
 
 CALIBRATION_DIRECTIVES = "trivial asks go cheap, deep refactors go big"
 
@@ -123,6 +128,7 @@ from strands_code_cli.routing import (  # noqa: E402
     build_model_question,
     decide_via_ollama,
     decide_via_openrouter,
+    decide_via_typesafe,
     gate_model,
     local_engine_ready,
     validate_choice_answer,
@@ -165,7 +171,11 @@ def expand_ask(probe: dict) -> str:
 
 
 def calibration_strategy(
-    *, single: bool, decision_model: str | None, local_model: str | None
+    *,
+    single: bool,
+    decision_model: str | None,
+    local_model: str | None,
+    native_model: str | None = None,
 ) -> tuple[RoutingStrategy, dict[str, str]]:
     """Build the fixed calibration strategy plus id->tier map."""
     entries = CALIBRATION_CANDIDATES[1:2] if single else CALIBRATION_CANDIDATES
@@ -185,6 +195,7 @@ def calibration_strategy(
             primary="openrouter",
             decision_model=decision_model,
             local_model=local_model,
+            native_model=native_model,
         ),
     )
     return strategy, {model_id: tier for tier, model_id, _ in entries}
@@ -246,6 +257,16 @@ class _FaultContext:
                 "OPENROUTER_API_KEY"
             )
             os.environ.pop("OPENROUTER_API_KEY", None)
+        elif fault == "bad-key" and self._engine == "native":
+            self._saved["TYPESAFE_API_KEY"] = os.environ.get(
+                "TYPESAFE_API_KEY"
+            )
+            os.environ["TYPESAFE_API_KEY"] = "probe-bogus-key"
+        elif fault == "no-key" and self._engine == "native":
+            self._saved["TYPESAFE_API_KEY"] = os.environ.get(
+                "TYPESAFE_API_KEY"
+            )
+            os.environ.pop("TYPESAFE_API_KEY", None)
         elif fault == "dead-port" and self._engine == "local":
             self.base_override = "http://127.0.0.1:1"
         elif fault is not None:
@@ -253,12 +274,11 @@ class _FaultContext:
         return self
 
     def __exit__(self, *exc_info):
-        if "OPENROUTER_API_KEY" in self._saved:
-            saved = self._saved["OPENROUTER_API_KEY"]
+        for key, saved in self._saved.items():
             if saved is None:
-                os.environ.pop("OPENROUTER_API_KEY", None)
+                os.environ.pop(key, None)
             else:
-                os.environ["OPENROUTER_API_KEY"] = saved
+                os.environ[key] = saved
         return False
 
 
@@ -273,14 +293,17 @@ def run_probe(
     engine: str,
     decision_model: str,
     local_model: str,
+    native_model: str | None = None,
 ) -> dict:
     """Execute one probe through one engine; return the verdict record."""
     ask = expand_ask(probe)
     single = probe.get("candidates") == "single"
+    native_tag = native_model or NATIVE_MODEL_PIN
     strategy, tiers = calibration_strategy(
         single=single,
         decision_model=decision_model,
         local_model=local_model,
+        native_model=native_tag,
     )
     state = build_decision_state(
         ask=ask,
@@ -316,7 +339,7 @@ def run_probe(
                 questions=questions,
                 **kwargs,
             )
-        else:
+        elif engine == "local":
             kwargs = {}
             if applied.timeout is not None:
                 kwargs["timeout"] = applied.timeout
@@ -328,11 +351,29 @@ def run_probe(
                 questions=questions,
                 **kwargs,
             )
+        elif engine == "native":
+            kwargs = {}
+            if applied.timeout is not None:
+                kwargs["timeout"] = applied.timeout
+            result = decide_via_typesafe(
+                native_model=applied.model_override or native_tag,
+                state=state,
+                questions=questions,
+                **kwargs,
+            )
+        else:
+            raise SystemExit(f"unknown engine {engine!r}")
+    if engine == "openrouter":
+        pin = decision_model
+    elif engine == "local":
+        pin = local_model
+    else:
+        pin = native_tag
     record: dict = {
         "probe": probe["id"],
         "category": probe.get("category"),
         "engine": engine,
-        "pin": decision_model if engine == "openrouter" else local_model,
+        "pin": pin,
         "snapshot": result.model,
         "question": question_key,
         "fault": fault,
@@ -432,6 +473,7 @@ def _matches(record: dict, probe: dict, tiers: dict[str, str]) -> bool:
 def cmd_dry_run() -> int:
     """List probe ids without touching the network; exit 0."""
     probes = load_probes()
+    print(f"engines: {', '.join(RUN_ENGINES)}")
     print(f"probes: {len(probes)}")
     for probe in probes:
         print(f"  {probe['id']} [{probe.get('category')}]")
@@ -467,16 +509,19 @@ def cmd_run(
     out: Path | None,
     decision_model: str,
     local_model: str | None,
+    native_model: str | None = None,
 ) -> int:
     """Execute the probe set through one engine; write JSONL verdicts."""
     probes = load_probes()
-    # Cloud runs never touch the daemon: the OpenRouter transport
-    # ignores the local tag, so resolve lazily on the local path only
-    # and keep the pin populated from the constant otherwise (D-06).
+    # Cloud runs never touch the daemon: the OpenRouter and native
+    # transports ignore the local tag, so resolve lazily on the
+    # local path only and keep the pin populated from the constant
+    # otherwise (D-06).
     if engine == "local":
         tag = local_model or resolve_local_model()
     else:
         tag = local_model or LOCAL_MODEL_PIN
+    native_tag = native_model or NATIVE_MODEL_PIN
     if engine == "local":
         _warm_local(tag)
     out_path = out or Path(f"/tmp/route-probe-{engine}.jsonl")
@@ -488,6 +533,7 @@ def cmd_run(
                 engine=engine,
                 decision_model=decision_model,
                 local_model=tag,
+                native_model=native_tag,
             )
             handle.write(json.dumps(record) + "\n")
             handle.flush()
@@ -620,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     group.add_argument(
         "--run",
-        choices=("openrouter", "local"),
+        choices=RUN_ENGINES,
         metavar="ENGINE",
         help="execute the probe set through one engine",
     )
@@ -645,6 +691,10 @@ def main(argv: list[str] | None = None) -> int:
         "--local-model", default=None,
         help="local tag (default nimble-or-tev1 auto-resolve)",
     )
+    parser.add_argument(
+        "--native-model", default=None,
+        help="native Jev id (default pinned full semver)",
+    )
     args = parser.parse_args(argv)
     if args.dry_run:
         return cmd_dry_run()
@@ -654,12 +704,14 @@ def main(argv: list[str] | None = None) -> int:
             out=args.out,
             decision_model=args.decision_model,
             local_model=args.local_model,
+            native_model=args.native_model,
         )
     return cmd_compare(
         baseline_path=args.baseline,
         run_paths={
             "openrouter": Path("/tmp/route-probe-openrouter.jsonl"),
             "local": Path("/tmp/route-probe-local.jsonl"),
+            "native": Path("/tmp/route-probe-native.jsonl"),
         },
     )
 

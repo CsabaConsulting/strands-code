@@ -223,7 +223,9 @@ class TestLazyLocalTag:
     def _stub_probes(self, runner, monkeypatch):
         seen = []
 
-        def _fake_run(probe, *, engine, decision_model, local_model):
+        def _fake_run(
+            probe, *, engine, decision_model, local_model, native_model=None
+        ):
             seen.append(local_model)
             return _canned_record(probe["id"])
 
@@ -280,3 +282,190 @@ class TestLazyLocalTag:
         assert rc == 0
         assert warmed == ["resolved:tag"]
         assert seen == ["resolved:tag"] * 2
+
+
+class TestNativeProbeArm:
+    """09-03: --run native dispatch plus the native fault set.
+
+    All hermetic: the native transport is stubbed, so no live key is
+    needed. Fault arms use bogus key values only, never real ones.
+    """
+
+    PROBE = {
+        "id": "t-native-dispatch",
+        "ask": "What is the default decision timeout in seconds?",
+        "side": False,
+        "acceptable": ["cheap"],
+        "expected": "route",
+        "category": "critical",
+    }
+    CANNED = {
+        "type": "choice",
+        "choice": "anthropic/claude-haiku-4-5",
+        "probabilities": {
+            "anthropic/claude-haiku-4-5": 0.95,
+            "anthropic/claude-sonnet-4-5": 0.04,
+            "anthropic/claude-opus-4-5": 0.01,
+        },
+        "confidence": 0.8,
+    }
+
+    def _stub_transport(self, runner, monkeypatch, seen):
+        def _fake(*, native_model, state, questions, **kwargs):
+            seen.append(
+                {
+                    "native_model": native_model,
+                    "state": state,
+                    "questions": questions,
+                    "kwargs": kwargs,
+                }
+            )
+            return routing_mod.EngineResult(
+                answers={"pick_model": dict(self.CANNED)},
+                input_tokens=100,
+                output_tokens=5,
+                cost=100 * 0.042 / 1_000_000,
+                model="jev-1.13.0",
+            )
+
+        monkeypatch.setattr(runner, "decide_via_typesafe", _fake)
+
+    def test_native_dispatch_calls_production_transport(self, runner, monkeypatch):
+        seen = []
+        self._stub_transport(runner, monkeypatch, seen)
+        record = runner.run_probe(
+            dict(self.PROBE),
+            engine="native",
+            decision_model="decider",
+            local_model="nimble",
+        )
+        assert len(seen) == 1
+        call = seen[0]
+        assert call["native_model"] == runner.NATIVE_MODEL_PIN
+        assert set(call["state"]) == {"ask", "directives", "side"}
+        assert set(call["questions"]) == {"pick_model"}
+        assert call["kwargs"] == {}
+        assert record["engine"] == "native"
+        assert record["pin"] == runner.NATIVE_MODEL_PIN
+        assert record["snapshot"] == "jev-1.13.0"
+        assert record["gated"] == "anthropic/claude-haiku-4-5"
+        assert record["match"] is True
+
+    def test_native_arm_passes_timeout_only_no_base_override(
+        self, runner, monkeypatch
+    ):
+        seen = []
+        self._stub_transport(runner, monkeypatch, seen)
+        probe = dict(self.PROBE, fault="timeout")
+        record = runner.run_probe(
+            probe,
+            engine="native",
+            decision_model="decider",
+            local_model="nimble",
+        )
+        assert seen[0]["kwargs"] == {"timeout": 0.001}
+        assert "local_base_url" not in seen[0]["kwargs"]
+        assert record["fault"] == "timeout"
+
+    def test_native_unknown_model_override_reaches_transport(
+        self, runner, monkeypatch
+    ):
+        seen = []
+        self._stub_transport(runner, monkeypatch, seen)
+        probe = dict(self.PROBE, fault={"native": "unknown-model"})
+        runner.run_probe(
+            probe,
+            engine="native",
+            decision_model="decider",
+            local_model="nimble",
+        )
+        assert seen[0]["native_model"] == "probe-no-such-model-xyz"
+
+    def test_native_bad_key_restores_key_byte_identically(
+        self, runner, monkeypatch
+    ):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
+        with runner._FaultContext("bad-key", "native"):
+            import os
+
+            assert os.environ["TYPESAFE_API_KEY"] == "probe-bogus-key"
+        import os
+
+        assert os.environ["TYPESAFE_API_KEY"] == "sentinel-value-xyz"
+
+    def test_native_no_key_restores_presence_and_absence(
+        self, runner, monkeypatch
+    ):
+        import os
+
+        monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
+        with runner._FaultContext("no-key", "native"):
+            assert "TYPESAFE_API_KEY" not in os.environ
+        assert os.environ["TYPESAFE_API_KEY"] == "sentinel-value-xyz"
+        monkeypatch.delenv("TYPESAFE_API_KEY")
+        with runner._FaultContext("no-key", "native"):
+            assert "TYPESAFE_API_KEY" not in os.environ
+        assert "TYPESAFE_API_KEY" not in os.environ
+
+    def test_native_fault_records_carry_no_key_material(
+        self, runner, monkeypatch
+    ):
+        import os
+
+        monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
+        seen = []
+        self._stub_transport(runner, monkeypatch, seen)
+        probe = dict(self.PROBE, fault={"native": "bad-key"})
+        record = runner.run_probe(
+            probe,
+            engine="native",
+            decision_model="decider",
+            local_model="nimble",
+        )
+        dumped = json.dumps(record)
+        assert "probe-bogus-key" not in dumped
+        assert "sentinel-value-xyz" not in dumped
+        assert os.environ["TYPESAFE_API_KEY"] == "sentinel-value-xyz"
+
+    def test_calibration_strategy_carries_native_model(self, runner):
+        strategy, _ = runner.calibration_strategy(
+            single=False,
+            decision_model="decider",
+            local_model="nimble",
+            native_model="jev-1.13.0",
+        )
+        assert strategy.engine.native_model == "jev-1.13.0"
+
+    def test_native_run_takes_cloud_path_without_resolver_or_warmup(
+        self, runner, tmp_path, monkeypatch
+    ):
+        def _boom(base_url=None):
+            raise SystemExit("resolver must not fire")
+
+        def _warm_boom(tag):
+            raise SystemExit("warmup must not fire")
+
+        monkeypatch.setattr(runner, "resolve_local_model", _boom)
+        monkeypatch.setattr(runner, "_warm_local", _warm_boom)
+        seen = []
+
+        def _fake_run(
+            probe, *, engine, decision_model, local_model, native_model=None
+        ):
+            seen.append((engine, native_model))
+            return _canned_record(probe["id"])
+
+        monkeypatch.setattr(runner, "load_probes", lambda: [{"id": "p1"}])
+        monkeypatch.setattr(runner, "run_probe", _fake_run)
+        rc = runner.cmd_run(
+            "native",
+            out=tmp_path / "native.jsonl",
+            decision_model="decider",
+            local_model=None,
+        )
+        assert rc == 0
+        assert seen == [("native", runner.NATIVE_MODEL_PIN)]
+
+    def test_dry_run_lists_native_engine(self, runner, capsys):
+        assert runner.cmd_dry_run() == 0
+        assert "native" in capsys.readouterr().out
