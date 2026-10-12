@@ -16,6 +16,8 @@ from strands_code_cli.routing import (
     OLLAMA_DEFAULT_HOST,
     OPENROUTER_DECISIONS_URL,
     TRUNCATION_MARKER,
+    TYPESAFE_DECISIONS_URL,
+    TYPESAFE_INPUT_USD_PER_MTOK,
     EngineResult,
     RoutingCandidate,
     RoutingEngine,
@@ -23,6 +25,7 @@ from strands_code_cli.routing import (
     RoutingState,
     RoutingStrategy,
     _ENGINE_REGISTRY,
+    _chain_for,
     _fit_decision_payload,
     _validate_effort_answer,
     build_decision_state,
@@ -31,6 +34,7 @@ from strands_code_cli.routing import (
     decide,
     decide_via_ollama,
     decide_via_openrouter,
+    decide_via_typesafe,
     format_routed_line,
     gate_model,
     load_strategy,
@@ -486,6 +490,24 @@ class TestGateModel:
 def _route_payload(choice=HAIKU, probs=None, **usage) -> dict:
     table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
     return _decision_payload(_answer(choice, table), **usage)
+
+
+NATIVE_PIN = "jev-1.13.0"
+
+
+def _native_payload(choice=HAIKU, probs=None, **usage) -> dict:
+    """Canned native 200: costless usage plus the served snapshot."""
+    usage.setdefault("cost", None)  # native usage never reports spend
+    usage.setdefault("model", NATIVE_PIN)
+    table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
+    return _decision_payload(_answer(choice, table), **usage)
+
+
+def _native_effort_payload(choice="low", probs=None, **usage) -> dict:
+    """Canned native call-2 payload over the picked levels only."""
+    usage.setdefault("cost", None)
+    usage.setdefault("model", NATIVE_PIN)
+    return _effort_payload(choice, probs, **usage)
 
 
 class TestBodyBound:
@@ -1675,7 +1697,11 @@ class TestLocalEngine:
         assert engine == "local"
 
     def test_registry_orders_local_second(self):
-        assert [name for name, _ in _ENGINE_REGISTRY] == ["openrouter", "local"]
+        assert [name for name, _ in _ENGINE_REGISTRY] == [
+            "openrouter",
+            "local",
+            "native",
+        ]
 
     def test_engine_result_defaults_to_zero_usage(self):
         assert EngineResult(answers=None) == EngineResult(
@@ -1900,6 +1926,209 @@ class TestLocalEngine:
         assert result.truncated is True
         assert len(bodies) == 1
         assert len(bodies[0]) <= DECISION_BODY_MAX_BYTES  # local cap honored
+
+
+class TestNativeEngine:
+    @pytest.fixture(autouse=True)
+    def _keys(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def test_native_success_routes_with_computed_spend(self, monkeypatch):
+        import urllib.request
+
+        seen: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            seen.append(
+                {
+                    "url": request.full_url,
+                    "body": json.loads(request.data.decode("utf-8")),
+                    "auth": request.get_header("Authorization"),
+                    "timeout": timeout,
+                }
+            )
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _native_effort_payload(input_tokens=100, output_tokens=5)
+                )
+            return _FakeResponse(_native_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            engine=RoutingEngine(order=["native"], native_model=NATIVE_PIN)
+        )
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(seen) == 2  # model call, then the effort call
+        for call in seen:
+            assert call["url"] == TYPESAFE_DECISIONS_URL
+            assert call["url"] == "https://api.typesafe.ai/v1/systemone"
+            assert call["body"]["model"] == NATIVE_PIN
+            assert call["body"]["state"] == {
+                "ask": "hi",
+                "directives": "trivial asks go cheap",
+                "side": False,
+            }
+            assert call["auth"] == "Bearer " + "test-native-key"  # header-only
+            assert call["timeout"] == 10
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="low",
+            model_confidence=0.85,
+            effort_confidence=0.7,
+            tie_break=False,
+        )
+        assert engine == "native"
+        assert usage[0] == 484 and usage[1] == 46
+        assert usage[2] is not None
+        assert usage[2] == pytest.approx(
+            484 * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
+        )
+        assert detail == ""
+        line = format_routed_line(
+            model=pick.model,
+            effort=pick.effort,
+            model_confidence=pick.model_confidence,
+            effort_confidence=pick.effort_confidence,
+            tie_break=pick.tie_break,
+            prev_model=SONNET,
+            ask="hi",
+        )
+        assert "Routed" in line and HAIKU in line
+        assert "(low)" in line and "85%" in line and "70%" in line
+        assert "~$" in line and "/ask vs" in line
+
+    def test_native_transport_reports_snapshot_and_computed_cost(
+        self, monkeypatch
+    ):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse(_native_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        result = decide_via_typesafe(
+            native_model=NATIVE_PIN,
+            state={"ask": "hi"},
+            questions={"pick_model": {}},
+        )
+        assert result.answers is not None
+        assert result.answers["pick_model"]["choice"] == HAIKU
+        assert (result.input_tokens, result.output_tokens) == (384, 41)
+        assert result.cost == 384 * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
+        assert result.model == "jev-1.13.0"
+
+    @pytest.mark.parametrize(
+        "primary, mapped",
+        [
+            ("openrouter", ["openrouter", "local"]),
+            ("local", ["local"]),
+            ("off", []),
+        ],
+    )
+    def test_legacy_primary_maps_to_identical_chain(
+        self, monkeypatch, primary, mapped
+    ):
+        import strands_code_cli.routing as routing_mod
+
+        monkeypatch.setattr(routing_mod, "local_engine_ready", lambda *args: True)
+        base = dict(decision_model="cheap/decider", local_model="nimble")
+        legacy = _strategy(engine=RoutingEngine(primary=primary, **base))
+        ordered = _strategy(engine=RoutingEngine(order=list(mapped), **base))
+        legacy_chain = _chain_for(legacy)
+        ordered_chain = _chain_for(ordered)
+        assert [name for name, _ in ordered_chain] == [
+            name for name, _ in legacy_chain
+        ]
+        assert [fn for _, fn in ordered_chain] == [
+            fn for _, fn in legacy_chain
+        ]
+
+    def test_native_first_attempts_native_before_openrouter(self, monkeypatch):
+        import urllib.request
+
+        urls: list[str] = []
+
+        def _fake_urlopen(request, timeout=None):
+            urls.append(request.full_url)
+            if request.full_url == TYPESAFE_DECISIONS_URL:
+                raise _http_error(400)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            engine=RoutingEngine(
+                order=["native", "openrouter"],
+                decision_model="cheap/decider",
+                native_model=NATIVE_PIN,
+            )
+        )
+        assert [name for name, _ in _chain_for(strategy)] == [
+            "native",
+            "openrouter",
+        ]
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert urls[0] == TYPESAFE_DECISIONS_URL
+        assert OPENROUTER_DECISIONS_URL in urls[1:]
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "openrouter"
+
+    def test_openrouter_first_never_touches_native(self, monkeypatch):
+        import urllib.request
+
+        urls: list[str] = []
+
+        def _fake_urlopen(request, timeout=None):
+            urls.append(request.full_url)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            engine=RoutingEngine(
+                order=["openrouter", "native"],
+                decision_model="cheap/decider",
+                native_model=NATIVE_PIN,
+            )
+        )
+        assert [name for name, _ in _chain_for(strategy)] == [
+            "openrouter",
+            "native",
+        ]
+        pick, engine, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert urls and all(url != TYPESAFE_DECISIONS_URL for url in urls)
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "openrouter"
+
+    def test_empty_order_holds_like_primary_off(self):
+        strategy = _strategy(engine=RoutingEngine(order=[]))
+        pick, engine, usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "off"
+        assert usage == (0, 0, None)
+        assert detail == "off failed"
+        lone = _strategy(
+            candidates=_candidates()[:1],
+            engine=RoutingEngine(order=[]),
+        )
+        pick, engine, usage, detail = decide(
+            lone, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "off"
+        assert usage == (0, 0, None)
+        assert detail == "off failed"
 
 
 class TestRoutedEffort:

@@ -46,6 +46,12 @@ DECISION_TIMEOUT_SECONDS = 10
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 """Default decision engine transport (D-06)."""
 
+TYPESAFE_DECISIONS_URL = "https://api.typesafe.ai/v1/systemone"
+"""Native TypeSafe decision engine transport (Phase 9 D-05)."""
+
+TYPESAFE_INPUT_USD_PER_MTOK = 0.042
+"""Native input price per million tokens (flat input-only rate)."""
+
 DEFAULT_TIE_MARGIN = 0.04
 """Near-tie gap: top-two within this routes the cheaper one (D-14).
 
@@ -102,7 +108,15 @@ _TOP_LEVEL_KEYS = {
 }
 _CANDIDATE_KEYS = {"id", "tier", "note", "levels", "benchmarks", "criteria"}
 _BENCHMARK_KEYS = {"swe_verified", "lmarena_coding", "aa_index", "pulled"}
-_ENGINE_KEYS = {"primary", "decision_model", "local_model", "local_base_url"}
+_ENGINE_KEYS = {
+    "primary",
+    "decision_model",
+    "local_model",
+    "local_base_url",
+    "order",
+    "native_model",
+    "skip_notes",
+}
 
 
 @dataclass
@@ -125,6 +139,9 @@ class RoutingEngine:
     decision_model: str | None = None
     local_model: str | None = None
     local_base_url: str | None = None
+    order: list[str] | None = None
+    native_model: str | None = None
+    skip_notes: bool = True
 
 
 @dataclass
@@ -278,6 +295,32 @@ def _parse_engine(raw: object) -> RoutingEngine:
             engine.primary,
         )
         engine.primary = "openrouter"
+    order = raw.get("order")
+    if order is not None:
+        if not isinstance(order, list):
+            logger.warning("Ignoring routing engine 'order' (not a list)")
+        else:
+            names: list[str] = []
+            for entry in order:
+                if entry not in ("native", "openrouter", "local"):
+                    logger.warning(
+                        "Ignoring unknown routing engine %r in 'order'", entry
+                    )
+                    continue
+                if entry not in names:
+                    names.append(entry)
+            engine.order = names
+    native_model = raw.get("native_model")
+    if native_model is not None:
+        if not isinstance(native_model, str):
+            logger.warning("Ignoring routing engine 'native_model' (not a string)")
+        else:
+            engine.native_model = native_model
+    skip_notes = raw.get("skip_notes", True)
+    if not isinstance(skip_notes, bool):
+        logger.warning("Ignoring routing engine 'skip_notes' (not true/false)")
+    else:
+        engine.skip_notes = skip_notes
     base_url = engine.local_base_url
     if base_url is not None:
         if not base_url.strip():
@@ -1138,6 +1181,63 @@ def decide_via_openrouter(
     )
 
 
+def decide_via_typesafe(
+    *,
+    native_model: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float = DECISION_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """One routing decision via the native TypeSafe Decisions API.
+
+    The ``TYPESAFE_API_KEY`` is read at call time inside this engine
+    function only (runtime-supplied credential, never persisted, sent
+    header-only, never logged — the ``OPENROUTER_API_KEY``
+    precedent). Any failure (no key, network, timeout, malformed
+    payload) yields an answers-None result and the chain tries the
+    next engine. Usage carries the reported input/output tokens;
+    native usage never reports spend, so cost is computed code-side
+    from the reported input tokens at the published flat input-only
+    rate (output tokens are free).
+    """
+    api_key = os.environ.get("TYPESAFE_API_KEY")
+    if not api_key or not native_model:
+        return EngineResult(answers=None)
+    payload, truncated = _fit_decision_payload(
+        {"model": native_model, "state": state, "questions": questions}
+    )
+    data, error = _post_decision(
+        TYPESAFE_DECISIONS_URL,
+        payload,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "strands-code",
+        },
+        timeout,
+    )
+    if data is None:
+        return EngineResult(answers=None, error=error, truncated=truncated)
+    answers = data.get("answers")
+    if not isinstance(answers, dict):
+        return EngineResult(
+            answers=None, error="invalid body", truncated=truncated
+        )
+    usage = data.get("usage", {})
+    if not isinstance(usage, dict):
+        usage = {}
+    model = data.get("model")
+    in_tok = _count(usage.get("input_tokens"))
+    return EngineResult(
+        answers=answers,
+        input_tokens=in_tok,
+        output_tokens=_count(usage.get("output_tokens")),
+        cost=in_tok * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000,
+        model=model if isinstance(model, str) else None,
+        truncated=truncated,
+    )
+
+
 _OLLAMA_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 """Hosts that never carry key material (T-08-06)."""
 
@@ -1413,7 +1513,7 @@ _ENGINE_REGISTRY: list[tuple[str, EngineAttempt]] = []
 
 
 def register_engine(name: str, attempt: EngineAttempt) -> None:
-    """Append one named engine to the chain (openrouter first, local second)."""
+    """Append one named engine to the chain (openrouter, local, native)."""
     _ENGINE_REGISTRY.append((name, attempt))
 
 
@@ -1444,6 +1544,18 @@ def _ollama_attempt(
     )
 
 
+def _typesafe_attempt(
+    strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
+) -> EngineResult | None:
+    """Native chain link: None without a configured native model."""
+    native_model = strategy.engine.native_model
+    if not native_model:
+        return None
+    return decide_via_typesafe(
+        native_model=native_model, state=state, questions=questions
+    )
+
+
 def _local_unready_attempt(
     _strategy: RoutingStrategy, _state: dict[str, Any], _questions: dict[str, Any]
 ) -> EngineResult:
@@ -1459,6 +1571,7 @@ def _local_unready_attempt(
 
 register_engine("openrouter", _openrouter_attempt)
 register_engine("local", _ollama_attempt)
+register_engine("native", _typesafe_attempt)
 
 
 def _link_detail(name: str, error: str | None) -> str:
@@ -1491,22 +1604,43 @@ def is_pause_detail(detail: str) -> bool:
     return detail.startswith("paused:")
 
 
-def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
-    """Engine links for one strategy: primary selects, unconfigured skips.
+_LEGACY_PRIMARY_ORDER = {
+    "openrouter": ["openrouter", "local"],
+    "local": ["local"],
+    "off": [],
+}
+"""Legacy primary values mapped to their equivalent engine order (D-01)."""
 
-    ``openrouter`` tries the API then the daemon; ``local`` tries the
-    daemon only (fully offline local-or-hold, D-09); ``off`` tries
-    nothing — the load layer already yields None for it, and a
-    directly built off strategy degrades the same way here. The local
-    link is skipped, not failed, when no local model configures, and
-    consults :func:`local_engine_ready` before it is offered: an
-    unready daemon yields the inert unready link (zero POSTs, distinct
+
+def _effective_order(engine: RoutingEngine) -> list[str]:
+    """Engine order for one strategy: explicit order or legacy mapping.
+
+    An explicit ``order`` drives the chain as listed; None means a
+    legacy file, so ``primary`` maps to its equivalent order
+    (openrouter-then-local, local-only, or empty for off).
+    """
+    if engine.order is not None:
+        return list(engine.order)
+    return list(
+        _LEGACY_PRIMARY_ORDER.get(
+            engine.primary or "openrouter", ["openrouter", "local"]
+        )
+    )
+
+
+def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
+    """Engine links for one strategy: order drives, unconfigured skips.
+
+    The effective order lists the links in try order; an empty order
+    tries nothing — the load layer already yields None for legacy
+    off, and a directly built off strategy (or an explicit empty
+    order) degrades the same way here. The local link is skipped,
+    not failed, when no local model configures, and consults
+    :func:`local_engine_ready` before it is offered: an unready
+    daemon yields the inert unready link (zero POSTs, distinct
     detail) instead of a doomed decision call.
     """
-    primary = strategy.engine.primary or "openrouter"
-    if primary == "off":
-        return []
-    names = ["local"] if primary == "local" else ["openrouter", "local"]
+    names = _effective_order(strategy.engine)
     by_name = dict(_ENGINE_REGISTRY)
     chain: list[tuple[str, EngineAttempt]] = []
     for name in names:
@@ -1555,7 +1689,8 @@ def _decide_effort(
             candidate=candidate, directives=strategy.directives
         )
     }
-    failed = chain[0][0] if chain else (strategy.engine.primary or "openrouter")
+    order = _effective_order(strategy.engine)
+    failed = chain[0][0] if chain else (order[0] if order else "off")
     detail = f"{failed} failed"
     down: list[str] = []
     informative = False
@@ -1645,7 +1780,7 @@ def decide(
     with no levels holds with no engine call: a one-option choice is
     invalid (2-26) and there is no effort to pass through.
     """
-    if strategy.engine.primary != "off" and len(strategy.candidates) == 1:
+    if _effective_order(strategy.engine) and len(strategy.candidates) == 1:
         only = strategy.candidates[0]
         if not only.levels:
             return (
@@ -1679,8 +1814,9 @@ def decide(
         )
         chain = _chain_for(strategy)
         if not chain:
-            primary = strategy.engine.primary or "openrouter"
-            return (None, primary, (0, 0, None), f"{primary} failed")
+            order = _effective_order(strategy.engine)
+            head = order[0] if order else "off"
+            return (None, head, (0, 0, None), f"{head} failed")
         (
             effort,
             effort_confidence,
@@ -1731,8 +1867,9 @@ def decide(
     }
     chain = _chain_for(strategy)
     if not chain:
-        primary = strategy.engine.primary or "openrouter"
-        return (None, primary, (0, 0, None), f"{primary} failed")
+        order = _effective_order(strategy.engine)
+        head = order[0] if order else "off"
+        return (None, head, (0, 0, None), f"{head} failed")
     failed = chain[0][0]
     detail = f"{failed} failed"
     down: list[str] = []
