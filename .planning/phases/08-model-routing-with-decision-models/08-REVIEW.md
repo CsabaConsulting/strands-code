@@ -1,30 +1,62 @@
 ---
 phase: 08-model-routing-with-decision-models
-reviewed: 2026-10-12T07:34:08Z
+reviewed: 2026-10-12T09:03:58Z
 depth: standard
 reviewer: gsd-code-reviewer (generic-agent workaround — typed gsd-code-reviewer dispatch unavailable in this runtime)
 files_reviewed: 4
 files_reviewed_list:
-  - strands_code_cli/routing.py
-  - scripts/route-probe.py
-  - tests/test_routing.py
-  - tests/test_routing_strategy.py
+  - scripts/uattest/driver.py
+  - strands_code_cli/loop.py
+  - tests/test_loop_routing.py
+  - tests/test_uattest_driver.py
 findings:
   critical: 0
   warning: 0
-  info: 6
-  total: 6
+  info: 8
+  total: 8
 status: issues_found
 ---
 
 # Phase 8: Code Review Report
 
-**Reviewed:** 2026-10-12T07:34:08Z (scoped gap-closure re-review; full-phase review 2026-10-12T07:01:22Z below)
+**Reviewed:** 2026-10-12T09:03:58Z (scoped UAT-gap re-review; prior re-review 2026-10-12T07:34:08Z, full-phase review 2026-10-12T07:01:22Z below)
 **Depth:** standard
-**Files Reviewed:** 4 (gap-commit scope; prior full review covered 16)
+**Files Reviewed:** 4 (UAT-gap scope `efc2874..368cfb1`; prior reviews covered 16 + 4)
 **Status:** issues_found
 
 ## Summary
+
+**Re-review (2026-10-12T09:03:58Z, generic-agent workaround):** scoped
+re-review of the 08-07 UAT gap-closure commits (`efc2874..368cfb1`:
+G-08-1 rig-model-id constant, rig fail-fast + `(n/a)` cost-line
+match, pre-send baselines, loop.py routed-pick persistence FENCE)
+across the 4 gap-commit files. The fence is VERIFIED correct and
+complete (see Fence Verdict): the only remaining global-default
+writer is the explicit `/model` branch, and every failed/unvalidated
+pick path holds before any persistence. The 6 prior infos carry over
+unchanged — their files are untouched by this diff. Two new infos
+(IN-07, IN-08) on the fresh diff, both minor. Supporting evidence:
+70 passed across `tests/test_loop_routing.py` and
+`tests/test_uattest_driver.py` (project venv).
+
+**Fence Verdict (G-08-1):** PASS — correct and complete. The
+`_route_pre_turn` resolved branch (`strands_code_cli/loop.py:1546-1554`)
+assigns `current_model` in memory only; `explicit_save` writes the
+session snapshot, never the provider config, and `index.ensure`
+touches session recency only (no model/ProviderConfig refs in
+`session_index.py`). `apply_model_action` itself never persisted
+(resolve + history conversion only), so removing the call-site
+`save_model_choice` closes the path fully. Repo-wide, the sole
+production `save_model_choice` call site is the explicit `/model`
+action branch (`loop.py:2183`); `ProviderConfig.save` is reachable
+only through it (the other `.save(` hits are `DiffConfig`/`MemoryModeConfig`,
+unrelated). Every failed/unvalidated pick — decide-exception,
+`pick is None`, effort-gate refusal, `apply_model_action` raise —
+returns `current_model` before the switch block, so a failed pick
+cannot reach the global default through any path. Locked by
+`TestRoutedPickNoPersist` (`tests/test_loop_routing.py:1520-1537`):
+in-memory switch asserted plus a sole-call-site tripwire
+(`save_model_choice` count == 1).
 
 **Re-review (2026-10-12T07:34:08Z, generic-agent workaround):** scoped
 re-review of the 08-06 gap-closure commits (`08d6d4a..0109ef6`: GAP-01
@@ -139,6 +171,12 @@ so the pin-valued tag is inert there.
 
 ## Info
 
+_Carry-over note (2026-10-12T09:03:58Z re-review): IN-01–IN-06 remain
+open with their prior dispositions — none of their files
+(`router.py`, `live_pricing.py`, `cost_context.py`, `route-probe.py`,
+`routing.py`) are touched by the UAT-gap diff (`efc2874..368cfb1`),
+so all refs are current as written._
+
 _Carry-over note (2026-10-12T07:34:08Z re-review): IN-01–IN-05 remain
 open with their prior dispositions — none of their regions changed in
 the gap diff (`08d6d4a..0109ef6` touches only the WR-01/WR-02/GAP-01
@@ -229,6 +267,45 @@ exclude ints like `1`). Flagged only so the lossy corner is on record.
 **Fix:** Document that only `on`/`off` spellings round-trip (or quote
 anything else) in the strategy docs; no code change required.
 
+### IN-07: `_route_pre_turn` docstring still claims routed persistence (new in re-review)
+
+**File:** `strands_code_cli/loop.py:1403-1406`
+
+**Issue:** The fence commit (`a275cb8`) removed the
+`save_model_choice` call and added an accurate inline FENCE comment
+at the branch (`loop.py:1547-1549`), but the function docstring
+still says a gated pick "applies through
+:func:`apply_model_action` with the same persistence as the
+model-action site". That sentence now states the exact opposite of
+the code: routed picks deliberately persist nothing while the
+`/model` site persists the global default. A future reader
+trusting the docstring could "fix" the fence back into existence.
+
+**Fix:** Reword the docstring sentence to the fence contract, e.g.
+"and then applies in memory only (never the global default —
+routing re-decides every ask; only explicit /model choices
+persist)".
+
+### IN-08: Fail-fast covers `wait_main_end`/`wait_routed` but not `wait_for`/`wait_for_new` (new in re-review)
+
+**File:** `scripts/uattest/driver.py:51-82`
+
+**Issue:** `FAIL_RE` short-circuits only the two turn waits
+(`wait_main_end`, `driver.py:127-131`; `wait_routed`,
+`driver.py:300-304`). A turn failure landing during a trailing
+`wait_for`/`wait_for_new` window — e.g. s1's `wait_for(...,
+"end btw", 180, "fenced-result")` after the dialog is answered, or
+a boot-prompt wait against a wedged pane — still hangs to its full
+timeout and misreports as TIMEOUT instead of naming the failure.
+All in-scenario failures observed so far surface at a turn wait
+first (every `send` of a real ask is followed by
+`wait_main_end`/`wait_routed` before any trailing local-command
+wait), so this is diagnostic quality, not a missed failure — but
+the same three-line check would close it.
+
+**Fix:** Add the `FAIL_RE` check at the top of the `wait_for` and
+`wait_for_new` poll loops, matching the turn waits.
+
 ---
 
 _Checked but not flagged: threshold-hold verdicts intentionally record zero
@@ -247,6 +324,26 @@ mergeable but clear; new tests (`TestUnhashableChoiceHolds`,
 `TestBoolLevelNormalization`, incl. the YAML round-trip) assert
 directly on return values with no flaky patterns._
 
-_Reviewed: 2026-10-12T07:34:08Z (re-review; full review 2026-10-12T07:01:22Z)_
+_UAT-gap re-review checked but not flagged: COST_RE `(n/a)` alternative
+matches the real `format_usage` fallback (`cost_context.py:161`) and
+requires the trailing `) $`, so routed lines (`(off): ...`) and
+confidence cells (`model n/a, ...`) cannot false-match; FAIL_RE is
+case-sensitive `Turn failed`, matching both loop emit sites
+(`loop.py:1859`, `loop.py:2262`) and nothing else in the transcript
+vocabulary (the streaming warning is lowercase "turns will fail");
+fail-fast's full-scrollback (unbaselined) FAIL scan is terminal-
+consistent — no scenario recovers from a failed turn, so a stale
+match can only abort an already-doomed run; `wait_for_new` uses
+`is None` (not falsy) for the `before` default so `before=0` works;
+every pre-send baseline pattern matches its wait pattern
+(`Routing: `, `Routing:`, `Routing off/on`, `Side question noted`,
+COST_RE); r3 `final_cost_before` derives from full-pane `held_text`,
+consistent with `wait_main_end`'s full-pane comparison; new tests
+are deterministic (monkeypatched `pane_text`, `poll=0` with an
+iterator that resolves on the second call) and the two
+source-text assertions fail loudly on drift, matching the
+pre-existing `TestRigModelId` pattern._
+
+_Reviewed: 2026-10-12T09:03:58Z (UAT-gap re-review; prior re-review 2026-10-12T07:34:08Z, full review 2026-10-12T07:01:22Z)_
 _Reviewer: gsd-code-reviewer (generic-agent workaround — typed gsd-code-reviewer dispatch unavailable in this runtime)_
 _Depth: standard_
