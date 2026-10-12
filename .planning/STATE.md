@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 09
 current_phase_name: native-typesafe-decision-engine
 status: executing
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-10-12T20:17:59.180Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-10-12T20:38:41.106Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 09 execution started
-state_head: 4516663882bb51b03f7cf948c58dea0d0fafdee2
+state_head: ec469383ed975434d7b60c7b20346979854737dc
 progress:
   total_phases: 11
   completed_phases: 8
   total_plans: 26
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 ## Current Position
 
 Phase: 09 (native-typesafe-decision-engine) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-10-12 — Phase 09 execution started
 
@@ -84,6 +84,7 @@ Progress: [███████░░░] 73%
 | Phase 08 P06 | 4min | 3 tasks | 4 files |
 | Phase 08 P07 | 24min | 3 tasks | 5 files |
 | Phase 09 P01 | 15min | 3 tasks | 5 files |
+| Phase 09 P02 | 17min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,10 @@ Recent decisions affecting current work:
 - [Phase 09]: decision_model_for names the native model for native — Otherwise production native events record decision_model None and real /cost output never carries the computed-rate marker (Rule 2 adjunct)
 - [Phase 09]: Unknown primary is not judged when engine.order is present — An ignored value judges nothing; the both-present validate test pins it
 - [Phase 09]: Non-list engine.order fails validation with a fix line — Mirrors the candidates not-a-list precedent; loader stays warn-and-default
+- [Phase 09]: Setup stdout never prints the TYPESAFE_API_KEY literal (uses 'TypeSafe key' phrasing), keeping test_setup_never_prompts_for_keys green unweakened
+- [Phase 09]: Validate ping flips the report head to INVALID on key/model failures — appended lines alone would not fail bad keys
+- [Phase 09]: Ping gate reads strategy.engine.order directly — the loader coerces primary, so native reaches the effective order only via explicit order
+- [Phase 09]: Off-tty order builder aborts on the second unknown engine — an order is positional, so a partial write would silently reorder the chain
 
 ### Pending Todos
 
@@ -175,6 +180,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T20:17:59.094Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-10-12T20:38:41.015Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None

@@ -240,7 +240,7 @@ Plans:
 **Plans**: TBD (not yet planned)
 
 - [x] 09-01-PLAN.md
-- [ ] 09-02-PLAN.md
+- [x] 09-02-PLAN.md
 - [ ] 09-03-PLAN.md
 
 ### Phase 10: Provider-Reported Turn Spend
@@ -286,7 +286,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
 | 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
-| 9. Native TypeSafe Decision Engine | 1/3 | In Progress|  |
+| 9. Native TypeSafe Decision Engine | 2/3 | In Progress|  |
 | 10. Provider-Reported Turn Spend | 0/TBD | Not started | - |
 | 11. CodeAct Action Interface | 0/TBD | Not started | - |
 
