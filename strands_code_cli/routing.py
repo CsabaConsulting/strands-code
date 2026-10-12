@@ -1310,7 +1310,8 @@ def _validate_choice_shape(answer: object) -> dict[str, Any] | None:
             return None
     if abs(sum(probs.values()) - 1.0) > 1e-6:
         return None
-    if answer.get("choice") not in probs:
+    choice = answer.get("choice")
+    if not isinstance(choice, str) or choice not in probs:
         return None
     return answer
 
@@ -1330,7 +1331,8 @@ def validate_choice_answer(
     if answer is None:
         return None
     live = {candidate.id for candidate in candidates}
-    if answer.get("choice") not in live:
+    choice = answer.get("choice")
+    if not isinstance(choice, str) or choice not in live:
         return None
     return answer
 

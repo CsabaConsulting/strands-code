@@ -24,6 +24,7 @@ from strands_code_cli.routing import (
     RoutingStrategy,
     _ENGINE_REGISTRY,
     _fit_decision_payload,
+    _validate_effort_answer,
     build_decision_state,
     build_effort_question,
     build_model_question,
@@ -346,6 +347,25 @@ class TestValidateChoiceAnswer:
         answer = _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15})
         del answer["confidence"]
         assert validate_choice_answer(answer, _candidates()) is answer
+
+
+class TestUnhashableChoiceHolds:
+    def test_unhashable_choice_holds_model_answer(self):
+        table = {HAIKU: 0.85, NOVA_MICRO: 0.15}
+        for bad in ([HAIKU], {"id": HAIKU}, (HAIKU,)):
+            assert (
+                validate_choice_answer(_answer(bad, table), _candidates()) is None
+            )
+
+    def test_unhashable_choice_holds_effort_answer(self):
+        table = {"low": 0.7, "high": 0.3}
+        assert _validate_effort_answer(_answer(["low"], table)) is None
+
+    def test_string_choice_still_validates(self):
+        model = _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15})
+        assert validate_choice_answer(model, _candidates()) is model
+        effort = _answer("low", {"low": 0.7, "high": 0.3})
+        assert _validate_effort_answer(effort) == {"low": 0.7, "high": 0.3}
 
 
 class TestGateModel:
