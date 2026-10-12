@@ -35,7 +35,7 @@
 
 - [x] **MODEL-01**: User can switch providers mid-session via `/model` (Bedrock default, override-friendly)
 - [x] **MODEL-02**: User can see cost and token usage per session and task via `/cost` (display only, no enforcement)
-- [x] **MODEL-03**: CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override
+- [ ] **MODEL-03**: CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override
 
 ### Skills & Memory
 
@@ -107,7 +107,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SKILL-01 | Phase 6 | Complete |
 | SKILL-02 | Phase 6 | Complete |
 | TOOL-07 | Phase 9 | Pending |
-| MODEL-03 | Phase 8 | Complete |
+| MODEL-03 | Phase 8 | Gaps Found |
 | GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | GITHUB-02 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | REVIEW-01 | Deferred (v2) | Small future `/review` slash |
