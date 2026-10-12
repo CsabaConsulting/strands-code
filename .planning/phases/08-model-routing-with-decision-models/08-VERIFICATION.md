@@ -4,6 +4,7 @@ verified: 2026-10-12T09:30:00Z
 verifier: gsd-verifier 08 final (generic-agent workaround — typed gsd-verifier dispatch unavailable in this runtime)
 status: passed
 score: 31/31 must-haves verified
+covered_digest: "v1:sha256:b107882fe7c8162c733d84a9670fd7bdac42e2407273451a17fe9d011cb245fc"
 covered_files:
   - .planning/REQUIREMENTS.md
   - .planning/phases/08-model-routing-with-decision-models/08-01-PLAN.md

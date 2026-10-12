@@ -20,8 +20,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Model + Cost + Context Commands** - Provider switching, spend visibility, context controls (completed 2026-10-04)
 - [x] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file (completed 2026-10-04)
 - [x] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task (completed 2026-10-11)
-- [x] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept
-- [ ] **Phase 9: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
+- [x] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept (completed 2026-10-12)
+- [ ] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines
+- [ ] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
+- [ ] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
 
 ## Phase Details
 
@@ -223,7 +225,35 @@ Plans:
 
 - [x] 08-07-PLAN.md — UAT gap closure: rig us. profile ids plus fail-fast plus persistence fence (gap_closure, G-08-1)
 
-### Phase 9: CodeAct Action Interface
+### Phase 9: Native TypeSafe Decision Engine
+
+**Goal**: Routing can use Jev via TypeSafe's native API directly, alongside the OpenRouter and Ollama engines
+**Mode:** mvp
+**Depends on**: Phase 8 (engine chain, strategy, calibration)
+**Requirements**: MODEL-04
+**Success Criteria** (what must be TRUE):
+
+  1. User with a `TYPESAFE_API_KEY` can select the native TypeSafe engine in `/route setup` and validate it
+  2. Native-engine decisions return the same verdict shape (answers, confidences, reported spend) as the other engines
+  3. Engine chain, preflight, retry, and calibration cover the native engine like the others
+
+**Plans**: TBD (not yet planned)
+
+### Phase 10: Provider-Reported Turn Spend
+
+**Goal**: `/cost` shows provider-reported actuals for main turns where the provider supplies them, estimates elsewhere
+**Mode:** mvp
+**Depends on**: Phase 5 (cost display), Phase 8 (reported-spend pattern)
+**Requirements**: MODEL-05
+**Success Criteria** (what must be TRUE):
+
+  1. Main turns served via OpenRouter show the provider-reported USD cost in the usage line and `/cost`
+  2. Bedrock and offline turns keep the tokens × rate estimate with provenance labeled
+  3. Mixed sessions total actuals and estimates without double counting
+
+**Plans**: TBD (not yet planned)
+
+### Phase 11: CodeAct Action Interface
 
 **Goal**: Users can opt into code-generation-first actions where they beat gated tool-calling; tool-calling stays the default and CodeAct is never mandatory
 **Mode:** mvp
@@ -240,7 +270,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -251,8 +281,10 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Model + Cost + Context Commands | 1/1 | Complete    | 2026-10-04 |
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
-| 8. Model Routing with Decision Models | 7/7 | In Progress|  |
-| 9. CodeAct Action Interface | 0/TBD | Not started | - |
+| 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
+| 9. Native TypeSafe Decision Engine | 0/TBD | Not started | - |
+| 10. Provider-Reported Turn Spend | 0/TBD | Not started | - |
+| 11. CodeAct Action Interface | 0/TBD | Not started | - |
 
 ## Future (post-v1)
 

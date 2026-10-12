@@ -36,6 +36,8 @@
 - [x] **MODEL-01**: User can switch providers mid-session via `/model` (Bedrock default, override-friendly)
 - [x] **MODEL-02**: User can see cost and token usage per session and task via `/cost` (display only, no enforcement)
 - [x] **MODEL-03**: CLI auto-selects model and thinking budget per ask via a decision model (Jev/Kev/Laya class), with manual override
+- [ ] **MODEL-04**: CLI can route decisions through Jev via TypeSafe's native API (`TYPESAFE_API_KEY`), alongside OpenRouter and Ollama engines
+- [ ] **MODEL-05**: `/cost` shows provider-reported actuals for main turns where supplied (OpenRouter), estimates elsewhere, without double counting
 
 ### Skills & Memory
 
@@ -106,8 +108,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MODEL-02 | Phase 5 | Complete |
 | SKILL-01 | Phase 6 | Complete |
 | SKILL-02 | Phase 6 | Complete |
-| TOOL-07 | Phase 9 | Pending |
+| TOOL-07 | Phase 11 | Pending |
 | MODEL-03 | Phase 8 | Complete |
+| MODEL-04 | Phase 9 | Pending |
+| MODEL-05 | Phase 10 | Pending |
 | GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | GITHUB-02 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | REVIEW-01 | Deferred (v2) | Small future `/review` slash |
