@@ -130,8 +130,9 @@ class RoutingPick:
 
     ``model_confidence`` is the routed model's own table probability
     (the tie-break runner-up read when substituted, never the vendor
-    confidence field); ``effort_confidence`` stays None until the
-    effort decision call lands in plan 08-02.
+    confidence field); ``effort_confidence`` is the second call's
+    top-1 level probability, None when no effort question ran (the
+    lone level of a single-level pick rides through instead).
     """
 
     model: str
@@ -837,6 +838,48 @@ def build_model_question(
     }
 
 
+_EFFORT_CRITERIA = {
+    "auto": "Let the model decide how much thinking this ask needs",
+    "off": "Answer directly with no thinking budget",
+    "minimal": "Minimal thinking for trivial asks answerable at a glance",
+    "low": "Light thinking for simple asks with a clear answer",
+    "medium": "Moderate thinking for everyday implementation and debugging",
+    "high": "Deep thinking for complex refactors and multi-step work",
+    "xhigh": "Extended thinking for the hardest asks needing careful reasoning",
+    "max": "Maximum thinking budget for the most demanding asks",
+}
+"""Fixed code-side prose per known effort level (the harness Effort set).
+
+Unknown levels fall back to the bare level name, never operator
+prose — the map is code, not strategy text (T-08-26).
+"""
+
+
+def build_effort_question(
+    *, candidate: RoutingCandidate, directives: str
+) -> dict[str, Any]:
+    """Build the pick_effort choice question over one candidate (D-05, D-15).
+
+    Criteria cover exactly the picked candidate's advertised levels —
+    the second call judges only levels the pick can serve. Directives
+    append to the instructions so they shape the effort judgment like
+    the model one (D-07).
+    """
+    shaped = directives[:ASK_TRUNCATE_CHARS] if directives else ""
+    return {
+        "type": "choice",
+        "instructions": (
+            f"How much thinking budget does the ask in `ask` need "
+            f"on {candidate.id}? "
+            "Judge the ask, not its length. " + shaped
+        ),
+        "criteria": {
+            level: _EFFORT_CRITERIA.get(level, level)
+            for level in candidate.levels or []
+        },
+    }
+
+
 @dataclass(frozen=True)
 class EngineResult:
     """One engine try: typed answers plus usage triple plus snapshot.
@@ -1036,18 +1079,15 @@ def decide_via_ollama(
     )
 
 
-def validate_choice_answer(
-    answer: object, candidates: list[RoutingCandidate]
-) -> dict[str, Any] | None:
-    """Validate one typed choice answer; None holds the current model.
+def _validate_choice_shape(answer: object) -> dict[str, Any] | None:
+    """Typed shape check shared by both decision calls; None holds.
 
     The answer must be a dict with ``type`` exactly ``choice``, a
     non-empty ``probabilities`` mapping of 0..1 numbers summing to 1
-    within 1e-6, and a ``choice`` that sits both in the table and in
-    the live candidate ids (a stale pick after a strategy edit must
-    never route — no normalization, no fuzzy match). The vendor
-    ``confidence`` field may be absent; it is logged, never gated on
-    (T-08-21).
+    within 1e-6, and a ``choice`` sitting in the table. Membership in
+    the live option set is judged separately per call (candidates for
+    call 1, advertised levels via ``validate_routed_effort`` for
+    call 2).
     """
     if not isinstance(answer, dict):
         return None
@@ -1063,13 +1103,42 @@ def validate_choice_answer(
             return None
     if abs(sum(probs.values()) - 1.0) > 1e-6:
         return None
-    choice = answer.get("choice")
-    if choice not in probs:
-        return None
-    live = {candidate.id for candidate in candidates}
-    if choice not in live:
+    if answer.get("choice") not in probs:
         return None
     return answer
+
+
+def validate_choice_answer(
+    answer: object, candidates: list[RoutingCandidate]
+) -> dict[str, Any] | None:
+    """Validate one typed choice answer; None holds the current model.
+
+    The answer must pass the shape check plus name a ``choice`` that
+    sits in the live candidate ids (a stale pick after a strategy
+    edit must never route — no normalization, no fuzzy match). The
+    vendor ``confidence`` field may be absent; it is logged, never
+    gated on (T-08-21).
+    """
+    answer = _validate_choice_shape(answer)
+    if answer is None:
+        return None
+    live = {candidate.id for candidate in candidates}
+    if answer.get("choice") not in live:
+        return None
+    return answer
+
+
+def _validate_effort_answer(answer: object) -> dict[str, float] | None:
+    """Validate one effort table; the probability mapping or None.
+
+    Shape only — level membership is judged downstream by
+    ``validate_routed_effort`` so an outside-level read holds with
+    its unsupported-effort detail instead of a bare engine failure.
+    """
+    answer = _validate_choice_shape(answer)
+    if answer is None:
+        return None
+    return answer["probabilities"]
 
 
 def _price_total(model_id: str) -> float | None:
@@ -1194,6 +1263,63 @@ def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
     return chain
 
 
+def _merge_cost(first: float | None, second: float | None) -> float | None:
+    """Summed reported spend; None only when both calls omit cost."""
+    if first is None and second is None:
+        return None
+    return (first if first is not None else 0.0) + (
+        second if second is not None else 0.0
+    )
+
+
+def _decide_effort(
+    strategy: RoutingStrategy,
+    candidate: RoutingCandidate,
+    state: dict[str, Any],
+    chain: list[tuple[str, EngineAttempt]],
+) -> tuple[str | None, float | None, tuple[int, int, float | None], str]:
+    """Second sequential choice over the picked levels (D-15).
+
+    Runs the pick_effort question through the same engine chain on
+    the same state — never parallel with call 1, whose answer scopes
+    the criteria. Returns ``(effort, confidence, usage, engine)``
+    with the top choice taken ungated (a weak effort read still
+    routes, D-16); a None effort holds the ask, since a failed or
+    unparseable effort read carries no level to route.
+    """
+    questions = {
+        "pick_effort": build_effort_question(
+            candidate=candidate, directives=strategy.directives
+        )
+    }
+    failed = chain[0][0] if chain else (strategy.engine.primary or "openrouter")
+    for name, attempt in chain:
+        try:
+            result = attempt(strategy, state, questions)
+        except Exception:
+            result = None
+        if result is None or result.answers is None:
+            failed = name
+            continue
+        if result.model:
+            logger.debug(
+                "Routing effort decision via %s served by %s", name, result.model
+            )
+        table = _validate_effort_answer(result.answers.get("pick_effort"))
+        if table is None:
+            failed = name
+            continue
+        ranked = sorted(table.items(), key=lambda item: (-item[1], item[0]))
+        top, top_prob = ranked[0]
+        return (
+            top,
+            float(top_prob),
+            (result.input_tokens, result.output_tokens, result.cost),
+            name,
+        )
+    return (None, None, (0, 0, None), failed)
+
+
 def decide(
     strategy: RoutingStrategy,
     *,
@@ -1204,21 +1330,27 @@ def decide(
     """Route one ask: state build, engine chain, validate, gate.
 
     Returns ``(pick, engine, usage, detail)`` where engine names the
-    producing engine on success and the last attempted engine on hold,
-    usage is the decision-call ``(input, output, reported cost)``
-    triple (zeros plus None on hold), and detail feeds the hold/route
-    notes (empty on a clean route). Total failure — every engine down
-    or schema-invalid — yields a None pick and the caller holds
-    current (D-08). One chain pass per ask; each engine retries at
-    most once on retryable failures only.
+    model-decision engine on success and the last attempted engine on
+    hold, usage sums both decision calls into one ``(input, output,
+    reported cost)`` triple (zeros plus None on hold), and detail
+    feeds the hold/route notes (empty on a clean route). Total
+    failure — every engine down or schema-invalid — yields a None
+    pick and the caller holds current (D-08). One chain pass per
+    call; each engine retries at most once on retryable failures
+    only.
 
     A below-threshold table holds immediately without trying the next
     engine: the ask itself is ambiguous, so the retry happens next
-    ask (D-16). Effort rides the picked candidate's first advertised
-    level through ``validate_routed_effort`` with effort_confidence
-    None — the effort decision call lands in plan 08-02. Same-model
-    picks skip that validation (the no-op fast path wins: the hook
-    applies no switch and no effort, so there is nothing to judge).
+    ask (D-16). Past the gate, a second sequential call chooses the
+    thinking level over only the picked candidate's levels, and the
+    top choice routes ungated with its probability recorded as
+    effort_confidence; the level then passes ``validate_routed_effort``
+    on the switch path. Same-model picks skip that validation (the
+    no-op fast path wins: the hook applies no switch and no effort,
+    so there is nothing to judge). A single-level pick skips the
+    second call — nothing to choose, and a one-option question
+    violates the 2-26 floor — so the lone level rides through with
+    effort_confidence None.
 
     A single candidate advertising at least one level skips every
     engine (nothing to choose): the verdict names the candidate with
@@ -1291,11 +1423,33 @@ def decide(
                 (0, 0, None),
                 f"picked candidate {model_id} advertises no levels",
             )
+        if len(candidate.levels) == 1:
+            # Degenerate choice: nothing to judge, and a one-option
+            # question violates the 2-26 floor — the lone level rides
+            # through with no effort read.
+            effort, effort_confidence = candidate.levels[0], None
+            total = (result.input_tokens, result.output_tokens, result.cost)
+        else:
+            effort, effort_confidence, effort_usage, effort_engine = (
+                _decide_effort(strategy, candidate, state, chain)
+            )
+            if effort is None:
+                return (
+                    None,
+                    effort_engine,
+                    (0, 0, None),
+                    f"{effort_engine} failed",
+                )
+            total = (
+                result.input_tokens + effort_usage[0],
+                result.output_tokens + effort_usage[1],
+                _merge_cost(result.cost, effort_usage[2]),
+            )
         pick = RoutingPick(
             model=model_id,
-            effort=candidate.levels[0],
+            effort=effort,
             model_confidence=float(answer["probabilities"][model_id]),
-            effort_confidence=None,
+            effort_confidence=effort_confidence,
             tie_break=tie_break,
         )
         if model_id != current_model and not validate_routed_effort(
@@ -1310,7 +1464,7 @@ def decide(
         return (
             pick,
             name,
-            (result.input_tokens, result.output_tokens, result.cost),
+            total,
             gate_detail,
         )
     return (None, failed, (0, 0, None), detail)

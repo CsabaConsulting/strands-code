@@ -59,8 +59,14 @@ def _table_result(
     probs: dict | None = None,
     usage: tuple = (0, 0, None),
     confidence: float = 0.85,
+    effort: str = "low",
+    effort_probs: dict | None = None,
+    effort_confidence: float = 0.7,
 ) -> EngineResult:
     table = probs if probs is not None else {HAIKU: 0.85, NOVA_MICRO: 0.15}
+    effort_table = (
+        effort_probs if effort_probs is not None else {"low": 0.7, "high": 0.3}
+    )
     return EngineResult(
         answers={
             "pick_model": {
@@ -68,7 +74,13 @@ def _table_result(
                 "choice": choice,
                 "probabilities": dict(table),
                 "confidence": confidence,
-            }
+            },
+            "pick_effort": {
+                "type": "choice",
+                "choice": effort,
+                "probabilities": dict(effort_table),
+                "confidence": effort_confidence,
+            },
         },
         input_tokens=usage[0],
         output_tokens=usage[1],
@@ -770,12 +782,12 @@ class TestCostRouting:
                 "model": HAIKU,
                 "effort": "low",
                 "model_confidence": 0.85,
-                "effort_confidence": None,
+                "effort_confidence": 0.7,
                 "tie_break": False,
                 "engine": "openrouter",
-                "input_tokens": 120,
-                "output_tokens": 25,
-                "decision_cost": 0.0002,
+                "input_tokens": 240,  # both decision calls merged
+                "output_tokens": 50,
+                "decision_cost": 0.0002 + 0.0002,
                 "held": False,
                 "decision_model": "cheap/decider",
             }
@@ -962,14 +974,14 @@ class TestSideRouting:
         events: list = []
         ctx, builds = _side_ctx(monkeypatch, _side_agent(), _engine, events)
         ctx.build("why is the sky blue?")
-        assert len(seen) == 1  # one decision per spawn
-        assert seen[0]["state"]["side"] is True
+        assert len(seen) == 2  # model call plus effort call per spawn
+        assert all(call["state"]["side"] is True for call in seen)
         assert seen[0]["state"]["ask"] == "why is the sky blue?"
         assert len(builds) == 1
         assert events[0]["side"] is True
         assert events[0]["held"] is False
-        assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (40, 8)
-        assert events[0]["decision_cost"] == 0.0001
+        assert (events[0]["input_tokens"], events[0]["output_tokens"]) == (80, 16)
+        assert events[0]["decision_cost"] == 0.0001 + 0.0001
 
     def test_pick_reaches_build_with_resolved_model_and_effort(
         self, monkeypatch, capsys
@@ -1069,11 +1081,11 @@ class TestSideRouting:
         agent = _side_agent()
         ctx, builds = _side_ctx(monkeypatch, agent, _engine, events)
         ctx.build("first question")
-        assert len(calls) == 1
+        assert len(calls) == 2  # model call plus effort call
         ctx.attach_live(SimpleNamespace(), SimpleNamespace(), "first question")
         assert ctx.has_live is True
         ctx.build("second question")
-        assert len(calls) == 1  # no re-decision while live
+        assert len(calls) == 2  # no re-decision while live
         assert builds[1][0]["model"] is agent.model
         assert len(events) == 1
 

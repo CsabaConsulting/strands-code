@@ -22,10 +22,12 @@ from strands_code_cli.routing import (
     RoutingStrategy,
     _ENGINE_REGISTRY,
     build_decision_state,
+    build_effort_question,
     build_model_question,
     decide,
     decide_via_ollama,
     decide_via_openrouter,
+    format_routed_line,
     gate_model,
     load_strategy,
     validate_choice_answer,
@@ -77,6 +79,7 @@ def _answer(choice: str, probs: dict[str, float], confidence: float = 0.8) -> di
 def _decision_payload(
     answer: dict,
     *,
+    key: str = "pick_model",
     input_tokens: int = 384,
     output_tokens: int = 41,
     cost: float | None = 0.000016128,
@@ -85,7 +88,23 @@ def _decision_payload(
     usage: dict = {"input_tokens": input_tokens, "output_tokens": output_tokens}
     if cost is not None:
         usage["cost"] = cost
-    return {"model": model, "answers": {"pick_model": answer}, "usage": usage}
+    return {"model": model, "answers": {key: answer}, "usage": usage}
+
+
+def _effort_payload(
+    choice: str = "low",
+    probs: dict[str, float] | None = None,
+    **usage,
+) -> dict:
+    """Canned call-2 payload answering the picked levels only."""
+    table = probs if probs is not None else {"low": 0.7, "high": 0.3}
+    return _decision_payload(_answer(choice, table), key="pick_effort", **usage)
+
+
+def _wants_effort(request) -> bool:
+    """True when the stubbed POST asks the pick_effort question."""
+    body = json.loads(request.data.decode("utf-8"))
+    return "pick_effort" in body.get("questions", {})
 
 
 class _FakeResponse:
@@ -190,6 +209,37 @@ class TestDecisionBuilders:
             candidates=_candidates(), directives="trivial asks go cheap"
         )
         assert set(question["criteria"]) == {HAIKU, NOVA_MICRO, SONNET}
+
+    def test_effort_question_scopes_criteria_to_picked_levels(self):
+        candidate = RoutingCandidate(id=HAIKU, levels=["low", "high"])
+        question = build_effort_question(
+            candidate=candidate, directives="trivial asks go cheap"
+        )
+        assert question["type"] == "choice"
+        assert set(question["criteria"]) == {"low", "high"}
+        assert HAIKU not in question["criteria"]  # levels only, never models
+
+    def test_effort_question_uses_known_level_prose(self):
+        from strands_code_cli.routing import _EFFORT_CRITERIA
+
+        candidate = RoutingCandidate(id=HAIKU, levels=["low", "high"])
+        question = build_effort_question(candidate=candidate, directives="")
+        assert question["criteria"]["low"] == _EFFORT_CRITERIA["low"]
+        assert question["criteria"]["low"] != "low"  # fixed prose, not the name
+
+    def test_effort_question_falls_back_to_bare_level_name(self):
+        candidate = RoutingCandidate(id=HAIKU, levels=["low", "turbo"])
+        question = build_effort_question(candidate=candidate, directives="")
+        assert question["criteria"]["turbo"] == "turbo"  # unknown: bare name
+
+    def test_effort_question_shapes_instructions_with_directives(self):
+        candidate = RoutingCandidate(id=HAIKU, levels=["low", "high"])
+        question = build_effort_question(
+            candidate=candidate, directives="trivial asks go cheap"
+        )
+        assert "trivial asks go cheap" in question["instructions"]
+        assert HAIKU in question["instructions"]  # names the picked model
+        assert "`ask`" in question["instructions"]
 
 
 class TestValidateChoiceAnswer:
@@ -412,56 +462,76 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _effort_payload(input_tokens=100, output_tokens=5, cost=0.000004)
+                )
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         pick, engine, usage, detail = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
-        assert len(calls) == 1
+        assert len(calls) == 2  # model call, then the effort call
         assert pick == RoutingPick(
             model=HAIKU,
-            effort="low",  # first advertised level passthrough
+            effort="low",  # decided level, top of the effort table
             model_confidence=0.85,
-            effort_confidence=None,
+            effort_confidence=0.7,
             tie_break=False,
         )
         assert engine == "openrouter"
-        assert usage == (384, 41, 0.000016128)  # reported triple, cost verbatim
+        # summed reported triples, both costs verbatim
+        assert usage == (484, 46, 0.000016128 + 0.000004)
         assert detail == ""
 
     def test_openrouter_posts_decision_contract(self, monkeypatch):
         import urllib.request
 
-        seen: dict = {}
+        seen: list = []
 
         def _fake_urlopen(request, timeout=None):
-            seen["url"] = request.full_url
-            seen["body"] = json.loads(request.data.decode("utf-8"))
-            seen["auth"] = request.get_header("Authorization")
-            seen["timeout"] = timeout
+            seen.append(
+                {
+                    "url": request.full_url,
+                    "body": json.loads(request.data.decode("utf-8")),
+                    "auth": request.get_header("Authorization"),
+                    "timeout": timeout,
+                }
+            )
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         decide(_strategy(), current_model=SONNET, side=False, ask="hi")
-        assert seen["url"] == OPENROUTER_DECISIONS_URL
-        assert seen["url"] == "https://openrouter.ai/api/alpha/decisions"
-        body = seen["body"]
-        assert body["model"] == "cheap/decider"
-        assert body["state"] == {
-            "ask": "hi",
-            "directives": "trivial asks go cheap",
-            "side": False,
-        }
-        assert body["questions"]["pick_model"]["type"] == "choice"
-        assert set(body["questions"]["pick_model"]["criteria"]) == {
+        assert len(seen) == 2  # model call first, effort call second
+        for call in seen:
+            assert call["url"] == OPENROUTER_DECISIONS_URL
+            assert call["url"] == "https://openrouter.ai/api/alpha/decisions"
+            assert call["body"]["model"] == "cheap/decider"
+            assert call["body"]["state"] == {
+                "ask": "hi",
+                "directives": "trivial asks go cheap",
+                "side": False,
+            }
+            assert "response_format" not in call["body"]  # no legacy JSON mode
+            assert "messages" not in call["body"] and "max_tokens" not in call["body"]
+            assert call["auth"] == "Bearer " + "test-key"  # header-only
+            assert call["timeout"] == 10
+        first, second = seen[0]["body"], seen[1]["body"]
+        assert set(first["questions"]) == {"pick_model"}  # sequential, never merged
+        assert first["questions"]["pick_model"]["type"] == "choice"
+        assert set(first["questions"]["pick_model"]["criteria"]) == {
             HAIKU,
             NOVA_MICRO,
         }
-        assert "response_format" not in body  # no legacy JSON mode
-        assert "messages" not in body and "max_tokens" not in body
-        assert seen["auth"] == "Bearer " + "test-key"  # header-only, not in URL
-        assert seen["timeout"] == 10
+        assert set(second["questions"]) == {"pick_effort"}
+        assert second["questions"]["pick_effort"]["type"] == "choice"
+        assert set(second["questions"]["pick_effort"]["criteria"]) == {
+            "low",
+            "high",
+        }
 
     def test_openrouter_reports_snapshot_and_cost(self, monkeypatch):
         import urllib.request
@@ -521,6 +591,8 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             step = script.pop(0) if script else None
             if isinstance(step, Exception):
                 raise step
@@ -530,7 +602,7 @@ class TestEngineChain:
         pick, engine, _, _ = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
-        assert len(calls) == 2  # at most one retry
+        assert len(calls) == 3  # one retry on call 1, then call 2
         assert pick is not None and pick.model == HAIKU
         assert engine == "openrouter"
 
@@ -578,6 +650,8 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             step = script.pop(0) if script else None
             if isinstance(step, Exception):
                 raise step
@@ -587,7 +661,7 @@ class TestEngineChain:
         pick, _, _, _ = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
-        assert len(calls) == 2
+        assert len(calls) == 3  # one retry on call 1, then call 2
         assert pick is not None and pick.model == HAIKU
 
     def test_timeout_exhaustion_holds(self, monkeypatch):
@@ -642,6 +716,8 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             step = script.pop(0) if script else None
             if isinstance(step, Exception):
                 raise step
@@ -651,7 +727,7 @@ class TestEngineChain:
         pick, _, _, _ = decide(
             _strategy(), current_model=SONNET, side=False, ask="hi"
         )
-        assert len(calls) == 2
+        assert len(calls) == 3  # one retry on call 1, then call 2
         assert pick is not None
 
     def test_schema_failures_hold_without_retry(self, monkeypatch):
@@ -681,6 +757,8 @@ class TestEngineChain:
         import urllib.request
 
         def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
             if "openrouter" in request.full_url:
                 bad = _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5, SONNET: 0.5})
                 return _FakeResponse(_decision_payload(bad))
@@ -742,7 +820,7 @@ class TestEngineChain:
         assert urls == [OPENROUTER_DECISIONS_URL]  # local never tried
 
     def test_first_advertised_level_rejection_holds(self, monkeypatch):
-        # The picked candidate's first advertised level rides through
+        # The picked candidate's lone level rides through
         # validate_routed_effort: nova-micro advertises "low" but
         # supports no thinking, so the route holds.
         import urllib.request
@@ -812,6 +890,8 @@ class TestEngineChain:
         def _fake_urlopen(request, timeout=None):
             body = json.loads(request.data.decode("utf-8"))
             assert body["state"]["side"] is False
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -843,18 +923,20 @@ class TestLocalEngine:
 
         def _fake_urlopen(request, timeout=None):
             urls.append(request.full_url)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         pick, engine, _, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
-        assert urls == [OPENROUTER_DECISIONS_URL]
+        assert urls == [OPENROUTER_DECISIONS_URL] * 2  # both calls, no local
         assert pick == RoutingPick(
             model=HAIKU,
             effort="low",
             model_confidence=0.85,
-            effort_confidence=None,
+            effort_confidence=0.7,
             tie_break=False,
         )
         assert engine == "openrouter"
@@ -868,18 +950,26 @@ class TestLocalEngine:
             urls.append(request.full_url)
             if "openrouter" in request.full_url:
                 raise urllib.error.URLError("api down")
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _effort_payload(cost=None, input_tokens=50, output_tokens=6)
+                )
             return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         pick, engine, usage, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
-        assert len(urls) == 2  # one attempt per engine, no in-ask retry
-        assert urls[1].startswith(OLLAMA_DEFAULT_HOST)
+        # call 1 falls through, then call 2 retries the chain (api still
+        # down) before landing local: one attempt per engine per call
+        assert len(urls) == 4
         assert urls[1] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
+        assert urls[2] == OPENROUTER_DECISIONS_URL
+        assert urls[3] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
         assert pick is not None and pick.model == HAIKU
+        assert pick.effort_confidence == 0.7
         assert engine == "local"
-        assert usage == (384, 41, None)  # local spend records as None
+        assert usage == (434, 47, None)  # local spend records as None
 
     def test_both_failing_holds_current(self, monkeypatch):
         import urllib.request
@@ -904,6 +994,8 @@ class TestLocalEngine:
         def _fake_urlopen(request, timeout=None):
             urls.append(request.full_url)
             assert "openrouter" not in request.full_url
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -911,7 +1003,7 @@ class TestLocalEngine:
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
-        assert len(urls) == 1
+        assert len(urls) == 2  # both calls stay local
         assert pick is not None and engine == "local"
 
     def test_primary_local_failure_holds_without_api_call(self, monkeypatch):
@@ -1042,6 +1134,8 @@ class TestLocalEngine:
         def _fake_urlopen(request, timeout=None):
             seen["url"] = request.full_url
             seen["timeout"] = timeout
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -1079,6 +1173,10 @@ class TestLocalEngine:
         import urllib.request
 
         def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _effort_payload(cost=None, input_tokens=30, output_tokens=4)
+                )
             return _FakeResponse(
                 _decision_payload(
                     _answer(HAIKU, {HAIKU: 0.85, NOVA_MICRO: 0.15}),
@@ -1097,7 +1195,7 @@ class TestLocalEngine:
         _, _, usage, _ = decide(
             self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
         )
-        assert usage == (90, 12, None)
+        assert usage == (120, 16, None)  # both local calls summed, still costless
 
     def test_proxied_host_carries_bearer_key(self, monkeypatch):
         import urllib.request
@@ -1163,6 +1261,10 @@ class TestLocalEngine:
 
 
 class TestRoutedEffort:
+    @pytest.fixture(autouse=True)
+    def _key(self, monkeypatch):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
     def test_apply_switch_forwards_effort_to_resolve(self, monkeypatch):
         import strands_harness.models as harness_models
         from types import SimpleNamespace
@@ -1242,6 +1344,171 @@ class TestRoutedEffort:
         )
         assert resolved_id is not None
         assert calls and all("effort" not in kwargs for _, kwargs in calls)
+
+    def test_sequential_calls_run_model_then_effort(self, monkeypatch):
+        import urllib.request
+
+        bodies: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            bodies.append(json.loads(request.data.decode("utf-8")))
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, usage, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(bodies) == 2  # exactly two sequential POSTs
+        first, second = bodies
+        assert set(first["questions"]) == {"pick_model"}
+        assert set(second["questions"]) == {"pick_effort"}
+        assert second["state"] == first["state"]  # same state reused
+        assert set(second["questions"]["pick_effort"]["criteria"]) == {
+            "low",
+            "high",
+        }
+        assert pick is not None and pick.effort == "low"
+        assert pick.effort_confidence == 0.7
+        assert usage[0] == 384 + 384 and usage[1] == 41 + 41
+
+    def test_effort_scoped_to_picked_model_levels_only(self, monkeypatch):
+        import urllib.request
+
+        other = "other/model"
+        bodies: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            bodies.append(json.loads(request.data.decode("utf-8")))
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload())
+            return _FakeResponse(
+                _route_payload(choice=HAIKU, probs={HAIKU: 0.9, other: 0.1})
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, levels=["low", "high"]),
+                RoutingCandidate(id=other, levels=["medium", "max"]),
+            ]
+        )
+        pick, _, _, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert set(bodies[1]["questions"]["pick_effort"]["criteria"]) == {
+            "low",
+            "high",  # the picked levels only, never the runner-up's
+        }
+
+    def test_weak_effort_read_still_routes(self, monkeypatch):
+        # Only the model confidence gates (D-16): a 51% effort top-1
+        # routes with the top level named on the line.
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _effort_payload("low", {"low": 0.51, "high": 0.49})
+                )
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, _, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None
+        assert (pick.effort, pick.effort_confidence) == ("low", 0.51)
+        line = format_routed_line(
+            model=pick.model,
+            effort=pick.effort,
+            model_confidence=pick.model_confidence,
+            effort_confidence=pick.effort_confidence,
+            tie_break=pick.tie_break,
+            prev_model=SONNET,
+            ask="hi",
+        )
+        assert "(low)" in line and "85%" in line and "51%" in line
+        assert "~$" in line and "/ask vs" in line
+
+    def test_effort_outside_levels_holds_via_validation(self, monkeypatch):
+        # The effort top choice sits outside the advertised set: the
+        # shape validates, then validate_routed_effort holds current.
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(
+                    _effort_payload("max", {"low": 0.15, "max": 0.85})
+                )
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == f"effort 'max' unsupported by {HAIKU}"
+
+    def test_single_level_pick_skips_effort_call(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _fake_urlopen(request, timeout=None):
+            calls.append(request)
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        strategy = _strategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, levels=["high"]),
+                RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
+            ]
+        )
+        pick, _, usage, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert len(calls) == 1  # degenerate choice: no effort question
+        assert pick is not None
+        assert (pick.effort, pick.effort_confidence) == ("high", None)
+        assert usage == (384, 41, 0.000016128)  # call-1 totals only
+
+    def test_failed_effort_call_holds(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_route_payload())  # no pick_effort key
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, engine, usage, detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None  # no level to route: hold, never guess
+        assert engine == "openrouter"
+        assert usage == (0, 0, None)
+        assert detail == "openrouter failed"
+
+    def test_cost_absent_effort_keeps_call_1_spend(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
+            return _FakeResponse(_route_payload())
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        pick, _, usage, _ = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None
+        assert usage == (768, 82, 0.000016128)  # None side adds $0, never None
 
 
 class TestSingleCandidateFastPath:
@@ -1402,13 +1669,21 @@ class TestLiveEngines:
             cost=None,
             model="nimble",
         )
+        canned_effort = _effort_payload(
+            input_tokens=30, output_tokens=4, cost=None, model="nimble"
+        )
 
         class _Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", 0))
                 seen["path"] = self.path
-                seen["body"] = json.loads(self.rfile.read(length).decode("utf-8"))
-                body = json.dumps(canned).encode("utf-8")
+                seen.setdefault("bodies", []).append(
+                    json.loads(self.rfile.read(length).decode("utf-8"))
+                )
+                payload = canned_effort if (
+                    "pick_effort" in seen["bodies"][-1].get("questions", {})
+                ) else canned
+                body = json.dumps(payload).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -1442,17 +1717,19 @@ class TestLiveEngines:
             model=HAIKU,
             effort="low",
             model_confidence=0.85,
-            effort_confidence=None,
+            effort_confidence=0.7,
             tie_break=False,
         )
         assert engine == "local"
-        assert usage == (90, 12, None)
+        assert usage == (120, 16, None)
         assert seen["path"] == "/v1/systemone"
-        body = seen["body"]
-        assert body["model"] == "stub-model"
-        assert body["keep_alive"] == "5m"
-        assert set(body["state"]) == {"ask", "directives", "side"}
-        assert body["questions"]["pick_model"]["type"] == "choice"
+        assert len(seen["bodies"]) == 2  # model call, then the effort call
+        for body in seen["bodies"]:
+            assert body["model"] == "stub-model"
+            assert body["keep_alive"] == "5m"
+            assert set(body["state"]) == {"ask", "directives", "side"}
+        assert seen["bodies"][0]["questions"]["pick_model"]["type"] == "choice"
+        assert set(seen["bodies"][1]["questions"]) == {"pick_effort"}
 
     @pytest.mark.integration
     def test_openrouter_live_decision_returns_answers(self):
