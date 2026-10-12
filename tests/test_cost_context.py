@@ -315,6 +315,70 @@ class TestReportedRows:
         assert "Total: in 4.01K, out 1, $0.0034" in report
 
 
+class TestBlendedTotalsAndSplit:
+    def test_mixed_total_shows_blended_and_split(self):
+        turns = [
+            _session_row(reported_cost=0.0024),
+            _session_row(turn=2, input_tokens=4000, output_tokens=0),
+        ]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "Total: in 4.01K, out 1, $0.0034" in report
+        assert "  (actual $0.0024 + estimated $0.0010)" in report.splitlines()
+
+    def test_estimate_only_has_no_split(self):
+        turns = [_session_row(turn=2, input_tokens=4000, output_tokens=0)]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "Total: in 4.00K, out 0, $0.0010" in report
+        assert not [
+            line for line in report.splitlines() if line.startswith("  (actual")
+        ]
+
+    def test_actuals_only_has_no_split(self):
+        turns = [
+            _session_row(reported_cost=0.0024),
+            _session_row(turn=2, reported_cost=0.001),
+        ]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "Total: in 24, out 2, $0.0034" in report
+        assert not [
+            line for line in report.splitlines() if line.startswith("  (actual")
+        ]
+
+    def test_present_zero_actual_opens_lane(self):
+        turns = [
+            _session_row(reported_cost=0.0),
+            _session_row(turn=2, input_tokens=4000, output_tokens=0),
+        ]
+        report = cost_report(turns, "mystery/acme-1")
+        assert "  (actual $0.0000 + estimated $0.0010)" in report.splitlines()
+
+    def test_routing_reported_spend_marked_and_laned(self):
+        turns = [_session_row(turn=1, input_tokens=4000, output_tokens=0)]
+        event = _routed_event(decision_cost=0.0006)
+        report = cost_report(turns, "mystery/acme-1", routing=[event])
+        lines = _routing_lines(report)
+        assert len(lines) == 1
+        assert lines[0].endswith("$0.0006 actual")
+        assert "  (actual $0.0006 + estimated $0.0010)" in report.splitlines()
+
+    def test_routing_absent_cost_bare_zero(self):
+        event = _routed_event(decision_cost=None)
+        report = cost_report([], "a/routed", routing=[event])
+        lines = _routing_lines(report)
+        assert len(lines) == 1
+        assert lines[0].endswith("$0.0000")
+        assert "actual" not in lines[0]
+
+    def test_absent_routing_cost_never_opens_lane(self):
+        turns = [_session_row(turn=1, input_tokens=4000, output_tokens=0)]
+        event = _routed_event(decision_cost=None)
+        report = cost_report(turns, "mystery/acme-1", routing=[event])
+        assert "Total: in 4.38K, out 41, $0.0010" in report
+        assert not [
+            line for line in report.splitlines() if line.startswith("  (actual")
+        ]
+
+
 def _routed_event(**overrides):
     base = {
         "ask": 1,
