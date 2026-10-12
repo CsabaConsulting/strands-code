@@ -46,19 +46,26 @@ DECISION_TIMEOUT_SECONDS = 10
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 """Default decision engine transport (D-06)."""
 
-DEFAULT_TIE_MARGIN = 0.05
-"""Provisional near-tie gap: top-two within this routes the cheaper one.
+DEFAULT_TIE_MARGIN = 0.04
+"""Near-tie gap: top-two within this routes the cheaper one (D-14).
 
-Shipped placeholder — plan 08-05 re-derives it from real probe
-distributions, never round numbers (Pitfall 2 floors the grid at 0.01).
+Probe-derived 2026-10-12 (``evals/routing-probe/baseline.json``):
+max observed near-tie margin 0.03 (Jev 0.51-vs-0.48 split) plus one
+0.01 grid step of headroom — the grid floor is Jev's 2-decimal
+rounding granularity (Pitfall 2). Below every routed margin (0.34
+min), so zero probe outcomes change; arms the tie-break for future
+threshold-clearing near-ties.
 """
 
-DEFAULT_CONFIDENCE_THRESHOLD = 0.70
-"""Provisional model gate: top-1 probability below this holds current.
+DEFAULT_CONFIDENCE_THRESHOLD = 0.62
+"""Model gate: top-1 probability below this holds current (D-16).
 
-Shipped placeholder — plan 08-05 re-derives it from real probe
-distributions, never round numbers. Always compared against the
-pick's top-1 probability, never the vendor confidence field (D-16).
+Probe-derived 2026-10-12 (``evals/routing-probe/baseline.json``):
+midpoint of the observed (0.51 wrong-catchable max, 0.73 correct
+min) gap, with 0.11 margin each side. One shared value serves both
+pinned engines — neither misfires in the dangerous direction.
+Always compared against the pick's top-1 probability, never the
+vendor confidence field (Pitfall 1).
 """
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 524, 529})

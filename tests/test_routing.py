@@ -370,11 +370,11 @@ class TestGateModel:
         )
         assert model is None
         assert tie_break is False
-        assert detail == "confidence 41% < 70%"
+        assert detail == "confidence 41% < 62%"
 
     def test_threshold_boundary_routes(self):
         model, _, _ = gate_model(
-            _answer(HAIKU, {HAIKU: 0.70, NOVA_MICRO: 0.30}), _strategy()
+            _answer(HAIKU, {HAIKU: 0.62, NOVA_MICRO: 0.38}), _strategy()
         )
         assert model == HAIKU  # exactly at the threshold still routes
 
@@ -382,7 +382,7 @@ class TestGateModel:
         self._priced(monkeypatch)
         model, tie_break, detail = gate_model(
             _answer(HAIKU, {HAIKU: 0.52, NOVA_MICRO: 0.48}),
-            _strategy(confidence_threshold=0.4),
+            _strategy(confidence_threshold=0.4, tie_margin=0.05),
         )
         assert model == NOVA_MICRO
         assert tie_break is True
@@ -892,7 +892,7 @@ class TestEngineChain:
         assert pick is None  # ambiguous ask: hold, retry next ask
         assert engine == "openrouter"
         assert usage == (0, 0, None)
-        assert detail == "confidence 41% < 70%"
+        assert detail == "confidence 41% < 62%"
         assert urls == [OPENROUTER_DECISIONS_URL]  # local never tried
 
     def test_first_advertised_level_rejection_holds(self, monkeypatch):

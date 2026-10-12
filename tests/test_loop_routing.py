@@ -549,7 +549,7 @@ class TestPreTurnHook:
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the note
         assert (
-            f"Routing held on {HAIKU} (confidence 41% < 70%; retrying next ask)"
+            f"Routing held on {HAIKU} (confidence 41% < 62%; retrying next ask)"
             in flat
         )
         assert "Routed \u2192" not in out
@@ -564,6 +564,7 @@ class TestPreTurnHook:
             ]
         )
         strategy.confidence_threshold = 0.4
+        strategy.tie_margin = 0.05
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
         prices = {HAIKU: (3.0, 15.0), SONNET: (0.5, 2.0)}
         monkeypatch.setattr(routing_mod, "price_for", lambda mid: prices.get(mid))

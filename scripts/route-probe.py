@@ -18,9 +18,12 @@ Regression path (compare-mode fallback): promptfoo is not installed on
 this machine, so question regression runs through ``--compare`` instead
 of ``promptfoo eval``. ``--compare`` diffs fresh ``--run`` output
 against the recorded ``evals/routing-probe/baseline.json`` and exits
-nonzero on any verdict drift (gated-pick change or route/hold flip),
-which is the same signal a promptfoo verdict-diff gate would give. If
-promptfoo is installed later, wrap ``probes.jsonl`` in
+nonzero on any gated model-verdict drift (pick change or route/hold
+flip), which is the same signal a promptfoo verdict-diff gate would
+give. Effort-read flips warn instead of failing (D-16 routes weak
+effort reads ungated, so near-tie flips are expected jitter), as do
+top-1 moves over 0.05 and serving-snapshot changes. If promptfoo is
+installed later, wrap ``probes.jsonl`` in
 ``evals/routing-probe/promptfooconfig.yaml`` per the pinned decision
 model and run ``promptfoo eval`` alongside ``--compare``.
 
@@ -348,11 +351,14 @@ def run_probe(
         },
     }
     answer = None
+    raw_answer = None
     if result.answers is not None:
-        answer = validate_choice_answer(
-            result.answers.get(question_key), membership
-        )
+        raw_answer = result.answers.get(question_key)
+        answer = validate_choice_answer(raw_answer, membership)
+    record["had_answers"] = result.answers is not None
     if answer is None:
+        if raw_answer is not None:
+            record["raw_answer"] = repr(raw_answer)[:500]
         record.update(
             {
                 "table": None,
@@ -482,11 +488,16 @@ def cmd_run(
             status = "HOLD" if record["gated"] is None else "route"
             extra = record["detail"] or record["top1"]
             print(f"[{status}] {record['probe']}: {extra}", flush=True)
-            if record["fault"] is None and record["table"] is None:
+            # Transport health only: an invalid table with answers
+            # present is a legitimate hold verdict (production holds
+            # and serves), not a runner failure — behavior drift is
+            # compare's job. Missing answers mean the engine itself
+            # failed (or the key/daemon is absent) and fail loudly.
+            if record["fault"] is None and not record["had_answers"]:
                 failures += 1
                 print(
-                    f"error: non-fault probe {record['probe']} yielded "
-                    f"no table ({record['detail']})",
+                    f"error: non-fault probe {record['probe']} got no "
+                    f"answers ({record['detail']})",
                     file=sys.stderr,
                 )
     print(f"wrote {len(probes)} verdicts to {out_path}", flush=True)
@@ -523,11 +534,23 @@ def _compare_engine(
             drifts += 1
             continue
         if got.get("gated") != want.get("gated"):
-            print(
-                f"drift: {engine}/{probe_id}: gated "
-                f"{want.get('gated')} -> {got.get('gated')}"
-            )
-            drifts += 1
+            # Effort reads are ungated by design (D-16 routes weak
+            # reads), so near-tie effort flips are expected jitter,
+            # not regressions — warn. Model verdicts are gated and
+            # stable: any flip fails.
+            if got.get("question") == "pick_effort":
+                print(
+                    f"warn: {engine}/{probe_id}: effort "
+                    f"{want.get('gated')} -> {got.get('gated')} "
+                    "(ungated read)"
+                )
+                warnings += 1
+            else:
+                print(
+                    f"drift: {engine}/{probe_id}: gated "
+                    f"{want.get('gated')} -> {got.get('gated')}"
+                )
+                drifts += 1
         for key in ("top1_prob",):
             old, new = want.get(key), got.get(key)
             if (

@@ -1161,8 +1161,8 @@ class TestRouteValidate:
         )
         assert report.valid is True
         text = report.format()
-        assert "tie_margin: 0.05 (default)" in text
-        assert "confidence_threshold: 0.7 (default)" in text
+        assert "tie_margin: 0.04 (default)" in text
+        assert "confidence_threshold: 0.62 (default)" in text
 
     def test_explicit_knobs_reported(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])

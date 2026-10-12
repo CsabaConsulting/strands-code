@@ -71,8 +71,8 @@ directives: >-
   Trivial asks go cheap; deep refactors go big.
   Judge the ask, not its length: short asks can still need depth.
 # Gate knobs (current defaults; omit either to inherit it).
-tie_margin: 0.05
-confidence_threshold: 0.7
+tie_margin: 0.04
+confidence_threshold: 0.62
 engine:
   primary: openrouter
   # Decisions-catalog id — pick from /route setup, never an alias.
