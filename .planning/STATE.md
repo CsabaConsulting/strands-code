@@ -3,17 +3,17 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 08
 current_phase_name: Model Routing with Decision Models
-status: verifying
-stopped_at: Phase 08 execution complete
-last_updated: "2026-10-11T05:19:57.118Z"
-last_activity: 2026-10-10
+status: executing
+stopped_at: Completed 08-04-PLAN.md
+last_updated: "2026-10-12T06:27:31.469Z"
+last_activity: 2026-10-11
 last_activity_desc: Phase 08 execution started
-state_head: d92d2a74994739ff7c505caaa7db56f0416167f0
+state_head: a38ac95fcbdb0532779639e19bd4902a3f2bcd27
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 19
-  completed_plans: 19
+  total_plans: 21
+  completed_plans: 20
 ---
 
 # Project State
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-11)
 ## Current Position
 
 Phase: 08 (Model Routing with Decision Models) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-10-10 — Phase 08 execution started
+Plan: 5 of 5
+Status: Ready to execute
+Last activity: 2026-10-11 — Phase 08 execution started
 
 Progress: [████████░░] 78%
 
@@ -75,6 +75,10 @@ Progress: [████████░░] 78%
 | Phase 08 P01 | 11min | 3 tasks | 8 files |
 | Phase 08 P02 | 15min | 3 tasks | 6 files |
 | Phase 08 P03 | 16min | 3 tasks | 6 files |
+| Phase 08 P01 | 26min | 2 tasks | 7 files |
+| Phase 08 P02 | 11min | 3 tasks | 3 files |
+| Phase 08 P03 | 25min | 3 tasks | 5 files |
+| Phase 08 P04 | 17min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -119,6 +123,14 @@ Recent decisions affecting current work:
 - [Phase 08]: Validate is the strict judge while load stays fail-soft: skipped entries fail validation, unknown top-level keys and empty directives stay valid notes — Skipped entries mean the file does not mean what the user wrote, so validate fails them with fixes; the loader keeps routing with the survivors
 - [Phase 08]: Single-candidate strategies with advertised levels skip all decision engines via a pick-shaped fast-path verdict — Nothing to choose means no decision call to pay for; the unchanged hook takes its pick branch with zero-token spend recorded
 - [Phase 08]: Live engine tests skip on absent credentials or daemon but fail loudly when a present endpoint rejects the call — Absence skips keep CI hermetic; failing on present-but-broken endpoints surfaces contract drift, proven by the live OpenRouter pass this run
+- [Phase 08]: [Phase 08-01]: Threshold holds short-circuit the engine chain; model_confidence is the routed table probability; same-model picks skip effort validation — Below-threshold means the ask is ambiguous (retry next ask, never next engine); vendor confidence is engine-specific so the gate reads top-1 probability; the hook applies nothing on no-op picks so validation is meaningless there
+- [Phase 08]: [Phase 08-01]: Reported decision cost verbatim into /cost line and totals; cost-absent local calls render zero, token-estimate branch deleted — usage.cost is exact input-token billing while cost_for re-estimates from tables; verbatim keeps /cost truthful and stops failed calls from flipping provenance
+- [Phase 08]: [Phase 08-01]: Provisional gate defaults 0.70/0.05 ship marked for 08-05 probe calibration; lone candidate without levels holds with no engine call — Thresholds must come from real probe distributions never round numbers; a one-option choice is invalid (2-26) and no effort exists to pass through, so hold is the only models-only verdict
+- [Phase 08]: [Phase 08-02]: Single-level picks skip call 2 with the lone level riding through; lone-single-level keeps a documented zero-call route exception — A one-option choice has nothing to judge and violates the documented 2-26 floor (Ollama rejects it); the exception is pinned by test_lone_single_level_routes_with_no_call
+- [Phase 08]: [Phase 08-02]: Same-model picks run call 2 but skip validate_routed_effort; call-2 failures hold; outside-levels reads hold via validate_routed_effort — Preserves the locked 08-01 no-op decision (hook applies nothing on same-model picks); a failed effort read carries no level to route, and membership rejects keep the unsupported-effort detail
+- [Phase 08]: [Phase 08-03]: Unready daemons yield an inert zero-POST link; 4xx/schema keep falling through; pause fires only when every attempted link fails at connection level — Inert link keeps the _chain_for signature while the distinct detail flows through the error channel; fall-through is the existing tested contract the plan does not revoke; neutral skipped/unready/errorless links keep mixed failures informative
+- [Phase 08]: [Phase 08-03]: Pause is turn-scoped on RoutingState and only the ask tightens under the 64 KiB body cap — Pre-turn resumes every ask per D-08 retry-next-ask while side spawns skip with zero POSTs; ask-only tightening keeps the guard simple and criteria overshoot degrades to a 413 hold with the engine-plus-code detail
+- [Phase 08]: [Phase 08-04]: Split-catalog setup with decisions-cache validate; empty local tag takes nimble; rig levels [auto, off] — Decisions catalog drives the decider pick and the validate check (D-06); nimble is the RESEARCH default local tag; reasoning-free levels keep scripted live runs deterministic on any boot model
 
 ### Pending Todos
 
@@ -150,6 +162,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-11T05:19:57.041Z
-Stopped at: Phase 08 execution complete
+Last session: 2026-10-12T06:27:27.154Z
+Stopped at: Completed 08-04-PLAN.md
 Resume file: None
