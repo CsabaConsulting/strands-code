@@ -76,6 +76,9 @@ OLLAMA_TIMEOUT_SECONDS = 30
 OLLAMA_KEEP_ALIVE = "5m"
 """Keep the decision model warm between asks (one daemon round trip)."""
 
+OLLAMA_PREFLIGHT_TIMEOUT_SECONDS = 5
+"""Per-GET ceiling for daemon preflight; the chain runs two per ask."""
+
 _TOP_LEVEL_KEYS = {
     "candidates",
     "directives",
@@ -889,7 +892,10 @@ class EngineResult:
     response usage fields and default to zeros when absent, ``cost``
     carries the reported USD spend (None when the shape omits it, as
     local calls do), and ``model`` names the dated snapshot that
-    served the request for drift tracing.
+    served the request for drift tracing. ``error`` names the short
+    failure class (``unready`` for a skipped local link, HTTP and
+    transport classes otherwise); None means no information, which
+    the verdict renders as the legacy ``<engine> failed`` detail.
     """
 
     answers: dict[str, Any] | None
@@ -897,6 +903,7 @@ class EngineResult:
     output_tokens: int = 0
     cost: float | None = None
     model: str | None = None
+    error: str | None = None
 
 
 def _count(value: object) -> int:
@@ -1012,6 +1019,11 @@ _OLLAMA_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 """Hosts that never carry key material (T-08-06)."""
 
 
+def _ollama_base(local_base_url: str | None) -> str:
+    """Daemon root: strategy URL, else the harness host, else loopback."""
+    return local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
+
+
 def _ollama_headers(base: str) -> dict[str, str]:
     """Local daemon headers; the auth header only for proxied hosts."""
     from urllib.parse import urlsplit
@@ -1025,6 +1037,72 @@ def _ollama_headers(base: str) -> dict[str, str]:
     if api_key and not loopback:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+def _preflight_get(url: str, headers: dict[str, str]) -> dict[str, Any] | None:
+    """One daemon preflight GET: parsed mapping or None on any failure."""
+    import urllib.request
+
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(
+            request, timeout=OLLAMA_PREFLIGHT_TIMEOUT_SECONDS
+        ) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 — every preflight failure reads unready
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _version_tuple(text: object) -> tuple[int, ...] | None:
+    """Dotted version to ints; None when unparseable (fail closed)."""
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        return tuple(int(part) for part in text.split("."))
+    except ValueError:
+        return None
+
+
+def local_engine_ready(base: str, tag: str) -> bool:
+    """True when the Ollama daemon meets the floor and has the tag pulled.
+
+    Probes GET ``<base>/api/version`` for the 0.35 floor (0.35.1 for
+    tags starting with ``clef``) and GET ``<base>/api/tags`` for the
+    tag (exact or ``:latest``-suffixed daemon names match). Any
+    transport or parse failure returns False without raising — the
+    chain treats unready as skip, never as ready (T-08-30).
+    """
+    if not base or not tag:
+        return False
+    root = base.rstrip("/")
+    version = _preflight_get(f"{root}/api/version", _ollama_headers(base))
+    if version is None:
+        return False
+    parsed = _version_tuple(version.get("version"))
+    if parsed is None:
+        return False
+    floor = (0, 35, 1) if tag.startswith("clef") else (0, 35)
+    if parsed < floor:
+        return False
+    tags = _preflight_get(f"{root}/api/tags", _ollama_headers(base))
+    if tags is None:
+        return False
+    models = tags.get("models")
+    if not isinstance(models, list):
+        return False
+    names = {
+        model["name"]
+        for model in models
+        if isinstance(model, dict) and isinstance(model.get("name"), str)
+    }
+    if tag in names:
+        return True
+    bare = {
+        name[: -len(":latest")] if name.endswith(":latest") else name
+        for name in names
+    }
+    return tag in bare
 
 
 def decide_via_ollama(
@@ -1047,7 +1125,7 @@ def decide_via_ollama(
     """
     if not local_model:
         return EngineResult(answers=None)
-    base = local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
+    base = _ollama_base(local_base_url)
     if not _valid_base_url(base):
         return EngineResult(answers=None)
     data = _post_decision(
@@ -1235,8 +1313,33 @@ def _ollama_attempt(
     )
 
 
+def _local_unready_attempt(
+    _strategy: RoutingStrategy, _state: dict[str, Any], _questions: dict[str, Any]
+) -> EngineResult:
+    """Inert local link: an unready daemon skips with zero POSTs.
+
+    Offered by :func:`_chain_for` when :func:`local_engine_ready`
+    fails — version below the floor, tag not pulled, or preflight
+    unreachable — so the verdict carries the distinct unready detail
+    instead of a transport failure.
+    """
+    return EngineResult(answers=None, error="unready")
+
+
 register_engine("openrouter", _openrouter_attempt)
 register_engine("local", _ollama_attempt)
+
+
+def _link_detail(name: str, error: str | None) -> str:
+    """Verdict detail for one failed link: unready skips name the cause.
+
+    Links without failure information keep the legacy ``<engine>
+    failed`` shape; transport and schema classes name engine plus
+    cause (extended per class in the fault-matrix task).
+    """
+    if error == "unready":
+        return f"{name} unready (daemon version or tag not ready)"
+    return f"{name} failed"
 
 
 def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
@@ -1246,7 +1349,10 @@ def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
     daemon only (fully offline local-or-hold, D-09); ``off`` tries
     nothing — the load layer already yields None for it, and a
     directly built off strategy degrades the same way here. The local
-    link is skipped, not failed, when no local model configures.
+    link is skipped, not failed, when no local model configures, and
+    consults :func:`local_engine_ready` before it is offered: an
+    unready daemon yields the inert unready link (zero POSTs, distinct
+    detail) instead of a doomed decision call.
     """
     primary = strategy.engine.primary or "openrouter"
     if primary == "off":
@@ -1255,8 +1361,13 @@ def _chain_for(strategy: RoutingStrategy) -> list[tuple[str, EngineAttempt]]:
     by_name = dict(_ENGINE_REGISTRY)
     chain: list[tuple[str, EngineAttempt]] = []
     for name in names:
-        if name == "local" and not strategy.engine.local_model:
-            continue
+        if name == "local":
+            if not strategy.engine.local_model:
+                continue
+            base = _ollama_base(strategy.engine.local_base_url)
+            if not local_engine_ready(base, strategy.engine.local_model):
+                chain.append((name, _local_unready_attempt))
+                continue
         attempt = by_name.get(name)
         if attempt is not None:
             chain.append((name, attempt))
@@ -1298,7 +1409,9 @@ def _decide_effort(
             result = attempt(strategy, state, questions)
         except Exception:
             result = None
-        if result is None or result.answers is None:
+        if result is None:
+            continue  # skipped link: unconfigured, never attempted
+        if result.answers is None:
             failed = name
             continue
         if result.model:
@@ -1438,8 +1551,10 @@ def decide(
             result = attempt(strategy, state, questions)
         except Exception:
             result = None
-        if result is None or result.answers is None:
-            failed, detail = name, f"{name} failed"
+        if result is None:
+            continue  # skipped link: unconfigured, never attempted
+        if result.answers is None:
+            failed, detail = name, _link_detail(name, result.error)
             continue
         if result.model:
             logger.debug("Routing decision via %s served by %s", name, result.model)

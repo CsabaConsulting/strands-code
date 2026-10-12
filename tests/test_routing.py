@@ -30,6 +30,7 @@ from strands_code_cli.routing import (
     format_routed_line,
     gate_model,
     load_strategy,
+    local_engine_ready,
     validate_choice_answer,
     validate_routed_effort,
 )
@@ -125,6 +126,20 @@ class _FakeResponse:
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(OPENROUTER_DECISIONS_URL, code, "boom", {}, None)
+
+
+def _with_preflight(fake, *, version: str = "0.40.3", tags=("nimble",)):
+    """Serve daemon preflight GETs, delegating decision POSTs to fake."""
+
+    def _wrapped(request, timeout=None):
+        url = request.full_url
+        if url.endswith("/api/version"):
+            return _FakeResponse({"version": version})
+        if url.endswith("/api/tags"):
+            return _FakeResponse({"models": [{"name": name} for name in tags]})
+        return fake(request, timeout=timeout)
+
+    return _wrapped
 
 
 class TestDecisionBuilders:
@@ -764,7 +779,9 @@ class TestEngineChain:
                 return _FakeResponse(_decision_payload(bad))
             return _FakeResponse(_route_payload())
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         strategy = _strategy(
             engine=RoutingEngine(
                 decision_model="cheap/decider", local_model="nimble"
@@ -803,7 +820,9 @@ class TestEngineChain:
             urls.append(request.full_url)
             return _FakeResponse(_decision_payload(weak))
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         strategy = _strategy(
             candidates=_candidates(),
             engine=RoutingEngine(
@@ -927,7 +946,9 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload())
             return _FakeResponse(_route_payload())
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         pick, engine, _, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
@@ -956,7 +977,9 @@ class TestLocalEngine:
                 )
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         pick, engine, usage, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
@@ -984,7 +1007,9 @@ class TestLocalEngine:
         assert pick is None
         assert engine == "local"  # last attempted engine
         assert usage == (0, 0, None)
-        assert detail == "local failed"
+        # The refused preflight skips the local link with the distinct
+        # unready detail instead of a transport failure.
+        assert detail == "local unready (daemon version or tag not ready)"
 
     def test_primary_local_skips_the_api(self, monkeypatch):
         import urllib.request
@@ -998,7 +1023,9 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         strategy = self._dual(primary="local")
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1138,7 +1165,9 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         strategy = self._dual(primary="local")
         pick, _, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert pick is not None
@@ -1186,7 +1215,9 @@ class TestLocalEngine:
                 )
             )
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         result = decide_via_ollama(
             local_model="nimble", state={}, questions={}
         )
@@ -1244,7 +1275,9 @@ class TestLocalEngine:
             table = {HAIKU: 0.2, near_miss: 0.8}
             return _FakeResponse(_decision_payload(_answer(near_miss, table)))
 
-        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
+        )
         pick, engine, _, _ = decide(
             self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
         )
@@ -1258,6 +1291,206 @@ class TestLocalEngine:
         assert EngineResult(answers=None) == EngineResult(
             answers=None, input_tokens=0, output_tokens=0, cost=None, model=None
         )
+
+    def test_ready_daemon_attempts_local_link(self, monkeypatch):
+        import urllib.request
+
+        gets: list[str] = []
+        posts: list[str] = []
+
+        def _fake_urlopen(request, timeout=None):
+            posts.append(request.full_url)
+            if _wants_effort(request):
+                return _FakeResponse(_effort_payload(cost=None))
+            return _FakeResponse(self._local_payload())
+
+        def _recording(request, timeout=None):
+            if request.full_url.endswith(
+                ("/api/version", "/api/tags")
+            ):
+                gets.append(request.full_url)
+            return _with_preflight(_fake_urlopen)(request, timeout=timeout)
+
+        monkeypatch.setattr(urllib.request, "urlopen", _recording)
+        pick, engine, _, detail = decide(
+            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is not None and pick.model == HAIKU
+        assert engine == "local"
+        assert detail == ""
+        assert len(gets) == 2  # version plus tags, once per ask
+        assert posts == [f"{OLLAMA_DEFAULT_HOST}/v1/systemone"] * 2
+
+    def test_old_daemon_skips_local_link_with_zero_posts(self, monkeypatch):
+        import urllib.request
+
+        gets: list[str] = []
+
+        def _boom(request, timeout=None):
+            raise AssertionError("unready daemon: no decision POST")
+
+        def _recording(request, timeout=None):
+            gets.append(request.full_url)
+            return _with_preflight(_boom, version="0.34.0")(
+                request, timeout=timeout
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _recording)
+        pick, engine, usage, detail = decide(
+            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "local"
+        assert usage == (0, 0, None)
+        assert detail == "local unready (daemon version or tag not ready)"
+        assert gets == [f"{OLLAMA_DEFAULT_HOST}/api/version"]  # tags never asked
+
+    def test_missing_tag_skips_local_link_with_zero_posts(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("tag missing: no decision POST")
+
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            _with_preflight(_boom, tags=("other-model:1b",)),
+        )
+        pick, engine, usage, detail = decide(
+            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "local"
+        assert usage == (0, 0, None)
+        assert detail == "local unready (daemon version or tag not ready)"
+
+    def test_clef_tag_needs_point_release(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("preflight only: no decision POST")
+
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            _with_preflight(_boom, version="0.35.0", tags=("clef", "nimble")),
+        )
+        base = OLLAMA_DEFAULT_HOST
+        assert local_engine_ready(base, "clef") is False  # 0.35.0 < 0.35.1
+        assert local_engine_ready(base, "nimble") is True  # floor is 0.35
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            _with_preflight(
+                _boom, version="0.35.1", tags=("clef", "clef-flash")
+            ),
+        )
+        assert local_engine_ready(base, "clef") is True
+        assert local_engine_ready(base, "clef-flash") is True
+
+    @pytest.mark.parametrize(
+        "version,ready",
+        [
+            ("0.35", True),  # exactly the floor
+            ("0.35.0", True),
+            ("0.40.3", True),
+            ("1.2.3", True),
+            ("0.34.9", False),  # just below the floor
+            ("0.34", False),
+            ("", False),
+            ("abc", False),  # unparseable fails closed
+            ("0.x.1", False),
+        ],
+    )
+    def test_version_floor_boundaries(self, monkeypatch, version, ready):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("preflight only: no decision POST")
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _with_preflight(_boom, version=version)
+        )
+        assert local_engine_ready(OLLAMA_DEFAULT_HOST, "nimble") is ready
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"version": "0.40.3", "models": "nimble"},  # models not a list
+            {"version": "0.40.3", "models": [{"digest": "abc"}]},  # no names
+            {"version": "0.40.3", "models": [{"name": 42}]},  # name not a str
+        ],
+    )
+    def test_malformed_tags_shape_is_unready(self, monkeypatch, payload):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            if request.full_url.endswith("/api/version"):
+                return _FakeResponse({"version": "0.40.3"})
+            if request.full_url.endswith("/api/tags"):
+                return _FakeResponse(payload)
+            raise AssertionError("preflight only: no decision POST")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        assert local_engine_ready(OLLAMA_DEFAULT_HOST, "nimble") is False
+
+    def test_missing_version_key_is_unready(self, monkeypatch):
+        import urllib.request
+
+        def _fake_urlopen(request, timeout=None):
+            return _FakeResponse({"models": []})  # no version anywhere
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+        assert local_engine_ready(OLLAMA_DEFAULT_HOST, "nimble") is False
+
+    def test_latest_suffixed_daemon_name_matches(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("preflight only: no decision POST")
+
+        monkeypatch.setattr(
+            urllib.request,
+            "urlopen",
+            _with_preflight(_boom, tags=("nimble:latest",)),
+        )
+        base = OLLAMA_DEFAULT_HOST
+        assert local_engine_ready(base, "nimble") is True
+        assert local_engine_ready(base, "nimble:latest") is True  # exact too
+        assert local_engine_ready(base, "nimble:9b") is False  # no fuzzy tag
+
+    def test_refused_preflight_returns_false_and_never_raises(self, monkeypatch):
+        import urllib.request
+
+        calls: list = []
+
+        def _refused(request, timeout=None):
+            calls.append(request)
+            raise urllib.error.URLError(
+                ConnectionRefusedError(111, "Connection refused")
+            )
+
+        monkeypatch.setattr(urllib.request, "urlopen", _refused)
+        assert local_engine_ready(OLLAMA_DEFAULT_HOST, "nimble") is False
+        pick, engine, _, detail = decide(
+            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None  # the hook holds; nothing raised to it
+        assert engine == "local"
+        assert detail == "local unready (daemon version or tag not ready)"
+        assert all(
+            call.full_url.endswith("/api/version") for call in calls
+        )  # zero POSTs
+
+    def test_empty_base_or_tag_is_unready_without_network(self, monkeypatch):
+        import urllib.request
+
+        def _boom(request, timeout=None):
+            raise AssertionError("empty input: no preflight attempt")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        assert local_engine_ready("", "nimble") is False
+        assert local_engine_ready(OLLAMA_DEFAULT_HOST, "") is False
 
 
 class TestRoutedEffort:
@@ -1742,6 +1975,23 @@ class TestLiveEngines:
         )
 
         class _Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.setdefault("gets", []).append(self.path)
+                if self.path == "/api/version":
+                    payload: dict = {"version": "0.40.3"}
+                elif self.path == "/api/tags":
+                    payload = {"models": [{"name": "stub-model"}]}
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_POST(self):
                 length = int(self.headers.get("Content-Length", 0))
                 seen["path"] = self.path
@@ -1791,6 +2041,7 @@ class TestLiveEngines:
         assert engine == "local"
         assert usage == (120, 16, None)
         assert seen["path"] == "/v1/systemone"
+        assert seen["gets"] == ["/api/version", "/api/tags"]  # preflight first
         assert len(seen["bodies"]) == 2  # model call, then the effort call
         for body in seen["bodies"]:
             assert body["model"] == "stub-model"
