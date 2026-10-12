@@ -169,6 +169,24 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     # the loop replays this dict through create_harness with the
     # delegate overrides, so the child is built the way the parent was.
     agent._harness_kwargs = kwargs
+    if isinstance(model, str):
+        # Initial-build wrap (D-07): a session starting on an OpenRouter
+        # id captures from turn one. In-place promotion preserves the
+        # resolved config; the stash keeps the STRING for side rebuilds
+        # (which fresh-copy per build). Fail soft to the estimate path.
+        try:
+            from strands_code_cli import live_pricing
+            from strands_code_cli.reported_cost import wrap_for_openrouter
+
+            resolved = getattr(agent, "model", None)
+            if (
+                live_pricing.is_openrouter_id(model)
+                and callable(getattr(resolved, "format_chunk", None))
+                and not callable(getattr(resolved, "take_reported_costs", None))
+            ):
+                agent.model = wrap_for_openrouter(model, resolved)
+        except Exception:
+            pass
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
     bind_main_agent(agent)  # D-12 delegated-turn detection
     # Phase 4: single steering hook (BeforeToolCallEvent at SDK_FIRST, so

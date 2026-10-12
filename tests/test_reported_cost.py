@@ -310,3 +310,98 @@ class TestExplicitReportedWins:
         )
         assert turns[-1]["reported_cost"] == 0.001
         assert model.take_reported_costs() == [0.0099]
+
+
+def _build_agent_with_resolved(monkeypatch, tmp_path, model_string, resolved):
+    """Run build_agent with a stubbed create_harness resolving to `resolved`."""
+    import importlib
+    import uuid
+
+    from strands.models.model import Model
+
+    main_module = importlib.import_module("strands_code_cli.main")
+
+    class _Placeholder(Model):
+        def update_config(self, **model_config: Any) -> None:
+            pass
+
+        def get_config(self) -> Any:
+            return {}
+
+        async def structured_output(  # type: ignore[override]
+            self, output_model: Any, prompt: Any, system_prompt: Any = None, **kwargs: Any
+        ) -> Any:
+            raise NotImplementedError("offline test double")
+            yield  # pragma: no cover - keeps this an async generator
+
+        async def stream(  # type: ignore[override]
+            self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
+        ):
+            yield {"messageStop": {"stopReason": "end_turn"}}
+
+    real_create = main_module.create_harness
+
+    def _fake_create(**kwargs):
+        agent = real_create(**{**kwargs, "model": _Placeholder()})
+        agent.model = resolved
+        return agent
+
+    monkeypatch.setattr(main_module, "create_harness", _fake_create)
+    return main_module.build_agent(str(uuid.uuid4()), tmp_path, model=model_string)
+
+
+class TestInitialBuildWrap:
+    def test_openrouter_initial_build_promotes_in_place(
+        self, _litellm_stub, monkeypatch, tmp_path
+    ):
+        resolved = _litellm_stub()
+        resolved.effort = "high"
+        agent = _build_agent_with_resolved(
+            monkeypatch, tmp_path, "litellm/openrouter/qwen/qwen3-32b", resolved
+        )
+        assert agent.model is resolved
+        assert callable(getattr(agent.model, "take_reported_costs", None))
+        assert agent.model.effort == "high"
+        assert (
+            agent._harness_kwargs["model"] == "litellm/openrouter/qwen/qwen3-32b"
+        )
+
+    def test_bedrock_initial_build_leaves_model_identical(
+        self, _litellm_stub, monkeypatch, tmp_path
+    ):
+        resolved = _litellm_stub()
+        agent = _build_agent_with_resolved(
+            monkeypatch, tmp_path, "bedrock/anthropic.claude-x", resolved
+        )
+        assert agent.model is resolved
+        assert not hasattr(agent.model, "take_reported_costs")
+
+
+class TestWrapScope:
+    def test_two_wraps_on_same_id_have_independent_costs(self, _litellm_stub):
+        first = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        second = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        first.format_chunk(_metadata(0.001))
+        assert first.take_reported_costs() == [0.001]
+        assert second.take_reported_costs() == []
+
+    def test_promotion_preserves_every_config_attribute(self, _litellm_stub):
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        resolved = _litellm_stub()
+        resolved.model_id = "litellm/openrouter/qwen/qwen3-32b"
+        resolved.effort = "high"
+        resolved.thinking = {"type": "enabled", "budget_tokens": 4000}
+        resolved.client_args = {"base_url": "https://openrouter.ai/api/v1"}
+        resolved.temperature = 0.7
+        before = dict(vars(resolved))
+        promoted = wrap_for_openrouter(
+            "litellm/openrouter/qwen/qwen3-32b", resolved
+        )
+        assert promoted is resolved
+        after = {
+            key: value
+            for key, value in vars(promoted).items()
+            if key != "_reported_costs"
+        }
+        assert after == before

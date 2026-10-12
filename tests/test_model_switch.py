@@ -2066,3 +2066,87 @@ class TestModelPersistence:
             model_for_config("openai/nemotron-70b", "https://proxy.local/v1")
             == "openai/nemotron-70b"
         )
+
+
+class TestReportedWrapScope:
+    """Wrap gate scope: openrouter promotes, others pass through identical."""
+
+    def _stub_litellm_base(self, monkeypatch):
+        import sys
+        import types
+
+        class FakeLiteLLMModel:
+            """Minimal format_chunk base standing in for LiteLLMModel."""
+
+            def format_chunk(self, event, **kwargs):
+                return {"chunk": dict(event), "kwargs": dict(kwargs)}
+
+        module = types.ModuleType("strands.models.litellm")
+        module.LiteLLMModel = FakeLiteLLMModel
+        monkeypatch.setitem(sys.modules, "strands.models.litellm", module)
+        return FakeLiteLLMModel
+
+    def test_openrouter_ids_wrap(self, monkeypatch):
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        fake_base = self._stub_litellm_base(monkeypatch)
+        resolved = fake_base()
+        wrapped = wrap_for_openrouter(
+            "litellm/openrouter/qwen/qwen3-32b", resolved
+        )
+        assert wrapped is resolved
+        assert callable(getattr(wrapped, "take_reported_costs", None))
+
+    def test_non_openrouter_ids_pass_through_identical(self, monkeypatch):
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        fake_base = self._stub_litellm_base(monkeypatch)
+        bedrock = fake_base()
+        assert (
+            wrap_for_openrouter("bedrock/anthropic.claude-x", bedrock) is bedrock
+        )
+        assert not hasattr(bedrock, "take_reported_costs")
+        direct = fake_base()
+        assert wrap_for_openrouter("openai/gpt-4o", direct) is direct
+        assert not hasattr(direct, "take_reported_costs")
+
+    def test_apply_switch_preserves_effort_forwarding(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+        from strands_code_cli.model_switch import apply_switch
+
+        fake_base = self._stub_litellm_base(monkeypatch)
+        calls: list = []
+
+        def _fake_resolve(*args, **kwargs):
+            calls.append((args, kwargs))
+            return fake_base()
+
+        monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve)
+        agent = SimpleNamespace(model=None, messages=[])
+        model, resolved_id = apply_switch(
+            agent, "litellm/openrouter/qwen/qwen3-32b", effort="high"
+        )
+        assert calls[-1] == (
+            ("litellm/openrouter/qwen/qwen3-32b", "litellm/openrouter/qwen/qwen3-32b"),
+            {"effort": "high"},
+        )
+        assert agent.model is model
+        assert callable(getattr(model, "take_reported_costs", None))
+        assert resolved_id == "litellm/openrouter/qwen/qwen3-32b"
+        plain_calls = len(calls)
+        other = fake_base()
+
+        def _fake_resolve_other(*args, **kwargs):
+            calls.append((args, kwargs))
+            return other
+
+        monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve_other)
+        model, resolved_id = apply_switch(agent, "bedrock/anthropic.claude-x")
+        assert calls[plain_calls:] == [
+            (("bedrock/anthropic.claude-x", "bedrock/anthropic.claude-x"), {})
+        ]
+        assert model is other
+        assert agent.model is other
+        assert not hasattr(model, "take_reported_costs")
