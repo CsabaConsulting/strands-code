@@ -544,8 +544,8 @@ def _candidate_fix(reason: str, pos: int) -> str:
     return f"repair candidates[{pos}] ({reason})"
 
 
-def _cached_catalog_ids() -> set[str] | None:
-    """OpenRouter catalog ids from the disk cache only (None when absent).
+def _cached_decision_ids() -> set[str] | None:
+    """Decisions-catalog ids from the disk cache only (None when absent).
 
     Never fetches: validate judges the real file against cached entries
     only and must report without network (D-13).
@@ -556,10 +556,10 @@ def _cached_catalog_ids() -> set[str] | None:
         tables = cached_tables()
     except Exception:
         return None
-    openrouter = tables.get("openrouter")
-    if not isinstance(openrouter, dict):
+    decisions = tables.get("decisions")
+    if not isinstance(decisions, dict):
         return None
-    models = openrouter.get("models")
+    models = decisions.get("models")
     if not isinstance(models, dict):
         return None
     return {key for key in models if isinstance(key, str)}
@@ -596,8 +596,8 @@ def validate_strategy(
     line per candidate (ok or the exact loader skip reason), the
     26-candidate cap, the effective gate knobs (explicit or default),
     engine checks with the decision model looked up in the cached
-    catalog only (unchecked when the cache is unreachable), and the
-    directives presence note. Every failure class carries a
+    decisions catalog only (unchecked when the cache is unreachable),
+    and the directives presence note. Every failure class carries a
     manual-edit fix.
     """
     repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
@@ -755,30 +755,30 @@ def validate_strategy(
                 "with no decision_model"
             )
             lines.append(
-                "fix: set engine.decision_model to a cheap chat model id, "
+                "fix: set engine.decision_model to a decisions-catalog id, "
                 "or re-run /route setup"
             )
         else:
-            catalog = _cached_catalog_ids()
+            catalog = _cached_decision_ids()
             if catalog is None:
                 lines.append(
                     f"engine: decision model {engine.decision_model} — unchecked "
-                    "(no cached catalog; run /cost refresh, then re-validate)"
+                    "(no cached decisions catalog; run /cost refresh, then re-validate)"
                 )
             elif _catalog_known(engine.decision_model, catalog):
                 lines.append(
                     f"engine: decision model {engine.decision_model} — "
-                    "known in the cached catalog"
+                    "known in the cached decisions catalog"
                 )
             else:
                 valid = False
                 lines.append(
                     f"engine: INVALID — decision model {engine.decision_model} "
-                    "not in the cached catalog"
+                    "not in the cached decisions catalog"
                 )
                 lines.append(
-                    "fix: pick a live id (re-run /route setup), then "
-                    "/cost refresh and re-validate"
+                    "fix: pick a live id from the decisions listing "
+                    "(re-run /route setup), then /cost refresh and re-validate"
                 )
     directives = data.get("directives", "")
     if directives is None:

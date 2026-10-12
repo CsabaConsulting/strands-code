@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -781,9 +782,9 @@ class TestRouteSetup:
             assert data["engine"]["decision_model"]
 
 
-def _seed_catalog_ids(tmp_path, ids):
-    """Seed the isolated OpenRouter disk cache with the given ids."""
-    (tmp_path / "cache" / "openrouter-models.json").write_text(
+def _seed_cache_ids(tmp_path, filename, ids):
+    """Seed one isolated OpenRouter disk cache file with the given ids."""
+    (tmp_path / "cache" / filename).write_text(
         json.dumps(
             {
                 "fetched_at": 0,
@@ -794,6 +795,16 @@ def _seed_catalog_ids(tmp_path, ids):
     )
 
 
+def _seed_catalog_ids(tmp_path, ids):
+    """Seed the isolated OpenRouter chat disk cache with the given ids."""
+    _seed_cache_ids(tmp_path, "openrouter-models.json", ids)
+
+
+def _seed_decision_ids(tmp_path, ids):
+    """Seed the isolated decisions disk cache with the given ids."""
+    _seed_cache_ids(tmp_path, "openrouter-decision-models.json", ids)
+
+
 class TestRouteValidate:
     @pytest.fixture(autouse=True)
     def _empty_cache(self, tmp_path, monkeypatch):
@@ -802,7 +813,7 @@ class TestRouteValidate:
         monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(cache))
 
     def test_valid_file_reports_clean_naming_winning_source(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
         report = validate_strategy(
             global_path=tmp_path / "absent.yaml", repo_path=path
@@ -813,7 +824,7 @@ class TestRouteValidate:
         assert text.startswith("Routing strategy VALID")
         assert str(path) in text
         assert "candidate #0 a/1: ok" in text
-        assert "known in the cached catalog" in text
+        assert "known in the cached decisions catalog" in text
         assert "directives: present" in text
 
     def test_unchecked_catalog_stays_valid(self, tmp_path):
@@ -826,7 +837,7 @@ class TestRouteValidate:
         assert "unchecked" in text and "/cost refresh" in text
 
     def test_long_directives_validate_with_warning(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
@@ -844,7 +855,7 @@ class TestRouteValidate:
         assert "warning: directives exceed ~4K chars" in text
 
     def test_directives_warning_boundary(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
 
         def _validate_with(directives: str) -> str:
             path = _write(
@@ -865,7 +876,7 @@ class TestRouteValidate:
     def test_openrouter_prefixed_id_matches_verbatim(self, tmp_path):
         # UAT R1: openrouter/auto is a genuine catalog id — the
         # aggregator-prefix strip must not mangle it into "auto".
-        _seed_catalog_ids(tmp_path, ["openrouter/auto"])
+        _seed_decision_ids(tmp_path, ["openrouter/auto"])
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
@@ -876,10 +887,10 @@ class TestRouteValidate:
             global_path=tmp_path / "absent.yaml", repo_path=path
         )
         assert report.valid is True
-        assert "known in the cached catalog" in report.format()
+        assert "known in the cached decisions catalog" in report.format()
 
     def test_unknown_decision_model_reports_engine_failure(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["other/model"])
+        _seed_decision_ids(tmp_path, ["other/model"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
         report = validate_strategy(
             global_path=tmp_path / "absent.yaml", repo_path=path
@@ -887,8 +898,8 @@ class TestRouteValidate:
         assert report.valid is False
         text = report.format()
         assert text.startswith("Routing strategy INVALID")
-        assert "not in the cached catalog" in text
-        assert "fix: pick a live id" in text
+        assert "not in the cached decisions catalog" in text
+        assert "fix: pick a live id from the decisions listing" in text
 
     def test_corrupt_file_reports_invalid_with_loader_reason(self, tmp_path):
         repo = _write(tmp_path / "repo.yaml", "candidates: [unclosed\n")
@@ -907,7 +918,7 @@ class TestRouteValidate:
         assert "not a mapping" in report.format()
 
     def test_corrupt_repo_falls_back_to_global_with_note(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         repo = _write(tmp_path / "repo.yaml", "candidates: [unclosed\n")
         home = _write(tmp_path / "global.yaml", _strategy_yaml())
         report = validate_strategy(global_path=home, repo_path=repo)
@@ -918,7 +929,7 @@ class TestRouteValidate:
     def test_entry_with_unknown_keys_reports_skip_reason_with_fix(
         self, tmp_path
     ):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(
@@ -1093,7 +1104,7 @@ class TestRouteValidate:
         assert after == before
 
     def test_27_candidates_fail_naming_cap(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(27))
         path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
         report = validate_strategy(
@@ -1106,7 +1117,7 @@ class TestRouteValidate:
         assert "fix: keep at most 26 candidates" in text
 
     def test_26_candidates_pass_cap(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(26))
         path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
         report = validate_strategy(
@@ -1143,7 +1154,7 @@ class TestRouteValidate:
         assert "fix: set tie_margin to a number between 0 and 1" in text
 
     def test_knob_defaults_reported(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
         report = validate_strategy(
             global_path=tmp_path / "absent.yaml", repo_path=path
@@ -1154,7 +1165,7 @@ class TestRouteValidate:
         assert "confidence_threshold: 0.7 (default)" in text
 
     def test_explicit_knobs_reported(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(extra="tie_margin: 0.1\nconfidence_threshold: 0.6\n"),
@@ -1169,7 +1180,7 @@ class TestRouteValidate:
         assert "(default)" not in text
 
     def test_criteria_wrong_type_fails_with_fix(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(candidates="[{id: a/1, criteria: [not, prose]}]"),
@@ -1183,7 +1194,7 @@ class TestRouteValidate:
         assert "fix: make candidates[0].criteria a string" in text
 
     def test_criteria_present_passes(self, tmp_path):
-        _seed_catalog_ids(tmp_path, ["cheap/decider"])
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(
@@ -1195,3 +1206,75 @@ class TestRouteValidate:
         )
         assert report.valid is True
         assert "candidate #0 a/1: ok" in report.format()
+
+    def test_chat_only_model_as_decider_fails_with_decisions_fix(
+        self, tmp_path
+    ):
+        # Known in the chat cache but absent from the decisions
+        # cache: the decider check reads the decisions ids only.
+        _seed_catalog_ids(tmp_path, ["chat/only"])
+        _seed_decision_ids(tmp_path, ["other/decider"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: openrouter, decision_model: chat/only}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "not in the cached decisions catalog" in text
+        assert "fix: pick a live id from the decisions listing" in text
+
+    def test_decisions_catalog_id_as_decider_validates(self, tmp_path):
+        _seed_decision_ids(tmp_path, ["decide/yes"])
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {primary: openrouter, decision_model: decide/yes}\n",
+        )
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert "known in the cached decisions catalog" in report.format()
+
+    def test_validate_makes_zero_network_calls(self, tmp_path, monkeypatch):
+        _seed_decision_ids(tmp_path, ["cheap/decider"])
+        calls = []
+
+        def _count(request, timeout=None):
+            calls.append(request)
+            raise AssertionError("validate must not touch the network")
+
+        monkeypatch.setattr(urllib.request, "urlopen", _count)
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=path
+        )
+        assert report.valid is True
+        assert calls == []
+
+    def test_docs_routing_examples_validate_verbatim(self, tmp_path):
+        text = (
+            Path(__file__).parent.parent / "docs" / "ROUTING.md"
+        ).read_text(encoding="utf-8")
+        blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
+        examples = [block for block in blocks if "candidates:" in block]
+        assert len(examples) == 2
+        deciders = set()
+        for example in examples:
+            engine = (yaml.safe_load(example).get("engine") or {})
+            if engine.get("decision_model"):
+                deciders.add(engine["decision_model"])
+        assert deciders, "examples carry no decider to seed"
+        _seed_decision_ids(tmp_path, sorted(deciders))
+        for pos, example in enumerate(examples):
+            path = _write(tmp_path / f"example-{pos}.yaml", example)
+            report = validate_strategy(
+                global_path=tmp_path / "absent.yaml", repo_path=path
+            )
+            assert report.valid is True, report.format()
