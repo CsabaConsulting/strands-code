@@ -279,7 +279,10 @@ def _drain_reported_cost(model: Any) -> float | None:
     """Reported turn spend from a cost-aware model, else None (fail soft)."""
     take = getattr(model, "take_reported_costs", None)
     if not callable(take):
-        return None
+        # Agent-shaped callers carry the capture on the serving model.
+        take = getattr(getattr(model, "model", None), "take_reported_costs", None)
+        if not callable(take):
+            return None
     try:
         from strands_code_cli.reported_cost import sum_reported_costs
 
@@ -1911,7 +1914,7 @@ def _drain_revise_rounds(
             revise_state.disarm()
             break
         usage = record_turn_metrics(
-            follow_result, current_model, session_turns, model=agent
+            follow_result, current_model, session_turns, model=getattr(agent, "model", None)
         )
         if usage is not None:
             print_plain(console, usage, style="dim")
@@ -2335,7 +2338,7 @@ def run_loop(
                             print_plain(console, btw_usage, style="dim")
                     btw.pending.clear()
                     usage = record_turn_metrics(
-                        result, current_model, session_turns, model=agent
+                        result, current_model, session_turns, model=getattr(agent, "model", None)
                     )
                     if usage is not None:
                         print_plain(console, usage, style="dim")

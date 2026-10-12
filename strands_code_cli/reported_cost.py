@@ -106,8 +106,9 @@ def wrap_for_openrouter(model_id: str, resolved: Any) -> Any:
     except ImportError:
         return resolved
     resolved.__class__ = _composed_class(LiteLLMModel)
-    if getattr(resolved, "_reported_costs", None) is None:
-        resolved._reported_costs = []
+    # Costs gathered without per-turn drain discipline belong to no single
+    # turn, so a re-wrap drops them once instead of misattributing them.
+    resolved._reported_costs = []
     return resolved
 
 
