@@ -41,7 +41,7 @@
     {
       "number": "8",
       "name": "Model Routing with Decision Models",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "9",
@@ -51,8 +51,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 8)",
-    "reason": "Phase 8 of 9 — needs a plan"
+    "label": "Advance to the next step (verify)",
+    "reason": "Phase 08 of 9 · ready to verify"
   },
-  "updated_at": "2026-10-11T02:03:50.282Z"
+  "updated_at": "2026-10-11T05:09:16.316Z"
 }

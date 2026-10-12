@@ -181,3 +181,173 @@ Slash names/shapes; strategy file format/paths; transcript + /cost shapes; hold-
 - Cost budgets/enforcement (locked: display only).
 - Heuristic model-picking — rejected, not deferred.
 - Fully automatic routing with no override — locked out.
+
+---
+
+# Revisit 2026-10-11 — Decision-API rework
+
+Trigger: true Decision APIs verified live (OpenRouter `/api/alpha/decisions`, Ollama `/v1/systemone`); chat-completions JSON design superseded. Existing D-01..D-13 carried forward unless revised below.
+
+## Judgment split — cost-awareness
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Code tie-break (Recommended) | Model judges fit; code substitutes cheaper on near-ties | |
+| Criteria hints | Rough cost words in choice criteria | ✓ |
+| You decide | Agent decides | |
+
+**User's choice:** Criteria hints + mash-up
+**Notes:** "plus we can mash up code substitutes the cheaper candidate when top probabilities are near-tied" → D-14.
+
+## Judgment split — descriptors
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Out of the call (Recommended) | Benchmarks leave the decision call | |
+| Criteria prose | One-line role notes as criteria prose | ✓ |
+| You decide | Agent decides | |
+
+**User's choice:** Criteria prose
+**Notes:** "These can be pre-computed configuration time, potentially the user can influence or edit them" → D-02 revision.
+
+## Judgment split — cost line
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Keep in code (Recommended) | ~/ask delta computed from almanac | ✓ |
+| Drop delta | Session totals only | |
+
+**User's choice:** Keep in code
+
+## Judgment split — tie margin
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Fixed constant (Recommended) | E.g. top two within 5pp | |
+| Strategy knob | Tunable tie_margin in strategy file | ✓ |
+| You decide | Agent decides | |
+
+**User's choice:** Strategy knob
+**Notes:** "and that knob ships with a reasonable default" → D-14.
+
+## Question mapping — effort
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Second choice (Recommended) | Second choice over picked model's levels | ✓ |
+| Score | 1-5 depth score, code maps to levels | |
+| You decide | Agent decides | |
+
+**User's choice:** Second choice → D-05 revision, D-15.
+
+## Question mapping — directives
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| State context (Recommended) | Ask + directives as state data | |
+| Instructions | Directives shape question text | |
+| Both | State and instructions | ✓ |
+
+**User's choice:** Both → D-07 revision.
+
+## Question mapping — single candidate
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Code fast path (Recommended) | No call; code routes trivially | ✓ |
+| Always call | Call for a confidence signal | |
+
+**User's choice:** Code fast path
+**Notes:** "But thinking level is still a question at the second level" → D-15.
+
+## Question mapping — sequence
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Sequential (Recommended) | Model call, then effort call with that model's levels | ✓ |
+| Single call | Model + union-levels, code validates | |
+| You decide | Agent decides | |
+
+**User's choice:** Sequential → D-15.
+
+## Why replacement — routed line
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Choice + confidence (Recommended) | E.g. haiku (high, 94%) | ✓ |
+| Top-two spread | Top-two probabilities inline | |
+| You decide | Agent decides | |
+
+**User's choice:** Choice + confidence → D-12 revision.
+
+## Why replacement — cost entry
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Compact + spend (Recommended) | Choice + confidence + spend; full table in verbose only | ✓ |
+| Full table | Full distribution per ask | |
+| You decide | Agent decides | |
+
+**User's choice:** Compact + spend → D-12 revision.
+
+## Why replacement — tie note
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Note it (Recommended) | Substitution visible on the line | ✓ |
+| Silent | Final pick only | |
+
+**User's choice:** Note it → D-12 revision.
+
+## Why replacement — effort confidence
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Model only (Recommended) | Effort confidence in /cost only | |
+| Both inline | E.g. haiku (high 88%, 94%) | ✓ |
+| You decide | Agent decides | |
+
+**User's choice:** Both inline → D-12 revision.
+
+## Confidence policy — low-confidence action
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Hold + retry (Recommended) | Below threshold holds, retries next ask | ✓ |
+| Route anyway | Confidence display-only | |
+| You decide | Agent decides | |
+
+**User's choice:** Hold + retry → D-08 extension, D-16.
+
+## Confidence policy — threshold
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Strategy knob (Recommended) | Threshold in strategy file with default | ✓ |
+| Fixed | One constant for all | |
+| You decide | Agent decides | |
+
+**User's choice:** Strategy knob → D-16.
+
+## Confidence policy — gate scope
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Model only (Recommended) | Only model pick must clear | ✓ |
+| Both must clear | Model and effort gate | |
+| You decide | Agent decides | |
+
+**User's choice:** Model only → D-16.
+
+## Confidence policy — hold note
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Distinct note (Recommended) | E.g. Routing held (confidence 41% < 70%) | ✓ |
+| Same as failure | Reuse engine-failure wording | |
+
+**User's choice:** Distinct note → D-16.
+
+## Additional areas round
+
+Offered round two (decision-model selection/pinning, 2–26 choice cap vs candidate scale). User chose "I'm ready for context" — both captured as the agent's Discretion for the researcher/planner.
