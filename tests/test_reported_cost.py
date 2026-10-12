@@ -225,3 +225,88 @@ class TestTracerEndToEnd:
             is None
         )
         assert model.take_reported_costs() == []
+
+
+class TestFreshSideModel:
+    def test_side_builds_from_one_parent_stay_independent(self, _litellm_stub):
+        from strands_code_cli.reported_cost import fresh_side_model
+
+        parent = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        parent.format_chunk(_metadata(0.005))
+        first = fresh_side_model(parent)
+        second = fresh_side_model(parent)
+        assert first is not parent
+        assert second is not parent
+        assert first is not second
+        first.format_chunk(_metadata(0.001))
+        assert first.take_reported_costs() == [0.001]
+        assert second.take_reported_costs() == []
+        assert parent.take_reported_costs() == [0.005]
+
+    def test_plain_model_passes_through_identical(self):
+        from strands_code_cli.reported_cost import fresh_side_model
+
+        plain = SimpleNamespace()
+        assert fresh_side_model(plain) is plain
+
+
+class TestSideDrainCarrier:
+    def test_finished_side_turns_carry_cost_to_rows(self, _litellm_stub):
+        from concurrent.futures import Future
+
+        from strands_code_cli.loop import _finish_btw_turn, record_turn_metrics
+
+        def _side_agent(cost):
+            model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+            model.format_chunk(_metadata(cost))
+            return SimpleNamespace(model=model, messages=[])
+
+        btw = SimpleNamespace(pending=[], done=False)
+        for question, cost in (("q1", 0.001), ("q2", 0.002)):
+            future: Future = Future()
+            future.set_result(_Summary(10, 1))
+            _finish_btw_turn(btw, _side_agent(cost), future, question)
+        assert [len(entry) for entry in btw.pending] == [4, 4]
+        turns: list = []
+        for _question, _body, result, reported in btw.pending:
+            record_turn_metrics(
+                result,
+                "litellm/openrouter/qwen/qwen3-32b",
+                turns,
+                reported_cost=reported,
+            )
+        assert [turn["reported_cost"] for turn in turns] == [0.001, 0.002]
+
+
+class TestExplicitReportedWins:
+    def test_explicit_none_wins_over_model_costs(self, _litellm_stub):
+        from strands_code_cli.loop import record_turn_metrics
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0024))
+        turns: list = []
+        record_turn_metrics(
+            _Summary(12, 1),
+            "litellm/openrouter/qwen/qwen3-32b",
+            turns,
+            model=model,
+            reported_cost=None,
+        )
+        assert turns[-1].get("reported_cost") is None
+        assert model.take_reported_costs() == [0.0024]
+
+    def test_explicit_value_wins_without_consulting_model(self, _litellm_stub):
+        from strands_code_cli.loop import record_turn_metrics
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(0.0099))
+        turns: list = []
+        record_turn_metrics(
+            _Summary(12, 1),
+            "litellm/openrouter/qwen/qwen3-32b",
+            turns,
+            model=model,
+            reported_cost=0.001,
+        )
+        assert turns[-1]["reported_cost"] == 0.001
+        assert model.take_reported_costs() == [0.0099]
