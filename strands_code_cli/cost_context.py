@@ -270,14 +270,21 @@ def cost_report(
         total_in += in_tok
         total_out += out_tok
         cell = f"  turn {turn}: in {format_tokens(in_tok)}, out {format_tokens(out_tok)}"
-        turn_cost = cost_for(in_tok, out_tok, row_model)
-        if turn_cost is not None:
+        reported = row.get("reported_cost")
+        if reported is not None:
+            # Actual-wins (D-09): exactly one money lane per row, never both.
             any_priced = True
-            total_cost += turn_cost
-            cell += f", ${turn_cost:.4f}"
-            provenance = price_provenance(row_model)
-            if provenance not in provenances:
-                provenances.append(provenance)
+            total_cost += reported
+            cell += f", ${reported:.4f} actual"
+        else:
+            turn_cost = cost_for(in_tok, out_tok, row_model)
+            if turn_cost is not None:
+                any_priced = True
+                total_cost += turn_cost
+                cell += f", ${turn_cost:.4f}"
+                provenance = price_provenance(row_model)
+                if provenance not in provenances:
+                    provenances.append(provenance)
         lines.append(cell)
     if routing:
         lines.append("Routing:")
