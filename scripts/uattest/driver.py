@@ -868,7 +868,7 @@ def scenario_n4():
 CHEAP_OPENROUTER_ID = "litellm/openrouter/openai/gpt-4o-mini"
 # Post-turn usage line with a marked actual: ``1.50K (1%) $0.00 actual``.
 ACTUAL_USAGE_RE = re.compile(r"\(\d+%\) \$\d+\.\d{2} actual", re.MULTILINE)
-# /cost row with a marked actual: ``Turn 1 ... $0.0024 actual``.
+# /cost row with a marked actual: ``turn 1 ... $0.0024 actual``.
 ACTUAL_ROW_RE = re.compile(r"\$\d+\.\d{4} actual", re.MULTILINE)
 # Blended-total split line: ``(actual $0.0024 + estimated $0.0100)``.
 SPLIT_RE = re.compile(
@@ -912,7 +912,7 @@ def scenario_c1():
             f"usage line lacks the actual marker: {text[-300:]}"
         )
         send(sess, "/cost", "Enter")
-        text = wait_for_new(sess, r"Turn 1", 60, "cost-rows")
+        text = wait_for_new(sess, r"turn 1", 60, "cost-rows")
         assert ACTUAL_ROW_RE.search(text), "cost row lacks the actual marker"
         assert not SPLIT_RE.search(text), "split line on a pure-actual session"
         print("C1 PASS", flush=True)
@@ -946,7 +946,7 @@ def scenario_c2():
             f"usage line lacks the actual marker: {text[-300:]}"
         )
         send(sess, "/cost", "Enter")
-        text = wait_for_new(sess, r"Turn 2", 60, "cost-rows")
+        text = wait_for_new(sess, r"turn 2", 60, "cost-rows")
         assert SPLIT_RE.search(text), "blended split line missing"
         print("C2 PASS", flush=True)
     finally:
