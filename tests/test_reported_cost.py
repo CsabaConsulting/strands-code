@@ -186,6 +186,15 @@ class TestWrapGate:
 
 
 class TestPromotion:
+    def test_composed_class_uses_single_inheritance(self, _litellm_stub):
+        from strands_code_cli.reported_cost import _composed_class
+
+        composed = _composed_class(_litellm_stub)
+        bases = [entry for entry in composed.__mro__ if entry is not object]
+        assert bases == [composed, _litellm_stub]
+        assert "format_chunk" in composed.__dict__
+        assert "take_reported_costs" in composed.__dict__
+
     def test_promoted_instance_keeps_config(self, _litellm_stub):
         model = _wrapped(
             "litellm/openrouter/qwen/qwen3-32b",
