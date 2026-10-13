@@ -14,9 +14,8 @@ updated: 2026-10-13T00:30:00Z
 
 ### 1. Live OpenRouter proof (keyed integration run)
 expected: With OPENROUTER_API_KEY set and the litellm extra installed, `uv run pytest tests/test_reported_cost.py::TestLiveReportedCost -q -rs -m integration` passes with a drained float >= 0 and an actual-marked row (a legitimate 0.0 must pass per D-09/WR-04).
-result: issue
-reported: "AttributeError: 'LiteLLMModel' object has no attribute 'take_reported_costs' at tests/test_reported_cost.py:523 — wrap_for_openrouter returned the model unpromoted (fail-soft swallowed the promotion failure)"
-severity: blocker
+result: pass
+retest: 2026-10-13T01:05Z after 10-05 fix (user confirmed pass; orchestrator re-run: 1 passed in 4.79s)
 
 ### 2. Prohibition review (P1, P2, P3)
 expected: The three must-NOT prohibitions in 10-VERIFICATION.md are reviewed against the cited code and each `status: unresolved` is explicitly accepted (or a blocking finding is raised).
@@ -24,9 +23,8 @@ result: pass
 
 ### 3. End-to-end main-turn confirmation
 expected: One real OpenRouter main turn shows the marked actual (`$X actual`) on both the post-turn usage line and the /cost row, matching the provider's reported cost for the turn.
-result: issue
-reported: "Usage line shows bare '3.01K (2%) $0.00' with no actual marker after a real OpenRouter main turn"
-severity: major
+result: pass
+retest: 2026-10-13T01:10Z after 10-05 fix (user accepted; orchestrator re-run: driver.py c1 -> C1 PASS, /tmp/uatr8/c1.log)
 
 ### 4. Inline usage.cost capture per model cycle with verbatim chunk delegation
 expected: Inline usage.cost capture per model cycle with verbatim chunk delegation
@@ -121,8 +119,8 @@ coverage_id: 10-04-D2
 ## Summary
 
 total: 18
-passed: 16
-issues: 2
+passed: 18
+issues: 0
 pending: 0
 skipped: 0
 
@@ -130,7 +128,7 @@ skipped: 0
 
 - gap_id: G-10-1
   truth: "Live OpenRouter turn captures a real reported cost end to end"
-  status: failed
+  status: closed-2026-10-13T01:10Z-test-1-retest-pass
   reason: "User reported: AttributeError: 'LiteLLMModel' object has no attribute 'take_reported_costs' — wrap promotion fail-soft hid the failure on the real SDK class"
   severity: blocker
   test: 1
@@ -140,7 +138,7 @@ skipped: 0
   fix_direction: "Build the composed class with SINGLE inheritance: class ReportedCostModel(base) with __slots__ = (), capture methods (format_chunk/take_reported_costs) defined directly on it instead of via a mixin base. Verified: __class__ promotion then succeeds on a real LiteLLMModel instance, _reported_costs stores in the inherited __dict__, client_args/effort preserved in place, isinstance stays true. Keeps D-05 fail-soft except, D-09 rewrap-discard, and display-only semantics untouched; add one real-SDK promotion test (no network: construct LiteLLMModel with dummy client_args and wrap)."
 - gap_id: G-10-3
   truth: "One real OpenRouter main turn shows the marked actual on usage line and /cost row"
-  status: failed
+  status: closed-2026-10-13T01:10Z-test-3-retest-pass
   reason: "User reported: bare '3.01K (2%) $0.00', no actual marker — same root cause as G-10-1 (promotion never takes effect on the real SDK class)"
   severity: major
   test: 3
