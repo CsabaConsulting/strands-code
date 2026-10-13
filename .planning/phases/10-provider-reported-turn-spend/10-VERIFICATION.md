@@ -3,6 +3,7 @@ phase: 10-provider-reported-turn-spend
 verified: 2026-10-13T00:07:53Z
 status: human_needed
 score: 16/17 must-haves verified
+covered_digest: "v1:sha256:4c619adca62c97ca237d5dc34add80cadc64f08b2c34caa57ec66aba144f982d"
 covered_files:
   - .planning/phases/10-provider-reported-turn-spend/10-01-PLAN.md
   - .planning/phases/10-provider-reported-turn-spend/10-02-PLAN.md
