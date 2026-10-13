@@ -4,8 +4,8 @@ milestone: v1
 current_phase: 10
 current_phase_name: provider-reported-turn-spend
 status: verifying
-stopped_at: Completed 10-04-PLAN.md
-last_updated: "2026-10-13T00:03:48.934Z"
+stopped_at: Completed 10-05-PLAN.md
+last_updated: "2026-10-13T00:54:26Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 10 execution started
 state_head: 087b1b33361696c5f75fd8dffb53996cae876d27
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 10 (provider-reported-turn-spend) — EXECUTING
-Plan: 4 of 4
-Status: Gap closure complete — ready for re-verification
-Last activity: 2026-10-13 — Phase 10 gap closure (10-04) executed
+Plan: 5 of 5
+Status: UAT gap closure complete — ready for re-verification
+Last activity: 2026-10-13 — Phase 10 UAT gap closure (10-05) executed
 
 Progress: [████████░░] 82%
 
@@ -91,6 +91,7 @@ Progress: [████████░░] 82%
 | Phase 10 P02 | 3min | 2 tasks | 2 files |
 | Phase 10 P03 | 7min | 3 tasks | 6 files |
 | Phase 10 P04 | 4min | 3 tasks | 3 files |
+| Phase 10 P05 | 7min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -166,6 +167,7 @@ Recent decisions affecting current work:
 - [Phase 10]: Live proof constructs LiteLLMModel directly with the env key in client_args instead of going through resolve_model — The harness litellm builder only forwards LITELLM_API_KEY/LITELLM_BASE_URL env, so resolve_model would not carry OPENROUTER_API_KEY; direct construction follows the verified harness client_args shape
 - [Phase 10]: Re-wrap unconditionally resets _reported_costs to [] (supersedes the 10-01 preserve-on-rewrap decision per D-09) — Absent/None/empty/non-empty converge on one outcome; costs gathered without per-turn drain discipline belong to no single turn, so discarding once prevents misattribution
 - [Phase 10]: Nested-model fallback in _drain_reported_cost drains agent.model when the passed object lacks take_reported_costs — Keeps agent-shaped callers draining even if a future site passes the Agent again; fail-soft try/except still returns None on drain errors
+- [Phase 10]: Single-inheritance ReportedCostModel(base) with capture methods defined directly (mixin removed) — CPython rejects in-place promotion to a multi-inheritance subclass on the slotted SDK chain; closes UAT G-10-1/G-10-3 with the keyed live proof and c1 rig C1 PASS as evidence
 
 ### Pending Todos
 
@@ -197,6 +199,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-13T00:03:43.708Z
-Stopped at: Completed 10-04-PLAN.md
+Last session: 2026-10-13T00:54:26Z
+Stopped at: Completed 10-05-PLAN.md
 Resume file: None
