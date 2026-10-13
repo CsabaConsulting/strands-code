@@ -2,10 +2,10 @@
 
 OpenRouter reports authoritative per-request USD inline as ``usage.cost``;
 the Strands SDK drops the field when formatting metadata chunks. This
-module recovers it at the seam: a capture mixin composed onto
-``LiteLLMModel`` for openrouter-routed ids only, drained per turn by
-``record_turn_metrics``. Display only — actuals change numbers shown,
-never behavior.
+module recovers it at the seam: a single-inheritance capture
+subclass composed onto ``LiteLLMModel`` for openrouter-routed ids
+only, drained per turn by ``record_turn_metrics``. Display only —
+actuals change numbers shown, never behavior.
 """
 
 from __future__ import annotations
@@ -29,45 +29,38 @@ def _extract_cost(value: object) -> float | None:
     return None
 
 
-class ReportedCostMixin:
-    """Capture inline ``usage.cost`` per model cycle into a side channel.
-
-    Mixed onto the ``LiteLLMModel`` subclass composed by
-    :func:`wrap_for_openrouter`; chunks pass through to ``super()``
-    unmodified, so the agent loop never sees the capture.
-    """
-
-    _reported_costs: list[float | None]
-    """Per-cycle captured costs; initialized by the wrap on promotion."""
-
-    def format_chunk(self, event: dict[str, Any], **kwargs: Any) -> Any:
-        """Record the metadata cost, then delegate verbatim to super().
-
-        Capture never raises into the stream: an unrecorded cost
-        degrades to the tokens-x-rate estimate path downstream.
-        """
-        try:
-            if event.get("chunk_type") == "metadata":
-                cost = _extract_cost(getattr(event.get("data"), "cost", None))
-                self._reported_costs.append(cost)
-        except Exception:
-            pass
-        return super().format_chunk(event, **kwargs)
-
-    def take_reported_costs(self) -> list[float | None]:
-        """Drain accumulated per-cycle costs (None marks an absent cycle)."""
-        costs = self._reported_costs
-        self._reported_costs = []
-        return costs
-
-
 def _composed_class(base: type) -> type:
     """Capture subclass for one SDK base, cached per base class."""
     cls = _wrapped_classes.get(base)
     if cls is None:
-
-        class ReportedCostModel(ReportedCostMixin, base):
+        # Single inheritance keeps in-place promotion legal on the slotted SDK chain.
+        class ReportedCostModel(base):
             """SDK model subclass capturing inline usage.cost per cycle."""
+
+            __slots__ = ()
+
+            _reported_costs: list[float | None]
+            """Per-cycle captured costs; initialized by the wrap on promotion."""
+
+            def format_chunk(self, event: dict[str, Any], **kwargs: Any) -> Any:
+                """Record the metadata cost, then delegate verbatim to super().
+
+                Capture never raises into the stream: an unrecorded cost
+                degrades to the tokens-x-rate estimate path downstream.
+                """
+                try:
+                    if event.get("chunk_type") == "metadata":
+                        cost = _extract_cost(getattr(event.get("data"), "cost", None))
+                        self._reported_costs.append(cost)
+                except Exception:
+                    pass
+                return super().format_chunk(event, **kwargs)
+
+            def take_reported_costs(self) -> list[float | None]:
+                """Drain accumulated per-cycle costs (None marks absent)."""
+                costs = self._reported_costs
+                self._reported_costs = []
+                return costs
 
         cls = ReportedCostModel
         _wrapped_classes[base] = cls
