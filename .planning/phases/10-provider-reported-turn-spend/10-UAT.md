@@ -134,13 +134,17 @@ skipped: 0
   reason: "User reported: AttributeError: 'LiteLLMModel' object has no attribute 'take_reported_costs' — wrap promotion fail-soft hid the failure on the real SDK class"
   severity: blocker
   test: 1
-  artifacts: []
+  artifacts: ["strands_code_cli/reported_cost.py:64-74 (_composed_class builds a MULTIPLE-inheritance subclass ReportedCostModel(ReportedCostMixin, base))", "strands_code_cli/reported_cost.py:109-113 (WR-01 fail-soft try/except swallows the promotion TypeError and returns input unchanged)", "tests/test_reported_cost.py:20-32 (hermetic FakeLiteLLMModel is a plain __dict__ class, so multi-inherit promotion succeeds there and all 27 hermetic tests pass)", "tests/test_reported_cost.py:523 (drain site raising AttributeError on the unpromoted real instance)"]
   missing: []
+  root_cause: "CONFIRMED against real installed strands.models.litellm.LiteLLMModel (chain LiteLLMModel->OpenAIModel->Model, all __slots__=(), __dict__ from ABC): resolved.__class__ = _composed_class(LiteLLMModel) raises TypeError: __class__ assignment: 'ReportedCostModel' object layout differs from 'LiteLLMModel' because CPython rejects in-place promotion from a single-base instance to a MULTIPLE-inheritance subclass (extra base changes instance layout). The WR-01 except swallows it, wrap returns the model unpromoted, and the drain finds no take_reported_costs. The hermetic stub never reproduces this because FakeLiteLLMModel is a plain single-dict class where multi-inherit __class__ reassignment is legal."
+  fix_direction: "Build the composed class with SINGLE inheritance: class ReportedCostModel(base) with __slots__ = (), capture methods (format_chunk/take_reported_costs) defined directly on it instead of via a mixin base. Verified: __class__ promotion then succeeds on a real LiteLLMModel instance, _reported_costs stores in the inherited __dict__, client_args/effort preserved in place, isinstance stays true. Keeps D-05 fail-soft except, D-09 rewrap-discard, and display-only semantics untouched; add one real-SDK promotion test (no network: construct LiteLLMModel with dummy client_args and wrap)."
 - gap_id: G-10-3
   truth: "One real OpenRouter main turn shows the marked actual on usage line and /cost row"
   status: failed
   reason: "User reported: bare '3.01K (2%) $0.00', no actual marker — same root cause as G-10-1 (promotion never takes effect on the real SDK class)"
   severity: major
   test: 3
-  artifacts: []
+  artifacts: ["strands_code_cli/reported_cost.py:64-74 (_composed_class builds a MULTIPLE-inheritance subclass ReportedCostModel(ReportedCostMixin, base))", "strands_code_cli/reported_cost.py:109-113 (WR-01 fail-soft try/except swallows the promotion TypeError and returns input unchanged)", "loop.py record_turn_metrics drain path (finds no take_reported_costs on the unpromoted model, falls back to D-05 estimate display)"]
   missing: []
+  root_cause: "Same confirmed root cause as G-10-1 (one diagnosis covers both): __class__ promotion to the multi-inheritance ReportedCostModel raises TypeError on the real slotted LiteLLMModel chain and is swallowed by the WR-01 fail-soft except, so the serving model never captures usage.cost and the turn renders the bare D-05 estimate with no actual marker."
+  fix_direction: "Same fix as G-10-1: single-inheritance composed subclass with __slots__ = () and capture methods defined directly on it; fixes both gaps with one change."
