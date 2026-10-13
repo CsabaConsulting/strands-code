@@ -98,6 +98,15 @@ class TestCapture:
         model.format_chunk({"chunk_type": "metadata", "data": SimpleNamespace()})
         assert sum_reported_costs(model.take_reported_costs()) is None
 
+    def test_extract_rejects_nonfinite_costs(self, _litellm_stub):
+        from strands_code_cli.reported_cost import sum_reported_costs
+
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        model.format_chunk(_metadata(float("nan")))
+        model.format_chunk(_metadata(float("inf")))
+        model.format_chunk(_metadata(float("-inf")))
+        assert sum_reported_costs(model.take_reported_costs()) is None
+
 
 class TestDelegateChunks:
     def test_override_returns_super_output_exactly(self, _litellm_stub):
@@ -157,6 +166,22 @@ class TestWrapGate:
         resolved = SimpleNamespace(model_id="litellm/openrouter/qwen/qwen3-32b")
         assert (
             wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved) is resolved
+        )
+
+    def test_wrap_promotion_failure_returns_input_unchanged(
+        self, _litellm_stub, monkeypatch
+    ):
+        import strands_code_cli.reported_cost as reported_cost
+        from strands_code_cli.reported_cost import wrap_for_openrouter
+
+        def _boom(_base):
+            raise RuntimeError("promotion unavailable")
+
+        monkeypatch.setattr(reported_cost, "_composed_class", _boom)
+        resolved = _litellm_stub()
+        assert (
+            wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved)
+            is resolved
         )
 
 
@@ -281,6 +306,20 @@ class TestFreshSideModel:
 
         plain = SimpleNamespace()
         assert fresh_side_model(plain) is plain
+
+    def test_fresh_side_model_copy_failure_returns_input(
+        self, _litellm_stub, monkeypatch
+    ):
+        import copy
+
+        from strands_code_cli.reported_cost import fresh_side_model
+
+        def _boom(_obj):
+            raise RuntimeError("copy unavailable")
+
+        monkeypatch.setattr(copy, "copy", _boom)
+        model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+        assert fresh_side_model(model) is model
 
 
 class TestSideDrainCarrier:
