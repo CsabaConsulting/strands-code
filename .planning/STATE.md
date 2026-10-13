@@ -4,16 +4,16 @@ milestone: v1
 current_phase: 10
 current_phase_name: provider-reported-turn-spend
 status: verifying
-stopped_at: Completed 10-03-PLAN.md
-last_updated: "2026-10-12T23:29:50.209Z"
+stopped_at: Completed 10-04-PLAN.md
+last_updated: "2026-10-13T00:03:48.934Z"
 last_activity: 2026-10-12
 last_activity_desc: Phase 10 execution started
-state_head: 4ffbaad661cf2478f630092f0d7c4d35cab3b146
+state_head: 087b1b33361696c5f75fd8dffb53996cae876d27
 progress:
   total_phases: 11
   completed_phases: 9
-  total_plans: 29
-  completed_plans: 29
+  total_plans: 30
+  completed_plans: 30
 ---
 
 # Project State
@@ -28,9 +28,9 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 10 (provider-reported-turn-spend) — EXECUTING
-Plan: 3 of 3
-Status: Phase complete — ready for verification
-Last activity: 2026-10-12 — Phase 10 execution started
+Plan: 4 of 4
+Status: Gap closure complete — ready for re-verification
+Last activity: 2026-10-13 — Phase 10 gap closure (10-04) executed
 
 Progress: [████████░░] 82%
 
@@ -90,6 +90,7 @@ Progress: [████████░░] 82%
 | Phase 10 P01 | 7min | 2 tasks | 6 files |
 | Phase 10 P02 | 3min | 2 tasks | 2 files |
 | Phase 10 P03 | 7min | 3 tasks | 6 files |
+| Phase 10 P04 | 4min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -163,6 +164,8 @@ Recent decisions affecting current work:
 - [Phase 10]: Display: lane-opens is presence-based (present 0.0 actual opens the actuals lane, derived zeros never do); split sits beneath Total as '  (actual $X + estimated $Y)' — Direct reading of the planner lock that a lane opens only on a present reported value or a computed estimate; keeps marker-iff-reported crisp and D-11 restraint symmetric
 - [Phase 10]: Side builds fresh-copy cost-aware models (plain pass through identical); routed side wrap sits inside the resolve try so a wrap failure holds to the live model like a resolve failure — Keeps main-vs-btw drains separate per D-09 with zero drift on non-wrapped paths; preserves the side-hold contract with no new failure mode
 - [Phase 10]: Live proof constructs LiteLLMModel directly with the env key in client_args instead of going through resolve_model — The harness litellm builder only forwards LITELLM_API_KEY/LITELLM_BASE_URL env, so resolve_model would not carry OPENROUTER_API_KEY; direct construction follows the verified harness client_args shape
+- [Phase 10]: Re-wrap unconditionally resets _reported_costs to [] (supersedes the 10-01 preserve-on-rewrap decision per D-09) — Absent/None/empty/non-empty converge on one outcome; costs gathered without per-turn drain discipline belong to no single turn, so discarding once prevents misattribution
+- [Phase 10]: Nested-model fallback in _drain_reported_cost drains agent.model when the passed object lacks take_reported_costs — Keeps agent-shaped callers draining even if a future site passes the Agent again; fail-soft try/except still returns None on drain errors
 
 ### Pending Todos
 
@@ -194,6 +197,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-12T23:29:45.029Z
-Stopped at: Completed 10-03-PLAN.md
+Last session: 2026-10-13T00:03:43.708Z
+Stopped at: Completed 10-04-PLAN.md
 Resume file: None
