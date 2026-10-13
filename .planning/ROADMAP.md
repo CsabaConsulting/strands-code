@@ -22,7 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task (completed 2026-10-11)
 - [x] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept (completed 2026-10-12)
 - [ ] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines
-- [ ] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
+- [x] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
 - [ ] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
 
 ## Phase Details
@@ -293,9 +293,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Skills + Memory File | 4/4 | Complete    | 2026-10-04 |
 | 7. Subagents + /btw Side Channel | 5/5 | Complete    | 2026-10-11 |
 | 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
-| 9. Native TypeSafe Decision Engine | 3/3 | In Progress|  |
-| 10. Provider-Reported Turn Spend | 4/4 | In Progress|  |
-| 11. CodeAct Action Interface | 0/TBD | Not started | - |
+| 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
+| 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
+| 11. CodeAct Action Interface | 0/TBD | In Progress |  |
 
 ## Future (post-v1)
 
