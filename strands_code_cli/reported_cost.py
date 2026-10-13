@@ -11,6 +11,7 @@ never behavior.
 from __future__ import annotations
 
 import copy
+import math
 from typing import Any
 
 from strands_code_cli import live_pricing
@@ -23,7 +24,7 @@ def _extract_cost(value: object) -> float | None:
     """Reported USD spend verbatim (None when absent or non-numeric)."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return float(value)
     return None
 
@@ -105,7 +106,11 @@ def wrap_for_openrouter(model_id: str, resolved: Any) -> Any:
         from strands.models.litellm import LiteLLMModel
     except ImportError:
         return resolved
-    resolved.__class__ = _composed_class(LiteLLMModel)
+    try:
+        resolved.__class__ = _composed_class(LiteLLMModel)
+    except Exception:
+        # A failed promotion degrades to the D-05 estimate path, never breaks the switch.
+        return resolved
     # Costs gathered without per-turn drain discipline belong to no single
     # turn, so a re-wrap drops them once instead of misattributing them.
     resolved._reported_costs = []
@@ -122,6 +127,10 @@ def fresh_side_model(model: Any) -> Any:
     """
     if not callable(getattr(model, "take_reported_costs", None)):
         return model
-    fresh = copy.copy(model)
+    try:
+        fresh = copy.copy(model)
+    except Exception:
+        # A degraded number beats a broken side turn: share the channel.
+        return model
     fresh._reported_costs = []
     return fresh
