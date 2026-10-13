@@ -488,6 +488,46 @@ class TestWrapScope:
         assert after == before
 
 
+class TestRealSdkPromotion:
+    def test_wrap_promotes_real_litellm_model_in_place(self):
+        try:
+            from strands.models.litellm import LiteLLMModel
+        except ImportError:
+            pytest.skip("litellm extra not installed")
+        from strands_code_cli.reported_cost import (
+            sum_reported_costs,
+            wrap_for_openrouter,
+        )
+
+        model_id = "openrouter/openai/gpt-4o-mini"
+        model = LiteLLMModel(
+            client_args={"api_key": "probe-dummy-key"}, model_id=model_id
+        )
+        model.effort = "high"
+        promoted = wrap_for_openrouter(model_id, model)
+        assert promoted is model
+        assert isinstance(model, LiteLLMModel)
+        assert type(model) is not LiteLLMModel
+        assert callable(model.take_reported_costs)
+        assert model.client_args == {"api_key": "probe-dummy-key"}
+        assert model.effort == "high"
+        # Usage-shaped double: the real format_chunk reads token counts.
+        model.format_chunk(
+            {
+                "chunk_type": "metadata",
+                "data": SimpleNamespace(
+                    prompt_tokens=12,
+                    completion_tokens=1,
+                    total_tokens=13,
+                    cost=0.0024,
+                ),
+            }
+        )
+        drained = model.take_reported_costs()
+        assert drained == [0.0024]
+        assert sum_reported_costs(drained) == 0.0024
+
+
 @pytest.mark.integration
 class TestLiveReportedCost:
     """Live proof: real usage.cost flows through capture to display."""
