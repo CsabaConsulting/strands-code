@@ -158,3 +158,27 @@ class TestR3CostBaselines:
         assert src.index("after_cost = ") < src.index(
             '"Reply with exactly: offcheck"'
         )
+
+
+class TestReportedSpendRig:
+    def test_shared_id_is_cli_accepted_form(self):
+        assert driver.CHEAP_OPENROUTER_ID == "litellm/openrouter/openai/gpt-4o-mini"
+
+    def test_scenarios_use_shared_id(self):
+        for name in ("scenario_c1", "scenario_c2"):
+            src = inspect.getsource(getattr(driver, name))
+            assert "CHEAP_OPENROUTER_ID" in src, f"{name} hardcodes the model id"
+
+    def test_actual_usage_marker(self):
+        assert driver.ACTUAL_USAGE_RE.search("6.00K (5%) $0.00 actual\n")
+        assert not driver.ACTUAL_USAGE_RE.search("6.00K (5%) $0.00\n")
+
+    def test_actual_row_marker(self):
+        assert driver.ACTUAL_ROW_RE.search("Turn 1 ... $0.0024 actual\n")
+        assert not driver.ACTUAL_ROW_RE.search("Turn 1 ... $0.0024\n")
+
+    def test_split_line(self):
+        assert driver.SPLIT_RE.search(
+            "  (actual $0.0024 + estimated $0.0100)\n"
+        )
+        assert not driver.SPLIT_RE.search("Total $0.0124\n")

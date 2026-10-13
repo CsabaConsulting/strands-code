@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Scripted live-tmux UAT driver for strands-code Phase 7 + 8 + 9 confirmation.
+"""Scripted live-tmux UAT driver for strands-code Phase 7 + 8 + 9 + 10 confirmation.
 
-Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4}   (one scenario per
+Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2}   (one scenario per
 process; tmux session per scenario). s1/s2 cover Phase 7 (/btw);
 r1/r2/r3/r4 cover the Phase 8 rows (guided setup, local engine, e2e
 routed turn, side ask) against the Decision-API flow; n1/n2/n3/n4
 cover the Phase 9 native rows (setup proposal, hidden-until-key,
-validate ping, native-routed turn) against the TypeSafe native API.
+validate ping, native-routed turn) against the TypeSafe native API;
+c1/c2 cover the Phase 10 reported-spend rows (marked actual on an
+OpenRouter main turn, blended total + split on a mixed session).
 Transcripts land in /tmp/uatr4/<scenario>.log (s*) or /tmp/uatr8/<scenario>.log
-(r*/n*). Exit 0 = all asserts passed.
+(r*/n*/c*). Exit 0 = all asserts passed.
 
 Key insight: a mid-turn Approve? dialog blocks the pump thread, so the driver
 must answer dialogs to make progress (like a human would). S1 retries until the
@@ -861,6 +863,97 @@ def scenario_n4():
         stop_cli(sess)
 
 
+# CLI-accepted aggregator form (bare ``openrouter/`` ids are rejected by
+# /model validation; the wrap gate accepts both prefix forms).
+CHEAP_OPENROUTER_ID = "litellm/openrouter/openai/gpt-4o-mini"
+# Post-turn usage line with a marked actual: ``1.50K (1%) $0.00 actual``.
+ACTUAL_USAGE_RE = re.compile(r"\(\d+%\) \$\d+\.\d{2} actual", re.MULTILINE)
+# /cost row with a marked actual: ``Turn 1 ... $0.0024 actual``.
+ACTUAL_ROW_RE = re.compile(r"\$\d+\.\d{4} actual", re.MULTILINE)
+# Blended-total split line: ``(actual $0.0024 + estimated $0.0100)``.
+SPLIT_RE = re.compile(
+    r"\(actual \$\d+\.\d{4} \+ estimated \$\d+\.\d{4}\)", re.MULTILINE
+)
+
+
+def _require_openrouter_key():
+    """Fail fast without the ambient key (never print key material)."""
+    assert os.environ.get("OPENROUTER_API_KEY"), (
+        "OPENROUTER_API_KEY not set in the ambient environment; "
+        "c-scenarios need a keyed run"
+    )
+
+
+def _switch_model(sess, model_id):
+    """Explicit-id /model switch; the loop replies ``Model: <id> — ...``."""
+    send(sess, f"/model {model_id}", "Enter")
+    text = wait_for(sess, rf"Model: {re.escape(model_id)}", 90, "switched")
+    assert "Model switch failed" not in text, "switch failed"
+    return text
+
+
+def scenario_c1():
+    """C1: an OpenRouter main turn shows the marked actual (UAT test 3).
+
+    Switch to the pinned cheap id, run one minimal turn, and assert
+    the usage line plus the /cost row carry the ``actual`` marker.
+    Pure-actual session: plain total, no split line (D-11).
+    """
+    _require_openrouter_key()
+    workdir = ensure_workdir("w9")
+    sess = "uatr8c1"
+    start_cli(sess, workdir)
+    try:
+        _switch_model(sess, CHEAP_OPENROUTER_ID)
+        after = len(COST_RE.findall(pane_text(sess)))
+        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        text, _ = wait_main_end(sess, after=after)
+        assert ACTUAL_USAGE_RE.search(text), (
+            f"usage line lacks the actual marker: {text[-300:]}"
+        )
+        send(sess, "/cost", "Enter")
+        text = wait_for_new(sess, r"Turn 1", 60, "cost-rows")
+        assert ACTUAL_ROW_RE.search(text), "cost row lacks the actual marker"
+        assert not SPLIT_RE.search(text), "split line on a pure-actual session"
+        print("C1 PASS", flush=True)
+    finally:
+        save(sess, "c1", LOGDIR8)
+        stop_cli(sess)
+
+
+def scenario_c2():
+    """C2: a mixed session shows the blended total plus the split.
+
+    One turn on the default (estimate) model, then switch to the
+    OpenRouter id for a second turn; /cost must show the blended
+    headline with the ``(actual $X + estimated $Y)`` split beneath.
+    """
+    _require_openrouter_key()
+    workdir = ensure_workdir("w10")
+    sess = "uatr8c2"
+    start_cli(sess, workdir)
+    try:
+        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        text, _ = wait_main_end(sess)
+        assert "actual" not in text.splitlines()[-1], (
+            "estimate turn unexpectedly marked actual"
+        )
+        _switch_model(sess, CHEAP_OPENROUTER_ID)
+        after = len(COST_RE.findall(pane_text(sess)))
+        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        text, _ = wait_main_end(sess, after=after)
+        assert ACTUAL_USAGE_RE.search(text), (
+            f"usage line lacks the actual marker: {text[-300:]}"
+        )
+        send(sess, "/cost", "Enter")
+        text = wait_for_new(sess, r"Turn 2", 60, "cost-rows")
+        assert SPLIT_RE.search(text), "blended split line missing"
+        print("C2 PASS", flush=True)
+    finally:
+        save(sess, "c2", LOGDIR8)
+        stop_cli(sess)
+
+
 if __name__ == "__main__":
     os.makedirs(LOGDIR, exist_ok=True)
     os.makedirs(LOGDIR8, exist_ok=True)
@@ -885,5 +978,9 @@ if __name__ == "__main__":
         scenario_n3()
     elif which == "n4":
         scenario_n4()
+    elif which == "c1":
+        scenario_c1()
+    elif which == "c2":
+        scenario_c2()
     else:
-        sys.exit("usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4}")
+        sys.exit("usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2}")
