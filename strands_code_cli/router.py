@@ -55,7 +55,7 @@ USAGE_HINT = (
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
     "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup|validate], "
-    "/codeact [tool|code|both], "
+    "/codeact [tool|code|both], /code <ask>, /tool <ask>, "
     "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
@@ -178,6 +178,13 @@ def dispatch(
     """
     stripped = text.strip()
     if not stripped.startswith("/"):
+        # Both-mode bare asks never silently default (D-13 explicit
+        # user routing); standalone callers keep the throwaway tool
+        # holder, so their bare asks still start agent turns.
+        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE
+
+        if _codeact_holder(interface).interface == "both":
+            return ("reply", CODEACT_ROUTE_USAGE)
         return ("agent", None)
     head, _, arg = stripped.partition(" ")
     cmd = head.lower()
@@ -238,6 +245,10 @@ def dispatch(
         # Before the skills-dynamic branch so the builtin always wins
         # the name (a skill named codeact stays shadowed).
         return ("reply", _codeact_message(rest, interface))
+    if cmd in ("/code", "/tool"):
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named code/tool stays shadowed).
+        return _codeact_route_action(cmd, rest, interface)
     if skills is not None:
         entry = skills.resolve(head[1:])
         if entry is not None and not entry.shadowed:
@@ -1380,6 +1391,23 @@ def _codeact_message(rest: str, codeact: CodeactState | None) -> str:
     if verb in ("tool", "code", "both"):
         return holder.set(verb)
     return CODEACT_USAGE
+
+
+def _codeact_route_action(
+    cmd: str, rest: str, codeact: CodeactState | None
+) -> tuple[str, str | None]:
+    """Handle /code + /tool one-shot routing: arm, then start the ask.
+
+    Empty asks reply with the routing usage (the /btw empty
+    precedent); otherwise the holder arms for exactly one turn and the
+    ask runs as an agent turn.
+    """
+    from strands_code_cli.codeact import CODEACT_ROUTE_USAGE
+
+    if not rest:
+        return ("reply", CODEACT_ROUTE_USAGE)
+    _codeact_holder(codeact).arm_one_shot("code" if cmd == "/code" else "tool")
+    return ("agent", rest)
 
 
 def _memory_mode_holder(memory_mode: MemoryModeState | None) -> MemoryModeState:

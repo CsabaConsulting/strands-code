@@ -2324,7 +2324,9 @@ def run_loop(
                 if mode.mode == "plan":
                     agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
                 # Fix-at-send (D-14/D-19): later /codeact flips wait for the next ask.
-                turn_interface = resolve_turn_interface(interface.interface)
+                # One armed /code or /tool override is consumed here, exactly
+                # once; otherwise the sticky holder value shapes the turn.
+                turn_interface = resolve_turn_interface(interface.resolve_turn())
                 agent_text = shape_turn_text(turn_interface, agent_text)
                 # Code turns execute in the stint interpreter (the tool
                 # handle builds lazily, only on code turns); the turn

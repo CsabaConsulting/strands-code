@@ -40,6 +40,8 @@ BUILTIN_SLASH_HEADS = frozenset(
         "btw",
         "route",
         "codeact",
+        "code",
+        "tool",
     }
 )
 """Builtin slash heads (no leading slash) that always win collisions (D-02).

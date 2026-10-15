@@ -883,3 +883,155 @@ class TestCodeactSwap:
             assert "registry[" not in source
             assert ".registry =" not in source
             assert "agent.messages" not in _codeact_source()
+
+
+# ----------------------------------------------------------------------
+# Both-mode per-ask routing via /code and /tool (11-02 task 3)
+# ----------------------------------------------------------------------
+
+
+class TestCodeactBothRouting:
+    def _dispatch(self, text: str, tmp_path, interface=None):  # type: ignore[no-untyped-def]
+        index = SessionIndex(tmp_path / "index")
+        return dispatch(text, session_id="s", index=index, interface=interface)
+
+    def test_both_code_prefix_arms_code_for_exactly_one_turn(self, tmp_path):
+        from strands_code_cli.codeact import CodeactState
+
+        holder = CodeactState(initial="both")
+        action, message = self._dispatch("/code list the files", tmp_path, holder)
+        assert action == "agent"
+        assert message == "list the files"
+        assert holder.resolve_turn() == "code"  # the armed turn
+        assert holder.resolve_turn() == "both"  # arm consumed, sticky back
+        assert holder.interface == "both"  # sticky value never moves
+
+    def test_both_tool_prefix_arms_tool(self, tmp_path):
+        from strands_code_cli.codeact import CodeactState
+
+        holder = CodeactState(initial="both")
+        action, message = self._dispatch("/tool list the files", tmp_path, holder)
+        assert (action, message) == ("agent", "list the files")
+        assert holder.resolve_turn() == "tool"
+        assert holder.resolve_turn() == "both"
+
+    def test_both_prefixes_override_sticky_tool_and_code(self, tmp_path):
+        from strands_code_cli.codeact import CodeactState
+
+        tool_holder = CodeactState(initial="tool")
+        assert self._dispatch("/code go", tmp_path, tool_holder)[0] == "agent"
+        assert tool_holder.resolve_turn() == "code"
+        assert tool_holder.resolve_turn() == "tool"
+        code_holder = CodeactState(initial="code")
+        assert self._dispatch("/tool go", tmp_path, code_holder)[0] == "agent"
+        assert code_holder.resolve_turn() == "tool"
+        assert code_holder.resolve_turn() == "code"
+
+    def test_both_empty_prefix_returns_usage_without_arming(self, tmp_path):
+        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE, CodeactState
+
+        assert CODEACT_ROUTE_USAGE == "Usage: /code <ask> or /tool <ask>"
+        for text in ("/code", "/code   ", "/tool", "/tool  "):
+            holder = CodeactState(initial="both")
+            action, message = self._dispatch(text, tmp_path, holder)
+            assert action == "reply"
+            assert message == CODEACT_ROUTE_USAGE
+            assert holder.resolve_turn() == "both"  # nothing armed
+
+    def test_both_bare_ask_returns_routing_usage(self, tmp_path):
+        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE, CodeactState
+
+        holder = CodeactState(initial="both")
+        action, message = self._dispatch("list the files", tmp_path, holder)
+        assert action == "reply"
+        assert message == CODEACT_ROUTE_USAGE
+
+    def test_both_bare_asks_in_tool_and_code_start_agent_turns(self, tmp_path):
+        from strands_code_cli.codeact import CodeactState
+
+        for sticky in ("tool", "code"):
+            holder = CodeactState(initial=sticky)
+            assert self._dispatch("list the files", tmp_path, holder) == (
+                "agent",
+                None,
+            )
+
+    def test_both_bare_ask_without_holder_starts_agent_turn(self, tmp_path):
+        assert self._dispatch("list the files", tmp_path, None) == ("agent", None)
+
+    def test_both_prefix_without_holder_starts_agent_turn(self, tmp_path):
+        action, message = self._dispatch("/code go", tmp_path, None)
+        assert (action, message) == ("agent", "go")
+
+    def test_both_arm_rejects_anything_but_code_or_tool(self):
+        from strands_code_cli.codeact import CodeactState
+
+        holder = CodeactState()
+        for bad in ("both", "turbo", "", "TOOL"):
+            try:
+                holder.arm_one_shot(bad)
+            except ValueError as exc:
+                assert "code|tool" in str(exc)
+            else:
+                raise AssertionError(f"expected ValueError for {bad!r}")
+        assert holder.resolve_turn() == "tool"  # failed arms arm nothing
+
+    def test_both_resolve_turn_passes_sticky_through(self):
+        from strands_code_cli.codeact import CodeactState
+
+        for sticky in CodeactState.VALID:
+            assert CodeactState(initial=sticky).resolve_turn() == sticky
+
+    def test_both_full_flow_prefix_then_bare_ask(self, tmp_path):
+        from strands_code_cli.codeact import (
+            CODEACT_ROUTE_USAGE,
+            CodeactState,
+            resolve_turn_interface,
+            shape_turn_text,
+        )
+
+        holder = CodeactState(initial="both")
+        # Turn 1: explicit /code routing runs a code turn.
+        action, message = self._dispatch("/code list the files", tmp_path, holder)
+        assert action == "agent"
+        turn = resolve_turn_interface(holder.resolve_turn())
+        assert turn == "code"
+        assert shape_turn_text(turn, message).startswith("You are in CodeAct mode")
+        # Turn 2: a bare ask never silently defaults — usage again.
+        assert self._dispatch("and the docs", tmp_path, holder) == (
+            "reply",
+            CODEACT_ROUTE_USAGE,
+        )
+
+    def test_both_heads_are_builtin(self):
+        assert "code" in BUILTIN_SLASH_HEADS
+        assert "tool" in BUILTIN_SLASH_HEADS
+
+    def test_both_heads_beat_shadowed_skills(self, tmp_path):
+        from strands_code_cli.codeact import CodeactState
+
+        for name, armed in (("code", "code"), ("tool", "tool")):
+            skills_dir = tmp_path / f"skills-{name}"
+            _write_skill(skills_dir, name)
+            skills = SkillIndex(skills_dir)
+            assert skills.warnings
+            holder = CodeactState(initial="both")
+            index = SessionIndex(tmp_path / "index")
+            action, message = dispatch(
+                f"/{name} go", session_id="s", index=index, skills=skills,
+                interface=holder,
+            )
+            assert (action, message) == ("agent", "go")
+            assert holder.resolve_turn() == armed
+
+    def test_both_usage_hint_documents_prefixes(self):
+        assert "/code <ask>" in USAGE_HINT
+        assert "/tool <ask>" in USAGE_HINT
+
+    def test_both_loop_fix_at_send_consumes_one_shot(self):
+        import inspect
+
+        import strands_code_cli.loop as loop_module
+
+        run_source = inspect.getsource(loop_module.run_loop)
+        assert "interface.resolve_turn()" in run_source

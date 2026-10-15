@@ -39,6 +39,7 @@ CODEACT_TOOL_REPLY = "Interface: tool — gated tool-calling."
 CODEACT_CODE_REPLY = "Interface: code — code-first actions through python_repl."
 CODEACT_BOTH_REPLY = "Interface: both — route each ask at send time."
 CODEACT_USAGE = "Usage: /codeact [tool|code|both]"
+CODEACT_ROUTE_USAGE = "Usage: /code <ask> or /tool <ask>"
 
 
 class CodeactState:
@@ -54,6 +55,7 @@ class CodeactState:
         if initial not in self.VALID:
             raise ValueError(f"unknown interface {initial!r}: expected tool|code|both")
         self._interface = initial
+        self._one_shot: str | None = None
 
     @property
     def interface(self) -> str:
@@ -82,6 +84,28 @@ class CodeactState:
         if self._interface == "both":
             return CODEACT_BOTH_REPLY
         return CODEACT_TOOL_REPLY
+
+    def arm_one_shot(self, interface: str) -> None:
+        """Arm a one-turn ``/code`` / ``/tool`` routing override (D-13).
+
+        Raises:
+            ValueError: For anything outside ``code|tool``.
+        """
+        if interface not in ("code", "tool"):
+            raise ValueError(f"unknown one-shot {interface!r}: expected code|tool")
+        self._one_shot = interface
+
+    def resolve_turn(self) -> str:
+        """Consume one armed override, else the sticky holder value.
+
+        Returns:
+            The armed ``code``/``tool`` exactly once (D-14 one interface
+            per turn), clearing the arm; otherwise the sticky value.
+        """
+        if self._one_shot is not None:
+            armed, self._one_shot = self._one_shot, None
+            return armed
+        return self._interface
 
 
 def resolve_turn_interface(value: str) -> str:
