@@ -276,7 +276,19 @@ Plans:
   2. CodeAct executes code-first actions through the harness sandbox primitive with deny-first approvals still gating side effects (reconciled with no-prompt-inside-orchestration; Risk 9 currently disables it)
   3. Switching interfaces mid-session keeps history and approvals coherent
 
-**Plans**: TBD (not yet planned)
+**Plans**:
+
+**Wave 1**
+
+- [ ] 11-01-PLAN.md — Tracer: toggle plus shaped code turn end to end
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 11-02-PLAN.md — Stint execution plus both-mode routing
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 11-03-PLAN.md — Whole-block approval plus coherence pins
 
 ## Progress
 
