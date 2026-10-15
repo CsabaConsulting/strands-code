@@ -612,3 +612,127 @@ class TestCodeactApprovalPreview:
             and "skipped, continuing" in line
             for line in shown
         )
+
+
+# ---------------------------------------------------------------------------
+# 11-03 task 2: one rule system + plan-deny coherence pins (D-07/D-04)
+# ---------------------------------------------------------------------------
+
+
+class TestCodeactRuleCoherence:
+    def test_always_derives_narrow_python_repl_rule(self, tmp_path, monkeypatch):
+        from strands_code_cli.policy import normalise_command
+
+        repo = tmp_path / "policy.toml"
+        missing = tmp_path / "missing.toml"
+
+        def loader():
+            return PolicyConfig.load(home_path=missing, repo_path=repo)
+
+        classifier = PolicyClassifier(policy_loader=loader, append_path=repo)
+        handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        # Single-line block: multi-line code exposes the pre-existing
+        # _serialise_rule no-escape limitation (invalid TOML on reload —
+        # logged in deferred-items.md, out of scope for this tests-only
+        # task). The D-07 derivation contract pins on one line regardless.
+        code = "total = '" + "ab" * 300 + "'"
+        assert len(code) > 500
+        monkeypatch.setattr("builtins.input", lambda *args: "always")
+        result = _run(handler, _event("python_repl", {"code": code}, uid="r1"))
+        assert isinstance(result, Confirm)
+        reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
+        assert len(reloaded.allow) == 1
+        assert reloaded.allow[0].tool == "python_repl"
+        assert reloaded.allow[0].command == normalise_command(code)[:500]
+        assert len(reloaded.allow[0].command) == 500
+        # A longer block sharing the prefix proceeds silently through a
+        # fresh batch: the persisted rule matches by prefix (D-07).
+        fresh = PolicyClassifier(policy_loader=loader)
+        fresh_handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=fresh, ask=fresh.ask
+        )
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(AssertionError("must not prompt")),
+        )
+        second = _run(
+            fresh_handler,
+            _event("python_repl", {"code": code + " + 'cd'"}, uid="r2"),
+        )
+        assert isinstance(second, Proceed)
+
+    def test_never_derives_python_repl_deny_rule(self, tmp_path, monkeypatch):
+        from strands_code_cli.policy import normalise_command
+
+        repo = tmp_path / "policy.toml"
+        missing = tmp_path / "missing.toml"
+        classifier = PolicyClassifier(
+            policy_loader=lambda: PolicyConfig.load(home_path=missing, repo_path=repo),
+            append_path=repo,
+        )
+        handler = HumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        code = "import socket; print(socket.gethostname())"
+        monkeypatch.setattr("builtins.input", lambda *args: "never")
+        result = _run(handler, _event("python_repl", {"code": code}, uid="r3"))
+        assert isinstance(result, Confirm)
+        assert result.evaluate("n") is False
+        reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
+        assert len(reloaded.deny) == 1
+        assert reloaded.deny[0].tool == "python_repl"
+        assert reloaded.deny[0].command == normalise_command(code)[:500]
+
+    @pytest.mark.parametrize("holder_value", ["tool", "code"])
+    def test_plan_deny_holds_on_both_interfaces(
+        self, holder_value, monkeypatch, tmp_path
+    ):
+        # D-04 natural fit: the gate never consults the interface, so the
+        # existing plan-deny holds on tool and code turns alike — no new
+        # mode logic. Mirrors test_mode.py BANNED_VOCAB (mode words only).
+        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.session_index import SessionIndex
+
+        holder = CodeactState()
+        index = SessionIndex(tmp_path / "index")
+        from strands_code_cli.router import dispatch
+
+        action, _ = dispatch(
+            "/codeact " + holder_value, session_id="s", index=index, interface=holder
+        )
+        assert action == "reply"
+        assert holder.interface == holder_value
+        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
+        classifier.set_mode("plan")
+        result = classifier(_event("python_repl", {"code": "print('x')"}))
+        assert result.requires_human_in_the_loop is True
+        assert "Plan mode is read-only" in result.reason
+        banned_vocab = (
+            "policy rule",
+            "rule [",
+            "approve-each",
+            "on-demand",
+            "auto",
+            "/diff",
+            "yolo",
+        )
+        for banned in banned_vocab:
+            assert banned not in result.reason
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(AssertionError("Plan deny must not prompt")),
+        )
+        assert classifier.ask("Approve?") == "n"
+        text = "\n".join(shown)
+        assert "Plan mode is read-only" in text
+        for banned in banned_vocab:
+            assert banned not in text
+        # Mode-vocabulary lock: plan-deny stays byte-identical — the D-06
+        # revise hint rides the policy-rule denial only, never plan mode.
+        assert "Revise the code" not in text

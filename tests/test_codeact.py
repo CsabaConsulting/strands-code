@@ -1035,3 +1035,86 @@ class TestCodeactBothRouting:
 
         run_source = inspect.getsource(loop_module.run_loop)
         assert "interface.resolve_turn()" in run_source
+
+
+# ----------------------------------------------------------------------
+# 11-03 task 2: switching coherence pins (D-16/D-18/D-20)
+# ----------------------------------------------------------------------
+
+
+class TestCodeactSwitchingCoherence:
+    def test_turn_rows_exclude_interface_across_turns(self):
+        from strands_code_cli.loop import record_turn_metrics
+
+        turns: list = []
+        interfaces: list[str] = []
+        record_turn_metrics(_Summary(1000, 200), "bedrock/x-model", turns)
+        interfaces.append("tool")
+        record_turn_metrics(_Summary(3000, 400), "bedrock/x-model", turns)
+        interfaces.append("code")
+        assert interfaces == ["tool", "code"]
+        assert [row["turn"] for row in turns] == [1, 2]
+        for row in turns:
+            assert set(row) == {"turn", "input_tokens", "output_tokens", "model"}
+            assert "interface" not in row
+
+    def test_cost_report_byte_identical_across_interfaces(self):
+        from strands_code_cli.cost_context import cost_report
+        from strands_code_cli.loop import record_turn_metrics
+
+        def _session(interfaces: list[str]) -> str:
+            turns: list = []
+            for in_tok, out_tok in ((1000, 200), (3000, 400)):
+                record_turn_metrics(
+                    _Summary(in_tok, out_tok), "bedrock/x-model", turns
+                )
+            # The parallel list shadows the rows one-to-one, never a row key.
+            assert len(turns) == len(interfaces)
+            return cost_report(turns, "bedrock/x-model")
+
+        tool_report = _session(["tool", "tool"])
+        code_report = _session(["code", "code"])
+        assert tool_report == code_report
+        assert "interface" not in tool_report
+
+    def test_policy_file_byte_identical_across_switches(self, tmp_path):
+        from strands_code_cli.policy import Allow, PolicyConfig, Rule, decide
+
+        repo = tmp_path / "policy.toml"
+        missing = tmp_path / "missing.toml"
+        PolicyConfig().append_rule(
+            "allow", Rule(tool="shell", command="git status"), repo_path=repo
+        )
+        before = repo.read_bytes()
+        holder = CodeactState()
+        index = SessionIndex(tmp_path / "index")
+        for verb in ("code", "both", "tool", "code"):
+            action, _ = dispatch(
+                "/codeact " + verb, session_id="s", index=index, interface=holder
+            )
+            assert action == "reply"
+        assert repo.read_bytes() == before
+        # The remembered rule still decides identically after the switches.
+        reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
+        assert isinstance(
+            decide("shell", {"command": "git status --short"}, reloaded), Allow
+        )
+
+    def test_messages_byte_identical_across_switch_with_stint_reset(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        holder = CodeactState()
+        stint = CodeactStint(tmp_path)
+        stint.execute_code("x = 41")
+        agent = SimpleNamespace(
+            messages=[
+                {"role": "user", "content": [{"text": "q"}]},
+                {"role": "assistant", "content": [{"text": "a"}]},
+            ]
+        )
+        before = copy.deepcopy(agent.messages)
+        for verb in ("code", "tool"):
+            holder.set(verb)
+            stint.reset()  # the loop's post-switch reset (D-17)
+        assert len(agent.messages) == len(before)
+        assert agent.messages == before
