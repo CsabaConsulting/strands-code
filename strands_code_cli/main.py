@@ -208,6 +208,9 @@ def _root(
     session_id: str | None = typer.Option(
         None, "--session-id", help="Resume the session with this id."
     ),
+    codeact: str | None = typer.Option(
+        None, "--codeact", help="Start the session on this action interface."
+    ),
 ) -> None:
     """Open the REPL immediately (D-01); --session-id resumes directly (D-02)."""
     if session_id is not None:
@@ -215,6 +218,8 @@ def _root(
             _validate_session_id(session_id)
         except ValueError as exc:
             raise typer.BadParameter(f"invalid --session-id: {exc}") from exc
+    if codeact is not None and codeact not in ("tool", "code", "both"):
+        raise typer.BadParameter("invalid --codeact: expected tool|code|both")
     # Gate runs before construction and before any session or config side
     # effect (D-05; reversing this to offline-first reworks launch).
     _preflight_credentials()
@@ -232,7 +237,7 @@ def _root(
         DEFAULT_SESSION_DIR,
         model=model_for_config(config.model, config.base_url),
     )
-    run_loop(agent, session_id=resolved, index=index)
+    run_loop(agent, session_id=resolved, index=index, codeact=codeact)
 
 
 def main() -> None:

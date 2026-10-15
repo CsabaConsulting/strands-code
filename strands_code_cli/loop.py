@@ -39,6 +39,7 @@ from strands_code_cli.choice import radio_choice
 from strands_code_cli.codeact import (
     CodeactState,
     codeact_label,
+    resolve_initial_interface,
     resolve_turn_interface,
     shape_turn_text,
 )
@@ -1998,6 +1999,7 @@ def run_loop(
     session_id: str,
     index: SessionIndex,
     model_id: str | None = None,
+    codeact: str | None = None,
 ) -> None:
     """Run the REPL until Ctrl-D or /exit.
 
@@ -2034,6 +2036,11 @@ def run_loop(
     (``/route`` toggle, defaulting to on when a strategy configures)
     and runs the pre-turn routing hook at idle; a confirmed manual
     ``/model`` switch disables routing with a transcript note.
+
+    Phase 11: the loop owns the session-sticky :class:`CodeactState`
+    (``/codeact`` toggle, starting on tool-calling unless the
+    ``--codeact`` flag or remember-last config says otherwise);
+    ``/codeact`` switches persist as the last choice.
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
@@ -2081,7 +2088,12 @@ def run_loop(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
-    interface = CodeactState()
+    _codeact_saved = ProviderConfig.load()
+    interface = CodeactState(
+        initial=resolve_initial_interface(
+            codeact, _codeact_saved.codeact, _codeact_saved.codeact_remember
+        )
+    )
     try:
         _boot_strategy = routing_mod.load_strategy()
     except ValueError as exc:
@@ -2203,6 +2215,7 @@ def run_loop(
             action, message = "agent", boundary_template
             text = f"/memory revise {revise_state.section} {revise_state.instruction}"
         else:
+            codeact_before = interface.interface
             action, message = dispatch(
                 text,
                 session_id=session_id,
@@ -2221,6 +2234,11 @@ def run_loop(
                 routing_events=routing_events,
                 interface=interface,
             )
+            if action == "reply" and interface.interface != codeact_before:
+                try:
+                    ProviderConfig.load().save_codeact_choice(interface.interface)
+                except ValueError as exc:
+                    logger.warning("CodeAct choice not persisted: %s", exc)
         if action == "agent":
             match_note = skill_match_note(skills, text)
             if match_note is not None:

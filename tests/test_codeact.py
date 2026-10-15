@@ -19,8 +19,12 @@ zero history mutation on switch; zero cost-row change.
 from __future__ import annotations
 
 import copy
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
 
 from strands_code_cli.codeact import (
     CODEACT_BOTH_REPLY,
@@ -30,9 +34,11 @@ from strands_code_cli.codeact import (
     CODEACT_USAGE,
     CodeactState,
     codeact_label,
+    resolve_initial_interface,
     resolve_turn_interface,
     shape_turn_text,
 )
+from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
 from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
@@ -81,6 +87,12 @@ def _write_skill(skills_dir: Path, name: str) -> Path:
         encoding="utf-8",
     )
     return skill_dir
+
+
+def _loop_source() -> str:
+    return (
+        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
+    ).read_text(encoding="utf-8")
 
 
 # ----------------------------------------------------------------------
@@ -352,3 +364,168 @@ class TestTracer:
         transcript = f"{message}\n{codeact_label(turn)}"
         assert transcript.count("interface: tool") == 1
         assert "interface: codeact" not in transcript
+
+
+# ----------------------------------------------------------------------
+# Startup surfaces: --codeact flag, config keys, remember-last (task 2)
+# ----------------------------------------------------------------------
+
+
+class TestCodeactStartupFlag:
+    def _invoke(self, main_module, args):  # type: ignore[no-untyped-def]
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(main_module.app, args)
+
+    def test_flag_each_value_reaches_run_loop(self, tmp_path, monkeypatch):
+        main_module = importlib.import_module("strands_code_cli.main")
+        monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
+        for value in ("tool", "code", "both"):
+            with (
+                patch.object(main_module, "_preflight_credentials", return_value=None),
+                patch.object(main_module, "build_agent", return_value=object()),
+                patch.object(main_module, "run_loop") as loop,
+            ):
+                result = self._invoke(main_module, ["--codeact", value])
+            assert result.exit_code == 0, result.output
+            assert loop.call_args[1]["codeact"] == value
+
+    def test_no_flag_passes_none(self, tmp_path, monkeypatch):
+        main_module = importlib.import_module("strands_code_cli.main")
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch.object(main_module, "_preflight_credentials", return_value=None),
+            patch.object(main_module, "build_agent", return_value=object()),
+            patch.object(main_module, "run_loop") as loop,
+        ):
+            result = self._invoke(main_module, [])
+        assert result.exit_code == 0, result.output
+        assert loop.call_args[1]["codeact"] is None
+
+    @pytest.mark.parametrize("bad", ["turbo", "CODE", ""])
+    def test_invalid_flag_rejected_before_side_effects(self, tmp_path, monkeypatch, bad):
+        main_module = importlib.import_module("strands_code_cli.main")
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch.object(
+                main_module, "_preflight_credentials", side_effect=AssertionError("gate runs")
+            ),
+            patch.object(main_module, "build_agent", side_effect=AssertionError("build runs")),
+            patch.object(main_module, "run_loop", side_effect=AssertionError("loop runs")),
+            patch.object(ProviderConfig, "load", side_effect=AssertionError("config loads")),
+        ):
+            result = self._invoke(main_module, ["--codeact", bad])
+        assert result.exit_code != 0
+        assert "codeact" in result.output.lower()
+        assert not Path(".agent").exists()
+
+
+class TestCodeactStartupConfig:
+    def test_keys_round_trip(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        cfg = ProviderConfig(
+            model="m", base_url="http://x", codeact="code", codeact_remember=True
+        )
+        cfg.save(path)
+        assert ProviderConfig.load(path) == cfg
+
+    def test_missing_config_yields_defaults(self, tmp_path):
+        loaded = ProviderConfig.load(tmp_path / "missing.yaml")
+        assert loaded.codeact is None
+        assert loaded.codeact_remember is False
+
+    def test_defaults_not_persisted(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        ProviderConfig(model="m").save(path)
+        assert "codeact" not in path.read_text(encoding="utf-8")
+        assert ProviderConfig.load(path).codeact_remember is False
+
+    def test_unknown_codeact_value_raises(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        path.write_text("codeact: turbo\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="tool\\|code\\|both"):
+            ProviderConfig.load(path)
+        with pytest.raises(ValueError, match="tool\\|code\\|both"):
+            ProviderConfig(codeact="turbo").save(tmp_path / "out.yaml")
+
+    @pytest.mark.parametrize("word", ["'yes'", "1"])
+    def test_non_bool_remember_raises(self, tmp_path, word):
+        path = tmp_path / "config.yaml"
+        path.write_text(f"codeact_remember: {word}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="must be a bool"):
+            ProviderConfig.load(path)
+        with pytest.raises(ValueError, match="must be a bool"):
+            ProviderConfig(codeact_remember="yes").save(tmp_path / "out.yaml")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("word,expected", [("true", True), ("false", False)])
+    def test_bool_spellings_accepted(self, tmp_path, word, expected):
+        path = tmp_path / "config.yaml"
+        path.write_text(f"codeact_remember: {word}\n", encoding="utf-8")
+        assert ProviderConfig.load(path).codeact_remember is expected
+
+
+class TestCodeactStartupPrecedence:
+    def test_flag_wins_over_remembered(self):
+        assert resolve_initial_interface("code", "tool", True) == "code"
+
+    def test_remembered_wins_over_default(self):
+        assert resolve_initial_interface(None, "code", True) == "code"
+
+    def test_saved_ignored_unless_remembered(self):
+        assert resolve_initial_interface(None, "code", False) == "tool"
+
+    def test_remember_without_saved_starts_tool(self):
+        assert resolve_initial_interface(None, None, True) == "tool"
+
+    def test_default_tool_session_start(self):
+        assert resolve_initial_interface(None, None, False) == "tool"
+
+    def test_missing_config_starts_tool(self, tmp_path):
+        loaded = ProviderConfig.load(tmp_path / "missing.yaml")
+        initial = resolve_initial_interface(None, loaded.codeact, loaded.codeact_remember)
+        assert initial == "tool"
+
+    def test_invalid_values_raise(self):
+        with pytest.raises(ValueError, match="tool\\|code\\|both"):
+            resolve_initial_interface("turbo", None, False)
+        with pytest.raises(ValueError, match="tool\\|code\\|both"):
+            resolve_initial_interface(None, "turbo", True)
+
+
+class TestCodeactStartupPersist:
+    def test_save_choice_persists_and_keeps_other_keys(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        cfg = ProviderConfig(model="m", base_url="http://x", codeact_remember=True)
+        cfg.save(path)
+        cfg.save_codeact_choice("both", path)
+        loaded = ProviderConfig.load(path)
+        assert loaded.codeact == "both"
+        assert loaded.model == "m"
+        assert loaded.base_url == "http://x"
+        assert loaded.codeact_remember is True
+
+    def test_save_choice_invalid_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="tool\\|code\\|both"):
+            ProviderConfig().save_codeact_choice("turbo", tmp_path / "out.yaml")
+
+    def test_switch_persists_last_choice(self, tmp_path, monkeypatch):
+        import strands_code_cli.provider_config as provider_config_module
+
+        path = tmp_path / "config.yaml"
+        monkeypatch.setattr(provider_config_module, "default_config_path", lambda: path)
+        holder = CodeactState()
+        index = SessionIndex(tmp_path / "index")
+        dispatch("/codeact code", session_id="s", index=index, interface=holder)
+        # The loop's persist line: save the flipped holder value.
+        provider_config_module.ProviderConfig.load().save_codeact_choice(holder.interface)
+        assert provider_config_module.ProviderConfig.load().codeact == "code"
+
+    def test_loop_wires_codeact_startup(self):
+        source = _loop_source()
+        assert "codeact: str | None = None," in source
+        assert "resolve_initial_interface(" in source
+
+    def test_loop_wires_codeact_persist(self):
+        source = _loop_source()
+        assert "codeact_before = interface.interface" in source
+        assert "save_codeact_choice(interface.interface)" in source

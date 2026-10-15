@@ -103,3 +103,30 @@ def codeact_label(turn_interface: str) -> str:
     if turn_interface == "code":
         return "interface: codeact"
     return "interface: tool"
+
+
+def resolve_initial_interface(
+    flag: str | None, saved: str | None, remember: bool
+) -> str:
+    """Resolve the session-start interface by D-03 precedence.
+
+    Args:
+        flag: The ``--codeact`` value (None when the flag is absent).
+        saved: The persisted last choice (None when never saved).
+        remember: The remember-last-choice option (D-03).
+
+    Returns:
+        The flag first, then the saved choice when remembered,
+        else ``"tool"`` (tool-calling stays the default).
+
+    Raises:
+        ValueError: For a flag or saved value outside ``tool|code|both``.
+    """
+    for value in (flag, saved):
+        if value is not None and value not in CodeactState.VALID:
+            raise ValueError(f"unknown interface {value!r}: expected tool|code|both")
+    if flag is not None:
+        return flag
+    if remember and saved is not None:
+        return saved
+    return "tool"
