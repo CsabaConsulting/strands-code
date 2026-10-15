@@ -532,3 +532,83 @@ class TestDialogAttribution:
         assert answer == "n"  # ESC/None denies fail-closed
         with pytest.raises(KeyboardInterrupt):
             self._dialog_ask(monkeypatch, "make test", KeyboardInterrupt)
+
+
+# ---------------------------------------------------------------------------
+# 11-03 task 1: whole-block approval preview + deny revise hint (D-05/D-06)
+# ---------------------------------------------------------------------------
+
+
+def _code_block_2000() -> str:
+    """Exactly 2000 chars of short-line code (no render-width folding)."""
+    line = "value = transform(input_value, options)\n"
+    return (line * ((2000 // len(line)) + 1))[:2000]
+
+
+class TestCodeactApprovalPreview:
+    def test_preview_carries_full_2000_char_block(self, monkeypatch):
+        import io
+
+        import strands_code_cli.policy_gate as gate_module
+        from rich.console import Console
+
+        block = _code_block_2000()
+        assert len(block) == 2000
+        buf = io.StringIO()
+        monkeypatch.setattr(gate_module, "console", Console(file=buf, width=200))
+        _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+        result = _run(handler, _event("python_repl", {"code": block}, uid="c1"))
+        assert isinstance(result, Confirm)
+        assert result.evaluate("y") is True
+        # Syntax pads each line to the console width: strip the padding,
+        # then the render must equal the block exactly (no truncation).
+        rendered = "\n".join(
+            line.rstrip() for line in buf.getvalue().split("\n")
+        ).rstrip("\n")
+        assert rendered == block.rstrip("\n")
+
+    def test_dialog_title_keeps_sixty_char_collapse(self):
+        from strands_code_cli.policy_gate import _dialog_title
+
+        block = _code_block_2000()
+        assert _dialog_title("main", "python_repl", {"code": block}) == (
+            "Approve? [main] python_repl — "
+            "value = transform(input_value, options) value = transform..."
+        )
+
+    def test_single_use_yields_exactly_one_prompt(self, monkeypatch):
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+        result = _run(handler, _event("python_repl", {"code": "print('hi')"}, uid="c2"))
+        assert isinstance(result, Confirm)
+        assert shown.count("Approval needed: [main] python_repl") == 1
+        # The truncated Detail preview is replaced by the Syntax render.
+        assert not any(line.startswith("  Detail:") for line in shown)
+        assert any(line.startswith("  Risk: Python execution:") for line in shown)
+
+    def test_deny_carries_revise_hint_with_continue_verdict(self, monkeypatch):
+        def loader():
+            return PolicyConfig(deny=[Rule(tool="python_repl", command="import socket")])
+
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        _, handler = _gate(loader=loader, monkeypatch=monkeypatch, answers=[])
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(AssertionError("deny must not prompt")),
+        )
+        result = _run(
+            handler, _event("python_repl", {"code": "import socket\nprint(1)"}, uid="d1")
+        )
+        assert isinstance(result, Confirm)
+        assert result.evaluate("n") is False
+        assert any(
+            "Revise the code or try a different approach." in line
+            and "skipped, continuing" in line
+            for line in shown
+        )

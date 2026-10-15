@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
 
 from rich.console import Console
+from rich.syntax import Syntax
 from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
@@ -79,6 +80,14 @@ T-03-08) so it is denied, not merely discouraged.
 
 PLAN_DENY_TEMPLATE = "Plan mode is read-only — {tool} skipped, continuing."
 """Mode-vocabulary denial (never a policy-rule or diff-mode word)."""
+
+REVISE_HINT = "Revise the code or try a different approach."
+"""Revise hint appended to denied python_repl observations (D-06).
+
+The denial feeds the model a revise hint while the standard
+skip-and-continue verdict keeps the turn alive, so the agent can
+revise the code or try a different approach within the live turn.
+"""
 
 
 def tag_for(agent: Any, main_agent: Any) -> str:
@@ -542,12 +551,23 @@ class PolicyClassifier:
                         print(rule_text)
                         self._batch.record(f"[{tag}] plan-mode denied {tool_name}")
                         return "n"
-                    print(f"Denied by policy rule [deny {rule_text}] — skipped, continuing.")
+                    refusal = f"Denied by policy rule [deny {rule_text}] — skipped, continuing."
+                    if tool_name == "python_repl":
+                        refusal += f" {REVISE_HINT}"
+                    print(refusal)
                     self._batch.record(f"[{tag}] denied {tool_name} [{rule_text}]")
                     return "n"
                 assert isinstance(verdict, Prompt)
                 print(f"Approval needed: [{tag}] {tool_name}")
-                print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
+                if tool_name == "python_repl":
+                    # D-05 whole-block approval: the preview is the
+                    # complete block as a Syntax render, never the
+                    # 500-char truncation (T-11-08: a truncated preview
+                    # could hide trailing malicious code). One prompt
+                    # per code action, at the boundary only (D-08).
+                    console.print(Syntax(str(ctx["tool_input"].get("code", "")), "python"))
+                else:
+                    print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
                 def read_answer() -> str:
                     if sys.stdin.isatty():
