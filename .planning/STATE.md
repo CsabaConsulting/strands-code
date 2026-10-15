@@ -3,12 +3,12 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 11
 current_phase_name: CodeAct Action Interface
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 11-01-PLAN.md
-last_updated: "2026-10-15T22:08:46.476Z"
+stopped_at: Completed 11-02-PLAN.md
+last_updated: "2026-10-15T22:19:00.000Z"
 last_activity: 2026-10-15
-last_activity_desc: Transitioned to Phase 11
+last_activity_desc: Completed 11-02 stint execution plus both-mode routing
 state_head: 2bac598a83d27d1e227bbb788a0ed114810644e3
 progress:
   total_phases: 11
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 11 (CodeAct Action Interface) — EXECUTING
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 3
 Status: Ready to execute
-Last activity: 2026-10-15 — 11-01 tracer complete (/codeact toggle + shaped code turn + startup surfaces)
+Last activity: 2026-10-15 — 11-02 complete (stint execution + both-mode routing)
 
 Progress: [█████████░] 91%
 
@@ -96,6 +96,7 @@ Progress: [█████████░] 91%
 | Phase 10 P04 | 4min | 3 tasks | 3 files |
 | Phase 10 P05 | 7min | 3 tasks | 3 files |
 | Phase 11 P01 | 11 min | 2 tasks | 7 files |
+| Phase 11 P02 | 6 min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,8 @@ Recent decisions affecting current work:
 - [Phase 11]: Both-holder turns resolve to tool-shaped until per-ask routing lands in 11-02 — Plan shapes only code turns with the prefix; both stays a legal holder value with tool behavior pinned by test
 - [Phase 11]: Remember-last gates the read path only; every /codeact switch persists the last choice unconditionally — Plan persist step has no gating condition; unconditional persist keeps the saved value fresh for a later remember opt-in
 - [Phase 11]: Run-loop codeact config read stays fail-loud like the model line; load/save validation is the boundary — Config-file errors are already fatal at startup; a guarded read here would still crash one line later at the unguarded model read
+- [Phase 11]: Interior codeact_* functions are cwd-first module functions bound via functools.partial; swap/restore are explicit seams with the turn-local flag restored in the loop's outer turn finally — Probe-verified partials in smolagents; one finally covers attempts, revise rounds, and cancel
+- [Phase 11]: stint.tool evaluates only on code turns; new swap tests carry turn_setup in method names — Preserves stint laziness on the tool path; pre-existing TestTurnSetup never matched the -k turn_setup filter
 
 ### Pending Todos
 
@@ -207,6 +210,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-15T22:08:46.341Z
-Stopped at: Completed 11-01-PLAN.md
+Last session: 2026-10-15T22:19:00.000Z
+Stopped at: Completed 11-02-PLAN.md
 Resume file: None
