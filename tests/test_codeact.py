@@ -749,3 +749,137 @@ class TestCodeactInteriorFunctions:
         (tmp_path / "marker.txt").write_text("m", encoding="utf-8")
         result = codeact_shell(tmp_path, ["ls", "marker.txt"])
         assert "marker.txt" in result
+
+
+class _FakeRegistry:
+    """ToolRegistry double exposing replace plus a registry mapping."""
+
+    def __init__(self, default_tool):
+        self.registry = {"python_repl": default_tool}
+        self.calls: list = []
+
+    def replace(self, new_tool):
+        self.calls.append(new_tool)
+        self.registry["python_repl"] = new_tool
+
+
+def _fake_agent(default_tool):
+    return SimpleNamespace(tool_registry=_FakeRegistry(default_tool))
+
+
+# ----------------------------------------------------------------------
+# Per-turn python_repl swap onto the stint (11-02 task 2)
+# ----------------------------------------------------------------------
+
+
+class TestCodeactSwap:
+    def test_turn_setup_code_turn_swaps_then_restores(self):
+        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+
+        default_tool, stint_tool = object(), object()
+        agent = _fake_agent(default_tool)
+        swapped = swap_for_code_turn(agent, "code", stint_tool, default_tool)
+        assert swapped is True
+        assert agent.tool_registry.registry["python_repl"] is stint_tool
+        restore_after_turn(agent, swapped, default_tool)
+        assert agent.tool_registry.calls == [stint_tool, default_tool]
+        assert agent.tool_registry.registry["python_repl"] is default_tool
+
+    def test_turn_setup_tool_turn_never_swaps(self):
+        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+
+        default_tool, stint_tool = object(), object()
+        agent = _fake_agent(default_tool)
+        swapped = swap_for_code_turn(agent, "tool", stint_tool, default_tool)
+        assert swapped is False
+        restore_after_turn(agent, swapped, default_tool)
+        assert agent.tool_registry.calls == []
+        assert agent.tool_registry.registry["python_repl"] is default_tool
+
+    def test_turn_setup_missing_default_skips_swap(self):
+        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+
+        agent = _fake_agent(None)
+        agent.tool_registry.registry = {}
+        swapped = swap_for_code_turn(agent, "code", object(), None)
+        assert swapped is False
+        restore_after_turn(agent, swapped, None)  # no error, no call
+        assert agent.tool_registry.calls == []
+
+    def test_turn_setup_missing_stint_tool_skips_swap(self):
+        from strands_code_cli.codeact import swap_for_code_turn
+
+        default_tool = object()
+        agent = _fake_agent(default_tool)
+        assert swap_for_code_turn(agent, "code", None, default_tool) is False
+        assert agent.tool_registry.calls == []
+
+    def test_turn_setup_missing_registry_skips_swap(self):
+        from strands_code_cli.codeact import swap_for_code_turn
+
+        agent = SimpleNamespace()  # no tool_registry at all
+        assert swap_for_code_turn(agent, "code", object(), object()) is False
+
+    def test_turn_setup_exception_mid_turn_still_restores(self):
+        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+
+        default_tool, stint_tool = object(), object()
+        agent = _fake_agent(default_tool)
+        swapped = swap_for_code_turn(agent, "code", stint_tool, default_tool)
+        try:
+            try:
+                raise RuntimeError("mid-turn boom")
+            finally:
+                restore_after_turn(agent, swapped, default_tool)
+        except RuntimeError:
+            pass  # the turn failed; the boundary still restored
+        assert agent.tool_registry.calls == [stint_tool, default_tool]
+        assert agent.tool_registry.registry["python_repl"] is default_tool
+
+    def test_turn_setup_default_handle_reads_registry(self):
+        from strands_code_cli.codeact import default_repl_handle
+
+        default_tool = object()
+        assert default_repl_handle(_fake_agent(default_tool)) is default_tool
+        assert default_repl_handle(SimpleNamespace()) is None
+        bare = SimpleNamespace(tool_registry=SimpleNamespace(registry={}))
+        assert default_repl_handle(bare) is None
+
+    def test_turn_setup_restore_without_swap_is_noop(self):
+        from strands_code_cli.codeact import restore_after_turn
+
+        default_tool = object()
+        agent = _fake_agent(default_tool)
+        restore_after_turn(agent, False, default_tool)
+        restore_after_turn(agent, True, None)
+        assert agent.tool_registry.calls == []
+
+    def test_turn_setup_loop_wires_swap_and_restore(self):
+        import inspect
+
+        import strands_code_cli.loop as loop_module
+
+        run_source = inspect.getsource(loop_module.run_loop)
+        assert "default_repl = default_repl_handle(agent)" in run_source
+        assert "swapped = swap_for_code_turn(" in run_source
+        assert "stint.tool if turn_interface == \"code\" else None" in run_source
+        assert "restore_after_turn(agent, swapped, default_repl)" in run_source
+
+    def test_turn_setup_side_pool_path_performs_no_swap(self):
+        import inspect
+
+        import strands_code_cli.loop as loop_module
+
+        for name in ("_invoke_parallel", "_pump_parallel", "_route_side_spawn"):
+            source = inspect.getsource(getattr(loop_module, name))
+            assert "swap_for_code_turn" not in source
+            assert "restore_after_turn" not in source
+            assert "stint" not in source
+
+    def test_turn_setup_no_private_registry_mutation(self):
+        # Public replace() only: neither module assigns into .registry.
+        for source in (_codeact_source(), _loop_source()):
+            assert ".registry[" not in source
+            assert "registry[" not in source
+            assert ".registry =" not in source
+            assert "agent.messages" not in _codeact_source()

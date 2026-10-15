@@ -40,9 +40,12 @@ from strands_code_cli.codeact import (
     CodeactState,
     CodeactStint,
     codeact_label,
+    default_repl_handle,
     resolve_initial_interface,
     resolve_turn_interface,
+    restore_after_turn,
     shape_turn_text,
+    swap_for_code_turn,
 )
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
@@ -2099,6 +2102,10 @@ def run_loop(
     # code turns within the stint and resets on every interface switch
     # (D-17) at the post-dispatch hook below. Built lazily on first use.
     stint = CodeactStint(cwd=os.getcwd())
+    # Always-on tool-turn python_repl, captured once at startup: code
+    # turns swap the stint tool in at send and restore this at the
+    # boundary (None when absent — code turns stay prefix-shaped).
+    default_repl = default_repl_handle(agent)
     try:
         _boot_strategy = routing_mod.load_strategy()
     except ValueError as exc:
@@ -2295,6 +2302,7 @@ def run_loop(
         reader = None
         cancelled = False
         prev_sigint: Any = None
+        swapped = False
         if threading.current_thread() is threading.main_thread():
             prev_sigint = signal.getsignal(signal.SIGINT)
             signal.signal(
@@ -2318,6 +2326,15 @@ def run_loop(
                 # Fix-at-send (D-14/D-19): later /codeact flips wait for the next ask.
                 turn_interface = resolve_turn_interface(interface.interface)
                 agent_text = shape_turn_text(turn_interface, agent_text)
+                # Code turns execute in the stint interpreter (the tool
+                # handle builds lazily, only on code turns); the turn
+                # finally below restores the default at the boundary.
+                swapped = swap_for_code_turn(
+                    agent,
+                    turn_interface,
+                    stint.tool if turn_interface == "code" else None,
+                    default_repl,
+                )
                 current_model = _route_pre_turn(
                     agent,
                     current_model=current_model,
@@ -2460,6 +2477,10 @@ def run_loop(
                     agent, session_id, index, event, armed_snapshot, target=target
                 )
         finally:
+            # Turn boundary (D-19): the run always finishes on its
+            # starting interface — covers the attempts loop plus revise
+            # rounds, and still restores on mid-turn failure or cancel.
+            restore_after_turn(agent, swapped, default_repl)
             if prev_sigint is not None:
                 signal.signal(signal.SIGINT, prev_sigint)
             if reader is not None:

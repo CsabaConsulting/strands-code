@@ -296,6 +296,60 @@ class CodeactStint:
         return self._tool
 
 
+def default_repl_handle(agent: Any) -> Any | None:
+    """Read the always-on ``python_repl`` handle; None when absent.
+
+    Reads the public ``agent.tool_registry.registry`` mapping once at
+    loop startup. Doubles and registries without ``python_repl`` yield
+    None (fail-soft): code turns then skip the swap and stay
+    prefix-shaped.
+    """
+    registry = getattr(getattr(agent, "tool_registry", None), "registry", None)
+    if not isinstance(registry, dict):
+        return None
+    return registry.get("python_repl")
+
+
+def swap_for_code_turn(
+    agent: Any, turn_interface: str, stint_tool: Any | None, default_tool: Any | None
+) -> bool:
+    """Swap the stint tool in for code turns via public ``replace``.
+
+    Args:
+        agent: The session agent owning the tool registry.
+        turn_interface: The resolved ``"code"`` or ``"tool"`` turn.
+        stint_tool: The stint ``python_repl`` (None skips the swap).
+        default_tool: The startup ``python_repl`` (None skips the swap).
+
+    Returns:
+        True exactly when the swap happened (caller restores).
+    """
+    if turn_interface != "code":
+        return False
+    if stint_tool is None or default_tool is None:
+        return False
+    replace = getattr(getattr(agent, "tool_registry", None), "replace", None)
+    if replace is None:
+        return False
+    replace(stint_tool)
+    return True
+
+
+def restore_after_turn(agent: Any, swapped: bool, default_tool: Any | None) -> None:
+    """Restore the default tool when a code turn swapped it in.
+
+    Args:
+        agent: The session agent owning the tool registry.
+        swapped: The flag :func:`swap_for_code_turn` returned.
+        default_tool: The startup ``python_repl`` to restore.
+    """
+    if not swapped or default_tool is None:
+        return
+    replace = getattr(getattr(agent, "tool_registry", None), "replace", None)
+    if replace is not None:
+        replace(default_tool)
+
+
 def resolve_initial_interface(
     flag: str | None, saved: str | None, remember: bool
 ) -> str:
