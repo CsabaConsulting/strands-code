@@ -36,6 +36,12 @@ from strands_code_cli.btw import (
     unregister_btw_cancel,
 )
 from strands_code_cli.choice import radio_choice
+from strands_code_cli.codeact import (
+    CodeactState,
+    codeact_label,
+    resolve_turn_interface,
+    shape_turn_text,
+)
 from strands_code_cli.cost_context import (
     AUTO_COMPACT_PCT,
     MODEL_PRICING,
@@ -1876,6 +1882,8 @@ def _drain_revise_rounds(
     current_model: str,
     mode: ModeState,
     apply_fn: Any = None,
+    turn_interface: str = "tool",
+    turn_interfaces: list | None = None,
 ) -> None:
     """Consume armed revise rounds, re-invoking while the user iterates.
 
@@ -1883,7 +1891,7 @@ def _drain_revise_rounds(
     normal invocation path (plan prefix, metrics); a failed
     follow-up disarms with a note. Ctrl-C propagates after consume
     disarms, so the interrupt lands on the cancel path with clean
-    state.
+    state. Rounds record under the owning turn's interface (D-15).
     """
     writer = apply_fn if apply_fn is not None else apply_memory_section
     text = _result_text(agent, result)
@@ -1916,8 +1924,11 @@ def _drain_revise_rounds(
         usage = record_turn_metrics(
             follow_result, current_model, session_turns, model=getattr(agent, "model", None)
         )
+        if turn_interfaces is not None:
+            turn_interfaces.append(turn_interface)
         if usage is not None:
             print_plain(console, usage, style="dim")
+        print_plain(console, codeact_label(turn_interface), style="dim")
         text = _result_text(agent, follow_result)
 
 
@@ -2070,6 +2081,7 @@ def run_loop(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
+    interface = CodeactState()
     try:
         _boot_strategy = routing_mod.load_strategy()
     except ValueError as exc:
@@ -2115,6 +2127,10 @@ def run_loop(
             style="yellow",
         )
     session_turns: list = []
+    # Per-turn interface record (D-15) parallel to session_turns —
+    # the cost rows keep their shape (D-16), so the interface lives
+    # here, never as a rendered column.
+    turn_interfaces: list = []
     routing_events: list = []
     stash_path = rich_stash_path(index.root, session_id)
     rich = RichHistory.load(stash_path)
@@ -2203,6 +2219,7 @@ def run_loop(
                 init=init_state,
                 routing=routing,
                 routing_events=routing_events,
+                interface=interface,
             )
         if action == "agent":
             match_note = skill_match_note(skills, text)
@@ -2273,6 +2290,9 @@ def run_loop(
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
                     agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
+                # Fix-at-send (D-14/D-19): later /codeact flips wait for the next ask.
+                turn_interface = resolve_turn_interface(interface.interface)
+                agent_text = shape_turn_text(turn_interface, agent_text)
                 current_model = _route_pre_turn(
                     agent,
                     current_model=current_model,
@@ -2340,8 +2360,10 @@ def run_loop(
                     usage = record_turn_metrics(
                         result, current_model, session_turns, model=getattr(agent, "model", None)
                     )
+                    turn_interfaces.append(turn_interface)
                     if usage is not None:
                         print_plain(console, usage, style="dim")
+                    print_plain(console, codeact_label(turn_interface), style="dim")
                     history = getattr(agent, "messages", None)
                     if (
                         attempts >= 2
@@ -2370,6 +2392,8 @@ def run_loop(
                         session_turns,
                         current_model,
                         mode,
+                        turn_interface=turn_interface,
+                        turn_interfaces=turn_interfaces,
                     )
                 if init_state.armed:
                     init_reply = consume_init_turn(

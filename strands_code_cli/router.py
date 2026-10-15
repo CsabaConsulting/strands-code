@@ -45,6 +45,7 @@ from strands_code_cli.output import print_plain
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
 if TYPE_CHECKING:
+    from strands_code_cli.codeact import CodeactState
     from strands_code_cli.routing import RoutingState
     from strands_code_cli.skills import SkillIndex
 
@@ -54,6 +55,7 @@ USAGE_HINT = (
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
     "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
     "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup|validate], "
+    "/codeact [tool|code|both], "
     "/skills|/skill [show <name>|remove <name>|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
@@ -121,6 +123,7 @@ def dispatch(
     init: InitState | None = None,
     routing: RoutingState | None = None,
     routing_events: list | None = None,
+    interface: CodeactState | None = None,
 ) -> tuple[str, str | None]:
     """Route one REPL line: slash commands handled, anything else is an agent turn.
 
@@ -163,6 +166,9 @@ def dispatch(
         routing_events: Session routing event records accumulated by
             the loop for the /cost Routing section (None → the
             pre-routing report, keeping existing callers untouched).
+        interface: Session-sticky action-interface holder backing
+            /codeact (None → throwaway tool holder, keeping
+            standalone/test behaviour without a loop-owned holder).
 
     Returns:
         ``(action, message)`` where action is ``"agent"`` (caller runs the
@@ -228,6 +234,10 @@ def dispatch(
         # Before the skills-dynamic branch so the builtin always wins
         # the name (a skill named route stays shadowed).
         return ("reply", _route_message(rest, routing))
+    if cmd == "/codeact":
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named codeact stays shadowed).
+        return ("reply", _codeact_message(rest, interface))
     if skills is not None:
         entry = skills.resolve(head[1:])
         if entry is not None and not entry.shadowed:
@@ -1346,6 +1356,30 @@ def _mode_message(rest: str, mode: ModeState | None) -> str:
     if verb in ("plan", "act"):
         return holder.set(verb)
     return _MODE_USAGE
+
+
+def _codeact_holder(codeact: CodeactState | None) -> CodeactState:
+    """Loop-owned holder when present, else a throwaway tool default."""
+    from strands_code_cli.codeact import CodeactState
+
+    return codeact if codeact is not None else CodeactState()
+
+
+def _codeact_message(rest: str, codeact: CodeactState | None) -> str:
+    """Handle /codeact: report, switch with announcement, or usage — replies only.
+
+    No agent turn ever leaves this branch; approval prompts never live
+    here (established reply-only pattern).
+    """
+    from strands_code_cli.codeact import CODEACT_USAGE
+
+    holder = _codeact_holder(codeact)
+    verb = rest.strip().lower()
+    if not verb:
+        return holder.announce()
+    if verb in ("tool", "code", "both"):
+        return holder.set(verb)
+    return CODEACT_USAGE
 
 
 def _memory_mode_holder(memory_mode: MemoryModeState | None) -> MemoryModeState:
