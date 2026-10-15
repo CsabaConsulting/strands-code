@@ -15,6 +15,17 @@ never policy-rule words, never ``/diff`` mode terms.
 
 from __future__ import annotations
 
+import functools
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from strands_code_agent.python_environments.base import STDERR_LABEL, STDOUT_LABEL
+from strands_code_agent.python_environments.local_sandboxed import (
+    SandboxedPythonInterpreter,
+)
+from strands_code_cli.scope import confine, resolve
+
 CODEACT_PREFIX = """You are in CodeAct mode: solve this turn by generating Python first.
 
 Do the work with Python code executed through the python_repl tool.
@@ -103,6 +114,186 @@ def codeact_label(turn_interface: str) -> str:
     if turn_interface == "code":
         return "interface: codeact"
     return "interface: tool"
+
+
+CODEACT_AUTHORIZED_IMPORTS = frozenset({"math"})
+"""Stint import allowlist (D-10): capabilities ride narrow functions, never imports."""
+
+CODEACT_TIMEOUT_SECONDS = 60
+"""Stint interpreter timeout (D-12 library default; no new setting)."""
+
+CODEACT_SHELL_TIMEOUT_SECONDS = 60
+"""Interior shell timeout, matching the interpreter bound (D-12)."""
+
+
+def codeact_read(cwd: str | Path, path: str) -> str:
+    """Read one in-scope file; missing files report, never raise.
+
+    Args:
+        cwd: The REPL working directory the stint was bound to.
+        path: Caller-supplied path (relative resolves against ``cwd``).
+
+    Returns:
+        The file text, a not-found note, or the confine refusal —
+        interior functions return error strings, never raise into
+        the executor.
+    """
+    try:
+        target = confine(resolve(path, cwd), cwd)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        return target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return f"File not found: {path}"
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"Could not read {path}: {exc}"
+
+
+def codeact_write(cwd: str | Path, path: str, content: str) -> str:
+    """Write one in-scope file, creating parents; reports, never raises.
+
+    Args:
+        cwd: The REPL working directory the stint was bound to.
+        path: Caller-supplied path (relative resolves against ``cwd``).
+        content: Full replacement text for the file.
+
+    Returns:
+        A confirmation naming the path, or the confine refusal.
+    """
+    try:
+        target = confine(resolve(path, cwd), cwd)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    except (OSError, UnicodeEncodeError) as exc:
+        return f"Could not write {path}: {exc}"
+    return f"Wrote {target}"
+
+
+def codeact_edit(cwd: str | Path, path: str, old: str, new: str) -> str:
+    """Replace the first ``old`` with ``new`` in one in-scope file.
+
+    Args:
+        cwd: The REPL working directory the stint was bound to.
+        path: Caller-supplied path (relative resolves against ``cwd``).
+        old: The text to find (first occurrence only).
+        new: The replacement text.
+
+    Returns:
+        A confirmation, an absent-match note, a not-found note, or
+        the confine refusal — never raises into the executor.
+    """
+    try:
+        target = confine(resolve(path, cwd), cwd)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return f"File not found: {path}"
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"Could not read {path}: {exc}"
+    if old not in text:
+        return f"No match for {old!r} in {path}"
+    try:
+        target.write_text(text.replace(old, new, 1), encoding="utf-8")
+    except (OSError, UnicodeEncodeError) as exc:
+        return f"Could not write {path}: {exc}"
+    return f"Edited {target}"
+
+
+def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
+    """Run one argv command under ``cwd``; no shell, labeled output.
+
+    Args:
+        cwd: The REPL working directory the stint was bound to.
+        argv: Argument vector (a bare string is refused — argv only).
+
+    Returns:
+        Labeled stdout/stderr text with the exit code when nonzero,
+        or an error note — never raises into the executor.
+    """
+    if isinstance(argv, str) or not isinstance(argv, (list, tuple)):
+        return "shell expects an argv list, e.g. shell(['ls'])"
+    if not argv:
+        return "shell expects a non-empty argv list"
+    try:
+        proc = subprocess.run(
+            list(argv),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=CODEACT_SHELL_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        return f"Command not found: {argv[0]}"
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after {CODEACT_SHELL_TIMEOUT_SECONDS}s"
+    except OSError as exc:
+        return f"shell failed: {exc}"
+    parts = []
+    if proc.stdout:
+        parts.append(f"{STDOUT_LABEL}{proc.stdout.rstrip()}")
+    if proc.stderr:
+        parts.append(f"{STDERR_LABEL}{proc.stderr.rstrip()}")
+    if proc.returncode != 0:
+        parts.append(f"exit code: {proc.returncode}")
+    return "\n".join(parts) if parts else "Command ran with no output."
+
+
+class CodeactStint:
+    """One CodeAct stint: a loop-owned sandboxed interpreter (D-10/D-11).
+
+    Lazily builds a single :class:`SandboxedPythonInterpreter` whose
+    ``additional_functions`` carry the sync scope-confined
+    ``read``/``write``/``edit``/``shell`` callables (D-09). REPL state
+    persists across code turns within the stint (D-11); the loop calls
+    :meth:`reset` on every interface switch (D-17). The stint
+    interpreter is separate from the always-on tool-turn REPL, so
+    tool turns never observe stint state.
+
+    Args:
+        cwd: The REPL working directory interior functions confine to.
+    """
+
+    def __init__(self, cwd: str | Path) -> None:
+        self._cwd = Path(cwd)
+        self._interpreter: SandboxedPythonInterpreter | None = None
+        self._tool: Any | None = None
+
+    def _ensure(self) -> SandboxedPythonInterpreter:
+        if self._interpreter is None:
+            self._interpreter = SandboxedPythonInterpreter(
+                "",
+                authorized_imports=CODEACT_AUTHORIZED_IMPORTS,
+                additional_functions={
+                    "read": functools.partial(codeact_read, self._cwd),
+                    "write": functools.partial(codeact_write, self._cwd),
+                    "edit": functools.partial(codeact_edit, self._cwd),
+                    "shell": functools.partial(codeact_shell, self._cwd),
+                },
+                timeout_seconds=CODEACT_TIMEOUT_SECONDS,
+            )
+        return self._interpreter
+
+    def execute_code(self, code: str) -> tuple[str, str]:
+        """Run one code block in the stint REPL (builds it on first use)."""
+        return self._ensure().execute_code(code)
+
+    def reset(self) -> None:
+        """Clear stint REPL state; a never-built stint stays unbuilt."""
+        if self._interpreter is not None:
+            self._interpreter.clear_state()
+
+    @property
+    def tool(self) -> Any:
+        """The stint ``python_repl`` tool, built once (for per-turn swap)."""
+        if self._tool is None:
+            self._tool = self._ensure().get_tool()
+        return self._tool
 
 
 def resolve_initial_interface(

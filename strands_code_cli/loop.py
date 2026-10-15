@@ -38,6 +38,7 @@ from strands_code_cli.btw import (
 from strands_code_cli.choice import radio_choice
 from strands_code_cli.codeact import (
     CodeactState,
+    CodeactStint,
     codeact_label,
     resolve_initial_interface,
     resolve_turn_interface,
@@ -2094,6 +2095,10 @@ def run_loop(
             codeact, _codeact_saved.codeact, _codeact_saved.codeact_remember
         )
     )
+    # Loop-owned CodeAct stint (D-10/D-11): REPL state persists across
+    # code turns within the stint and resets on every interface switch
+    # (D-17) at the post-dispatch hook below. Built lazily on first use.
+    stint = CodeactStint(cwd=os.getcwd())
     try:
         _boot_strategy = routing_mod.load_strategy()
     except ValueError as exc:
@@ -2239,6 +2244,8 @@ def run_loop(
                     ProviderConfig.load().save_codeact_choice(interface.interface)
                 except ValueError as exc:
                     logger.warning("CodeAct choice not persisted: %s", exc)
+                # D-17: each CodeAct stint starts fresh on every switch.
+                stint.reset()
         if action == "agent":
             match_note = skill_match_note(skills, text)
             if match_note is not None:

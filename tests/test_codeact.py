@@ -529,3 +529,223 @@ class TestCodeactStartupPersist:
         source = _loop_source()
         assert "codeact_before = interface.interface" in source
         assert "save_codeact_choice(interface.interface)" in source
+
+
+def _codeact_source() -> str:
+    return (
+        Path(__file__).resolve().parent.parent / "strands_code_cli" / "codeact.py"
+    ).read_text(encoding="utf-8")
+
+
+# ----------------------------------------------------------------------
+# Stint lifecycle + sync interior file/shell functions (11-02 task 1)
+# ----------------------------------------------------------------------
+
+
+class TestCodeactStintLifecycle:
+    def test_lazy_until_first_use(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        assert stint._interpreter is None
+        stint.reset()  # a never-built stint stays unbuilt, no error
+        assert stint._interpreter is None
+
+    def test_bare_name_write_then_read_back(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stdout, stderr = stint.execute_code("write('n.txt','hi')")
+        assert stderr == ""
+        assert (tmp_path / "n.txt").read_text(encoding="utf-8") == "hi"
+        stdout, stderr = stint.execute_code("print(read('n.txt'))")
+        assert stderr == ""
+        assert "hi" in stdout
+
+    def test_write_confirms_naming_path(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stdout, _ = stint.execute_code("print(write('sub/n.txt','hi'))")
+        assert "n.txt" in stdout
+        assert (tmp_path / "sub" / "n.txt").read_text(encoding="utf-8") == "hi"
+
+    def test_state_persists_across_calls(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stint.execute_code("stint_var = 41")
+        stdout, stderr = stint.execute_code("print(stint_var + 1)")
+        assert stderr == ""
+        assert "42" in stdout
+
+    def test_reset_clears_stint_state(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stint.execute_code("stint_var = 41")
+        stint.reset()
+        _, stderr = stint.execute_code("print(stint_var)")
+        assert "not defined" in stderr
+
+    def test_reset_keeps_bare_names_usable(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stint.execute_code("write('n.txt','hi')")
+        stint.reset()
+        stdout, stderr = stint.execute_code("print(read('n.txt'))")
+        assert stderr == ""
+        assert "hi" in stdout
+
+    def test_os_import_fails_closed(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        _, stderr = stint.execute_code("import os")
+        assert "not allowed" in stderr
+
+    def test_subprocess_import_fails_closed(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        _, stderr = stint.execute_code("import subprocess")
+        assert "not allowed" in stderr
+
+    def test_math_import_works(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stdout, stderr = stint.execute_code("import math\nprint(math.floor(3.7))")
+        assert stderr == ""
+        assert "3" in stdout
+
+    def test_allowlist_pinned_to_math(self, tmp_path):
+        from strands_code_cli.codeact import CODEACT_AUTHORIZED_IMPORTS, CodeactStint
+
+        assert CODEACT_AUTHORIZED_IMPORTS == frozenset({"math"})
+        stint = CodeactStint(cwd=tmp_path)
+        stint.execute_code("pass")
+        assert stint._interpreter is not None
+        assert stint._interpreter.authorized_imports == frozenset({"math"})
+        assert stint._interpreter.timeout_seconds == 60
+
+    def test_tool_property_built_once(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        first = stint.tool
+        assert first.tool_name == "python_repl"
+        assert stint.tool is first
+
+    def test_out_of_scope_write_returns_refusal(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stdout, stderr = stint.execute_code(
+            "print(write('/definitely-outside-scope-x/n.txt','hi'))"
+        )
+        assert stderr == ""
+        assert "outside the allowed roots" in stdout
+
+    def test_shell_runs_argv(self, tmp_path):
+        from strands_code_cli.codeact import CodeactStint
+
+        stint = CodeactStint(cwd=tmp_path)
+        stdout, stderr = stint.execute_code("print(shell(['echo','hi']))")
+        assert stderr == ""
+        assert "hi" in stdout
+
+    def test_no_shell_true_in_module(self):
+        assert "shell=True" not in _codeact_source()
+
+    def test_no_prompt_dialog_stdin_on_execution_path(self):
+        source = _codeact_source().lower()
+        for symbol in ("prompt", "dialog", "stdin"):
+            assert symbol not in source
+
+    def test_loop_owns_stint_and_resets_on_switch(self):
+        source = _loop_source()
+        assert "CodeactStint(cwd=" in source
+        assert "stint.reset()" in source
+
+
+class TestCodeactInteriorFunctions:
+    def test_read_missing_returns_not_found(self, tmp_path):
+        from strands_code_cli.codeact import codeact_read
+
+        assert "not found" in codeact_read(tmp_path, "missing.txt").lower()
+
+    def test_read_out_of_scope_returns_refusal(self, tmp_path):
+        from strands_code_cli.codeact import codeact_read
+
+        result = codeact_read(tmp_path, "/definitely-outside-scope-x/n.txt")
+        assert "outside the allowed roots" in result
+
+    def test_write_creates_parents_and_confirms(self, tmp_path):
+        from strands_code_cli.codeact import codeact_write
+
+        result = codeact_write(tmp_path, "a/b/n.txt", "hi")
+        assert "n.txt" in result
+        assert (tmp_path / "a" / "b" / "n.txt").read_text(encoding="utf-8") == "hi"
+
+    def test_edit_replaces_first_occurrence_only(self, tmp_path):
+        from strands_code_cli.codeact import codeact_edit, codeact_write
+
+        codeact_write(tmp_path, "n.txt", "aa bb aa")
+        result = codeact_edit(tmp_path, "n.txt", "aa", "zz")
+        assert "n.txt" in result
+        assert (tmp_path / "n.txt").read_text(encoding="utf-8") == "zz bb aa"
+
+    def test_edit_absent_match_reports(self, tmp_path):
+        from strands_code_cli.codeact import codeact_edit, codeact_write
+
+        codeact_write(tmp_path, "n.txt", "hi")
+        result = codeact_edit(tmp_path, "n.txt", "zzz", "yy")
+        assert "No match" in result
+        assert (tmp_path / "n.txt").read_text(encoding="utf-8") == "hi"
+
+    def test_edit_missing_file_reports(self, tmp_path):
+        from strands_code_cli.codeact import codeact_edit
+
+        assert "not found" in codeact_edit(tmp_path, "missing.txt", "a", "b").lower()
+
+    def test_interior_functions_never_raise(self, tmp_path):
+        from strands_code_cli.codeact import (
+            codeact_edit,
+            codeact_read,
+            codeact_shell,
+            codeact_write,
+        )
+
+        # Every out-of-scope / malformed call returns a string, never raises.
+        assert isinstance(codeact_read(tmp_path, "/nope-x/n.txt"), str)
+        assert isinstance(codeact_write(tmp_path, "/nope-x/n.txt", "x"), str)
+        assert isinstance(codeact_edit(tmp_path, "/nope-x/n.txt", "a", "b"), str)
+        assert isinstance(codeact_shell(tmp_path, "echo hi"), str)  # type: ignore[arg-type]
+        assert isinstance(codeact_shell(tmp_path, []), str)
+
+    def test_shell_string_refused(self, tmp_path):
+        from strands_code_cli.codeact import codeact_shell
+
+        assert "argv list" in codeact_shell(tmp_path, "echo hi")  # type: ignore[arg-type]
+
+    def test_shell_labels_stdout_and_stderr(self, tmp_path):
+        from strands_code_cli.codeact import codeact_shell
+
+        result = codeact_shell(tmp_path, ["echo", "hi"])
+        assert "STDOUT:" in result
+        assert "hi" in result
+
+    def test_shell_missing_command_reports(self, tmp_path):
+        from strands_code_cli.codeact import codeact_shell
+
+        result = codeact_shell(tmp_path, ["codeact-no-such-cmd-xyz"])
+        assert "not found" in result.lower()
+
+    def test_shell_runs_under_stint_cwd(self, tmp_path):
+        from strands_code_cli.codeact import codeact_shell
+
+        (tmp_path / "marker.txt").write_text("m", encoding="utf-8")
+        result = codeact_shell(tmp_path, ["ls", "marker.txt"])
+        assert "marker.txt" in result
