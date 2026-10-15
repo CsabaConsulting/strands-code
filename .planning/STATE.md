@@ -3,12 +3,13 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 11
 current_phase_name: CodeAct Action Interface
+current_plan: 2
 status: executing
-stopped_at: Phase 11 context gathered
-last_updated: "2026-10-15T21:54:00.915Z"
-last_activity: 2026-10-13
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-10-15T22:08:46.476Z"
+last_activity: 2026-10-15
 last_activity_desc: Transitioned to Phase 11
-state_head: d2af136144d743e9b6ab52f627662268f1aa10ae
+state_head: 2bac598a83d27d1e227bbb788a0ed114810644e3
 progress:
   total_phases: 11
   completed_phases: 10
@@ -27,10 +28,11 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 
 ## Current Position
 
-Phase: 11 (CodeAct Action Interface) — READY TO EXECUTE
-Plan: 0 of TBD
+Phase: 11 (CodeAct Action Interface) — EXECUTING
+Current Plan: 2
+Total Plans in Phase: 3
 Status: Ready to execute
-Last activity: 2026-10-13 — Phase 10 fully gated (UAT 18/18, secure 0 open, validate Nyquist), transitioned to Phase 11
+Last activity: 2026-10-15 — 11-01 tracer complete (/codeact toggle + shaped code turn + startup surfaces)
 
 Progress: [█████████░] 91%
 
@@ -93,6 +95,7 @@ Progress: [█████████░] 91%
 | Phase 10 P03 | 7min | 3 tasks | 6 files |
 | Phase 10 P04 | 4min | 3 tasks | 3 files |
 | Phase 10 P05 | 7min | 3 tasks | 3 files |
+| Phase 11 P01 | 11 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -169,6 +172,10 @@ Recent decisions affecting current work:
 - [Phase 10]: Re-wrap unconditionally resets _reported_costs to [] (supersedes the 10-01 preserve-on-rewrap decision per D-09) — Absent/None/empty/non-empty converge on one outcome; costs gathered without per-turn drain discipline belong to no single turn, so discarding once prevents misattribution
 - [Phase 10]: Nested-model fallback in _drain_reported_cost drains agent.model when the passed object lacks take_reported_costs — Keeps agent-shaped callers draining even if a future site passes the Agent again; fail-soft try/except still returns None on drain errors
 - [Phase 10]: Single-inheritance ReportedCostModel(base) with capture methods defined directly (mixin removed) — CPython rejects in-place promotion to a multi-inheritance subclass on the slotted SDK chain; closes UAT G-10-1/G-10-3 with the keyed live proof and c1 rig C1 PASS as evidence
+- [Phase 11]: Turn-setup lives in testable codeact.py seams (resolve_turn_interface, shape_turn_text, codeact_label); loop.py calls them at the mode/routing hook site — The plan's turn_setup/label/tracer tests are untestable against loop-inline code, so the seams carry the behavior and the loop holds thin glue
+- [Phase 11]: Both-holder turns resolve to tool-shaped until per-ask routing lands in 11-02 — Plan shapes only code turns with the prefix; both stays a legal holder value with tool behavior pinned by test
+- [Phase 11]: Remember-last gates the read path only; every /codeact switch persists the last choice unconditionally — Plan persist step has no gating condition; unconditional persist keeps the saved value fresh for a later remember opt-in
+- [Phase 11]: Run-loop codeact config read stays fail-loud like the model line; load/save validation is the boundary — Config-file errors are already fatal at startup; a guarded read here would still crash one line later at the unguarded model read
 
 ### Pending Todos
 
@@ -200,6 +207,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-15T21:32:45.230Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-codeact-action-interface/11-CONTEXT.md
+Last session: 2026-10-15T22:08:46.341Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: None

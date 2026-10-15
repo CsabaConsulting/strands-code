@@ -280,7 +280,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 11-01-PLAN.md — Tracer: toggle plus shaped code turn end to end
+- [x] 11-01-PLAN.md — Tracer: toggle plus shaped code turn end to end
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -307,7 +307,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
 | 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
 | 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
-| 11. CodeAct Action Interface | 0/TBD | In Progress |  |
+| 11. CodeAct Action Interface | 1/3 | In Progress|  |
 
 ## Future (post-v1)
 
