@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -466,7 +467,10 @@ class TestCodeactStartupFlag:
         ):
             result = self._invoke(main_module, ["--codeact", bad])
         assert result.exit_code != 0
-        assert "codeact" in result.output.lower()
+        # Strip ANSI: typer's OptionHighlighter emits mid-word style spans
+        # when color is forced (GITHUB_ACTIONS); assert on text, not styling.
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "codeact" in plain.lower()
         assert not Path(".agent").exists()
 
     def test_bare_flag_at_end_implies_code(self):

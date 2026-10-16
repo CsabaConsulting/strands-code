@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -412,7 +413,10 @@ class TestCliRouting:
 
         result = CliRunner().invoke(main_module.app, ["--session-id", "../../x"])
         assert result.exit_code != 0
-        assert "session-id" in result.output.lower()
+        # Strip ANSI: typer's OptionHighlighter emits mid-word style spans
+        # when color is forced (GITHUB_ACTIONS), splitting "session-id".
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "session-id" in plain.lower()
         assert not Path(".agent").exists()
 
 

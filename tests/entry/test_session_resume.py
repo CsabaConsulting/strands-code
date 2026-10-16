@@ -139,7 +139,10 @@ class TestEntryRouting:
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["--session-id", "../../x"])
         assert result.exit_code != 0
-        assert "session-id" in result.output.lower()
+        # Strip ANSI: typer's OptionHighlighter emits mid-word style spans
+        # when color is forced (GITHUB_ACTIONS), splitting "session-id".
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "session-id" in plain.lower()
 
     def test_invalid_session_id_creates_no_session_dir(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
