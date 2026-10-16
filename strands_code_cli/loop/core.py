@@ -1178,6 +1178,224 @@ def _record_routing_event(
     )
 
 
+def _emit_chain_skip_notes(strategy: routing_mod.RoutingStrategy) -> None:
+    """Print each listed-but-keyless engine note once per session (D-03).
+
+    The ``skip_notes`` knob alone governs: notes print even under
+    ``quiet``. Already-emitted notes stay silent.
+    """
+    if strategy.engine.skip_notes:
+        for note in routing_mod.chain_skip_notes(strategy):
+            if note not in _emitted_chain_skip_notes:
+                _emitted_chain_skip_notes.add(note)
+                print_plain(console, note)
+
+
+def _decide_routed_pick(
+    strategy: routing_mod.RoutingStrategy,
+    current_model: str,
+    ask_text: str,
+    routing: routing_mod.RoutingState | None,
+    routing_events: list | None,
+) -> tuple[routing_mod.RoutingPick | None, str, tuple[int, int, float | None], str]:
+    """Run the routing decision, holding current on any failure (D-08).
+
+    A decide exception or a None pick records a held event and prints
+    the hold note; a pause-detail pick also pauses routing for the
+    turn. History is untouched on every hold path.
+
+    Returns:
+        The ``(pick, engine, usage, detail)`` tuple; ``pick`` is None
+        exactly when the ask held.
+    """
+    try:
+        pick, engine, usage, detail = routing_mod.decide(
+            strategy, current_model=current_model, side=False, ask=ask_text
+        )
+    except Exception as exc:  # noqa: BLE001 — pricing/validation failure holds, never kills
+        logger.warning("Routing decision failed (%s); holding %s", exc, current_model)
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+            engine="decide",
+            decision_engine="decide",
+            usage=(0, 0, None),
+            held=True,
+        )
+        print_plain(
+            console,
+            routing_mod.format_hold_line(current=current_model, detail="decide failed"),
+        )
+        return None, "decide", (0, 0, None), "decide failed"
+    if pick is None:
+        if routing is not None and routing_mod.is_pause_detail(detail):
+            routing.pause()
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+            engine=engine,
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
+        print_plain(
+            console, routing_mod.format_hold_line(current=current_model, detail=detail)
+        )
+        return None, engine, usage, detail
+    return pick, engine, usage, detail
+
+
+def _apply_routed_pick(
+    agent: Any,
+    pick: routing_mod.RoutingPick,
+    strategy: routing_mod.RoutingStrategy,
+    current_model: str,
+    rich: RichHistory | None,
+    index: SessionIndex,
+    session_id: str,
+    stash_path: Path | None,
+    engine: str,
+    usage: tuple[int, int, float | None],
+    routing_events: list | None,
+) -> str:
+    """Validate and apply a cross-model routed pick; holds stay on current.
+
+    A gated pick validates its routed effort, then applies through
+    :func:`apply_model_action` with the same persistence as the
+    model-action site (FENCE: in memory only, never the global
+    default). Any gate or resolve failure holds current with history
+    untouched and prints the hold note.
+
+    Returns:
+        The picked model id when applied, else ``current_model``.
+    """
+    try:
+        effort_ok = routing_mod.validate_routed_effort(pick, strategy.candidates)
+    except Exception as exc:  # noqa: BLE001 — gate failure holds, never kills
+        logger.warning("Routed effort gate failed (%s); holding %s", exc, current_model)
+        effort_ok = False
+    if not effort_ok:
+        logger.warning(
+            "Routed effort %r unsupported by %s; holding %s",
+            pick.effort,
+            pick.model,
+            current_model,
+        )
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+            engine=engine,
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
+        print_plain(
+            console,
+            routing_mod.format_hold_line(
+                current=current_model,
+                detail=f"effort {pick.effort!r} unsupported by {pick.model}",
+            ),
+        )
+        return current_model
+    try:
+        resolved_id, _reply = apply_model_action(
+            agent,
+            pick.model,
+            turn_running=False,
+            current_model=current_model,
+            rich=rich,
+            effort=pick.effort,
+        )
+    except Exception as exc:  # noqa: BLE001 — switch-first: history untouched
+        logger.warning("Routed switch failed (%s); holding %s", exc, current_model)
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=current_model,
+            effort="",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+            engine="resolve",
+            decision_engine=engine,
+            usage=usage,
+            held=True,
+        )
+        print_plain(
+            console,
+            routing_mod.format_hold_line(
+                current=current_model, detail="resolve failed"
+            ),
+        )
+        return current_model
+    if resolved_id is not None:
+        # FENCE (G-08-1): routed picks apply in memory only and
+        # never persist the global default (routing re-decides
+        # every ask; only explicit /model choices persist).
+        current_model = pick.model
+        explicit_save(agent)
+        index.ensure(session_id)
+        if rich is not None and stash_path is not None:
+            rich.save(stash_path)
+        if not supports_streaming_tools(pick.model):
+            print_plain(
+                console,
+                f"Warning: {pick.model} rejects tool use in streaming "
+                "mode — turns will fail; /model to switch.",
+                style="yellow",
+            )
+    return current_model
+
+
+def _print_routed_note(
+    strategy: routing_mod.RoutingStrategy,
+    pick: routing_mod.RoutingPick,
+    detail: str,
+    prev_model: str,
+    ask_text: str,
+) -> None:
+    """Print the one routed-ask transcript line (suppressed under quiet).
+
+    A failed note is logged with the switch standing — it must never
+    kill the turn.
+    """
+    if not strategy.quiet:
+        try:
+            routed_line = routing_mod.format_routed_line(
+                model=pick.model,
+                effort=pick.effort,
+                model_confidence=pick.model_confidence,
+                effort_confidence=pick.effort_confidence,
+                tie_break=pick.tie_break,
+                truncated=routing_mod.TRUNCATION_MARKER in detail,
+                prev_model=prev_model,
+                ask=ask_text,
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed note must not kill the turn
+            logger.warning("Routed note failed (%s); switch stands", exc)
+        else:
+            print_plain(console, routed_line, style="dim")
+
+
 def _route_pre_turn(
     agent: Any,
     *,
@@ -1222,145 +1440,29 @@ def _route_pre_turn(
         return current_model
     if strategy is None or not strategy.candidates:
         return current_model
-    if strategy.engine.skip_notes:
-        for note in routing_mod.chain_skip_notes(strategy):
-            if note not in _emitted_chain_skip_notes:
-                _emitted_chain_skip_notes.add(note)
-                print_plain(console, note)
+    _emit_chain_skip_notes(strategy)
     if routing is not None:
         routing.resume()  # a new ask attempts fresh; pause covers one ask
-    try:
-        pick, engine, usage, detail = routing_mod.decide(
-            strategy, current_model=current_model, side=False, ask=ask_text
-        )
-    except Exception as exc:  # noqa: BLE001 — pricing/validation failure holds, never kills
-        logger.warning("Routing decision failed (%s); holding %s", exc, current_model)
-        _record_routing_event(
-            routing_events,
-            strategy=strategy,
-            side=False,
-            model=current_model,
-            effort="",
-            model_confidence=None,
-            effort_confidence=None,
-            tie_break=False,
-            engine="decide",
-            decision_engine="decide",
-            usage=(0, 0, None),
-            held=True,
-        )
-        print_plain(
-            console,
-            routing_mod.format_hold_line(current=current_model, detail="decide failed"),
-        )
-        return current_model
+    pick, engine, usage, detail = _decide_routed_pick(
+        strategy, current_model, ask_text, routing, routing_events
+    )
     if pick is None:
-        if routing is not None and routing_mod.is_pause_detail(detail):
-            routing.pause()
-        _record_routing_event(
-            routing_events,
-            strategy=strategy,
-            side=False,
-            model=current_model,
-            effort="",
-            model_confidence=None,
-            effort_confidence=None,
-            tie_break=False,
-            engine=engine,
-            decision_engine=engine,
-            usage=usage,
-            held=True,
-        )
-        print_plain(
-            console, routing_mod.format_hold_line(current=current_model, detail=detail)
-        )
         return current_model
     prev_model = current_model
     if pick.model != current_model:
-        try:
-            effort_ok = routing_mod.validate_routed_effort(pick, strategy.candidates)
-        except Exception as exc:  # noqa: BLE001 — gate failure holds, never kills
-            logger.warning(
-                "Routed effort gate failed (%s); holding %s", exc, current_model
-            )
-            effort_ok = False
-        if not effort_ok:
-            logger.warning(
-                "Routed effort %r unsupported by %s; holding %s",
-                pick.effort,
-                pick.model,
-                current_model,
-            )
-            _record_routing_event(
-                routing_events,
-                strategy=strategy,
-                side=False,
-                model=current_model,
-                effort="",
-                model_confidence=None,
-                effort_confidence=None,
-                tie_break=False,
-                engine=engine,
-                decision_engine=engine,
-                usage=usage,
-                held=True,
-            )
-            print_plain(
-                console,
-                routing_mod.format_hold_line(
-                    current=current_model,
-                    detail=f"effort {pick.effort!r} unsupported by {pick.model}",
-                ),
-            )
-            return current_model
-        try:
-            resolved_id, _reply = apply_model_action(
-                agent,
-                pick.model,
-                turn_running=False,
-                current_model=current_model,
-                rich=rich,
-                effort=pick.effort,
-            )
-        except Exception as exc:  # noqa: BLE001 — switch-first: history untouched
-            logger.warning("Routed switch failed (%s); holding %s", exc, current_model)
-            _record_routing_event(
-                routing_events,
-                strategy=strategy,
-                side=False,
-                model=current_model,
-                effort="",
-                model_confidence=None,
-                effort_confidence=None,
-                tie_break=False,
-                engine="resolve",
-                decision_engine=engine,
-                usage=usage,
-                held=True,
-            )
-            print_plain(
-                console,
-                routing_mod.format_hold_line(
-                    current=current_model, detail="resolve failed"
-                ),
-            )
-            return current_model
-        if resolved_id is not None:
-            # FENCE (G-08-1): routed picks apply in memory only and
-            # never persist the global default (routing re-decides
-            # every ask; only explicit /model choices persist).
-            current_model = pick.model
-            explicit_save(agent)
-            index.ensure(session_id)
-            if rich is not None and stash_path is not None:
-                rich.save(stash_path)
-            if not supports_streaming_tools(pick.model):
-                print_plain(
-                    console,
-                    f"Warning: {pick.model} rejects tool use in streaming "
-                    "mode — turns will fail; /model to switch.",
-                    style="yellow",
-                )
+        current_model = _apply_routed_pick(
+            agent,
+            pick,
+            strategy,
+            current_model,
+            rich,
+            index,
+            session_id,
+            stash_path,
+            engine,
+            usage,
+            routing_events,
+        )
     _record_routing_event(
         routing_events,
         strategy=strategy,
@@ -1375,22 +1477,7 @@ def _route_pre_turn(
         usage=usage,
         held=False,
     )
-    if not strategy.quiet:
-        try:
-            routed_line = routing_mod.format_routed_line(
-                model=pick.model,
-                effort=pick.effort,
-                model_confidence=pick.model_confidence,
-                effort_confidence=pick.effort_confidence,
-                tie_break=pick.tie_break,
-                truncated=routing_mod.TRUNCATION_MARKER in detail,
-                prev_model=prev_model,
-                ask=ask_text,
-            )
-        except Exception as exc:  # noqa: BLE001 — a failed note must not kill the turn
-            logger.warning("Routed note failed (%s); switch stands", exc)
-        else:
-            print_plain(console, routed_line, style="dim")
+    _print_routed_note(strategy, pick, detail, prev_model, ask_text)
     return current_model
 
 
