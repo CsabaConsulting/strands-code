@@ -1994,6 +1994,227 @@ def _handle_reply_action(
         rich.save(stash_path)  # empty stash removes the sidecar
 
 
+def _install_turn_sigint_handler(
+    cancel_event: threading.Event, both_running: threading.Event | None
+) -> Any:
+    """Install the turn SIGINT handler on the main thread.
+
+    Returns:
+        The previous SIGINT disposition, or None off the main thread.
+    """
+    if threading.current_thread() is threading.main_thread():
+        prev_sigint = signal.getsignal(signal.SIGINT)
+        signal.signal(
+            signal.SIGINT,
+            _make_turn_sigint_handler(
+                cancel_event, prev_sigint, both_running=both_running
+            ),
+        )
+        return prev_sigint
+    return None
+
+
+def _compose_agent_text(message: str | None, text: str, mode: ModeState) -> str:
+    """Coalesce the composed message over raw text; plan mode prefixes read-only."""
+    agent_text = message if message is not None else text
+    if mode.mode == "plan":
+        agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
+    return agent_text
+
+
+def _announce_turn_usage(
+    btw: BtwContext,
+    result: Any,
+    current_model: str,
+    session_turns: list,
+    agent: Any,
+    turn_interface: str,
+    turn_interfaces: list,
+) -> None:
+    """Melt side-channel and main spend into the session total (D-15).
+
+    Each completed btw turn records through the shared row shape —
+    no btw-specific field, tag, or report branch. Consumed so an
+    empty-retry never re-records.
+    """
+    for _, _, btw_result, btw_reported in btw.pending:
+        btw_usage = record_turn_metrics(
+            btw_result,
+            current_model,
+            session_turns,
+            reported_cost=btw_reported,
+        )
+        if btw_usage is not None:
+            print_plain(console, btw_usage, style="dim")
+    btw.pending.clear()
+    usage = record_turn_metrics(
+        result,
+        current_model,
+        session_turns,
+        model=getattr(agent, "model", None),
+    )
+    turn_interfaces.append(turn_interface)
+    if usage is not None:
+        print_plain(console, usage, style="dim")
+    print_plain(console, codeact_label(turn_interface), style="dim")
+
+
+def _run_turn_attempts(
+    agent: Any,
+    agent_text: str,
+    turn_id: str,
+    cancel_event: threading.Event,
+    btw: BtwContext,
+    both_running: threading.Event | None,
+    side_pool: ThreadPoolExecutor,
+    current_model: str,
+    session_turns: list,
+    turn_interface: str,
+    turn_interfaces: list,
+) -> tuple[Any, bool, int, int]:
+    """Run one turn's invoke attempts with a single empty-output retry.
+
+    Provider/model errors fail the turn (reported, re-prompt) but
+    never the session — errors never retry, only empty success.
+    Cancels propagate to the turn handler.
+
+    Returns:
+        ``(result, failed, attempts, before)``: the agent result
+        (None when the turn failed), whether the turn failed, the
+        attempt count, and the pre-turn history length backing the
+        persistent-empty note.
+    """
+    history = getattr(agent, "messages", None)
+    before = len(history) if isinstance(history, list) else 0
+    attempts = 0
+    result = None
+    failed = False
+    while True:
+        attempts += 1
+        try:
+            result = _invoke_agent(
+                agent,
+                agent_text,
+                cancel_event,
+                btw=btw,
+                both_running=both_running,
+                side_pool=side_pool,
+            )
+        except (KeyboardInterrupt, TurnCancelled):
+            raise
+        except Exception as exc:
+            if worker_cancelled(exc):
+                raise KeyboardInterrupt from None
+            # Provider/model errors (validation, throttling, ...)
+            # must fail the turn, never the session: report and
+            # re-prompt. Errors never retry — only empty success.
+            print_plain(
+                console,
+                f"Turn failed ({type(exc).__name__}): {exc}",
+                style="red",
+            )
+            if "tool use in streaming mode" in str(exc):
+                console.print(
+                    "[red]This model needs non-streaming tool use — "
+                    "/model to switch to a supported model.[/red]"
+                )
+            failed = True
+            break
+        _announce_turn_usage(
+            btw,
+            result,
+            current_model,
+            session_turns,
+            agent,
+            turn_interface,
+            turn_interfaces,
+        )
+        history = getattr(agent, "messages", None)
+        if (
+            attempts >= 2
+            or not isinstance(history, list)
+            or not _turn_appended_empty(before, history)
+        ):
+            break
+        # Empty success: drop the no-op attempt so history shows
+        # the question once, then run it back exactly once.
+        del history[before:]
+        logger.info("Empty turn response; retrying once.")
+    return result, failed, attempts, before
+
+
+def _drop_armed_on_failure(revise_state: ReviseState, init_state: InitState) -> None:
+    """Drop armed revise/init rounds when the turn failed (fresh arm next turn)."""
+    if revise_state.armed:
+        revise_state.disarm()
+        console.print("Revise round dropped — the turn failed.")
+    if init_state.armed:
+        init_state.disarm()
+        console.print("Init draft dropped — the turn failed.")
+
+
+def _consume_followup_rounds(
+    agent: Any,
+    result: Any,
+    revise_state: ReviseState,
+    init_state: InitState,
+    curate_queue: CurateQueue,
+    cancel_event: threading.Event,
+    session_turns: list,
+    current_model: str,
+    mode: ModeState,
+    turn_interface: str,
+    turn_interfaces: list,
+) -> None:
+    """Drain armed revise/init follow-up rounds after a successful turn.
+
+    The revise drain keeps issue rounds until clean, exhausted, or
+    cancelled; the init consume prints the draft review.
+    """
+    if revise_state.armed:
+        _drain_revise_rounds(
+            agent,
+            result,
+            revise_state,
+            cancel_event,
+            session_turns,
+            current_model,
+            mode,
+            turn_interface=turn_interface,
+            turn_interfaces=turn_interfaces,
+        )
+    if init_state.armed:
+        init_reply = consume_init_turn(
+            _result_text(agent, result), init_state, curate_queue
+        )
+        console.print(init_reply)
+
+
+def _finish_successful_turn(
+    agent: Any,
+    current_model: str,
+    index: SessionIndex,
+    session_id: str,
+    before: int,
+    attempts: int,
+) -> None:
+    """Close a successful turn: persistent-empty note, auto-compact, save."""
+    history = getattr(agent, "messages", None)
+    if (
+        attempts == 2
+        and isinstance(history, list)
+        and _turn_appended_empty(before, history)
+    ):
+        console.print(
+            "[dim]No response content — the model returned empty twice.[/dim]"
+        )
+    announcement = maybe_auto_compact(agent, current_model)
+    if announcement is not None:
+        console.print(announcement)
+        explicit_save(agent)
+        index.ensure(session_id)
+
+
 def run_loop(
     agent: Any,
     *,
@@ -2259,16 +2480,8 @@ def run_loop(
         btw = btw_session
         reader = None
         cancelled = False
-        prev_sigint: Any = None
         swapped = False
-        if threading.current_thread() is threading.main_thread():
-            prev_sigint = signal.getsignal(signal.SIGINT)
-            signal.signal(
-                signal.SIGINT,
-                _make_turn_sigint_handler(
-                    cancel_event, prev_sigint, both_running=both_running
-                ),
-            )
+        prev_sigint = _install_turn_sigint_handler(cancel_event, both_running)
         try:
             with output_context():
                 bind_turn(turn_id)
@@ -2276,9 +2489,7 @@ def run_loop(
                 slot.state = steering
                 set_gate_mode(mode.mode)
                 reader = start_steering_reader(steering, gate_open, on_btw=btw.submit)
-                agent_text = message if message is not None else text
-                if mode.mode == "plan":
-                    agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
+                agent_text = _compose_agent_text(message, text, mode)
                 # Fix-at-send (D-14/D-19): later /codeact flips wait for the next ask.
                 # One armed /code or /tool override is consumed here, exactly
                 # once; otherwise the sticky holder value shapes the turn.
@@ -2307,116 +2518,38 @@ def run_loop(
                     routing=routing,
                     routing_events=routing_events,
                 )
-                history = getattr(agent, "messages", None)
-                before = len(history) if isinstance(history, list) else 0
-                attempts = 0
-                result = None
-                failed = False
-                while True:
-                    attempts += 1
-                    try:
-                        result = _invoke_agent(
-                            agent,
-                            agent_text,
-                            cancel_event,
-                            btw=btw,
-                            both_running=both_running,
-                            side_pool=side_pool,
-                        )
-                    except (KeyboardInterrupt, TurnCancelled):
-                        raise
-                    except Exception as exc:
-                        if worker_cancelled(exc):
-                            raise KeyboardInterrupt from None
-                        # Provider/model errors (validation, throttling, ...)
-                        # must fail the turn, never the session: report and
-                        # re-prompt. Errors never retry — only empty success.
-                        print_plain(
-                            console,
-                            f"Turn failed ({type(exc).__name__}): {exc}",
-                            style="red",
-                        )
-                        if "tool use in streaming mode" in str(exc):
-                            console.print(
-                                "[red]This model needs non-streaming tool use — "
-                                "/model to switch to a supported model.[/red]"
-                            )
-                        failed = True
-                        break
-                    # Side-channel spend melts into the session total (D-15):
-                    # each completed btw turn records through the shared
-                    # row shape — no btw-specific field, tag, or report
-                    # branch. Consumed so an empty-retry never re-records.
-                    for _, _, btw_result, btw_reported in btw.pending:
-                        btw_usage = record_turn_metrics(
-                            btw_result,
-                            current_model,
-                            session_turns,
-                            reported_cost=btw_reported,
-                        )
-                        if btw_usage is not None:
-                            print_plain(console, btw_usage, style="dim")
-                    btw.pending.clear()
-                    usage = record_turn_metrics(
-                        result,
-                        current_model,
-                        session_turns,
-                        model=getattr(agent, "model", None),
-                    )
-                    turn_interfaces.append(turn_interface)
-                    if usage is not None:
-                        print_plain(console, usage, style="dim")
-                    print_plain(console, codeact_label(turn_interface), style="dim")
-                    history = getattr(agent, "messages", None)
-                    if (
-                        attempts >= 2
-                        or not isinstance(history, list)
-                        or not _turn_appended_empty(before, history)
-                    ):
-                        break
-                    # Empty success: drop the no-op attempt so history shows
-                    # the question once, then run it back exactly once.
-                    del history[before:]
-                    logger.info("Empty turn response; retrying once.")
+                result, failed, attempts, before = _run_turn_attempts(
+                    agent,
+                    agent_text,
+                    turn_id,
+                    cancel_event,
+                    btw,
+                    both_running,
+                    side_pool,
+                    current_model,
+                    session_turns,
+                    turn_interface,
+                    turn_interfaces,
+                )
                 if failed:
-                    if revise_state.armed:
-                        revise_state.disarm()
-                        console.print("Revise round dropped — the turn failed.")
-                    if init_state.armed:
-                        init_state.disarm()
-                        console.print("Init draft dropped — the turn failed.")
+                    _drop_armed_on_failure(revise_state, init_state)
                     continue
-                if revise_state.armed:
-                    _drain_revise_rounds(
-                        agent,
-                        result,
-                        revise_state,
-                        cancel_event,
-                        session_turns,
-                        current_model,
-                        mode,
-                        turn_interface=turn_interface,
-                        turn_interfaces=turn_interfaces,
-                    )
-                if init_state.armed:
-                    init_reply = consume_init_turn(
-                        _result_text(agent, result), init_state, curate_queue
-                    )
-                    console.print(init_reply)
-                history = getattr(agent, "messages", None)
-                if (
-                    attempts == 2
-                    and isinstance(history, list)
-                    and _turn_appended_empty(before, history)
-                ):
-                    console.print(
-                        "[dim]No response content — the model returned empty twice.[/dim]"
-                    )
-                announcement = maybe_auto_compact(agent, current_model)
-                if announcement is not None:
-                    console.print(announcement)
-                    explicit_save(agent)
-                    index.ensure(session_id)
+                _consume_followup_rounds(
+                    agent,
+                    result,
+                    revise_state,
+                    init_state,
+                    curate_queue,
+                    cancel_event,
+                    session_turns,
+                    current_model,
+                    mode,
+                    turn_interface,
+                    turn_interfaces,
+                )
+                _finish_successful_turn(
+                    agent, current_model, index, session_id, before, attempts
+                )
         except KeyboardInterrupt:
             cancelled = True
             if revise_state.armed:
