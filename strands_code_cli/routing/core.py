@@ -818,6 +818,87 @@ def _validate_engine_legacy_primary(
     return ok
 
 
+def _validate_candidates(data: dict[str, Any], lines: list[str]) -> bool:
+    """Judge the candidates list: one line per entry plus the 26-cap."""
+    ok = True
+    raw_candidates: object = data.get("candidates", [])
+    if raw_candidates is None:
+        raw_candidates = []
+    if not isinstance(raw_candidates, list):
+        lines.append("candidates: INVALID — not a list (the loader ignores it)")
+        lines.append("fix: make candidates: a list of {id: ...} entries")
+        return False
+    usable = 0
+    for pos, entry in enumerate(raw_candidates):
+        reason = _candidate_skip_reason(entry, pos)
+        if reason is None:
+            usable += 1
+            lines.append(f"candidate #{pos} {entry['id']}: ok")
+        else:
+            ok = False
+            lines.append(f"candidate #{pos}: SKIP — {reason}")
+            lines.append(f"fix: {_candidate_fix(reason, pos)}")
+    if len(raw_candidates) > MAX_CANDIDATES:
+        ok = False
+        lines.append(
+            f"candidates: INVALID — {len(raw_candidates)} entries "
+            f"exceeds the {MAX_CANDIDATES}-candidate cap"
+        )
+        lines.append(
+            f"fix: keep at most {MAX_CANDIDATES} candidates "
+            "(the choice call caps at 26 options)"
+        )
+    if usable == 0:
+        ok = False
+        lines.append("no usable candidates — routing stays off")
+        lines.append(
+            "fix: add at least one candidates entry with a model id, "
+            "or re-run /route setup"
+        )
+    return ok
+
+
+def _validate_knobs(data: dict[str, Any], lines: list[str]) -> bool:
+    """Judge the gate knobs: explicit in-range numbers or noted defaults."""
+    ok = True
+    for knob, default in (
+        ("tie_margin", DEFAULT_TIE_MARGIN),
+        ("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
+    ):
+        raw_knob = data.get(knob)
+        if raw_knob is None:
+            lines.append(f"{knob}: {default} (default)")
+        elif isinstance(raw_knob, bool) or not isinstance(raw_knob, (int, float)):
+            ok = False
+            lines.append(f"{knob}: INVALID — {raw_knob!r} is not a number")
+            lines.append(f"fix: set {knob} to a number between 0 and 1")
+        elif not 0.0 <= float(raw_knob) <= 1.0:
+            ok = False
+            lines.append(f"{knob}: INVALID — {raw_knob} is outside 0..1")
+            lines.append(f"fix: set {knob} to a number between 0 and 1")
+        else:
+            lines.append(f"{knob}: {float(raw_knob)}")
+    return ok
+
+
+def _validate_directives(data: dict[str, Any], lines: list[str]) -> None:
+    """Note the directives presence (advisory only; never fails validation)."""
+    directives = data.get("directives", "")
+    if directives is None:
+        directives = ""
+    if not isinstance(directives, str):
+        lines.append("note: directives is not a string (the loader ignores it)")
+    elif directives.strip():
+        lines.append(f"directives: present ({len(directives)} chars)")
+        if len(directives) > 4096:
+            lines.append(
+                "warning: directives exceed ~4K chars — they ride every "
+                "decision call twice, so trim for cost and accuracy"
+            )
+    else:
+        lines.append("note: no directives — the decider picks without guidance")
+
+
 def validate_strategy(
     global_path: str | Path | None = None,
     repo_path: str | Path | None = None,
@@ -884,58 +965,10 @@ def validate_strategy(
             f"note: unknown top-level keys ignored: {sorted(unknown_top)} "
             "(the loader warns and continues)"
         )
-    raw_candidates: object = data.get("candidates", [])
-    if raw_candidates is None:
-        raw_candidates = []
-    if not isinstance(raw_candidates, list):
+    if not _validate_candidates(data, lines):
         valid = False
-        lines.append("candidates: INVALID — not a list (the loader ignores it)")
-        lines.append("fix: make candidates: a list of {id: ...} entries")
-    else:
-        usable = 0
-        for pos, entry in enumerate(raw_candidates):
-            reason = _candidate_skip_reason(entry, pos)
-            if reason is None:
-                usable += 1
-                lines.append(f"candidate #{pos} {entry['id']}: ok")
-            else:
-                valid = False
-                lines.append(f"candidate #{pos}: SKIP — {reason}")
-                lines.append(f"fix: {_candidate_fix(reason, pos)}")
-        if len(raw_candidates) > MAX_CANDIDATES:
-            valid = False
-            lines.append(
-                f"candidates: INVALID — {len(raw_candidates)} entries "
-                f"exceeds the {MAX_CANDIDATES}-candidate cap"
-            )
-            lines.append(
-                f"fix: keep at most {MAX_CANDIDATES} candidates "
-                "(the choice call caps at 26 options)"
-            )
-        if usable == 0:
-            valid = False
-            lines.append("no usable candidates — routing stays off")
-            lines.append(
-                "fix: add at least one candidates entry with a model id, "
-                "or re-run /route setup"
-            )
-    for knob, default in (
-        ("tie_margin", DEFAULT_TIE_MARGIN),
-        ("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD),
-    ):
-        raw_knob = data.get(knob)
-        if raw_knob is None:
-            lines.append(f"{knob}: {default} (default)")
-        elif isinstance(raw_knob, bool) or not isinstance(raw_knob, (int, float)):
-            valid = False
-            lines.append(f"{knob}: INVALID — {raw_knob!r} is not a number")
-            lines.append(f"fix: set {knob} to a number between 0 and 1")
-        elif not 0.0 <= float(raw_knob) <= 1.0:
-            valid = False
-            lines.append(f"{knob}: INVALID — {raw_knob} is outside 0..1")
-            lines.append(f"fix: set {knob} to a number between 0 and 1")
-        else:
-            lines.append(f"{knob}: {float(raw_knob)}")
+    if not _validate_knobs(data, lines):
+        valid = False
     engine = _parse_engine(data.get("engine"))
     raw_engine = data.get("engine")
     raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None
@@ -974,20 +1007,7 @@ def validate_strategy(
         engine_ok = _validate_engine_legacy_primary(raw_engine, engine, lines)
     if not engine_ok:
         valid = False
-    directives = data.get("directives", "")
-    if directives is None:
-        directives = ""
-    if not isinstance(directives, str):
-        lines.append("note: directives is not a string (the loader ignores it)")
-    elif directives.strip():
-        lines.append(f"directives: present ({len(directives)} chars)")
-        if len(directives) > 4096:
-            lines.append(
-                "warning: directives exceed ~4K chars — they ride every "
-                "decision call twice, so trim for cost and accuracy"
-            )
-    else:
-        lines.append("note: no directives — the decider picks without guidance")
+    _validate_directives(data, lines)
     return ValidationReport(valid=valid, source=source, lines=lines)
 
 
