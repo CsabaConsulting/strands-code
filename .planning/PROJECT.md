@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests — with the agent able to "talk" to source code and do deep research when needed. (GitHub work rides on general tool competence via `gh`, as in Claude Code — no dedicated loop.)
+Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests — with the agent able to "talk" to source code and do deep research when needed.
 
 ## Core Value
 

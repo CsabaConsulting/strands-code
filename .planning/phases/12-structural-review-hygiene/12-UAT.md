@@ -34,9 +34,8 @@ evidence: Orchestrator commands — 10 packages + __init__ only, ENTRY OK, phase
 
 ### 5. Agent instructions describe new tree (12-05 D2)
 expected: AGENTS.md and CONVENTIONS.md describe the ruff-governed repackaged tree, not the removed flat modules — read and confirm.
-result: issue
-reported: "AGENTS.md in the beginning says 'and working the full GitHub loop' - this phase got scrapped, so need to be corrected to the final phase goals"
-severity: minor
+result: pass
+retest: 2026-10-16 after 12-06 fix + retest tweak (user chose to drop the GitHub parenthetical entirely rather than keep/extend it; applied to PROJECT.md source + AGENTS.md block)
 
 ### 6. Dev tooling fork-scoped (12-01 D1)
 expected: Dev tooling installed and configured for fork-owned paths only.
@@ -107,8 +106,8 @@ coverage_id: 12-05-D4
 ## Summary
 
 total: 16
-passed: 15
-issues: 1
+passed: 16
+issues: 0
 pending: 0
 skipped: 0
 
@@ -116,7 +115,7 @@ skipped: 0
 
 - gap_id: G-12-1
   truth: "AGENTS.md and its convention source contain no stale references (GitHub loop, OKF examples, flat test paths)"
-  status: failed
+  status: closed-2026-10-16-test-5-retest-pass
   reason: "User reported: AGENTS.md says 'working the full GitHub loop' but the GitHub phase was scrapped (GITHUB-01/02 covered with no phase). Follow-up sweep found more: OKFBundle-family examples (module deleted) and flat tests/test_*.py paths (tests now mirrored) in AGENTS.md + CONVENTIONS.md source."
   severity: minor
   test: 5
