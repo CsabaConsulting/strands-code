@@ -24,8 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines (completed 2026-10-12)
 - [x] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
 - [x] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default (completed 2026-10-16)
-- [ ] **Phase 12: Hindsight Removal** - Scrub Hindsight as a planned integration; record heavy-backend rejections
-- [ ] **Phase 13: Structural Review + Hygiene** - Measurement-first breakup (CLI packages, rig files), dead example removal
+- [ ] **Phase 12: Structural Review + Hygiene** - Measurement-first breakup (CLI packages, rig files), dead example removal
 
 ## Phase Details
 
@@ -296,20 +295,7 @@ Plans:
 
 - [x] 11-04-PLAN.md — Bare --codeact implies code (G-11-1)
 
-### Phase 12: Hindsight Removal
-
-**Goal**: Hindsight is removed as a planned/supported integration and the heavy-backend rejections are recorded (re-scoped 2026-10-16; formerly OpenViking Recall Backend, abandoned on AGPL + server-required findings in 12-RESEARCH.md)
-**Depends on**: Phase 6 (memory seam requirement SKILL-05 originated there)
-**Requirements**: SKILL-05
-**Success Criteria** (what must be TRUE):
-
-  1. No live reference presents Hindsight as a supported or planned integration (historical audit trails excepted)
-  2. SKILL-05 is restated as the out-of-scope requirement; Strands native memory is the only backend
-  3. The OpenViking rejection rationale is preserved in 12-RESEARCH.md
-
-**Plans**: TBD (not yet planned)
-
-### Phase 13: Structural Review + Hygiene
+### Phase 12: Structural Review + Hygiene
 
 **Goal**: Codebase passes a measurement-first structural review and sheds dead example code
 **Depends on**: Phase 11 (last feature phase; review covers the whole tree)
@@ -325,7 +311,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -340,8 +326,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
 | 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
 | 11. CodeAct Action Interface | 4/4 | Complete | 2026-10-16 |
-| 12. Hindsight Removal | 0/TBD | Not started | - |
-| 13. Structural Review + Hygiene | 0/TBD | Not started | - |
+| 12. Structural Review + Hygiene | 0/TBD | Not started | - |
 
 ## Future (post-v1)
 

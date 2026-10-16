@@ -2,17 +2,16 @@
 gsd_state_version: "1.0"
 milestone: v1
 current_phase: 12
-current_phase_name: Hindsight Removal
+current_phase_name: Structural Review + Hygiene
 status: discussing
-stopped_at: Phase 12 context gathered
-last_updated: "2026-10-16T04:59:11.633Z"
+stopped_at: Hindsight Removal retired as no-op (scrub committed); Structural Review renumbered 13 -> 12
+last_updated: "2026-10-16T04:45:00Z"
 last_activity: 2026-10-16
-last_activity_desc: Roadmap expanded (SKILL-05 -> OpenViking, new STRUCT-01/CLEANUP-01, phases 12-13)
-state_head: a5648c6db8599411a2e7b279c826c403c9a5f754
+last_activity_desc: Phase renumber (13 -> 12); hindsight shell archived
 progress:
-  total_phases: 13
+  total_phases: 12
   completed_phases: 11
-  total_plans: 35
+  total_plans: 38
   completed_plans: 38
 ---
 
@@ -23,14 +22,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-12)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 12 — hindsight-removal
+**Current focus:** Phase 12 — structural-review-hygiene
 
 ## Current Position
 
-Phase: 12 (Hindsight Removal) — DISCUSSING
+Phase: 12 (Structural Review + Hygiene) — DISCUSSING
 Plan: 0 of TBD
-Status: Phase 11 complete — Phase 12 re-scoped (OpenViking abandoned on AGPL + server-required), ready to plan
-Last activity: 2026-10-16 — Phase 12 re-scoped to Hindsight Removal; research kept as rejection evidence
+Status: Hindsight shell retired as no-op — ready to discuss Phase 12 scope
+Last activity: 2026-10-16 — Phase renumber (Structural Review 13 -> 12); hindsight shell archived
 
 Progress: [█████████░] 92%
 
@@ -214,5 +213,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-10-16T04:59:11.492Z
-Stopped at: Phase 12 re-scoped to Hindsight Removal
-Resume file: .planning/phases/12-hindsight-removal/12-CONTEXT.md
+Stopped at: Phase renumber (13 -> 12)
+Resume file: (none — run $gsd-discuss-phase 12)

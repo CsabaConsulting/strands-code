@@ -60,19 +60,14 @@
     },
     {
       "number": "12",
-      "name": "Hindsight Removal",
-      "status": "not_started"
-    },
-    {
-      "number": "13",
       "name": "Structural Review + Hygiene",
       "status": "not_started"
     }
   ],
   "next": {
-    "command": "/gsd:plan-phase 12",
-    "label": "Plan phase 12 (re-scoped)",
-    "reason": "Phase 12 of 13 \u00b7 re-scoped to Hindsight Removal, context ready"
+    "command": "/gsd:discuss-phase 12",
+    "label": "Discuss phase 12 scope",
+    "reason": "Phase 12 of 12 \u00b7 ready to discuss"
   },
-  "updated_at": "2026-10-16T04:30:00.000Z"
+  "updated_at": "2026-10-16T04:45:00.000Z"
 }
