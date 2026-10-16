@@ -3,12 +3,12 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 11
 current_phase_name: CodeAct Action Interface
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-10-15T22:30:00.000Z"
-last_activity: 2026-10-15
-last_activity_desc: Completed 11-03 whole-block approval plus coherence pins
+stopped_at: Completed 11-04-PLAN.md
+last_updated: "2026-10-16T03:40:00.000Z"
+last_activity: 2026-10-16
+last_activity_desc: Completed 11-04 bare --codeact implies code (G-11-1 closed, a1 green)
 state_head: 2bac598a83d27d1e227bbb788a0ed114810644e3
 progress:
   total_phases: 11
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 11 (CodeAct Action Interface) — EXECUTING
-Current Plan: 3 of 3 (complete)
-Total Plans in Phase: 3
+Current Plan: 4 of 4 (complete)
+Total Plans in Phase: 4
 Status: All plans complete, ready for verify/transition
-Last activity: 2026-10-15 — 11-03 complete (whole-block approval + coherence pins)
+Last activity: 2026-10-16 — 11-04 complete (bare --codeact implies code, G-11-1 closed)
 
 Progress: [█████████░] 91%
 
@@ -98,6 +98,7 @@ Progress: [█████████░] 91%
 | Phase 11 P01 | 11 min | 2 tasks | 7 files |
 | Phase 11 P02 | 6 min | 3 tasks | 5 files |
 | Phase 11 P03 | 6 min | 2 tasks | 4 files |
+| Phase 11 P04 | 2 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,7 @@ Recent decisions affecting current work:
 - [Phase 11]: stint.tool evaluates only on code turns; new swap tests carry turn_setup in method names — Preserves stint laziness on the tool path; pre-existing TestTurnSetup never matched the -k turn_setup filter
 - [Phase 11]: Syntax preview replaces the Detail line in place for python_repl only; revise hint rides the policy-rule denial, plan-deny stays byte-identical — No duplicated half-preview; mode-vocabulary lock keeps plan-deny untouched
 - [Phase 11]: D-07 pins use single-line blocks; the pre-existing multi-line TOML serialise gap is deferred, not fixed — Task 2 is tests-only; probe-verified the gap predates CodeAct (multi-line shell rules break identically); logged to 11/deferred-items.md
+- [Phase 11]: Bare --codeact implies code via pure argv pre-normalization in main() — the pinned typer never forwards flag_value/is_flag to click, so the helper rewrite is the mechanism; BadParameter pre-gate check byte-identical before the credential gate
 
 ### Pending Todos
 
@@ -213,6 +215,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-15T22:30:00.000Z
-Stopped at: Completed 11-03-PLAN.md
+Last session: 2026-10-16T03:40:00.000Z
+Stopped at: Completed 11-04-PLAN.md
 Resume file: None

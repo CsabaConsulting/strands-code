@@ -292,7 +292,7 @@ Plans:
 
 **Wave 4** *(gap closure, blocked on Wave 1 completion)*
 
-- [ ] 11-04-PLAN.md — Bare --codeact implies code (G-11-1)
+- [x] 11-04-PLAN.md — Bare --codeact implies code (G-11-1)
 
 ## Progress
 
