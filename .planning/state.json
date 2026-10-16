@@ -61,13 +61,13 @@
     {
       "number": "12",
       "name": "Structural Review + Hygiene",
-      "status": "not_started"
+      "status": "in_progress"
     }
   ],
   "next": {
-    "command": "/gsd:discuss-phase 12",
-    "label": "Discuss phase 12 scope",
-    "reason": "Phase 12 of 12 \u00b7 ready to discuss"
+    "command": "/gsd:progress",
+    "label": "Show progress",
+    "reason": "Unsure of state — showing progress"
   },
-  "updated_at": "2026-10-16T04:45:00.000Z"
+  "updated_at": "2026-10-16T06:51:17.777Z"
 }

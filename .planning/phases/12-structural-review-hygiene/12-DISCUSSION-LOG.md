@@ -250,3 +250,9 @@ User: "Don't we need to discuss ruff?" — ran 4 areas, all resolved:
 **Pre-existing violations.** Fix all in one pass over grandfather. Waivers per-line noqa-with-reason only, no file ignores. User note (pressed twice, second time at wrap-up): gates apply ONLY to fork-added code, never inherited upstream code — for ruff AND cyclomatic complexity — to avoid fork merge conflicts. Recorded as D-24, amending D-01/D-02/D-18.
 
 **Auto-fix bounds.** Auto-fix freely (format + check --fix), green suite proves safety — over format-only-auto and batched+green.
+
+---
+
+## D-15 amendment (2026-10-16, plan-phase research)
+
+Researcher finding: `strands_code_agent/knowledge/`, `examples/pdf_to_okf_bundle/`, and `tests/test_okf_bundle.py` are byte-identical to `upstream/main` (empty diff; `b1de584` is an upstream commit) — the "fork-added" assumption recorded during discussion was wrong. Orchestrator independently verified with `git diff upstream/main..HEAD`. User ruling: "delete anyway" — accept a possible future modify/delete conflict. D-15 revised in CONTEXT.md.

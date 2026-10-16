@@ -36,7 +36,7 @@ A measurement-first structural review of the CLI tree plus dead-code hygiene. Co
 - **D-14:** Per area — one scenario file per area (side, routing, native, cost, codeact); `driver.py` stays a thin dispatch entry with the same command; contract tests split to mirror.
 
 ### Cleanup scope
-- **D-15:** Remove both — `examples/pdf_to_okf_bundle` plus `strands_code_agent/knowledge` (fork-added per git history: "Feature Request: Document processing library set"; planner must confirm no upstream overlap before deleting).
+- **D-15:** Remove both — `examples/pdf_to_okf_bundle` plus `strands_code_agent/knowledge` (REVISED 2026-10-16: researcher proved both byte-identical to `upstream/main`, so the fork-added assumption was wrong; user ruled "delete anyway", accepting a possible future modify/delete conflict if upstream touches those files).
 - **D-16:** Full README rewrite of the features table for the post-cleanup tree (not just dropping the OKF row).
 - **D-17:** Cleanup first — dead code is deleted before measurement, so the numbers describe the tree being repackaged.
 

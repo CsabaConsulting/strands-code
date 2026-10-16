@@ -518,33 +518,33 @@ from scenarios_routing import scenario_r1, scenario_r2  # per-area modules, abso
 | A8 | Full-suite runtime unknown (1553 passed per CONTEXT; not timed this session) | Validation | Low — planner time-boxes; suite is the mandated guardrail regardless |
 | A9 | pre-commit canonical repo is `github.com/pre-commit/pre-commit` (not re-verified) | Legitimacy Audit | Negligible — hook `repo:` URL is planner-verified at write time |
 
-## Open Questions
+## Open Questions (RESOLVED — all seven closed at plan time; per-question markers below)
 
-1. **D-15 re-confirmation (CF-01) — BLOCKING user question**
+1. **D-15 re-confirmation (CF-01) — BLOCKING user question (RESOLVED: user ruled "delete anyway" 2026-10-16; CONTEXT.md D-15 revised; executed by 12-01 Task 1 tracer)**
    - What we know: removal targets are byte-identical to `upstream/main`; deletion removes upstream code with delete/modify merge risk.
    - What's unclear: whether the user still wants both deleted given the failed precondition.
    - Recommendation: planner asks before writing any removal plan; offer (a) delete both anyway, (b) README-only + leave code, (c) delete example only.
-2. **D-12 amendment for `search_tool.py:18` (CF-02)**
+2. **D-12 amendment for `search_tool.py:18` (CF-02) (RESOLVED: routed to human via 12-02 Task 1 checkpoint:decision — carve-out vs confine() redesign vs reject; 12-03 Task 1 implements the recorded choice)**
    - What we know: exactly one fork-added agent file needs an import-line update for D-09.
    - What's unclear: whether to amend D-12 (allow) or redesign `confine()` ownership.
    - Recommendation: amend D-12 with a one-file carve-out; cheapest merge-safe path.
-3. **E501: `ignore` vs fix-all (CF-04)**
+3. **E501: `ignore` vs fix-all (CF-04) (RESOLVED: adopted ignore = ["E501"] rule-scope config; 12-01 Task 1)**
    - What we know: E501 fires under F+E+I; formatter cannot split long strings/comments.
    - What's unclear: planner/executor taste within D-20/D-22.
    - Recommendation: `ignore = ["E501"]` (formatter owns line length); document in pyproject comment.
-4. **D-04 report location and format (discretion)**
+4. **D-04 report location and format (discretion) (RESOLVED: adopted docs/STRUCTURE.md; written by 12-01 Task 3)**
    - What we know: must be committed and cited by the breakup.
    - What's unclear: `docs/STRUCTURE-REPORT.md` vs phase dir vs `STRUCTURE.md` at root.
    - Recommendation: `docs/STRUCTURE.md` (durable, discoverable, beside QUICKSTART/ROUTING); radon tables + xenon thresholds + import-linter contracts + breakup rationale citing numbers.
-5. **Xenon `--max-modules` / `--max-average` grades (D-03 locks only absolute)**
+5. **Xenon `--max-modules` / `--max-average` grades (D-03 locks only absolute) (RESOLVED: adopted absolute-threshold-only gating --max-absolute C; module/average suggestions not taken up; 12-02 Task 3, 12-03 Task 3, 12-05 Task 2)**
    - What we know: `-b C` is locked; module/average thresholds are free.
    - What's unclear: current module/average numbers (measure step produces them).
    - Recommendation: set from the D-04 measurement (suggested start: modules B, average A); tighten, never loosen.
-6. **AGENTS.md + `codebase/*.md` refresh scope**
+6. **AGENTS.md + `codebase/*.md` refresh scope (RESOLVED: folded into Phase 12; 12-05 Task 1)**
    - What we know: conventions paragraph superseded by D-18; architecture docs describe removed `knowledge/`.
    - What's unclear: whether the planner folds the refresh into Phase 12 or leaves it.
    - Recommendation: fold in as a trailing task — stale agent instructions rot the next session.
-7. **`docs/competitive-gap-analysis.md` OKF prose (D-16 covers README only)**
+7. **`docs/competitive-gap-analysis.md` OKF prose (D-16 covers README only) (RESOLVED: left alone per recommendation; 12-05 Task 1 leaves prose docs outside README untouched)**
    - What we know: doc mentions the OKF module in prose (lines 38, 168, 190, 196–197).
    - What's unclear: whether D-15's spirit covers prose docs.
    - Recommendation: leave unless the user says otherwise (D-16 is README-scoped); note in the plan.
