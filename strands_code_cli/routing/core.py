@@ -273,6 +273,25 @@ def _valid_base_url(value: str) -> bool:
     return parts.scheme.lower() in ("http", "https") and bool(parts.hostname)
 
 
+def _parse_engine_order(raw: dict[str, Any], engine: RoutingEngine) -> None:
+    """Normalize the engine try-order list; unknown entries warn and drop."""
+    order = raw.get("order")
+    if order is not None:
+        if not isinstance(order, list):
+            logger.warning("Ignoring routing engine 'order' (not a list)")
+        else:
+            names: list[str] = []
+            for entry in order:
+                if entry not in ("native", "openrouter", "local"):
+                    logger.warning(
+                        "Ignoring unknown routing engine %r in 'order'", entry
+                    )
+                    continue
+                if entry not in names:
+                    names.append(entry)
+            engine.order = names
+
+
 def _parse_engine(raw: object) -> RoutingEngine:
     """Normalize the engine mapping; unknown keys warn and fall to defaults."""
     engine = RoutingEngine()
@@ -304,21 +323,7 @@ def _parse_engine(raw: object) -> RoutingEngine:
             engine.primary,
         )
         engine.primary = "openrouter"
-    order = raw.get("order")
-    if order is not None:
-        if not isinstance(order, list):
-            logger.warning("Ignoring routing engine 'order' (not a list)")
-        else:
-            names: list[str] = []
-            for entry in order:
-                if entry not in ("native", "openrouter", "local"):
-                    logger.warning(
-                        "Ignoring unknown routing engine %r in 'order'", entry
-                    )
-                    continue
-                if entry not in names:
-                    names.append(entry)
-            engine.order = names
+    _parse_engine_order(raw, engine)
     native_model = raw.get("native_model")
     if native_model is not None:
         if not isinstance(native_model, str):
