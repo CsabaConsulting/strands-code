@@ -12,7 +12,7 @@ session-sticky Plan/Act, gated tools, skills, repo memory, and a `/btw` side cha
 1. **Harness-first, gaps-only.** Adopt `strands-harness` (`create_harness()`) for tools, sessions, skills, memory, context management, and effort presets. Build only genuine CLI gaps: slash commands, permissions UX, file picker, memory-tier backends.
 2. **Deny-first tool-calling.** Gated file/shell tools are the default action interface: every side effect passes a deny-first approval prompt that fails closed on ambiguity. Code-generation-first (CodeAct) arrives later as an opt-in interface (Phase 9) — never mandatory, never the default.
 3. **AWS-optional, never AWS-required.** Bedrock (LLM, KB memory, embeddings) and AgentCore are first-class *choices* behind config flags. Defaults are local: file sessions, markdown memory, sandboxed interpreter. The `agentcore` extra stays optional.
-4. **Tiered memory.** Local markdown files by default (offline, private) → Hindsight opt-in (team, temporal reasoning) → memsearch/Milvus (enterprise scale). All behind one memory seam.
+4. **Tiered memory.** Local markdown files by default (offline, private), all behind one memory seam. (Heavy recall backends evaluated and rejected: Hindsight's Postgres + background loop too heavy for a coding harness; OpenViking's AGPL server rejected.)
 5. **Loose dependencies, thin wrappers.** No upper pins during the experimental phase; upstream syncs via the `upstream` remote.
 
 Details: [docs/competitive-gap-analysis.md](docs/competitive-gap-analysis.md).

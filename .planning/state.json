@@ -60,7 +60,7 @@
     },
     {
       "number": "12",
-      "name": "OpenViking Recall Backend",
+      "name": "Hindsight Removal",
       "status": "not_started"
     },
     {
@@ -70,9 +70,9 @@
     }
   ],
   "next": {
-    "command": "/gsd:discuss-phase 12",
-    "label": "Discuss phase 12 scope",
-    "reason": "Phase 12 of 13 \u00b7 ready to discuss"
+    "command": "/gsd:plan-phase 12",
+    "label": "Plan phase 12 (re-scoped)",
+    "reason": "Phase 12 of 13 \u00b7 re-scoped to Hindsight Removal, context ready"
   },
-  "updated_at": "2026-10-16T04:00:00.000Z"
+  "updated_at": "2026-10-16T04:30:00.000Z"
 }

@@ -1,6 +1,8 @@
 # strands-code competitive gap analysis
 ## Claude Code / Codex CLI / Muse Code vs. sample-strands-code-agent
 
+> **Supersede note (2026-10-16, Phase 12):** the Hindsight recommendation in §6 below is withdrawn — Hindsight's Postgres + background loop is too heavy for a coding harness, and OpenViking (evaluated as the alternative) was rejected over its server requirement and AGPL license. Strands native memory stays the only backend. See `.planning/phases/12-hindsight-removal/12-RESEARCH.md`.
+
 Goal: turn this fork (`CsabaConsulting/strands-code`, forked from
 `aws-samples/sample-strands-code-agent` v0.4.0) into a Claude Code / Codex CLI
 competitor built on the Strands harness, while preserving its existing strengths.

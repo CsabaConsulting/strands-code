@@ -54,7 +54,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Forked from `aws-samples/sample-strands-code-agent` (library); the CLI is new construction on top. Upstream remote configured for refreshes.
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
 - Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.58.1; both move fast and are flagged Experimental upstream — keep wrappers thin.
-- Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers (local markdown → Hindsight → memsearch).
+- Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers, with local markdown the only backend (Hindsight and OpenViking evaluated and rejected in Phase 12).
 - Full test suite green (`uv run pytest tests/`, 935 passed, 6 deselected); dev group carries the data-science packages the toolkit tests execute.
 
 ## Constraints

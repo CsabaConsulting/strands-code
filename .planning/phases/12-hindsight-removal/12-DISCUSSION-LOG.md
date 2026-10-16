@@ -245,3 +245,9 @@ Drill-down mechanism, exact config key and flag names, `/memory` toggle UX wordi
 ## Deferred Ideas
 
 - OpenViking cloud endpoints, memsearch implementation, sidecar-daemon deployment (recorded in CONTEXT.md).
+
+---
+
+## Scope Supersede (2026-10-16, plan-phase research)
+
+The OpenViking scope discussed above was abandoned before planning: 12-RESEARCH.md proved D-01 embedded-in-process impossible (OpenViking requires a running server; only RAGFS inside the server is in-process) and surfaced the AGPL server license. User rulings: (1) abandon OpenViking, redo Phase 12 as Hindsight support removal; (2) AGPL rejected, no OpenViking implementation. Hindsight confirmed not-in-process either (Postgres + background loop). Phase renamed OpenViking Recall Backend → Hindsight Removal; 12-CONTEXT.md rewritten; 12-RESEARCH.md kept as rejection evidence. This log preserved as audit trail.

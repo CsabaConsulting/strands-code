@@ -2,7 +2,7 @@
 gsd_state_version: "1.0"
 milestone: v1
 current_phase: 12
-current_phase_name: OpenViking Recall Backend
+current_phase_name: Hindsight Removal
 status: discussing
 stopped_at: Phase 12 context gathered
 last_updated: "2026-10-16T04:59:11.633Z"
@@ -23,14 +23,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-12)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 12 — openviking-recall-backend
+**Current focus:** Phase 12 — hindsight-removal
 
 ## Current Position
 
-Phase: 12 (OpenViking Recall Backend) — DISCUSSING
+Phase: 12 (Hindsight Removal) — DISCUSSING
 Plan: 0 of TBD
-Status: Phase 11 complete — ready to discuss Phase 12 scope
-Last activity: 2026-10-16 — Phase 11 fully gated (UAT 20/20, secure 0 open, validate Nyquist); roadmap expanded to 13 phases
+Status: Phase 11 complete — Phase 12 re-scoped (OpenViking abandoned on AGPL + server-required), ready to plan
+Last activity: 2026-10-16 — Phase 12 re-scoped to Hindsight Removal; research kept as rejection evidence
 
 Progress: [█████████░] 92%
 
@@ -214,5 +214,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-10-16T04:59:11.492Z
-Stopped at: Phase 12 context gathered
-Resume file: .planning/phases/12-openviking-recall-backend/12-CONTEXT.md
+Stopped at: Phase 12 re-scoped to Hindsight Removal
+Resume file: .planning/phases/12-hindsight-removal/12-CONTEXT.md

@@ -63,7 +63,7 @@
 
 ### Memory
 
-- **SKILL-05**: User can opt into OpenViking cross-session recall behind the same memory seam (on team demand; Hindsight explicitly out — Postgres + background loop too heavy for a coding harness)
+- **SKILL-05**: No Hindsight integration ships in the repo; heavy recall backends are explicitly out of scope (Hindsight's Postgres + background loop too heavy for a coding harness; OpenViking's AGPL server rejected) — Strands native memory stays the only backend
 
 ### Interaction
 
