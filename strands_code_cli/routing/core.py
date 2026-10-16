@@ -1972,6 +1972,178 @@ def _decide_single_candidate(
     )
 
 
+def _note_link_error(name: str, error: str | None, down: list[str]) -> bool:
+    """File one link failure; True when it judges the pause (informative)."""
+    if error in _CONNECTION_ERRORS:
+        down.append(name)
+        return False
+    if error not in (None, "unready"):
+        # Skipped and unready links are pause-neutral: never
+        # attempted, so only attempted failures judge the pause.
+        return True
+    return False
+
+
+def _resolve_effort(
+    strategy: RoutingStrategy,
+    candidate: RoutingCandidate,
+    state: dict[str, Any],
+    chain: list[tuple[str, EngineAttempt]],
+    result: EngineResult,
+) -> tuple[str | None, float | None, tuple[int, int, float | None], bool, str, str]:
+    """Read the effort level for a routed candidate (call 2 unless degenerate).
+
+    Returns ``(effort, confidence, total, truncated, engine, detail)``;
+    effort None signals a hold, with engine/detail naming the cause.
+    """
+    if len(candidate.levels) == 1:
+        # Degenerate choice: nothing to judge, and a one-option
+        # question violates the 2-26 floor — the lone level rides
+        # through with no effort read.
+        return (
+            candidate.levels[0],
+            None,
+            (result.input_tokens, result.output_tokens, result.cost),
+            False,
+            "",
+            "",
+        )
+    (
+        effort,
+        effort_confidence,
+        effort_usage,
+        effort_engine,
+        effort_detail,
+        effort_truncated,
+    ) = _decide_effort(strategy, candidate, state, chain)
+    if effort is None:
+        return (None, None, (0, 0, None), effort_truncated, effort_engine, effort_detail)
+    return (
+        effort,
+        effort_confidence,
+        (
+            result.input_tokens + effort_usage[0],
+            result.output_tokens + effort_usage[1],
+            _merge_cost(result.cost, effort_usage[2]),
+        ),
+        effort_truncated,
+        effort_engine,
+        effort_detail,
+    )
+
+
+def _find_candidate(
+    strategy: RoutingStrategy, model_id: str
+) -> RoutingCandidate:
+    """Return the candidate the gate picked (always present: gated ids win)."""
+    return next(entry for entry in strategy.candidates if entry.id == model_id)
+
+
+def _run_chain(
+    strategy: RoutingStrategy,
+    state: dict[str, Any],
+    questions: dict[str, str],
+    chain: list[tuple[str, EngineAttempt]],
+    current_model: str,
+) -> tuple[RoutingPick | None, str, tuple[int, int, float | None], str]:
+    """Attempt each engine link in order; first valid table routes (D-08).
+
+    Skipped and unready links never attempt; connection-level failure on
+    every attempted link pauses routing for the ask (D-09).
+    """
+    failed = chain[0][0]
+    detail = f"{failed} failed"
+    down: list[str] = []
+    informative = False
+    truncated_any = False
+    for name, attempt in chain:
+        try:
+            result = attempt(strategy, state, questions)
+        except Exception:
+            result = None
+        if result is None:
+            continue  # skipped link: unconfigured, never attempted
+        truncated_any = truncated_any or result.truncated
+        if result.answers is None:
+            failed, detail = name, _link_detail(name, result.error)
+            if _note_link_error(name, result.error, down):
+                informative = True
+            continue
+        if result.model:
+            logger.debug("Routing decision via %s served by %s", name, result.model)
+        answer = validate_choice_answer(
+            result.answers.get("pick_model"), strategy.candidates
+        )
+        if answer is None:
+            failed, detail = name, _link_detail(name, "invalid table")
+            informative = True
+            continue
+        model_id, tie_break, gate_detail = gate_model(answer, strategy)
+        if model_id is None:
+            return (
+                None,
+                name,
+                (0, 0, None),
+                _with_truncation(gate_detail, truncated_any),
+            )
+        candidate = _find_candidate(strategy, model_id)
+        if not candidate.levels:
+            return (
+                None,
+                name,
+                (0, 0, None),
+                f"picked candidate {model_id} advertises no levels",
+            )
+        (
+            effort,
+            effort_confidence,
+            total,
+            effort_truncated,
+            effort_engine,
+            effort_detail,
+        ) = _resolve_effort(strategy, candidate, state, chain, result)
+        if effort is None:
+            return (
+                None,
+                effort_engine,
+                (0, 0, None),
+                _with_truncation(effort_detail, truncated_any or effort_truncated),
+            )
+        pick = RoutingPick(
+            model=model_id,
+            effort=effort,
+            model_confidence=float(answer["probabilities"][model_id]),
+            effort_confidence=effort_confidence,
+            tie_break=tie_break,
+        )
+        shrunk = truncated_any or effort_truncated
+        if model_id != current_model and not validate_routed_effort(
+            pick, strategy.candidates
+        ):
+            return (
+                None,
+                name,
+                (0, 0, None),
+                _with_truncation(
+                    f"effort {pick.effort!r} unsupported by {model_id}", shrunk
+                ),
+            )
+        return (
+            pick,
+            name,
+            total,
+            _with_truncation(gate_detail, shrunk),
+        )
+    if down and not informative:
+        return (
+            None,
+            down[-1],
+            (0, 0, None),
+            _with_truncation(_pause_detail(down), truncated_any),
+        )
+    return (None, failed, (0, 0, None), _with_truncation(detail, truncated_any))
+
+
 def decide(
     strategy: RoutingStrategy,
     *,
@@ -2031,114 +2203,7 @@ def decide(
         order = _effective_order(strategy.engine)
         head = order[0] if order else "off"
         return (None, head, (0, 0, None), f"{head} failed")
-    failed = chain[0][0]
-    detail = f"{failed} failed"
-    down: list[str] = []
-    informative = False
-    truncated_any = False
-    for name, attempt in chain:
-        try:
-            result = attempt(strategy, state, questions)
-        except Exception:
-            result = None
-        if result is None:
-            continue  # skipped link: unconfigured, never attempted
-        truncated_any = truncated_any or result.truncated
-        if result.answers is None:
-            failed, detail = name, _link_detail(name, result.error)
-            if result.error in _CONNECTION_ERRORS:
-                down.append(name)
-            elif result.error not in (None, "unready"):
-                # Skipped and unready links are pause-neutral: never
-                # attempted, so only attempted failures judge the pause.
-                informative = True
-            continue
-        if result.model:
-            logger.debug("Routing decision via %s served by %s", name, result.model)
-        answer = validate_choice_answer(
-            result.answers.get("pick_model"), strategy.candidates
-        )
-        if answer is None:
-            failed, detail = name, _link_detail(name, "invalid table")
-            informative = True
-            continue
-        model_id, tie_break, gate_detail = gate_model(answer, strategy)
-        if model_id is None:
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(gate_detail, truncated_any),
-            )
-        candidate = next(entry for entry in strategy.candidates if entry.id == model_id)
-        if not candidate.levels:
-            return (
-                None,
-                name,
-                (0, 0, None),
-                f"picked candidate {model_id} advertises no levels",
-            )
-        effort_truncated = False
-        if len(candidate.levels) == 1:
-            # Degenerate choice: nothing to judge, and a one-option
-            # question violates the 2-26 floor — the lone level rides
-            # through with no effort read.
-            effort, effort_confidence = candidate.levels[0], None
-            total = (result.input_tokens, result.output_tokens, result.cost)
-        else:
-            (
-                effort,
-                effort_confidence,
-                effort_usage,
-                effort_engine,
-                effort_detail,
-                effort_truncated,
-            ) = _decide_effort(strategy, candidate, state, chain)
-            if effort is None:
-                return (
-                    None,
-                    effort_engine,
-                    (0, 0, None),
-                    _with_truncation(effort_detail, truncated_any or effort_truncated),
-                )
-            total = (
-                result.input_tokens + effort_usage[0],
-                result.output_tokens + effort_usage[1],
-                _merge_cost(result.cost, effort_usage[2]),
-            )
-        pick = RoutingPick(
-            model=model_id,
-            effort=effort,
-            model_confidence=float(answer["probabilities"][model_id]),
-            effort_confidence=effort_confidence,
-            tie_break=tie_break,
-        )
-        shrunk = truncated_any or effort_truncated
-        if model_id != current_model and not validate_routed_effort(
-            pick, strategy.candidates
-        ):
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(
-                    f"effort {pick.effort!r} unsupported by {model_id}", shrunk
-                ),
-            )
-        return (
-            pick,
-            name,
-            total,
-            _with_truncation(gate_detail, shrunk),
-        )
-    if down and not informative:
-        return (
-            None,
-            down[-1],
-            (0, 0, None),
-            _with_truncation(_pause_detail(down), truncated_any),
-        )
-    return (None, failed, (0, 0, None), _with_truncation(detail, truncated_any))
+    return _run_chain(strategy, state, questions, chain, current_model)
 
 
 _EFFORT_NO_THINKING = ("auto", "off")
