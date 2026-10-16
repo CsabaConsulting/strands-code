@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -209,7 +210,9 @@ def _root(
         None, "--session-id", help="Resume the session with this id."
     ),
     codeact: str | None = typer.Option(
-        None, "--codeact", help="Start the session on this action interface."
+        None,
+        "--codeact",
+        help="Start the session on this action interface (tool|code|both); the bare form implies code.",
     ),
 ) -> None:
     """Open the REPL immediately (D-01); --session-id resumes directly (D-02)."""
@@ -240,6 +243,39 @@ def _root(
     run_loop(agent, session_id=resolved, index=index, codeact=codeact)
 
 
+def _expand_bare_codeact(argv: list[str]) -> list[str]:
+    """Insert the implied code value after a value-less --codeact token.
+
+    The pinned typer never forwards flag_value/is_flag to click, so a bare
+    --codeact dies at parse time before any project code runs. Rewriting
+    argv ahead of parsing gives the valued-only option its missing
+    optional-value path while leaving every downstream site untouched.
+
+    Only the exact --codeact token matches (--codeact=value passes
+    through); expansion fires when the next token is missing or starts
+    with a dash. Scanning stops at a bare -- sentinel, whose remainder
+    is copied verbatim. The input list is never mutated.
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token == "--":
+            out.extend(argv[i:])
+            break
+        if token == "--codeact":
+            out.append(token)
+            nxt = argv[i + 1] if i + 1 < len(argv) else None
+            if nxt is None or nxt.startswith("-"):
+                out.append("code")
+            i += 1
+            continue
+        out.append(token)
+        i += 1
+    return out
+
+
 def main() -> None:
     """Console script entry."""
+    sys.argv[:] = _expand_bare_codeact(list(sys.argv))
     app()
