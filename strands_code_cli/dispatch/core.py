@@ -109,6 +109,126 @@ _MEMORY_MODE_USAGE = MEMORY_MODE_USAGE
 _PICKER_LIMIT = 10
 
 
+def _dispatch_session_cmds(
+    cmd: str, index: SessionIndex, session_id: str, rest: str
+) -> tuple[str, str | None] | None:
+    """Session slash commands; None when cmd is not a session command."""
+    if cmd == "/exit":
+        return ("exit", None)
+    if cmd == "/resume":
+        return ("reply", _resume_message(index, rest))
+    if cmd == "/rename":
+        return ("reply", _rename_message(index, session_id, rest))
+    if cmd == "/forget":
+        return ("reply", _forget_message(index, session_id, rest))
+    return None
+
+
+def _dispatch_config_cmds(
+    cmd: str,
+    rest: str,
+    cwd: str | Path | None,
+    mode: ModeState | None,
+    session_id: str,
+    diff_config_path: str | Path | None,
+) -> tuple[str, str | None] | None:
+    """Config/policy slash commands; None when cmd is not one of them."""
+    if cmd == "/diff":
+        return ("reply", _diff_message(session_id, rest, diff_config_path))
+    if cmd == "/search":
+        return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
+    if cmd == "/policy":
+        return ("reply", _policy_message(rest))
+    if cmd == "/mode":
+        return ("reply", _mode_message(rest, mode))
+    return None
+
+
+def _dispatch_memory_cmds(
+    cmd: str,
+    rest: str,
+    cwd: str | Path | None,
+    memory_mode: MemoryModeState | None,
+    curate: CurateQueue | None,
+    memory_mode_path: str | Path | None,
+    revise: ReviseState | None,
+    init: InitState | None,
+    skills: SkillIndex | None,
+    harness_skills_refresh: Any,
+    mode: ModeState | None,
+) -> tuple[str, str | None] | None:
+    """Memory/skills slash commands; None when cmd is not one of them."""
+    if cmd == "/memory":
+        if rest.partition(" ")[0].strip().lower() == "revise":
+            return _revise_action(rest, revise)
+        return ("reply", _memory_message(rest, memory_mode, curate, memory_mode_path))
+    if cmd == "/init":
+        return _init_action(rest, cwd if cwd is not None else os.getcwd(), init)
+    if cmd in ("/skills", "/skill"):
+        return ("reply", _skills_message(rest, skills, harness_skills_refresh))
+    if cmd == "/approve":
+        return _approve_message(mode)
+    return None
+
+
+def _dispatch_model_cmds(
+    cmd: str,
+    rest: str,
+    current_model: str | None,
+    routing: RoutingState | None,
+    session_turns: list | None,
+    routing_events: list | None,
+    agent,
+    session_id: str,
+) -> tuple[str, str | None] | None:
+    """Model/cost/context slash commands; None when cmd is not one of them."""
+    if cmd in ("/model", "/models"):
+        action, selection = _model_message(rest, current_model)
+        if action == "model" and selection is not None and _routing_warns(routing):
+            return _model_warn_action(selection)
+        return (action, selection)
+    if cmd == "/cost":
+        return (
+            "reply",
+            _cost_message(session_turns, current_model, rest, routing_events),
+        )
+    if cmd == "/compact":
+        return ("reply", _compact_message(agent))
+    if cmd == "/clear":
+        return ("reply", _clear_message(agent, session_id))
+    if cmd == "/context":
+        return ("reply", _context_message(agent, current_model, session_turns))
+    return None
+
+
+def _dispatch_builtin_wins(
+    cmd: str,
+    rest: str,
+    routing: RoutingState | None,
+    interface: CodeactState | None,
+) -> tuple[str, str | None] | None:
+    """Builtin commands placed before the skills-dynamic branch (shadow-proof)."""
+    if cmd == "/btw":
+        # Idle /btw (D-01) is a normal inline turn; placed before the
+        # skills-dynamic branch so the builtin always wins the name.
+        if not rest:
+            return ("reply", "Usage: /btw <side question>")
+        return ("agent", rest)
+    if cmd == "/route":
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named route stays shadowed).
+        return ("reply", _route_message(rest, routing))
+    if cmd == "/codeact":
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named codeact stays shadowed).
+        return ("reply", _codeact_message(rest, interface))
+    if cmd in ("/code", "/tool"):
+        # Before the skills-dynamic branch so the builtin always wins
+        # the name (a skill named code/tool stays shadowed).
+        return _codeact_route_action(cmd, rest, interface)
+    return None
+
+
 def dispatch(
     text: str,
     *,
@@ -195,66 +315,42 @@ def dispatch(
     head, _, arg = stripped.partition(" ")
     cmd = head.lower()
     rest = arg.strip()
-    if cmd == "/exit":
-        return ("exit", None)
-    if cmd == "/resume":
-        return ("reply", _resume_message(index, rest))
-    if cmd == "/rename":
-        return ("reply", _rename_message(index, session_id, rest))
-    if cmd == "/forget":
-        return ("reply", _forget_message(index, session_id, rest))
-    if cmd == "/diff":
-        return ("reply", _diff_message(session_id, rest, diff_config_path))
-    if cmd == "/search":
-        return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
-    if cmd == "/policy":
-        return ("reply", _policy_message(rest))
-    if cmd == "/mode":
-        return ("reply", _mode_message(rest, mode))
-    if cmd == "/memory":
-        if rest.partition(" ")[0].strip().lower() == "revise":
-            return _revise_action(rest, revise)
-        return ("reply", _memory_message(rest, memory_mode, curate, memory_mode_path))
-    if cmd == "/init":
-        return _init_action(rest, cwd if cwd is not None else os.getcwd(), init)
-    if cmd in ("/skills", "/skill"):
-        return ("reply", _skills_message(rest, skills, harness_skills_refresh))
-    if cmd == "/approve":
-        return _approve_message(mode)
-    if cmd in ("/model", "/models"):
-        action, selection = _model_message(rest, current_model)
-        if action == "model" and selection is not None and _routing_warns(routing):
-            return _model_warn_action(selection)
-        return (action, selection)
-    if cmd == "/cost":
-        return (
-            "reply",
-            _cost_message(session_turns, current_model, rest, routing_events),
-        )
-    if cmd == "/compact":
-        return ("reply", _compact_message(agent))
-    if cmd == "/clear":
-        return ("reply", _clear_message(agent, session_id))
-    if cmd == "/context":
-        return ("reply", _context_message(agent, current_model, session_turns))
-    if cmd == "/btw":
-        # Idle /btw (D-01) is a normal inline turn; placed before the
-        # skills-dynamic branch so the builtin always wins the name.
-        if not rest:
-            return ("reply", "Usage: /btw <side question>")
-        return ("agent", rest)
-    if cmd == "/route":
-        # Before the skills-dynamic branch so the builtin always wins
-        # the name (a skill named route stays shadowed).
-        return ("reply", _route_message(rest, routing))
-    if cmd == "/codeact":
-        # Before the skills-dynamic branch so the builtin always wins
-        # the name (a skill named codeact stays shadowed).
-        return ("reply", _codeact_message(rest, interface))
-    if cmd in ("/code", "/tool"):
-        # Before the skills-dynamic branch so the builtin always wins
-        # the name (a skill named code/tool stays shadowed).
-        return _codeact_route_action(cmd, rest, interface)
+    handled = _dispatch_session_cmds(cmd, index, session_id, rest)
+    if handled is not None:
+        return handled
+    handled = _dispatch_config_cmds(cmd, rest, cwd, mode, session_id, diff_config_path)
+    if handled is not None:
+        return handled
+    handled = _dispatch_memory_cmds(
+        cmd,
+        rest,
+        cwd,
+        memory_mode,
+        curate,
+        memory_mode_path,
+        revise,
+        init,
+        skills,
+        harness_skills_refresh,
+        mode,
+    )
+    if handled is not None:
+        return handled
+    handled = _dispatch_model_cmds(
+        cmd,
+        rest,
+        current_model,
+        routing,
+        session_turns,
+        routing_events,
+        agent,
+        session_id,
+    )
+    if handled is not None:
+        return handled
+    handled = _dispatch_builtin_wins(cmd, rest, routing, interface)
+    if handled is not None:
+        return handled
     if skills is not None:
         entry = skills.resolve(head[1:])
         if entry is not None and not entry.shadowed:
