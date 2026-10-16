@@ -115,11 +115,11 @@ skipped: 0
 ## Gaps
 
 - gap_id: G-12-1
-  truth: "AGENTS.md project block matches PROJECT.md (no dedicated GitHub loop)"
+  truth: "AGENTS.md and its convention source contain no stale references (GitHub loop, OKF examples, flat test paths)"
   status: failed
-  reason: "User reported: AGENTS.md says 'working the full GitHub loop' but the GitHub phase was scrapped (GITHUB-01/02 covered with no phase)"
+  reason: "User reported: AGENTS.md says 'working the full GitHub loop' but the GitHub phase was scrapped (GITHUB-01/02 covered with no phase). Follow-up sweep found more: OKFBundle-family examples (module deleted) and flat tests/test_*.py paths (tests now mirrored) in AGENTS.md + CONVENTIONS.md source."
   severity: minor
   test: 5
-  root_cause: "AGENTS.md GSD project block (source:PROJECT.md) is stale — PROJECT.md already says 'no dedicated loop' but the block was generated from an older revision and never re-synced; the 12-05 refresh didn't catch it."
-  artifacts: ["AGENTS.md:7 (stale sentence)", ".planning/PROJECT.md:5 (correct source)"]
-  missing: ["Re-sync AGENTS.md project block from PROJECT.md (via the GSD sync verb if one exists, else hand-edit consistently)"]
+  root_cause: "AGENTS.md GSD project block (source:PROJECT.md) is stale — PROJECT.md already says 'no dedicated loop' but the block was generated from an older revision and never re-synced; the 12-05 refresh also missed OKF examples and flat test paths in the conventions block and its CONVENTIONS.md source."
+  artifacts: ["AGENTS.md:7 (GitHub loop)", "AGENTS.md:88,92,221 (OKF examples)", "AGENTS.md:85,87,91 (flat test paths)", ".planning/codebase/CONVENTIONS.md:14,19,20,26,30,110,114,118 (same staleness at source)", ".planning/PROJECT.md:5 (correct source for project block)"]
+  missing: ["Re-sync AGENTS.md project block from PROJECT.md", "Replace OKF examples + flat test paths in CONVENTIONS.md source and AGENTS.md block with current-tree equivalents"]
