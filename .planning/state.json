@@ -61,13 +61,13 @@
     {
       "number": "12",
       "name": "Structural Review + Hygiene",
-      "status": "in_progress"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd:progress",
-    "label": "Show progress",
-    "reason": "Unsure of state — showing progress"
+    "command": "none",
+    "label": "All 12 phases complete",
+    "reason": "Roadmap v1 finished 2026-10-16"
   },
-  "updated_at": "2026-10-16T08:44:00.000Z"
+  "updated_at": "2026-10-16T00:00:00.000Z"
 }

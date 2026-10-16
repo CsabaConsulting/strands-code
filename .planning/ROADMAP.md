@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines (completed 2026-10-12)
 - [x] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
 - [x] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default (completed 2026-10-16)
-- [ ] **Phase 12: Structural Review + Hygiene** - Measurement-first breakup (CLI packages, rig files), dead example removal
+- [x] **Phase 12: Structural Review + Hygiene** - Measurement-first breakup (CLI packages, rig files), dead example removal (completed 2026-10-16)
 
 ## Phase Details
 
@@ -351,7 +351,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
 | 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
 | 11. CodeAct Action Interface | 4/4 | Complete | 2026-10-16 |
-| 12. Structural Review + Hygiene | 6/6 | In Progress|  |
+| 12. Structural Review + Hygiene | 6/6 | Complete | 2026-10-16 |
 
 ## Future (post-v1)
 

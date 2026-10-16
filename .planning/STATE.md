@@ -4,11 +4,11 @@ milestone: v1
 current_phase: 12
 current_phase_name: Structural Review + Hygiene
 current_plan: 6
-status: discussing
-stopped_at: Completed 12-06-PLAN.md
-last_updated: "2026-10-16T19:26:39.000Z"
+status: complete
+stopped_at: Roadmap v1 finished — all 12 phases gated (executed, UAT, secured, validated)
+last_updated: "2026-10-16T00:00:00Z"
 last_activity: 2026-10-16
-last_activity_desc: 12-06 executed (G-12-1 stale-block sweep, AGENTS.md + CONVENTIONS.md re-synced)
+last_activity_desc: Phase 12 fully gated (UAT 16/16, secure 0 open, validate Nyquist); roadmap v1 complete
 state_head: 3dd16c6b8325de06e2b8d948bef63b8c95f1eea7
 progress:
   total_phases: 12
