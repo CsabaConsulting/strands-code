@@ -4,7 +4,7 @@
 
 **Strands Code**
 
-Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests, and working the full GitHub loop — with the agent able to "talk" to source code and do deep research when needed.
+Strands Code is a conversational coding CLI in the spirit of Claude Code and Codex CLI, built on the Strands harness. The user issues a series of asks; the CLI plans tasks and orchestrates subagents and tool calls to fulfill them. Its home turf is software engineering: speccing features, implementing them, writing and executing tests — with the agent able to "talk" to source code and do deep research when needed. (GitHub work rides on general tool competence via `gh`, as in Claude Code — no dedicated loop.)
 
 **Core Value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
 
@@ -82,14 +82,14 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 ## Naming Patterns
 
 - `snake_case.py` for all modules: `code_agent.py`, `callback_handler.py`, `document_code.py`, `local_sandboxed.py`, `local_exec.py`
-- Test files mirror the module under test: `test_<module>.py` in `tests/` (e.g. `tests/test_code_agent.py` for `strands_code_agent/code_agent.py`)
+- Test files mirror the module under test: `test_<module>.py` in mirrored `tests/` subpackages (e.g. `tests/agent/test_code_agent.py` for `strands_code_agent/code_agent.py`).
 - Use `snake_case` for all functions and methods: `get_documentation`, `format_function`, `extract_imports`, `get_import_string`, `execute_code`, `clear_state`, `format_message`
-- Private module helpers use a leading underscore: `_parse_frontmatter`, `_extract_links`, `_get_source`, `_make_stream` (test helper in `tests/test_agentcore_python_interpreter.py`), `_make_agent` (test helper in `tests/test_code_agent.py`)
-- Private methods on classes use a leading underscore: `PythonInterpreter.get_tool` internals, `OKFBundle._ensure_loaded`, `OKFBundle._search`, `SandboxedPythonInterpreter._init_executor`, `AgentCorePythonInterpreter._ensure_session`, `_run_code`, `_stop_session`, `_build_initialization`
+- Private module helpers use a leading underscore: `_parse_frontmatter`, `_extract_links`, `_get_source`, `_make_stream` (test helper in `tests/agent/test_agentcore_python_interpreter.py`), `_make_agent` (test helper in `tests/agent/test_code_agent.py`)
+- Private methods on classes use a leading underscore: `PythonInterpreter.get_tool` internals, `SandboxedPythonInterpreter._init_executor`, `AgentCorePythonInterpreter._ensure_session`, `_run_code`, `_stop_session`, `_build_initialization`
 - Use `snake_case` for locals and parameters: `authorized_imports`, `initialization_code`, `domain_specific_code`, `timeout_seconds`, `stdout_label`, `stderr_label`
 - Use `UPPER_SNAKE_CASE` for module-level constants: `CODE_AGENT_INSTRUCTIONS` in `strands_code_agent/code_agent.py`, `CODE_PREAMBLE_TEMPLATE`, `TEMP_DIR_TEMPLATE`, `DOMAIN_SPECIFIC_DOC_TEMPLATE`, `DEFAULT_CODE_AGENT_CALLBACK_HANDLER`, `VISUALIZATION_TOOLKIT`, `DATA_ANALYSIS_TOOLKIT` in `strands_code_agent/toolkits.py`, `STDOUT_LABEL`, `STDERR_LABEL` in `strands_code_agent/python_environments/base.py`, `EXTRA_BUILTINS` in `strands_code_agent/python_environments/local_sandboxed.py`, `SOLUTION_UA` in `strands_code_agent/solution_user_agent.py`
-- Test-local helper names use leading underscore plus descriptive name: `_sample_func`, `_SampleClass` in `tests/test_code_agent.py`
-- Use `PascalCase` for all classes: `CodeAgent` (`strands_code_agent/code_agent.py`), `Toolkit` (`strands_code_agent/toolkits.py`), `PythonInterpreter` (`strands_code_agent/python_environments/base.py`), `SandboxedPythonInterpreter`, `ExecPythonInterpreter`, `AgentCorePythonInterpreter`, `OKFBundle`, `Concept`, `SearchIndex`, `KeywordSearchIndex`, `CodeAgentCallbackHandler`
+- Test-local helper names use leading underscore plus descriptive name: `_sample_func`, `_SampleClass` in `tests/agent/test_code_agent.py`
+- Use `PascalCase` for all classes: `CodeAgent` (`strands_code_agent/code_agent.py`), `Toolkit` (`strands_code_agent/toolkits.py`), `PythonInterpreter` (`strands_code_agent/python_environments/base.py`), `SandboxedPythonInterpreter`, `ExecPythonInterpreter`, `AgentCorePythonInterpreter`, `CodeAgentCallbackHandler`
 - Use `PascalCase` for test classes grouping a unit under test: `TestCodeAgentSystemPrompt`, `TestPythonInterpreterExecution`, `TestGetImportString` — one class per behavior area, not per method
 
 ## Code Style
@@ -218,7 +218,7 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 ## Architectural Constraints
 
 - **Threading:** Single-threaded synchronous model. No threads, asyncio, or workers in this repo; long runs are bounded by per-call `timeout_seconds` (default 180 in `CodeAgent`, 60 in interpreters) and AgentCore `session_timeout_seconds` (default 900).
-- **Global state:** `DEFAULT_CODE_AGENT_CALLBACK_HANDLER` module-level singleton shared by all `CodeAgent()` instances that omit `callback_handler` (`strands_code_agent/code_agent.py:36`); `botocore.session.Session.__init__` monkeypatched at import (`strands_code_agent/solution_user_agent.py:18`). `OKFBundle` caches are per-instance only.
+- **Global state:** `DEFAULT_CODE_AGENT_CALLBACK_HANDLER` module-level singleton shared by all `CodeAgent()` instances that omit `callback_handler` (`strands_code_agent/code_agent.py:36`); `botocore.session.Session.__init__` monkeypatched at import (`strands_code_agent/solution_user_agent.py:18`).
 - **Circular imports:** None detected. Dependency direction is one-way: `code_agent.py` → interpreters/helpers; `python_environments/*` → `base.py`.
 - **AWS-optional:** `boto3` is an optional `agentcore` extra; `AgentCorePythonInterpreter` is importable from the top level but only usable with credentials. Defaults stay local.
 
