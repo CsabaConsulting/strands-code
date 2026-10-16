@@ -329,6 +329,10 @@ Plans:
 
 - [x] 12-05-PLAN.md — README plus instruction refresh plus blocking gates plus final green proof
 
+**Wave 6** *(gap closure, blocked on Wave 5 completion)*
+
+- [ ] 12-06-PLAN.md — Stale-block sweep: AGENTS.md + CONVENTIONS.md re-sync (G-12-1)
+
 ## Progress
 
 **Execution Order:**
