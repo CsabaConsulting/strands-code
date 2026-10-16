@@ -12,7 +12,7 @@ question; the main-thread pump builds and submits the side agent, so
 agent construction never happens off the main thread. Both callback
 handlers serialize whole message blocks on :data:`RENDER_LOCK`, so
 fenced side blocks never tear against main output. Workers never open
-:func:`~strands_code_cli.output.output_context` — they print into the
+:func:`~strands_code_cli.ui.output.output_context` — they print into the
 turn's already-open proxy.
 """
 
@@ -30,8 +30,8 @@ from strands_harness import create_harness
 from strands_harness.memory import resolve_memory
 
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
-from strands_code_cli.memory_file import load_memory, register_memory_plugin
-from strands_code_cli.output import print_plain
+from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
+from strands_code_cli.ui.output import print_plain
 
 RENDER_LOCK = threading.RLock()
 """Serializes whole message blocks across the main and btw handlers.
@@ -420,7 +420,7 @@ def build_btw_agent(
         with the framed question as its trailing user turn — the
         side invocation prompt, passed as the agent's message list.
     """
-    from strands_code_cli.reported_cost import fresh_side_model
+    from strands_code_cli.cost.reported_cost import fresh_side_model
 
     prompt = fork_btw_history(history, question)
     kwargs = dict(parent_kwargs)

@@ -317,8 +317,8 @@ def current_model_from_boot(text):
 def live_decision_id():
     """Cheapest decisions-catalog id, via the repo's own code."""
     code = (
-        "from strands_code_cli.live_pricing import fetch_openrouter_decision_models;"
-        "from strands_code_cli.router import _setup_decision_entries;"
+        "from strands_code_cli.cost.live_pricing import fetch_openrouter_decision_models;"
+        "from strands_code_cli.dispatch.core import _setup_decision_entries;"
         "entries = _setup_decision_entries(fetch_openrouter_decision_models());"
         "assert entries, 'empty decisions catalog';"
         "print(entries[0]['id'])"

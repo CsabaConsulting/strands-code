@@ -147,7 +147,7 @@ class TestCleanExitFlush:
         explicit_save(object())  # no _session_manager: must be a silent no-op
 
     def test_clean_exit_bumps_index_recency(self, tmp_path):
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         session_id = index.mint()

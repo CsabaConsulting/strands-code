@@ -27,7 +27,10 @@ from unittest.mock import patch
 
 import pytest
 
-from strands_code_cli.codeact import (
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
+from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS, SkillIndex
+from strands_code_cli.policy.codeact import (
     CODEACT_BOTH_REPLY,
     CODEACT_CODE_REPLY,
     CODEACT_PREFIX,
@@ -39,10 +42,7 @@ from strands_code_cli.codeact import (
     resolve_turn_interface,
     shape_turn_text,
 )
-from strands_code_cli.provider_config import ProviderConfig
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 CODEACT_BANNED_VOCAB = (
     "Mode:",
@@ -418,7 +418,7 @@ class TestCodeactStartupFlag:
         return CliRunner().invoke(main_module.app, args)
 
     def test_flag_each_value_reaches_run_loop(self, tmp_path, monkeypatch):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
         for value in ("tool", "code", "both"):
             with (
@@ -431,7 +431,7 @@ class TestCodeactStartupFlag:
             assert loop.call_args[1]["codeact"] == value
 
     def test_no_flag_passes_none(self, tmp_path, monkeypatch):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         monkeypatch.chdir(tmp_path)
         with (
             patch.object(main_module, "_preflight_credentials", return_value=None),
@@ -446,7 +446,7 @@ class TestCodeactStartupFlag:
     def test_invalid_flag_rejected_before_side_effects(
         self, tmp_path, monkeypatch, bad
     ):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         monkeypatch.chdir(tmp_path)
         with (
             patch.object(
@@ -470,7 +470,7 @@ class TestCodeactStartupFlag:
         assert not Path(".agent").exists()
 
     def test_bare_flag_at_end_implies_code(self):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         assert main_module._expand_bare_codeact(["p", "--codeact"]) == [
             "p",
             "--codeact",
@@ -478,7 +478,7 @@ class TestCodeactStartupFlag:
         ]
 
     def test_bare_flag_before_other_flag_implies_code(self):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         assert main_module._expand_bare_codeact(
             ["p", "--codeact", "--session-id", "x"]
         ) == ["p", "--codeact", "code", "--session-id", "x"]
@@ -487,11 +487,11 @@ class TestCodeactStartupFlag:
         "argv", [["p", "--codeact", "both"], ["p", "--codeact=tool"]]
     )
     def test_valued_and_equals_forms_untouched(self, argv):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         assert main_module._expand_bare_codeact(argv) == argv
 
     def test_sentinel_stops_expansion(self):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         assert main_module._expand_bare_codeact(["p", "--", "--codeact"]) == [
             "p",
             "--",
@@ -499,13 +499,13 @@ class TestCodeactStartupFlag:
         ]
 
     def test_helper_never_mutates_input(self):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         argv = ["p", "--codeact"]
         main_module._expand_bare_codeact(argv)
         assert argv == ["p", "--codeact"]
 
     def test_main_expands_bare_flag_to_code(self, tmp_path, monkeypatch):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(sys, "argv", ["strands-code", "--codeact"])
         with (
@@ -610,7 +610,7 @@ class TestCodeactStartupPersist:
             ProviderConfig().save_codeact_choice("turbo", tmp_path / "out.yaml")
 
     def test_switch_persists_last_choice(self, tmp_path, monkeypatch):
-        import strands_code_cli.provider_config as provider_config_module
+        import strands_code_cli.entry.provider_config as provider_config_module
 
         path = tmp_path / "config.yaml"
         monkeypatch.setattr(provider_config_module, "default_config_path", lambda: path)
@@ -636,7 +636,10 @@ class TestCodeactStartupPersist:
 
 def _codeact_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent / "strands_code_cli" / "codeact.py"
+        Path(__file__).resolve().parent.parent
+        / "strands_code_cli"
+        / "policy"
+        / "codeact.py"
     ).read_text(encoding="utf-8")
 
 
@@ -647,7 +650,7 @@ def _codeact_source() -> str:
 
 class TestCodeactStintLifecycle:
     def test_lazy_until_first_use(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         assert stint._interpreter is None
@@ -655,7 +658,7 @@ class TestCodeactStintLifecycle:
         assert stint._interpreter is None
 
     def test_bare_name_write_then_read_back(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stdout, stderr = stint.execute_code("write('n.txt','hi')")
@@ -666,7 +669,7 @@ class TestCodeactStintLifecycle:
         assert "hi" in stdout
 
     def test_write_confirms_naming_path(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stdout, _ = stint.execute_code("print(write('sub/n.txt','hi'))")
@@ -674,7 +677,7 @@ class TestCodeactStintLifecycle:
         assert (tmp_path / "sub" / "n.txt").read_text(encoding="utf-8") == "hi"
 
     def test_state_persists_across_calls(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stint.execute_code("stint_var = 41")
@@ -683,7 +686,7 @@ class TestCodeactStintLifecycle:
         assert "42" in stdout
 
     def test_reset_clears_stint_state(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stint.execute_code("stint_var = 41")
@@ -692,7 +695,7 @@ class TestCodeactStintLifecycle:
         assert "not defined" in stderr
 
     def test_reset_keeps_bare_names_usable(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stint.execute_code("write('n.txt','hi')")
@@ -702,21 +705,21 @@ class TestCodeactStintLifecycle:
         assert "hi" in stdout
 
     def test_os_import_fails_closed(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         _, stderr = stint.execute_code("import os")
         assert "not allowed" in stderr
 
     def test_subprocess_import_fails_closed(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         _, stderr = stint.execute_code("import subprocess")
         assert "not allowed" in stderr
 
     def test_math_import_works(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stdout, stderr = stint.execute_code("import math\nprint(math.floor(3.7))")
@@ -724,7 +727,10 @@ class TestCodeactStintLifecycle:
         assert "3" in stdout
 
     def test_allowlist_pinned_to_math(self, tmp_path):
-        from strands_code_cli.codeact import CODEACT_AUTHORIZED_IMPORTS, CodeactStint
+        from strands_code_cli.policy.codeact import (
+            CODEACT_AUTHORIZED_IMPORTS,
+            CodeactStint,
+        )
 
         assert CODEACT_AUTHORIZED_IMPORTS == frozenset({"math"})
         stint = CodeactStint(cwd=tmp_path)
@@ -734,7 +740,7 @@ class TestCodeactStintLifecycle:
         assert stint._interpreter.timeout_seconds == 60
 
     def test_tool_property_built_once(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         first = stint.tool
@@ -742,7 +748,7 @@ class TestCodeactStintLifecycle:
         assert stint.tool is first
 
     def test_out_of_scope_write_returns_refusal(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stdout, stderr = stint.execute_code(
@@ -752,7 +758,7 @@ class TestCodeactStintLifecycle:
         assert "outside the allowed roots" in stdout
 
     def test_shell_runs_argv(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         stint = CodeactStint(cwd=tmp_path)
         stdout, stderr = stint.execute_code("print(shell(['echo','hi']))")
@@ -775,25 +781,25 @@ class TestCodeactStintLifecycle:
 
 class TestCodeactInteriorFunctions:
     def test_read_missing_returns_not_found(self, tmp_path):
-        from strands_code_cli.codeact import codeact_read
+        from strands_code_cli.policy.codeact import codeact_read
 
         assert "not found" in codeact_read(tmp_path, "missing.txt").lower()
 
     def test_read_out_of_scope_returns_refusal(self, tmp_path):
-        from strands_code_cli.codeact import codeact_read
+        from strands_code_cli.policy.codeact import codeact_read
 
         result = codeact_read(tmp_path, "/definitely-outside-scope-x/n.txt")
         assert "outside the allowed roots" in result
 
     def test_write_creates_parents_and_confirms(self, tmp_path):
-        from strands_code_cli.codeact import codeact_write
+        from strands_code_cli.policy.codeact import codeact_write
 
         result = codeact_write(tmp_path, "a/b/n.txt", "hi")
         assert "n.txt" in result
         assert (tmp_path / "a" / "b" / "n.txt").read_text(encoding="utf-8") == "hi"
 
     def test_edit_replaces_first_occurrence_only(self, tmp_path):
-        from strands_code_cli.codeact import codeact_edit, codeact_write
+        from strands_code_cli.policy.codeact import codeact_edit, codeact_write
 
         codeact_write(tmp_path, "n.txt", "aa bb aa")
         result = codeact_edit(tmp_path, "n.txt", "aa", "zz")
@@ -801,7 +807,7 @@ class TestCodeactInteriorFunctions:
         assert (tmp_path / "n.txt").read_text(encoding="utf-8") == "zz bb aa"
 
     def test_edit_absent_match_reports(self, tmp_path):
-        from strands_code_cli.codeact import codeact_edit, codeact_write
+        from strands_code_cli.policy.codeact import codeact_edit, codeact_write
 
         codeact_write(tmp_path, "n.txt", "hi")
         result = codeact_edit(tmp_path, "n.txt", "zzz", "yy")
@@ -809,12 +815,12 @@ class TestCodeactInteriorFunctions:
         assert (tmp_path / "n.txt").read_text(encoding="utf-8") == "hi"
 
     def test_edit_missing_file_reports(self, tmp_path):
-        from strands_code_cli.codeact import codeact_edit
+        from strands_code_cli.policy.codeact import codeact_edit
 
         assert "not found" in codeact_edit(tmp_path, "missing.txt", "a", "b").lower()
 
     def test_interior_functions_never_raise(self, tmp_path):
-        from strands_code_cli.codeact import (
+        from strands_code_cli.policy.codeact import (
             codeact_edit,
             codeact_read,
             codeact_shell,
@@ -829,25 +835,25 @@ class TestCodeactInteriorFunctions:
         assert isinstance(codeact_shell(tmp_path, []), str)
 
     def test_shell_string_refused(self, tmp_path):
-        from strands_code_cli.codeact import codeact_shell
+        from strands_code_cli.policy.codeact import codeact_shell
 
         assert "argv list" in codeact_shell(tmp_path, "echo hi")  # type: ignore[arg-type]
 
     def test_shell_labels_stdout_and_stderr(self, tmp_path):
-        from strands_code_cli.codeact import codeact_shell
+        from strands_code_cli.policy.codeact import codeact_shell
 
         result = codeact_shell(tmp_path, ["echo", "hi"])
         assert "STDOUT:" in result
         assert "hi" in result
 
     def test_shell_missing_command_reports(self, tmp_path):
-        from strands_code_cli.codeact import codeact_shell
+        from strands_code_cli.policy.codeact import codeact_shell
 
         result = codeact_shell(tmp_path, ["codeact-no-such-cmd-xyz"])
         assert "not found" in result.lower()
 
     def test_shell_runs_under_stint_cwd(self, tmp_path):
-        from strands_code_cli.codeact import codeact_shell
+        from strands_code_cli.policy.codeact import codeact_shell
 
         (tmp_path / "marker.txt").write_text("m", encoding="utf-8")
         result = codeact_shell(tmp_path, ["ls", "marker.txt"])
@@ -877,7 +883,10 @@ def _fake_agent(default_tool):
 
 class TestCodeactSwap:
     def test_turn_setup_code_turn_swaps_then_restores(self):
-        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+        from strands_code_cli.policy.codeact import (
+            restore_after_turn,
+            swap_for_code_turn,
+        )
 
         default_tool, stint_tool = object(), object()
         agent = _fake_agent(default_tool)
@@ -889,7 +898,10 @@ class TestCodeactSwap:
         assert agent.tool_registry.registry["python_repl"] is default_tool
 
     def test_turn_setup_tool_turn_never_swaps(self):
-        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+        from strands_code_cli.policy.codeact import (
+            restore_after_turn,
+            swap_for_code_turn,
+        )
 
         default_tool, stint_tool = object(), object()
         agent = _fake_agent(default_tool)
@@ -900,7 +912,10 @@ class TestCodeactSwap:
         assert agent.tool_registry.registry["python_repl"] is default_tool
 
     def test_turn_setup_missing_default_skips_swap(self):
-        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+        from strands_code_cli.policy.codeact import (
+            restore_after_turn,
+            swap_for_code_turn,
+        )
 
         agent = _fake_agent(None)
         agent.tool_registry.registry = {}
@@ -910,7 +925,7 @@ class TestCodeactSwap:
         assert agent.tool_registry.calls == []
 
     def test_turn_setup_missing_stint_tool_skips_swap(self):
-        from strands_code_cli.codeact import swap_for_code_turn
+        from strands_code_cli.policy.codeact import swap_for_code_turn
 
         default_tool = object()
         agent = _fake_agent(default_tool)
@@ -918,13 +933,16 @@ class TestCodeactSwap:
         assert agent.tool_registry.calls == []
 
     def test_turn_setup_missing_registry_skips_swap(self):
-        from strands_code_cli.codeact import swap_for_code_turn
+        from strands_code_cli.policy.codeact import swap_for_code_turn
 
         agent = SimpleNamespace()  # no tool_registry at all
         assert swap_for_code_turn(agent, "code", object(), object()) is False
 
     def test_turn_setup_exception_mid_turn_still_restores(self):
-        from strands_code_cli.codeact import restore_after_turn, swap_for_code_turn
+        from strands_code_cli.policy.codeact import (
+            restore_after_turn,
+            swap_for_code_turn,
+        )
 
         default_tool, stint_tool = object(), object()
         agent = _fake_agent(default_tool)
@@ -940,7 +958,7 @@ class TestCodeactSwap:
         assert agent.tool_registry.registry["python_repl"] is default_tool
 
     def test_turn_setup_default_handle_reads_registry(self):
-        from strands_code_cli.codeact import default_repl_handle
+        from strands_code_cli.policy.codeact import default_repl_handle
 
         default_tool = object()
         assert default_repl_handle(_fake_agent(default_tool)) is default_tool
@@ -949,7 +967,7 @@ class TestCodeactSwap:
         assert default_repl_handle(bare) is None
 
     def test_turn_setup_restore_without_swap_is_noop(self):
-        from strands_code_cli.codeact import restore_after_turn
+        from strands_code_cli.policy.codeact import restore_after_turn
 
         default_tool = object()
         agent = _fake_agent(default_tool)
@@ -1005,7 +1023,7 @@ class TestCodeactBothRouting:
         return dispatch(text, session_id="s", index=index, interface=interface)
 
     def test_both_code_prefix_arms_code_for_exactly_one_turn(self, tmp_path):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         holder = CodeactState(initial="both")
         action, message = self._dispatch("/code list the files", tmp_path, holder)
@@ -1016,7 +1034,7 @@ class TestCodeactBothRouting:
         assert holder.interface == "both"  # sticky value never moves
 
     def test_both_tool_prefix_arms_tool(self, tmp_path):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         holder = CodeactState(initial="both")
         action, message = self._dispatch("/tool list the files", tmp_path, holder)
@@ -1025,7 +1043,7 @@ class TestCodeactBothRouting:
         assert holder.resolve_turn() == "both"
 
     def test_both_prefixes_override_sticky_tool_and_code(self, tmp_path):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         tool_holder = CodeactState(initial="tool")
         assert self._dispatch("/code go", tmp_path, tool_holder)[0] == "agent"
@@ -1037,7 +1055,7 @@ class TestCodeactBothRouting:
         assert code_holder.resolve_turn() == "code"
 
     def test_both_empty_prefix_returns_usage_without_arming(self, tmp_path):
-        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE, CodeactState
+        from strands_code_cli.policy.codeact import CODEACT_ROUTE_USAGE, CodeactState
 
         assert CODEACT_ROUTE_USAGE == "Usage: /code <ask> or /tool <ask>"
         for text in ("/code", "/code   ", "/tool", "/tool  "):
@@ -1048,7 +1066,7 @@ class TestCodeactBothRouting:
             assert holder.resolve_turn() == "both"  # nothing armed
 
     def test_both_bare_ask_returns_routing_usage(self, tmp_path):
-        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE, CodeactState
+        from strands_code_cli.policy.codeact import CODEACT_ROUTE_USAGE, CodeactState
 
         holder = CodeactState(initial="both")
         action, message = self._dispatch("list the files", tmp_path, holder)
@@ -1056,7 +1074,7 @@ class TestCodeactBothRouting:
         assert message == CODEACT_ROUTE_USAGE
 
     def test_both_bare_asks_in_tool_and_code_start_agent_turns(self, tmp_path):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         for sticky in ("tool", "code"):
             holder = CodeactState(initial=sticky)
@@ -1073,7 +1091,7 @@ class TestCodeactBothRouting:
         assert (action, message) == ("agent", "go")
 
     def test_both_arm_rejects_anything_but_code_or_tool(self):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         holder = CodeactState()
         for bad in ("both", "turbo", "", "TOOL"):
@@ -1086,13 +1104,13 @@ class TestCodeactBothRouting:
         assert holder.resolve_turn() == "tool"  # failed arms arm nothing
 
     def test_both_resolve_turn_passes_sticky_through(self):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         for sticky in CodeactState.VALID:
             assert CodeactState(initial=sticky).resolve_turn() == sticky
 
     def test_both_full_flow_prefix_then_bare_ask(self, tmp_path):
-        from strands_code_cli.codeact import (
+        from strands_code_cli.policy.codeact import (
             CODEACT_ROUTE_USAGE,
             CodeactState,
             resolve_turn_interface,
@@ -1117,7 +1135,7 @@ class TestCodeactBothRouting:
         assert "tool" in BUILTIN_SLASH_HEADS
 
     def test_both_heads_beat_shadowed_skills(self, tmp_path):
-        from strands_code_cli.codeact import CodeactState
+        from strands_code_cli.policy.codeact import CodeactState
 
         for name, armed in (("code", "code"), ("tool", "tool")):
             skills_dir = tmp_path / f"skills-{name}"
@@ -1171,7 +1189,7 @@ class TestCodeactSwitchingCoherence:
             assert "interface" not in row
 
     def test_cost_report_byte_identical_across_interfaces(self):
-        from strands_code_cli.cost_context import cost_report
+        from strands_code_cli.cost.cost_context import cost_report
         from strands_code_cli.loop.core import record_turn_metrics
 
         def _session(interfaces: list[str]) -> str:
@@ -1188,7 +1206,7 @@ class TestCodeactSwitchingCoherence:
         assert "interface" not in tool_report
 
     def test_policy_file_byte_identical_across_switches(self, tmp_path):
-        from strands_code_cli.policy import Allow, PolicyConfig, Rule, decide
+        from strands_code_cli.policy.core import Allow, PolicyConfig, Rule, decide
 
         repo = tmp_path / "policy.toml"
         missing = tmp_path / "missing.toml"
@@ -1211,7 +1229,7 @@ class TestCodeactSwitchingCoherence:
         )
 
     def test_messages_byte_identical_across_switch_with_stint_reset(self, tmp_path):
-        from strands_code_cli.codeact import CodeactStint
+        from strands_code_cli.policy.codeact import CodeactStint
 
         holder = CodeactState()
         stint = CodeactStint(tmp_path)

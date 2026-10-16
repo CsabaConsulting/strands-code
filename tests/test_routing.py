@@ -11,7 +11,7 @@ import urllib.error
 
 import pytest
 
-from strands_code_cli.routing import (
+from strands_code_cli.routing.core import (
     _ENGINE_REGISTRY,
     DECISION_BODY_MAX_BYTES,
     OLLAMA_DEFAULT_HOST,
@@ -224,7 +224,7 @@ class TestDecisionBuilders:
     def test_question_never_touches_prices_or_stats(self, monkeypatch):
         # D-02: quantities stay code-side; building the question must
         # not consult the almanac at all.
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         def _boom(model_id):
             raise AssertionError("question building must not price candidates")
@@ -245,7 +245,7 @@ class TestDecisionBuilders:
         assert HAIKU not in question["criteria"]  # levels only, never models
 
     def test_effort_question_uses_known_level_prose(self):
-        from strands_code_cli.routing import _EFFORT_CRITERIA
+        from strands_code_cli.routing.core import _EFFORT_CRITERIA
 
         candidate = RoutingCandidate(id=HAIKU, levels=["low", "high"])
         question = build_effort_question(candidate=candidate, directives="")
@@ -365,7 +365,7 @@ class TestUnhashableChoiceHolds:
 
 class TestGateModel:
     def _priced(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         prices = {HAIKU: (3.0, 15.0), NOVA_MICRO: (0.035, 0.14)}
         monkeypatch.setattr(routing_mod, "price_for", lambda mid: prices.get(mid))
@@ -402,7 +402,7 @@ class TestGateModel:
         assert detail == f"tie 52% vs 48% → {NOVA_MICRO} (cheaper)"
 
     def test_exact_tie_routes_cheaper(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         # Exact ties break alphabetically (NOVA_MICRO sorts first), so
         # price it dearer to force the substitution the other way.
@@ -417,7 +417,7 @@ class TestGateModel:
         assert detail == f"tie 50% vs 50% → {HAIKU} (cheaper)"
 
     def test_outside_margin_keeps_top_without_lookup(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         def _boom(model_id):
             raise AssertionError("clear winners must not price candidates")
@@ -429,7 +429,7 @@ class TestGateModel:
         assert (model, tie_break, detail) == (HAIKU, False, "")
 
     def test_equal_prices_keep_top_without_marker(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         monkeypatch.setattr(routing_mod, "price_for", lambda mid: (1.0, 1.0))
         model, tie_break, detail = gate_model(
@@ -439,7 +439,7 @@ class TestGateModel:
         assert (model, tie_break, detail) == (HAIKU, False, "")
 
     def test_missing_or_raising_prices_keep_top(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         monkeypatch.setattr(routing_mod, "price_for", lambda mid: None)
         table = _answer(HAIKU, {HAIKU: 0.52, NOVA_MICRO: 0.48})
@@ -1484,7 +1484,7 @@ class TestLocalEngine:
             "local_base_url: 'ftp://files.local/ollama'}\n",
             encoding="utf-8",
         )
-        with caplog.at_level("WARNING", logger="strands_code_cli.routing"):
+        with caplog.at_level("WARNING", logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "missing.yaml"
             )
@@ -1820,7 +1820,7 @@ class TestLocalEngine:
         assert local_engine_ready(OLLAMA_DEFAULT_HOST, "") is False
 
     def test_none_base_probes_the_default_daemon(self, monkeypatch):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         gets: list = []
 
@@ -1958,7 +1958,7 @@ class TestNativeEngine:
         ],
     )
     def test_legacy_primary_maps_to_identical_chain(self, monkeypatch, primary, mapped):
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         monkeypatch.setattr(routing_mod, "local_engine_ready", lambda *args: True)
         base = dict(decision_model="cheap/decider", local_model="nimble")
@@ -2252,7 +2252,7 @@ class TestRoutedEffort:
 
         import strands_harness.models as harness_models
 
-        from strands_code_cli.model_switch import apply_switch
+        from strands_code_cli.model.model_switch import apply_switch
 
         calls: list = []
 
@@ -2271,7 +2271,7 @@ class TestRoutedEffort:
 
         import strands_harness.models as harness_models
 
-        from strands_code_cli.model_switch import apply_switch
+        from strands_code_cli.model.model_switch import apply_switch
 
         calls: list = []
 
@@ -2643,7 +2643,7 @@ class TestSingleCandidateFastPath:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        import strands_code_cli.routing as routing_mod
+        import strands_code_cli.routing.core as routing_mod
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 

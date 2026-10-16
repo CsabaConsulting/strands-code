@@ -16,10 +16,11 @@ from types import SimpleNamespace
 import pytest
 
 import strands_code_cli.loop.core as loop_mod
-import strands_code_cli.routing as routing_mod
-from strands_code_cli.provider_config import ProviderConfig
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.routing import (
+import strands_code_cli.routing.core as routing_mod
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
+from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.memory.skills import SkillIndex
+from strands_code_cli.routing.core import (
     MODEL_ROUTING_KEEP_REPLY,
     ROUTE_USAGE,
     ROUTING_MANUAL_OFF_NOTE,
@@ -30,8 +31,7 @@ from strands_code_cli.routing import (
     RoutingState,
     RoutingStrategy,
 )
-from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import SkillIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 HAIKU = "bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_MICRO = "bedrock/amazon.nova-micro-v1:0"
@@ -125,7 +125,7 @@ def _serving_invoke(calls):
     """Fake turn: record (text, serving model id), append a Q/A pair."""
 
     def _invoke(agent, text, event, **kwargs):
-        from strands_code_cli.model_switch import model_id_of
+        from strands_code_cli.model.model_switch import model_id_of
 
         calls.append((text, model_id_of(getattr(agent, "model", None), "?")))
         agent.messages.append({"role": "user", "content": [{"text": text}]})
@@ -771,7 +771,7 @@ class TestRoutingToggle:
     def test_model_with_routing_on_radio_cancel_keeps_routing(
         self, tmp_path, monkeypatch
     ):
-        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.ui.choice as choice_mod
 
         self._configured(monkeypatch)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -790,7 +790,7 @@ class TestRoutingToggle:
     def test_model_with_routing_on_radio_proceed_disables_after_apply(
         self, tmp_path, monkeypatch, capsys
     ):
-        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.ui.choice as choice_mod
 
         self._configured(monkeypatch)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
@@ -863,7 +863,7 @@ class TestRoutingToggle:
         assert ROUTING_MANUAL_OFF_NOTE in " ".join(capsys.readouterr().out.split())
 
     def test_model_with_routing_off_skips_warn_entirely(self, tmp_path, monkeypatch):
-        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.ui.choice as choice_mod
 
         monkeypatch.setattr(
             choice_mod,
@@ -885,7 +885,7 @@ class TestRoutingToggle:
         assert (action, message) == ("model", HAIKU)
 
     def test_model_unconfigured_skips_warn_entirely(self, tmp_path, monkeypatch):
-        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.ui.choice as choice_mod
 
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: None)
         monkeypatch.setattr(
@@ -1031,7 +1031,7 @@ class TestCostRouting:
         ]
 
     def test_cost_report_renders_routing_and_folds_spend(self):
-        from strands_code_cli.cost_context import cost_for, cost_report
+        from strands_code_cli.cost.cost_context import cost_for, cost_report
 
         turns = [
             {
@@ -1074,7 +1074,7 @@ class TestCostRouting:
         assert HAIKU in message and "85%" in message
 
     def test_cost_report_without_routing_is_byte_identical(self):
-        from strands_code_cli.cost_context import cost_report
+        from strands_code_cli.cost.cost_context import cost_report
 
         turns = [
             {
@@ -1235,7 +1235,7 @@ class TestSideRouting:
     ):
         import strands_harness.models as harness_models
 
-        from strands_code_cli.model_switch import model_id_of
+        from strands_code_cli.model.model_switch import model_id_of
 
         real_resolve = harness_models.resolve_model
         seen: list = []

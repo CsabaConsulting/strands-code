@@ -24,12 +24,12 @@ from typing import Any, Callable
 import platformdirs
 import yaml
 
-from strands_code_cli.cost_context import (
+from strands_code_cli.cost.cost_context import (
     cost_for,
     estimate_messages_tokens,
     price_for,
 )
-from strands_code_cli.model_switch import supports_reasoning
+from strands_code_cli.model.model_switch import supports_reasoning
 
 logger = logging.getLogger(__name__)
 
@@ -619,7 +619,7 @@ def _cached_decision_ids() -> set[str] | None:
     Never fetches: validate judges the real file against cached entries
     only and must report without network (D-13).
     """
-    from strands_code_cli.live_pricing import cached_tables
+    from strands_code_cli.cost.live_pricing import cached_tables
 
     try:
         tables = cached_tables()

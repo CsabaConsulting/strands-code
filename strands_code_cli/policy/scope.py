@@ -7,7 +7,7 @@ REPL cannot touch sibling repos.
 
 Shell commands pass through unscoped (D-06 full shell); shell redirection
 (``echo > file``, ``sed -i``) and ``python_repl`` ``open()`` calls bypass
-both this guard and the :mod:`strands_code_cli.diff_gate` review gate.
+both this guard and the :mod:`strands_code_cli.policy.diff_gate` review gate.
 That bypass is a documented advisory — airtight mediation of every tool
 is Phase 3 (TOOL-03) work, not closed here.
 """

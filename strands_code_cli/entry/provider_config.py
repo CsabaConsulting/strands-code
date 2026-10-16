@@ -11,7 +11,7 @@ from typing import Any
 import platformdirs
 import yaml
 
-from strands_code_cli.codeact import CodeactState
+from strands_code_cli.policy.codeact import CodeactState
 
 logger = logging.getLogger(__name__)
 

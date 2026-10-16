@@ -41,7 +41,7 @@ agentcore = ["boto3>=1.35.0"]
 litellm = ["litellm>=1.104"]
 
 [project.scripts]
-strands-code = "strands_code_cli.main:main"
+strands-code = "strands_code_cli.entry.main:main"
 
 [dependency-groups]
 # Test-only runtime needs: toolkit wiring tests execute real numpy/pandas
@@ -87,15 +87,15 @@ known-first-party = ["strands_code_cli", "strands_code_agent"]
 [tool.importlinter]
 root_package = "strands_code_cli"
 
-# Initial contract: main.py is the composition root; feature modules must not
-# depend on it. (A D-15 "never reintroduce knowledge" contract is inexpressible:
-# import-linter rejects subpackages of external packages, and the module no
-# longer exists. CLEANUP-01 stays guarded by the absence + anchored-grep CI
-# step instead. Layer contracts for the new feature packages land with the
-# breakup in 12-02/12-03.)
+# Composition-root contract: entry/main.py is the composition root; feature
+# modules must not depend on it. (A D-15 "never reintroduce knowledge"
+# contract is inexpressible: import-linter rejects subpackages of external
+# packages, and the module no longer exists. CLEANUP-01 stays guarded by the
+# absence + anchored-grep CI step instead. The package-root re-export is the
+# only allowed importer.)
 [[tool.importlinter.contracts]]
 name = "Feature modules never import the entry module (composition root)"
 type = "forbidden"
 source_modules = ["strands_code_cli"]
-forbidden_modules = ["strands_code_cli.main"]
-ignore_imports = ["strands_code_cli -> strands_code_cli.main"]
+forbidden_modules = ["strands_code_cli.entry.main"]
+ignore_imports = ["strands_code_cli -> strands_code_cli.entry.main"]

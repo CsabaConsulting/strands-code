@@ -13,15 +13,15 @@ import sys
 import pytest
 import yaml
 
-import strands_code_cli.routing as routing_mod
-from strands_code_cli.router import _SETUP_DONE, dispatch
-from strands_code_cli.routing import (
+import strands_code_cli.routing.core as routing_mod
+from strands_code_cli.dispatch.core import _SETUP_DONE, dispatch
+from strands_code_cli.routing.core import (
     NATIVE_JEV_ALIAS,
     NATIVE_JEV_PIN,
     EngineResult,
     load_strategy,
 )
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,7 @@ def _setup_paths(monkeypatch, tmp_path):
 
 def _scripted_radio(monkeypatch, picks):
     """Serve scripted radio picks; return the (title, options) call log."""
-    import strands_code_cli.choice as choice_mod
+    import strands_code_cli.ui.choice as choice_mod
 
     calls: list = []
     queue = list(picks)
@@ -86,7 +86,7 @@ _SETUP_DECISIONS = [
 
 def _setup_catalog(monkeypatch):
     """Serve the minimal catalogs for both setup fetches."""
-    import strands_code_cli.live_pricing as live_pricing_mod
+    import strands_code_cli.cost.live_pricing as live_pricing_mod
 
     monkeypatch.setattr(
         live_pricing_mod,

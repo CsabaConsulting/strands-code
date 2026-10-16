@@ -13,9 +13,7 @@ import typer
 
 from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_agent.search_tool import format_hits, run_search
-from strands_code_cli.diff_config import MODES, DiffConfig
-from strands_code_cli.diff_gate import apply_stashed, store_for
-from strands_code_cli.memory_file import (
+from strands_code_cli.memory.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
     UPDATED_MARKER_RE,
@@ -28,7 +26,7 @@ from strands_code_cli.memory_file import (
     scan_repo,
     section_span,
 )
-from strands_code_cli.memory_modes import (
+from strands_code_cli.memory.memory_modes import (
     MEMORY_EMPTY_QUEUE,
     MEMORY_MODE_USAGE,
     CurateQueue,
@@ -40,20 +38,22 @@ from strands_code_cli.memory_modes import (
     format_init_prompt,
     format_revise_prompt,
 )
-from strands_code_cli.mode import (
+from strands_code_cli.policy.diff_config import MODES, DiffConfig
+from strands_code_cli.policy.diff_gate import apply_stashed, store_for
+from strands_code_cli.policy.mode import (
     APPROVE_EMPTY,
     APPROVE_EXECUTE,
     APPROVE_OK,
     MODE_USAGE,
     ModeState,
 )
-from strands_code_cli.output import print_plain
-from strands_code_cli.session_index import SessionIndex, rich_stash_path
+from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
+from strands_code_cli.ui.output import print_plain
 
 if TYPE_CHECKING:
-    from strands_code_cli.codeact import CodeactState
-    from strands_code_cli.routing import RoutingState
-    from strands_code_cli.skills import SkillIndex
+    from strands_code_cli.memory.skills import SkillIndex
+    from strands_code_cli.policy.codeact import CodeactState
+    from strands_code_cli.routing.core import RoutingState
 
 USAGE_HINT = (
     "Available commands: /resume, /rename <title>, /forget <id>, "
@@ -188,7 +188,7 @@ def dispatch(
         # Both-mode bare asks never silently default (D-13 explicit
         # user routing); standalone callers keep the throwaway tool
         # holder, so their bare asks still start agent turns.
-        from strands_code_cli.codeact import CODEACT_ROUTE_USAGE
+        from strands_code_cli.policy.codeact import CODEACT_ROUTE_USAGE
 
         if _codeact_holder(interface).interface == "both":
             return ("reply", CODEACT_ROUTE_USAGE)
@@ -287,8 +287,12 @@ def _cost_message(
     routing_events: list | None = None,
 ) -> str:
     """Run /cost: session report, live-price refresh, or table listing."""
-    from strands_code_cli.cost_context import cost_report, price_table, refresh_report
-    from strands_code_cli.live_pricing import refresh_caches
+    from strands_code_cli.cost.cost_context import (
+        cost_report,
+        price_table,
+        refresh_report,
+    )
+    from strands_code_cli.cost.live_pricing import refresh_caches
 
     head, _, arg = rest.partition(" ")
     word = head.strip().lower()
@@ -309,7 +313,7 @@ def _compact_message(agent) -> str:
     """Run /compact: summarize-old + keep-recent, pair-atomic, then report."""
     if agent is None:
         return "No active session."
-    from strands_code_cli.cost_context import compact_messages, model_summarize
+    from strands_code_cli.cost.cost_context import compact_messages, model_summarize
 
     before = len(getattr(agent, "messages", []) or [])
     if not before:
@@ -322,7 +326,7 @@ def _clear_message(agent, session_id: str) -> str:
     """Run /clear: wipe history in place, keep the session id."""
     if agent is None:
         return "No active session."
-    from strands_code_cli.cost_context import clear_messages
+    from strands_code_cli.cost.cost_context import clear_messages
 
     clear_messages(agent)
     return f"Context cleared — session {session_id} kept."
@@ -334,7 +338,7 @@ def _context_message(
     """Render /context: the exact item-3 field list, read-only."""
     if agent is None:
         return "No active session."
-    from strands_code_cli.cost_context import context_report
+    from strands_code_cli.cost.cost_context import context_report
 
     return context_report(agent, current_model or "unknown-model", session_turns)
 
@@ -357,7 +361,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_harness.defaults import DEFAULT_MODEL
     from strands_harness.models import resolve_model
 
-    from strands_code_cli.model_switch import (
+    from strands_code_cli.model.model_switch import (
         build_model_tree,
         discover_models,
         normalize_model_ref,
@@ -370,7 +374,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         seen = list(dict.fromkeys(configured + options))
         tree = build_model_tree(seen)
         if sys.stdin.isatty():
-            from strands_code_cli.choice import radio_choice
+            from strands_code_cli.ui.choice import radio_choice
 
             def _ask(title, items, default):
                 try:
@@ -547,14 +551,14 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
 
 def _routing_holder(routing: RoutingState | None) -> RoutingState:
     """Loop-owned holder when present, else a throwaway off default."""
-    from strands_code_cli.routing import RoutingState
+    from strands_code_cli.routing.core import RoutingState
 
     return routing if routing is not None else RoutingState(initial="off")
 
 
 def _routing_warns(routing: RoutingState | None) -> bool:
     """True when a /model selection must pass the warn-and-cancel dialog."""
-    from strands_code_cli.routing import warn_applies
+    from strands_code_cli.routing.core import warn_applies
 
     return warn_applies(routing)
 
@@ -568,13 +572,13 @@ def _model_warn_action(selection: str) -> tuple:
     unclear answer fails closed to keep-routing. Never swaps inline —
     success returns ``("model", selection)`` like the wrapped path.
     """
-    from strands_code_cli.routing import MODEL_ROUTING_KEEP_REPLY
+    from strands_code_cli.routing.core import MODEL_ROUTING_KEEP_REPLY
 
     def _keep() -> tuple:
         return ("reply", MODEL_ROUTING_KEEP_REPLY)
 
     if sys.stdin.isatty():
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         try:
             picked = radio_choice(
@@ -751,7 +755,7 @@ def _setup_ask(
     all fail closed to None; the caller aborts with no writes (D-13).
     """
     if sys.stdin.isatty():
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         try:
             return radio_choice(title, options, default=default)
@@ -1041,7 +1045,7 @@ def _setup_engine_order() -> list[str] | None:
     accepts, "no" runs the builder, and EOF or Ctrl-C aborts. A lazy
     daemon probe notes an unreachable local link before the prompt.
     """
-    from strands_code_cli.routing import local_engine_ready, native_engine_ready
+    from strands_code_cli.routing.core import local_engine_ready, native_engine_ready
 
     has_key = native_engine_ready()
     if has_key:
@@ -1083,7 +1087,7 @@ def _setup_pick_native_model() -> str | None:
     choice prints a drift warning naming the per-verdict snapshot
     logging; the pin stays quiet.
     """
-    from strands_code_cli.routing import NATIVE_JEV_ALIAS, NATIVE_JEV_PIN
+    from strands_code_cli.routing.core import NATIVE_JEV_ALIAS, NATIVE_JEV_PIN
 
     picked = _setup_ask(
         "Pick the native Jev model (pin recommended)",
@@ -1144,11 +1148,11 @@ def _route_setup_message() -> str:
     (empty accepts the proposed order and the nimble default, and
     keeps skip notes on).
     """
-    from strands_code_cli.live_pricing import (
+    from strands_code_cli.cost.live_pricing import (
         fetch_openrouter_decision_models,
         fetch_openrouter_models,
     )
-    from strands_code_cli.routing import save_strategy
+    from strands_code_cli.routing.core import save_strategy
 
     scope = _setup_ask(
         "Where should the strategy live",
@@ -1259,7 +1263,7 @@ def _route_validate_message() -> str:
     append a note leaving validity unchanged (T-9-01: HTTP classes
     map to notes, never bodies; no key echo).
     """
-    from strands_code_cli.routing import (
+    from strands_code_cli.routing.core import (
         NATIVE_JEV_PIN,
         decide_via_typesafe,
         load_strategy,
@@ -1323,7 +1327,7 @@ def _route_message(rest: str, routing: RoutingState | None) -> str:
 
     Bare ``/route`` reports status like bare ``/mode``.
     """
-    from strands_code_cli.routing import (
+    from strands_code_cli.routing.core import (
         ROUTE_USAGE,
         load_strategy,
         route_status_text,
@@ -1368,7 +1372,7 @@ def _mode_message(rest: str, mode: ModeState | None) -> str:
 
 def _codeact_holder(codeact: CodeactState | None) -> CodeactState:
     """Loop-owned holder when present, else a throwaway tool default."""
-    from strands_code_cli.codeact import CodeactState
+    from strands_code_cli.policy.codeact import CodeactState
 
     return codeact if codeact is not None else CodeactState()
 
@@ -1379,7 +1383,7 @@ def _codeact_message(rest: str, codeact: CodeactState | None) -> str:
     No agent turn ever leaves this branch; approval prompts never live
     here (established reply-only pattern).
     """
-    from strands_code_cli.codeact import CODEACT_USAGE
+    from strands_code_cli.policy.codeact import CODEACT_USAGE
 
     holder = _codeact_holder(codeact)
     verb = rest.strip().lower()
@@ -1399,7 +1403,7 @@ def _codeact_route_action(
     precedent); otherwise the holder arms for exactly one turn and the
     ask runs as an agent turn.
     """
-    from strands_code_cli.codeact import CODEACT_ROUTE_USAGE
+    from strands_code_cli.policy.codeact import CODEACT_ROUTE_USAGE
 
     if not rest:
         return ("reply", CODEACT_ROUTE_USAGE)
@@ -1770,8 +1774,8 @@ def _policy_message(rest: str) -> str:
     Approval prompts never live here (they would race the prompt); this
     only reports the effective policy and the gate's covered-action log.
     """
-    from strands_code_cli.policy import PolicyConfig
-    from strands_code_cli.policy_gate import last_covered
+    from strands_code_cli.policy.core import PolicyConfig
+    from strands_code_cli.policy.policy_gate import last_covered
 
     verb = rest.strip().lower()
     if verb in ("", "show"):
@@ -1998,7 +2002,7 @@ def show_picker(
         # Arrow-key dialog (choice.radio_choice): same SIGINT-safe prompt
         # as the approval gate. ESC/failure means start-new (None);
         # Ctrl-C re-raises so startup cancel still works.
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         return _picker_tty_loop(index, session_dir, radio_choice)
     return _picker_typed_loop(index, session_dir)

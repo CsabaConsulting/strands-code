@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from strands_code_cli.router import USAGE_HINT, dispatch, show_picker
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch, show_picker
 
 
 def _fresh_index(tmp_path):
-    from strands_code_cli.session_index import SessionIndex
+    from strands_code_cli.session.session_index import SessionIndex
 
     return SessionIndex(tmp_path / "index")
 
@@ -88,7 +88,7 @@ class TestSlashDispatch:
 class TestShowPicker:
     def test_empty_index_returns_none_without_prompting(self, tmp_path):
         index = _fresh_index(tmp_path)
-        with patch("strands_code_cli.router.typer.prompt") as prompt:
+        with patch("strands_code_cli.dispatch.core.typer.prompt") as prompt:
             assert show_picker(index, session_dir=tmp_path / "sessions") is None
         prompt.assert_not_called()
 
@@ -102,7 +102,7 @@ class TestShowPicker:
         index.ensure(first)  # first is now the most recent
         _with_snapshot(session_dir, first)
         _with_snapshot(session_dir, second)
-        with patch("strands_code_cli.router.typer.prompt", return_value=1):
+        with patch("strands_code_cli.dispatch.core.typer.prompt", return_value=1):
             assert show_picker(index, session_dir=session_dir) == first
 
     def test_entries_without_snapshots_hidden(self, tmp_path):
@@ -113,13 +113,13 @@ class TestShowPicker:
         backed = index.mint()
         index.rename(backed, "Backed Session")
         _with_snapshot(session_dir, backed)
-        with patch("strands_code_cli.router.typer.prompt", return_value=1):
+        with patch("strands_code_cli.dispatch.core.typer.prompt", return_value=1):
             assert show_picker(index, session_dir=session_dir) == backed
 
     def test_all_orphans_returns_none_without_prompting(self, tmp_path):
         index = _fresh_index(tmp_path)
         index.mint()
-        with patch("strands_code_cli.router.typer.prompt") as prompt:
+        with patch("strands_code_cli.dispatch.core.typer.prompt") as prompt:
             assert show_picker(index, session_dir=tmp_path / "sessions") is None
         prompt.assert_not_called()
 
@@ -129,7 +129,7 @@ class TestShowPicker:
         sid = index.mint()
         _with_snapshot(session_dir, sid)
         # 1 = session, 2 = delete row, 3 = start new.
-        with patch("strands_code_cli.router.typer.prompt", return_value=3):
+        with patch("strands_code_cli.dispatch.core.typer.prompt", return_value=3):
             assert show_picker(index, session_dir=session_dir) is None
 
 
@@ -167,7 +167,7 @@ class TestForgetCommand:
         assert sid not in {e["id"] for e in index.list_recent(limit=None)}
 
     def test_forget_ambiguous_prefix_lists_matches(self, tmp_path):
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         root = tmp_path / "index"
         index = SessionIndex(root)
@@ -241,7 +241,7 @@ class TestPickerDeleteTyped:
         # then refreshed list (1 session): 3 = start new.
         prompts = iter([3, 1, 1, 3])
         with patch(
-            "strands_code_cli.router.typer.prompt",
+            "strands_code_cli.dispatch.core.typer.prompt",
             side_effect=lambda *a, **k: next(prompts),
         ):
             assert show_picker(index, session_dir=session_dir) is None
@@ -258,7 +258,7 @@ class TestPickerDeleteTyped:
         # 2 = delete row, 2 = cancel in the sub-list, 3 = start new.
         prompts = iter([2, 2, 3])
         with patch(
-            "strands_code_cli.router.typer.prompt",
+            "strands_code_cli.dispatch.core.typer.prompt",
             side_effect=lambda *a, **k: next(prompts),
         ):
             assert show_picker(index, session_dir=session_dir) is None
@@ -330,7 +330,7 @@ class TestCliRouting:
     def test_no_arg_reaches_repl(self, tmp_path, monkeypatch):
         import importlib
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
         with _patched_launch(main_module) as (_, loop):
@@ -348,7 +348,7 @@ class TestCliRouting:
         import importlib
         import uuid
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         session_id = str(uuid.uuid4())
@@ -364,7 +364,7 @@ class TestCliRouting:
         import importlib
         import uuid
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         with (
@@ -385,10 +385,10 @@ class TestCliRouting:
     def test_no_arg_with_sessions_shows_picker(self, tmp_path, monkeypatch):
         import importlib
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(".agent/session_index")
         chosen = index.mint()
@@ -405,7 +405,7 @@ class TestCliRouting:
     def test_malformed_id_is_usage_error_without_sessions(self, tmp_path, monkeypatch):
         import importlib
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         from typer.testing import CliRunner

@@ -15,6 +15,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from strands_code_cli.dispatch.core import (
+    _MEMORY_USAGE,
+    USAGE_HINT,
+    apply_memory_section,
+    dispatch,
+    read_memory_section,
+)
 from strands_code_cli.loop.core import (
     _drain_revise_rounds,
     _result_text,
@@ -22,7 +29,7 @@ from strands_code_cli.loop.core import (
     consume_revise_turn,
     review_memory_queue,
 )
-from strands_code_cli.memory_file import (
+from strands_code_cli.memory.memory_file import (
     MAX_SCAN_BYTES,
     MAX_SCAN_FILES,
     apply_init_proposal,
@@ -33,7 +40,7 @@ from strands_code_cli.memory_file import (
     parse_memory_file,
     scan_repo,
 )
-from strands_code_cli.memory_modes import (
+from strands_code_cli.memory.memory_modes import (
     MEMORY_EMPTY_QUEUE,
     CurateQueue,
     InitState,
@@ -44,15 +51,8 @@ from strands_code_cli.memory_modes import (
     seed_promotion_seen,
     silent_note,
 )
-from strands_code_cli.mode import ModeState
-from strands_code_cli.router import (
-    _MEMORY_USAGE,
-    USAGE_HINT,
-    apply_memory_section,
-    dispatch,
-    read_memory_section,
-)
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.policy.mode import ModeState
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _dispatch(text, tmp_path, **kwargs):
@@ -166,7 +166,7 @@ class TestCurateLoop:
         )
 
     def test_memory_approve_verb_acts_immediately(self, tmp_path, monkeypatch):
-        import strands_code_cli.router as router_mod
+        import strands_code_cli.dispatch.core as router_mod
 
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
@@ -178,7 +178,7 @@ class TestCurateLoop:
         assert [p.id for p in calls] == ["p1"]
 
     def test_memory_deny_verb_never_writes(self, tmp_path, monkeypatch):
-        import strands_code_cli.router as router_mod
+        import strands_code_cli.dispatch.core as router_mod
 
         queue = CurateQueue()
         queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p1")
@@ -325,8 +325,8 @@ class TestCurateLoop:
         assert "approve <id>|deny <id>" in USAGE_HINT
 
     def test_apply_memory_proposal_writes_through_dump(self, tmp_path, monkeypatch):
-        from strands_code_cli.memory_file import parse_memory_file
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
+        from strands_code_cli.memory.memory_file import parse_memory_file
 
         monkeypatch.chdir(tmp_path)
         apply_memory_proposal(Proposal("p1", "Build", "promoted", "Run uv build.\n"))
@@ -338,7 +338,7 @@ class TestCurateLoop:
         assert "Use uv run." in body
 
     def test_apply_memory_proposal_stamps_freshness_marker(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
         apply_memory_proposal(Proposal("p1", "Build", "promoted", "Run uv build.\n"))
@@ -349,7 +349,7 @@ class TestCurateLoop:
     def test_apply_memory_proposal_marks_existing_section_only(
         self, tmp_path, monkeypatch
     ):
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
         _write_memory(tmp_path, "## Build\nRun make.\n\n## Test\nRun pytest.\n")
@@ -362,7 +362,7 @@ class TestCurateLoop:
         assert "## Test\nRun pytest.\n" in body
 
     def test_apply_memory_proposal_refreshes_stale_marker(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
         old = (date.today() - timedelta(days=91)).isoformat()
@@ -375,7 +375,7 @@ class TestCurateLoop:
         assert f"{fresh}\n## Build\n" in body
 
     def test_approved_section_reads_fresh_to_diff(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
         apply_memory_proposal(Proposal("p1", "Build", "promoted", "Run uv build.\n"))
@@ -648,7 +648,7 @@ class TestReviseRounds:
     def test_section_span_keeps_marker_glued_to_next_heading(
         self, tmp_path, monkeypatch
     ):
-        from strands_code_cli.router import apply_memory_proposal
+        from strands_code_cli.dispatch.core import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
         path = _write_memory(
@@ -773,7 +773,7 @@ class TestInitScan:
             scan_repo(tmp_path, "sideways")
 
     def test_diff_sections_flags_missing_unmarked_and_stale(self):
-        from strands_code_cli.memory_file import MemorySnapshot
+        from strands_code_cli.memory.memory_file import MemorySnapshot
 
         old = (date.today() - timedelta(days=91)).isoformat()
         fresh = date.today().isoformat()
@@ -981,7 +981,7 @@ class TestMemoryGapRound:
         assert queue.sweep_promotions(fact_dir, seen, skip_sections=skip) == []
 
     def test_approve_all_applies_each_pending(self, tmp_path, monkeypatch):
-        import strands_code_cli.router as router_mod
+        import strands_code_cli.dispatch.core as router_mod
 
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
@@ -995,7 +995,7 @@ class TestMemoryGapRound:
         assert queue.list_pending() == []
 
     def test_deny_all_skips_each_without_writing(self, tmp_path, monkeypatch):
-        import strands_code_cli.router as router_mod
+        import strands_code_cli.dispatch.core as router_mod
 
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")

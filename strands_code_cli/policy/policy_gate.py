@@ -13,9 +13,9 @@ reason so the ask layer short-circuits to a printed refusal and returns
 ``"n"`` (deny) without prompting. Fail-closed wins over literal text.
 
 Layer split: ``PolicyClassifier`` reads the ``BeforeToolCallEvent`` tool
-name + input and calls :func:`strands_code_cli.policy.decide`; the ask
+name + input and calls :func:`strands_code_cli.policy.core.decide`; the ask
 renders full detail (exact command or diff + one-line risk reason, D-01)
-inside :func:`strands_code_cli.output.output_context`. D-03 remember
+inside :func:`strands_code_cli.ui.output.output_context`. D-03 remember
 writes happen inside the ask (which closes over tool name + input via
 the classifier's last-decision context), never in ``evaluate`` (which
 stays ``default_evaluate``). No ``enable_trust`` (wrong granularity),
@@ -43,8 +43,7 @@ from strands.vended_interventions.hitl.classifier import ClassifierResult
 
 from strands_code_cli.loop.btw import RENDER_LOCK
 from strands_code_cli.loop.steering import stdin_guard as gate_open
-from strands_code_cli.output import output_context, print_plain
-from strands_code_cli.policy import (
+from strands_code_cli.policy.core import (
     Allow,
     Deny,
     PolicyConfig,
@@ -53,6 +52,7 @@ from strands_code_cli.policy import (
     decide,
     normalise_command,
 )
+from strands_code_cli.ui.output import output_context, print_plain
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -625,7 +625,7 @@ class PolicyClassifier:
 
     def _dialog_answer(self, title: str = "Approve?") -> str:
         """Arrow-key approval choice; ESC/failure denies, Ctrl-C re-raises."""
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         picked = radio_choice(
             title,

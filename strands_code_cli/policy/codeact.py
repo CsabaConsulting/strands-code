@@ -24,7 +24,7 @@ from strands_code_agent.python_environments.base import STDERR_LABEL, STDOUT_LAB
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_cli.scope import confine, resolve
+from strands_code_cli.policy.scope import confine, resolve
 
 CODEACT_PREFIX = """You are in CodeAct mode: solve this turn by generating Python first.
 

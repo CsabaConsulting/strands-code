@@ -21,9 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS, CodeAgent
-from strands_code_cli.scope import ScopeGuard, confine, resolve
+from strands_code_cli.policy.scope import ScopeGuard, confine, resolve
 
-main_module = importlib.import_module("strands_code_cli.main")
+main_module = importlib.import_module("strands_code_cli.entry.main")
 
 
 def _tool_names(tools):
@@ -165,8 +165,8 @@ class TestPromptSteering:
 
 class TestScopePolicyOrdering:
     def test_outside_path_with_allow_rule_admitted(self, tmp_path):
-        from strands_code_cli.policy import PolicyConfig, Rule
-        from strands_code_cli.scope import confine, effective_roots
+        from strands_code_cli.policy.core import PolicyConfig, Rule
+        from strands_code_cli.policy.scope import confine, effective_roots
 
         cwd = Path("/opt/scope-test-proj")
         policy = PolicyConfig(allow=[Rule(tool="write", path="/opt/granted/*.md")])
@@ -180,8 +180,8 @@ class TestScopePolicyOrdering:
         assert str(admitted) == "/opt/granted/notes.md"
 
     def test_outside_path_without_rule_denied_names_roots(self):
-        from strands_code_cli.policy import PolicyConfig
-        from strands_code_cli.scope import confine, effective_roots
+        from strands_code_cli.policy.core import PolicyConfig
+        from strands_code_cli.policy.scope import confine, effective_roots
 
         cwd = Path("/opt/scope-test-proj")
         roots = effective_roots(cwd, PolicyConfig())
@@ -190,8 +190,8 @@ class TestScopePolicyOrdering:
             confine("/opt/other-repo/a.py", cwd)
 
     def test_relative_allow_rule_grants_no_extra_roots(self, tmp_path):
-        from strands_code_cli.policy import PolicyConfig, Rule
-        from strands_code_cli.scope import effective_roots
+        from strands_code_cli.policy.core import PolicyConfig, Rule
+        from strands_code_cli.policy.scope import effective_roots
 
         policy = PolicyConfig(allow=[Rule(tool="write", path="docs/*.md")])
         assert [str(r) for r in effective_roots(tmp_path, policy)] == [

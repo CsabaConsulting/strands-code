@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-import strands_code_cli.routing as routing_mod
+import strands_code_cli.routing.core as routing_mod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNNER = REPO_ROOT / "scripts" / "route-probe.py"

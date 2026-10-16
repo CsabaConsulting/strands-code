@@ -15,19 +15,19 @@ from pathlib import Path
 import pytest
 import yaml
 
-import strands_code_cli.routing as routing_mod
-from strands_code_cli.router import (
+import strands_code_cli.routing.core as routing_mod
+from strands_code_cli.dispatch.core import (
     _SETUP_DONE,
     _setup_decision_entries,
     dispatch,
 )
-from strands_code_cli.routing import (
+from strands_code_cli.routing.core import (
     RoutingCandidate,
     load_strategy,
     save_strategy,
     validate_strategy,
 )
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _write(path, text):
@@ -173,7 +173,7 @@ class TestStrategyLoad:
             tmp_path / "routing.yaml",
             _strategy_yaml(extra="tie_margin: wide\nconfidence_threshold: true\n"),
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -193,7 +193,7 @@ class TestStrategyLoad:
             tmp_path / "routing.yaml",
             _strategy_yaml(extra="tie_margin: 2.0\nconfidence_threshold: -1.0\n"),
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -272,7 +272,7 @@ class TestStrategyLoad:
             "directives: d\n"
             "engine: {order: [native, bogus, native, openrouter]}\n",
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -289,7 +289,7 @@ class TestStrategyLoad:
             "directives: d\n"
             "engine: {primary: local, order: native}\n",
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -306,7 +306,7 @@ class TestStrategyLoad:
             "directives: d\n"
             "engine: {order: [native], native_model: 42}\n",
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -323,7 +323,7 @@ class TestStrategyLoad:
             "directives: d\n"
             "engine: {order: [native], skip_notes: sometimes}\n",
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
@@ -382,7 +382,7 @@ def _setup_paths(monkeypatch, tmp_path):
 
 def _scripted_radio(monkeypatch, picks):
     """Serve scripted radio picks; return the (title, options) call log."""
-    import strands_code_cli.choice as choice_mod
+    import strands_code_cli.ui.choice as choice_mod
 
     calls: list = []
     queue = list(picks)
@@ -455,7 +455,7 @@ _SETUP_DECISIONS = [
 
 def _setup_catalog(monkeypatch, payload=None, decisions=None):
     """Serve fixture catalogs (deep-ish copies) for both setup fetches."""
-    import strands_code_cli.live_pricing as live_pricing_mod
+    import strands_code_cli.cost.live_pricing as live_pricing_mod
 
     rows = payload if payload is not None else _SETUP_CATALOG
     monkeypatch.setattr(
@@ -655,7 +655,7 @@ class TestRouteSetup:
         self, tmp_path, monkeypatch, capsys
     ):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
-        import strands_code_cli.live_pricing as live_pricing_mod
+        import strands_code_cli.cost.live_pricing as live_pricing_mod
 
         monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
         monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: True)
@@ -728,7 +728,7 @@ class TestRouteSetup:
     ):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
-        import strands_code_cli.live_pricing as live_pricing_mod
+        import strands_code_cli.cost.live_pricing as live_pricing_mod
 
         # Chat catalog fine, decisions catalog down: candidates pick
         # from the radio, the decider falls back to a typed id with
@@ -872,7 +872,7 @@ class TestRouteSetup:
                 "API_KEY": "sk-live-456",
             },
         }
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             path = save_strategy(
                 data, "global", global_path=tmp_path / "cfg" / "g.yaml"
             )
@@ -898,7 +898,7 @@ class TestRouteSetup:
                 "TYPESAFE_API_KEY": "ts-[REDACTED]",
             },
         }
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             path = save_strategy(
                 data, "global", global_path=tmp_path / "cfg" / "g.yaml"
             )
@@ -1178,7 +1178,7 @@ class TestRouteValidate:
                 candidates=("\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n")
             ),
         )
-        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )

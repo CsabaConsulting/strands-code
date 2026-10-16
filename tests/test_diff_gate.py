@@ -7,10 +7,11 @@ import asyncio
 import pytest
 from rich.console import Console
 
+import strands_code_cli.policy.diff_gate as diff_gate
 from strands_code_agent.callback_handler import CodeAgentCallbackHandler
-from strands_code_cli import diff_gate
-from strands_code_cli.diff_config import DEFAULT_MODE, DiffConfig
-from strands_code_cli.diff_gate import (
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
+from strands_code_cli.policy.diff_config import DEFAULT_MODE, DiffConfig
+from strands_code_cli.policy.diff_gate import (
     PendingStore,
     apply_stashed,
     bind_session,
@@ -20,8 +21,7 @@ from strands_code_cli.diff_gate import (
     store_for,
     unified_diff,
 )
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _mem_io(files: dict):
@@ -475,8 +475,8 @@ class TestGateSubsumption:
 
     def test_one_prompt_total_with_gate(self, tmp_path):
         """Gate ask (1, answered y) + gate-active wrapper (0) == 1 total."""
-        from strands_code_cli.policy import PolicyConfig
-        from strands_code_cli.policy_gate import PolicyClassifier
+        from strands_code_cli.policy.core import PolicyConfig
+        from strands_code_cli.policy.policy_gate import PolicyClassifier
 
         files: dict = {}
         read, write = _mem_io(files)

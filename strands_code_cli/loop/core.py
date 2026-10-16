@@ -21,20 +21,8 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory, History
 from rich.console import Console
 
-from strands_code_cli import routing as routing_mod
-from strands_code_cli.choice import radio_choice
-from strands_code_cli.codeact import (
-    CodeactState,
-    CodeactStint,
-    codeact_label,
-    default_repl_handle,
-    resolve_initial_interface,
-    resolve_turn_interface,
-    restore_after_turn,
-    shape_turn_text,
-    swap_for_code_turn,
-)
-from strands_code_cli.cost_context import (
+import strands_code_cli.routing.core as routing_mod
+from strands_code_cli.cost.cost_context import (
     AUTO_COMPACT_PCT,
     MODEL_PRICING,
     compact_messages,
@@ -43,6 +31,13 @@ from strands_code_cli.cost_context import (
     usage_line,
     window_for,
 )
+from strands_code_cli.dispatch.core import (
+    apply_approved_proposal,
+    apply_memory_section,
+    dispatch,
+    read_memory_section,
+)
+from strands_code_cli.entry.provider_config import ProviderConfig
 from strands_code_cli.loop.btw import (
     BTW_IDLE_APPROVAL,
     BtwContext,
@@ -60,7 +55,7 @@ from strands_code_cli.loop.steering import (
     register_steering_hook,
     start_steering_reader,
 )
-from strands_code_cli.memory_file import (
+from strands_code_cli.memory.memory_file import (
     MEMORY_RELOAD_NOTE,
     MemorySnapshot,
     load_memory,
@@ -68,7 +63,7 @@ from strands_code_cli.memory_file import (
     memory_section_names,
     sweep_memory_files,
 )
-from strands_code_cli.memory_modes import (
+from strands_code_cli.memory.memory_modes import (
     MEMORY_FACT_DIR,
     CurateQueue,
     InitState,
@@ -79,8 +74,7 @@ from strands_code_cli.memory_modes import (
     seed_promotion_seen,
     silent_note,
 )
-from strands_code_cli.mode import PLAN_PREFIX, ModeState
-from strands_code_cli.model_switch import (
+from strands_code_cli.model.model_switch import (
     MODEL_REFUSAL,
     apply_switch,
     canonical_prefix_hash,
@@ -94,25 +88,31 @@ from strands_code_cli.model_switch import (
     supports_streaming_tools,
     to_stash_json,
 )
-from strands_code_cli.output import output_context, print_plain
-from strands_code_cli.policy_gate import (
+from strands_code_cli.policy.codeact import (
+    CodeactState,
+    CodeactStint,
+    codeact_label,
+    default_repl_handle,
+    resolve_initial_interface,
+    resolve_turn_interface,
+    restore_after_turn,
+    shape_turn_text,
+    swap_for_code_turn,
+)
+from strands_code_cli.policy.mode import PLAN_PREFIX, ModeState
+from strands_code_cli.policy.policy_gate import (
     TurnCancelled,
     _active_broker,
     bind_turn,
     gate_open,
     worker_cancelled,
 )
-from strands_code_cli.policy_gate import (
+from strands_code_cli.policy.policy_gate import (
     set_mode as set_gate_mode,
 )
-from strands_code_cli.provider_config import ProviderConfig
-from strands_code_cli.router import (
-    apply_approved_proposal,
-    apply_memory_section,
-    dispatch,
-    read_memory_section,
-)
-from strands_code_cli.session_index import SessionIndex, rich_stash_path
+from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
+from strands_code_cli.ui.choice import radio_choice
+from strands_code_cli.ui.output import output_context, print_plain
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -298,7 +298,7 @@ def _drain_reported_cost(model: Any) -> float | None:
         if not callable(take):
             return None
     try:
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         return sum_reported_costs(take())
     except Exception:
@@ -502,7 +502,7 @@ def _route_side_spawn(
             return
         try:
             routed = resolve_model(pick.model, pick.model, effort=pick.effort)
-            from strands_code_cli.reported_cost import wrap_for_openrouter
+            from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
             routed = wrap_for_openrouter(pick.model, routed)
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
@@ -1487,7 +1487,7 @@ def _route_pre_turn(
 def _review_answer() -> str:
     """One approve/deny/revise answer; anything unclear fails closed to deny."""
     if sys.stdin.isatty():
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         try:
             picked = radio_choice(
@@ -1633,7 +1633,7 @@ def _result_text(agent: Any, result: Any) -> str:
 def _revise_answer() -> str:
     """One accept/revert/iterate answer; anything unclear fails closed to revert."""
     if sys.stdin.isatty():
-        from strands_code_cli.choice import radio_choice
+        from strands_code_cli.ui.choice import radio_choice
 
         try:
             picked = radio_choice(
@@ -2428,8 +2428,8 @@ def run_loop(
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
-    from strands_code_cli.completer import build_completer
-    from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
+    from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS, SkillIndex
+    from strands_code_cli.ui.completer import build_completer
 
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
     skills = SkillIndex()

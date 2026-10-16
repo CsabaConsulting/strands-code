@@ -32,8 +32,8 @@ from strands_code_cli.loop.core import (
     _poll_live,
     console,
 )
-from strands_code_cli.output import print_plain
-from strands_code_cli.policy_gate import TurnCancelled, worker_cancelled
+from strands_code_cli.policy.policy_gate import TurnCancelled, worker_cancelled
+from strands_code_cli.ui.output import print_plain
 
 _PUMP_RESUME = "resume"
 """Pump interrupt verdict: continue pumping (no unwinding cancel)."""

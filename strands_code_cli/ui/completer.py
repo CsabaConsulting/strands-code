@@ -12,7 +12,7 @@ from prompt_toolkit.completion import (
 )
 from prompt_toolkit.document import Document
 
-from strands_code_cli.skills import SKILLS_SOURCE
+from strands_code_cli.memory.skills import SKILLS_SOURCE
 
 WordList = list[tuple[str, str]]
 """``(bare, display)`` pairs: bare names match, display text completes."""

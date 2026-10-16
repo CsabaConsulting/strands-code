@@ -8,7 +8,8 @@ from urllib.error import URLError
 
 import pytest
 
-from strands_code_cli import cost_context, live_pricing
+import strands_code_cli.cost.cost_context as cost_context
+import strands_code_cli.cost.live_pricing as live_pricing
 
 # Real Price List records (us-west-2, pub 2026-10-03), trimmed to the
 # fields the parser reads. Standard Mistral Large 3: $0.50 in / $1.50

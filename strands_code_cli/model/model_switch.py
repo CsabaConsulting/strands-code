@@ -22,7 +22,8 @@ try:
 except ImportError:  # harness predates supports_thinking: static fallback below
     _harness_supports_thinking = None
 
-from strands_code_cli import model_capabilities, reported_cost
+import strands_code_cli.cost.reported_cost as reported_cost
+import strands_code_cli.model.model_capabilities as model_capabilities
 
 MODEL_REFUSAL = "Model switches apply at the idle prompt — wait for the turn to finish."
 
@@ -591,7 +592,7 @@ def estimate_fit(
     Returns:
         ``(fits, pct, tokens)`` with pct None when the window is unknown.
     """
-    from strands_code_cli.cost_context import estimate_messages_tokens, window_for
+    from strands_code_cli.cost.cost_context import estimate_messages_tokens, window_for
 
     tokens = estimate_messages_tokens(messages)
     window = window_for(new_id)

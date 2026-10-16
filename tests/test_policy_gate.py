@@ -52,8 +52,8 @@ from strands.interventions.actions import Confirm, Proceed
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands_harness.interventions import resolve_interventions
 
-from strands_code_cli.policy import PolicyConfig, PolicyOptions, Rule
-from strands_code_cli.policy_gate import (
+from strands_code_cli.policy.core import PolicyConfig, PolicyOptions, Rule
+from strands_code_cli.policy.policy_gate import (
     BatchState,
     PolicyClassifier,
     bind_main_agent,
@@ -62,7 +62,7 @@ from strands_code_cli.policy_gate import (
     last_covered,
 )
 
-main_module = importlib.import_module("strands_code_cli.main")
+main_module = importlib.import_module("strands_code_cli.entry.main")
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +328,7 @@ class TestBindHelpers:
     def test_bind_turn_and_last_covered(self, monkeypatch):
         build_interventions()
         bind_turn("t-1")
-        import strands_code_cli.policy_gate as gate_module
+        import strands_code_cli.policy.policy_gate as gate_module
 
         classifier = gate_module._ACTIVE["classifier"]
         assert isinstance(classifier, PolicyClassifier)
@@ -353,7 +353,7 @@ class TestBindHelpers:
 
 class TestAgentTaggedGate:
     def test_tag_for_identity(self):
-        from strands_code_cli.policy_gate import tag_for
+        from strands_code_cli.policy.policy_gate import tag_for
 
         main = _FakeAgent()
         assert tag_for(None, main) == "main"
@@ -497,7 +497,7 @@ class TestDialogAttribution:
     def _dialog_ask(self, monkeypatch, command, pick, *, btw=False):
         # Drive one ask through the tty dialog branch with a recording
         # radio_choice double; return (answer, titles seen).
-        import strands_code_cli.choice as choice_mod
+        import strands_code_cli.ui.choice as choice_mod
 
         titles: list[str] = []
 
@@ -581,7 +581,7 @@ class TestCodeactApprovalPreview:
 
         from rich.console import Console
 
-        import strands_code_cli.policy_gate as gate_module
+        import strands_code_cli.policy.policy_gate as gate_module
 
         block = _code_block_2000()
         assert len(block) == 2000
@@ -599,7 +599,7 @@ class TestCodeactApprovalPreview:
         assert rendered == block.rstrip("\n")
 
     def test_dialog_title_keeps_sixty_char_collapse(self):
-        from strands_code_cli.policy_gate import _dialog_title
+        from strands_code_cli.policy.policy_gate import _dialog_title
 
         block = _code_block_2000()
         assert _dialog_title("main", "python_repl", {"code": block}) == (
@@ -655,7 +655,7 @@ class TestCodeactApprovalPreview:
 
 class TestCodeactRuleCoherence:
     def test_always_derives_narrow_python_repl_rule(self, tmp_path, monkeypatch):
-        from strands_code_cli.policy import normalise_command
+        from strands_code_cli.policy.core import normalise_command
 
         repo = tmp_path / "policy.toml"
         missing = tmp_path / "missing.toml"
@@ -698,7 +698,7 @@ class TestCodeactRuleCoherence:
         assert isinstance(second, Proceed)
 
     def test_never_derives_python_repl_deny_rule(self, tmp_path, monkeypatch):
-        from strands_code_cli.policy import normalise_command
+        from strands_code_cli.policy.core import normalise_command
 
         repo = tmp_path / "policy.toml"
         missing = tmp_path / "missing.toml"
@@ -726,12 +726,12 @@ class TestCodeactRuleCoherence:
         # D-04 natural fit: the gate never consults the interface, so the
         # existing plan-deny holds on tool and code turns alike — no new
         # mode logic. Mirrors test_mode.py BANNED_VOCAB (mode words only).
-        from strands_code_cli.codeact import CodeactState
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.policy.codeact import CodeactState
+        from strands_code_cli.session.session_index import SessionIndex
 
         holder = CodeactState()
         index = SessionIndex(tmp_path / "index")
-        from strands_code_cli.router import dispatch
+        from strands_code_cli.dispatch.core import dispatch
 
         action, _ = dispatch(
             "/codeact " + holder_value, session_id="s", index=index, interface=holder

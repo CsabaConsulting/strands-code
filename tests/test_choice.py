@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 from strands.vended_interventions.hitl import HumanInTheLoop
 
-import strands_code_cli.choice as choice_module
-from strands_code_cli.policy import PolicyConfig
-from strands_code_cli.policy_gate import PolicyClassifier
-from strands_code_cli.router import show_picker
+import strands_code_cli.ui.choice as choice_module
+from strands_code_cli.dispatch.core import show_picker
+from strands_code_cli.policy.core import PolicyConfig
+from strands_code_cli.policy.policy_gate import PolicyClassifier
 
 
 class _FakeAgent:
@@ -93,7 +93,7 @@ class TestSessionPickerDialog:
         assert show_picker(self._index()) is None
 
     def _real_index(self, tmp_path):
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         session_dir = tmp_path / "sessions"
@@ -118,7 +118,10 @@ class TestSessionPickerDialog:
         return calls
 
     def test_picker_delete_confirmed(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _SESSION_DELETE, _SESSION_DELETE_CONFIRM
+        from strands_code_cli.dispatch.core import (
+            _SESSION_DELETE,
+            _SESSION_DELETE_CONFIRM,
+        )
 
         index, session_dir, first, second = self._real_index(tmp_path)
         calls = self._script(
@@ -136,7 +139,7 @@ class TestSessionPickerDialog:
         assert second in {e["id"] for e in index.list_recent(limit=None)}
 
     def test_picker_delete_cancel_at_target(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _SESSION_DELETE
+        from strands_code_cli.dispatch.core import _SESSION_DELETE
 
         index, session_dir, first, _second = self._real_index(tmp_path)
         self._script(monkeypatch, [_SESSION_DELETE, None, None])
@@ -145,7 +148,7 @@ class TestSessionPickerDialog:
         assert (session_dir / "session" / first).exists()
 
     def test_picker_delete_cancel_at_confirm(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _SESSION_DELETE
+        from strands_code_cli.dispatch.core import _SESSION_DELETE
 
         index, session_dir, first, _second = self._real_index(tmp_path)
         self._script(monkeypatch, [_SESSION_DELETE, first, None, None])

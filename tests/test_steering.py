@@ -31,8 +31,8 @@ from strands_code_cli.loop.steering import (
     mid_turn_slash_reply,
     start_steering_reader,
 )
-from strands_code_cli.policy import PolicyConfig
-from strands_code_cli.policy_gate import PolicyClassifier, gate_open
+from strands_code_cli.policy.core import PolicyConfig
+from strands_code_cli.policy.policy_gate import PolicyClassifier, gate_open
 
 
 def _hook_event(name="shell", uid="u1", **tool_input):
@@ -157,7 +157,7 @@ class TestSteeringReader:
             os.close(read_fd)
 
     def test_model_mid_turn_refused_never_armed(self):
-        from strands_code_cli.model_switch import MODEL_REFUSAL
+        from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
         steered: list[str] = []
         refused: list[tuple[str, str]] = []
@@ -212,7 +212,7 @@ class TestSteeringReader:
 
 class TestMidTurnSlashReply:
     def test_model_forms_reuse_loop_refusal(self):
-        from strands_code_cli.model_switch import MODEL_REFUSAL
+        from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
         for text in ("/model", "/models", "  /model us.x  ", "/MODEL"):
             assert mid_turn_slash_reply(text) == MODEL_REFUSAL
@@ -411,8 +411,8 @@ class TestStdinGuard:
         assert guard.held()
 
     def test_singleton_shared_by_gate_chooser_and_dialog(self):
-        import strands_code_cli.choice as choice_module
         import strands_code_cli.loop.core as loop_module
+        import strands_code_cli.ui.choice as choice_module
         from strands_code_cli.loop.steering import stdin_guard
 
         assert gate_open is stdin_guard

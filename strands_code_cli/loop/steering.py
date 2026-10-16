@@ -148,7 +148,7 @@ def mid_turn_slash_reply(text: str) -> str | None:
         return None
     head = cleaned.split()[0].lower()
     if head in ("/model", "/models"):
-        from strands_code_cli.model_switch import MODEL_REFUSAL
+        from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
         return MODEL_REFUSAL
     return f"{head} applies at the idle prompt — wait for the turn to finish."

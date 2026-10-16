@@ -28,12 +28,13 @@ import pytest
 from strands.models.model import Model
 from strands_harness import create_harness
 
+import strands_code_cli.cost.cost_context as cost_context
+import strands_code_cli.model.model_capabilities as model_capabilities
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_cli import cost_context, model_capabilities
-from strands_code_cli.cost_context import (
+from strands_code_cli.cost.cost_context import (
     AUTO_COMPACT_PCT,
     SUMMARY_MARKER,
     clear_messages,
@@ -542,7 +543,7 @@ class TestRoutingEntries:
         ]
 
     def test_native_entry_renders_computed_spend_with_marker(self):
-        from strands_code_cli.routing import TYPESAFE_INPUT_USD_PER_MTOK
+        from strands_code_cli.routing.core import TYPESAFE_INPUT_USD_PER_MTOK
 
         event = _routed_event(
             engine="native",
@@ -588,7 +589,7 @@ class TestRoutingEntries:
         ]
 
     def test_totals_fold_reported_spend(self):
-        from strands_code_cli.cost_context import cost_for
+        from strands_code_cli.cost.cost_context import cost_for
 
         turns = [
             {
@@ -707,8 +708,8 @@ class TestContextOps:
 
 class TestCostRouterBranches:
     def _dispatch(self, tmp_path, text, agent=None, turns=None, model=None):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         return dispatch(
@@ -729,7 +730,7 @@ class TestCostRouterBranches:
         assert "Display only — no budgets or enforcement." in message
 
     def test_cost_refresh_dispatch(self, tmp_path, monkeypatch):
-        from strands_code_cli import live_pricing
+        import strands_code_cli.cost.live_pricing as live_pricing
 
         monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
         monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path / "cache"))
@@ -743,7 +744,7 @@ class TestCostRouterBranches:
         assert "OpenRouter: 0 models." in message
 
     def test_cost_table_dispatch_reads_cache_only(self, tmp_path, monkeypatch):
-        from strands_code_cli import live_pricing
+        import strands_code_cli.cost.live_pricing as live_pricing
 
         monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path / "cache"))
         monkeypatch.setenv("AWS_REGION", "us-west-2")
@@ -799,8 +800,8 @@ class TestCostRouterBranches:
         assert sorted(uses) == sorted(results)
 
     def test_clear_keeps_session_id_exact_reply(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         sid = index.mint()
@@ -898,9 +899,9 @@ class TestLoopUsageWiring:
         from pathlib import Path as _Path
 
         roots = [
-            _Path("strands_code_cli/model_switch.py"),
-            _Path("strands_code_cli/cost_context.py"),
-            _Path("strands_code_cli/router.py"),
+            _Path("strands_code_cli/model/model_switch.py"),
+            _Path("strands_code_cli/cost/cost_context.py"),
+            _Path("strands_code_cli/dispatch/core.py"),
             _Path("strands_code_cli/loop/core.py"),
             _Path("strands_code_cli/loop/pump.py"),
             _Path("strands_code_agent/utils.py"),
@@ -924,7 +925,7 @@ class TestLoopUsageWiring:
                 ), (path, line.strip())
 
     def test_no_credential_persistence_sinks(self, tmp_path):
-        from strands_code_cli.provider_config import ProviderConfig
+        from strands_code_cli.entry.provider_config import ProviderConfig
 
         path = tmp_path / "config.yaml"
         ProviderConfig(model="bedrock/x", base_url="https://proxy.local").save(path)
@@ -936,12 +937,12 @@ class TestLoopUsageWiring:
         from pathlib import Path as _Path
 
         for mod in (
-            "model_switch",
-            "cost_context",
-            "router",
+            "model/model_switch",
+            "cost/cost_context",
+            "dispatch/core",
             "loop/core",
             "loop/pump",
-            "main",
+            "entry/main",
         ):
             text = _Path(f"strands_code_cli/{mod}.py").read_text(encoding="utf-8")
             assert "os.getenv" not in text and "os.environ" not in text, mod

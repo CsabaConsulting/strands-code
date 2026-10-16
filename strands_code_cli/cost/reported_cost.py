@@ -14,7 +14,7 @@ import copy
 import math
 from typing import Any
 
-from strands_code_cli import live_pricing
+import strands_code_cli.cost.live_pricing as live_pricing
 
 _wrapped_classes: dict[type, type] = {}
 """Composed capture subclass per SDK base (one base in production)."""

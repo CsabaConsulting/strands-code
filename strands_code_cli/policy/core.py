@@ -1,6 +1,6 @@
 """Deterministic TOML allow/deny policy store + match engine (TOOL-03, D-05..D-08).
 
-Shape mirrors :class:`strands_code_cli.diff_config.DiffConfig` exactly
+Shape mirrors :class:`strands_code_cli.policy.diff_config.DiffConfig` exactly
 (dataclass, platformdirs home, repo layer, symlink refusal fail-loud,
 atomic tmp+replace save, 0o700 home dir) but persists TOML via stdlib
 ``tomllib`` (read) plus a hand-rolled serialiser for the repo's own narrow
@@ -488,7 +488,7 @@ class Deny:
 
 def _allowed_roots_text(cwd: str | Path, policy: PolicyConfig) -> str:
     """Allowed-roots rendering for outside-scope denials (scope error shape)."""
-    from strands_code_cli.scope import effective_roots
+    from strands_code_cli.policy.scope import effective_roots
 
     roots = effective_roots(cwd, policy)
     return ", ".join(str(r) for r in roots)
@@ -535,11 +535,11 @@ def decide(
         return Prompt(reason=f"Python execution: {code[:200]}")
     if tool_name in FILE_TOOLS:
         raw = tool_input.get("path", "")
-        from strands_code_cli.scope import effective_roots
+        from strands_code_cli.policy.scope import effective_roots
 
         roots = effective_roots(base, policy)
         if isinstance(raw, str) and raw:
-            from strands_code_cli.scope import resolve
+            from strands_code_cli.policy.scope import resolve
 
             canonical = Path(os.path.realpath(resolve(raw, base)))
             if not any(canonical == r or r in canonical.parents for r in roots):

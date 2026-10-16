@@ -34,7 +34,7 @@ def _litellm_stub(monkeypatch):
 
 def _wrapped(model_id: str, fake_base: type, **config: Any):
     """Promote a fake resolved instance through the wrap gate."""
-    from strands_code_cli.reported_cost import wrap_for_openrouter
+    from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
     resolved = fake_base()
     for key, value in config.items():
@@ -75,7 +75,7 @@ class TestCapture:
         assert model.take_reported_costs() == [0.0024]
 
     def test_metadata_chunk_without_cost_records_absent(self, _litellm_stub):
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk({"chunk_type": "metadata", "data": SimpleNamespace()})
@@ -89,7 +89,7 @@ class TestCapture:
         assert model.take_reported_costs() == []
 
     def test_malformed_costs_never_raise_and_drain_to_none(self, _litellm_stub):
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata("0.0024"))
@@ -99,7 +99,7 @@ class TestCapture:
         assert sum_reported_costs(model.take_reported_costs()) is None
 
     def test_extract_rejects_nonfinite_costs(self, _litellm_stub):
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(float("nan")))
@@ -124,7 +124,7 @@ class TestDrain:
         assert model.take_reported_costs() == []
 
     def test_multi_cycle_sums_present_only(self, _litellm_stub):
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.001))
@@ -133,7 +133,7 @@ class TestDrain:
         assert sum_reported_costs(model.take_reported_costs()) == pytest.approx(0.003)
 
     def test_present_zero_drains_as_present_zero(self, _litellm_stub):
-        from strands_code_cli.reported_cost import sum_reported_costs
+        from strands_code_cli.cost.reported_cost import sum_reported_costs
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0))
@@ -145,7 +145,7 @@ class TestDrain:
 
 class TestWrapGate:
     def test_non_openrouter_ids_pass_through_identical(self, _litellm_stub):
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         bedrock = _litellm_stub()
         assert wrap_for_openrouter("bedrock/anthropic.claude-x", bedrock) is bedrock
@@ -160,7 +160,7 @@ class TestWrapGate:
         assert callable(getattr(second, "take_reported_costs", None))
 
     def test_missing_extra_returns_resolved_unchanged(self, monkeypatch):
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         monkeypatch.setitem(sys.modules, "strands.models.litellm", None)
         resolved = SimpleNamespace(model_id="litellm/openrouter/qwen/qwen3-32b")
@@ -172,8 +172,8 @@ class TestWrapGate:
     def test_wrap_promotion_failure_returns_input_unchanged(
         self, _litellm_stub, monkeypatch
     ):
-        import strands_code_cli.reported_cost as reported_cost
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        import strands_code_cli.cost.reported_cost as reported_cost
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         def _boom(_base):
             raise RuntimeError("promotion unavailable")
@@ -188,7 +188,7 @@ class TestWrapGate:
 
 class TestPromotion:
     def test_composed_class_uses_single_inheritance(self, _litellm_stub):
-        from strands_code_cli.reported_cost import _composed_class
+        from strands_code_cli.cost.reported_cost import _composed_class
 
         composed = _composed_class(_litellm_stub)
         bases = [entry for entry in composed.__mro__ if entry is not object]
@@ -211,13 +211,13 @@ class TestPromotion:
 
 class TestUsageLineActual:
     def test_reported_cost_marks_actual(self):
-        from strands_code_cli.cost_context import usage_line
+        from strands_code_cli.cost.cost_context import usage_line
 
         line = usage_line(12, 1, "bedrock/any", reported_cost=0.0024)
         assert "$0.00 actual" in line
 
     def test_actual_wins_over_estimate(self):
-        from strands_code_cli.cost_context import usage_line
+        from strands_code_cli.cost.cost_context import usage_line
 
         line = usage_line(
             1_000_000,
@@ -228,7 +228,7 @@ class TestUsageLineActual:
         assert line == "1.00M (100%) $0.00 actual"
 
     def test_without_reported_cost_byte_identical(self):
-        from strands_code_cli.cost_context import usage_line
+        from strands_code_cli.cost.cost_context import usage_line
 
         assert (
             usage_line(451270, 1000, "bedrock/global.anthropic.claude-sonnet-4-6")
@@ -281,7 +281,7 @@ class TestMainDrainAgentShape:
         assert line is not None and "$0.00 actual" in line
 
     def test_rewrap_discards_undrained_accumulation(self, _litellm_stub):
-        from strands_code_cli.reported_cost import (
+        from strands_code_cli.cost.reported_cost import (
             sum_reported_costs,
             wrap_for_openrouter,
         )
@@ -297,7 +297,7 @@ class TestMainDrainAgentShape:
 
 class TestFreshSideModel:
     def test_side_builds_from_one_parent_stay_independent(self, _litellm_stub):
-        from strands_code_cli.reported_cost import fresh_side_model
+        from strands_code_cli.cost.reported_cost import fresh_side_model
 
         parent = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         parent.format_chunk(_metadata(0.005))
@@ -312,7 +312,7 @@ class TestFreshSideModel:
         assert parent.take_reported_costs() == [0.005]
 
     def test_plain_model_passes_through_identical(self):
-        from strands_code_cli.reported_cost import fresh_side_model
+        from strands_code_cli.cost.reported_cost import fresh_side_model
 
         plain = SimpleNamespace()
         assert fresh_side_model(plain) is plain
@@ -322,7 +322,7 @@ class TestFreshSideModel:
     ):
         import copy
 
-        from strands_code_cli.reported_cost import fresh_side_model
+        from strands_code_cli.cost.reported_cost import fresh_side_model
 
         def _boom(_obj):
             raise RuntimeError("copy unavailable")
@@ -401,7 +401,7 @@ def _build_agent_with_resolved(monkeypatch, tmp_path, model_string, resolved):
 
     from strands.models.model import Model
 
-    main_module = importlib.import_module("strands_code_cli.main")
+    main_module = importlib.import_module("strands_code_cli.entry.main")
 
     class _Placeholder(Model):
         def update_config(self, **model_config: Any) -> None:
@@ -474,7 +474,7 @@ class TestWrapScope:
         assert second.take_reported_costs() == []
 
     def test_promotion_preserves_every_config_attribute(self, _litellm_stub):
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         resolved = _litellm_stub()
         resolved.model_id = "litellm/openrouter/qwen/qwen3-32b"
@@ -499,7 +499,7 @@ class TestRealSdkPromotion:
             from strands.models.litellm import LiteLLMModel
         except ImportError:
             pytest.skip("litellm extra not installed")
-        from strands_code_cli.reported_cost import (
+        from strands_code_cli.cost.reported_cost import (
             sum_reported_costs,
             wrap_for_openrouter,
         )
@@ -548,8 +548,8 @@ class TestLiveReportedCost:
             from strands.models.litellm import LiteLLMModel
         except ImportError:
             pytest.skip("litellm extra not installed")
-        from strands_code_cli.cost_context import cost_report
-        from strands_code_cli.reported_cost import (
+        from strands_code_cli.cost.cost_context import cost_report
+        from strands_code_cli.cost.reported_cost import (
             sum_reported_costs,
             wrap_for_openrouter,
         )

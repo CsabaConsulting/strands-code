@@ -6,7 +6,7 @@ in the ``builtin_tools`` mapping (name-collision rule) and these wrappers
 registered instead. Chosen over harness ``interventions`` to avoid building
 Phase 3 TOOL-03 machinery early, and over SDK hooks as least precedented.
 
-Each wrapper (a) resolves + confines paths via :mod:`strands_code_cli.scope`,
+Each wrapper (a) resolves + confines paths via :mod:`strands_code_cli.policy.scope`,
 (b) computes a stdlib ``difflib.unified_diff`` old-vs-new preview, (c)
 consults the :class:`DiffConfig` mode — ``approve-each`` prompts per hunk
 inside the turn via the ``ask`` callable, ``on-demand`` stashes pending
@@ -34,8 +34,8 @@ from typing import Any, Awaitable, Callable
 
 from strands import tool
 
-from strands_code_cli.diff_config import DEFAULT_MODE, MODES, DiffConfig
-from strands_code_cli.scope import confine, resolve
+from strands_code_cli.policy.diff_config import DEFAULT_MODE, MODES, DiffConfig
+from strands_code_cli.policy.scope import confine, resolve
 
 _PENDING_NAME = "pending.json"
 
@@ -260,8 +260,8 @@ def _policy_roots(cwd: str | Path) -> list[Path]:
     any failure yields no extras (fail-closed to default roots).
     """
     try:
-        from strands_code_cli.policy import PolicyConfig
-        from strands_code_cli.scope import effective_roots
+        from strands_code_cli.policy.core import PolicyConfig
+        from strands_code_cli.policy.scope import effective_roots
 
         return [r for r in effective_roots(cwd, PolicyConfig.load())]
     except Exception:

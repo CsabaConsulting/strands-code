@@ -16,8 +16,11 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
-from strands_code_cli.provider_config import ProviderConfig
+from strands_code_cli.entry.first_run import (
+    BEDROCK_SETUP_POINTER,
+    preflight_credentials,
+)
+from strands_code_cli.entry.provider_config import ProviderConfig
 
 
 def _no_creds() -> None:
@@ -53,7 +56,7 @@ class TestPreflightGate:
         import inspect
 
         source = inspect.getsource(preflight_credentials) + inspect.getsource(
-            importlib.import_module("strands_code_cli.first_run")
+            importlib.import_module("strands_code_cli.entry.first_run")
         )
         assert "os.environ" not in source
         assert "os.getenv" not in source
@@ -67,7 +70,7 @@ class TestPreflightGate:
 
 class TestFirstRunCli:
     def test_no_creds_cli_exits_non_zero_with_pointer(self, tmp_path, monkeypatch):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         with patch.object(
@@ -77,7 +80,7 @@ class TestFirstRunCli:
         assert result.exit_code != 0
 
     def test_no_creds_cli_creates_no_session_dir(self, tmp_path, monkeypatch):
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         with patch.object(
@@ -91,7 +94,7 @@ class TestFirstRunCli:
 
     def test_gate_runs_before_session_resolution(self, tmp_path, monkeypatch):
         """A failing gate must not mint index entries or snapshot dirs."""
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)
         with patch.object(

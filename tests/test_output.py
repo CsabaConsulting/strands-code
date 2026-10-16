@@ -16,8 +16,8 @@ from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
 import strands_code_cli.loop.core as loop_module
-from strands_code_cli.output import output_context, print_plain
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
+from strands_code_cli.ui.output import output_context, print_plain
 
 
 def test_output_context_uses_raw_mode():

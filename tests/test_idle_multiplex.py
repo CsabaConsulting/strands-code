@@ -466,7 +466,7 @@ def _child_main(scenario: str) -> int:
 
     from prompt_toolkit import PromptSession as _PromptSession
 
-    from strands_code_cli.choice import radio_choice as _radio_choice
+    from strands_code_cli.ui.choice import radio_choice as _radio_choice
 
     approval = _threading.Event()
 

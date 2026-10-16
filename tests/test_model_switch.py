@@ -47,12 +47,13 @@ from strands.models.model import Model
 from strands_harness import create_harness
 from strands_harness.models import resolve_model
 
+import strands_code_cli.model.model_capabilities as model_capabilities
+import strands_code_cli.model.model_switch as model_switch
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_cli import model_capabilities, model_switch
-from strands_code_cli.model_switch import (
+from strands_code_cli.model.model_switch import (
     TRACE_LABEL,
     apply_switch,
     convert_history,
@@ -228,7 +229,7 @@ class TestNormalizeModelRef:
     )
 
     def test_profile_arn_maps_to_tail(self):
-        from strands_code_cli.model_switch import normalize_model_ref
+        from strands_code_cli.model.model_switch import normalize_model_ref
 
         assert (
             normalize_model_ref(self._ARN)
@@ -247,14 +248,14 @@ class TestNormalizeModelRef:
         ],
     )
     def test_everything_else_passes_through(self, selection):
-        from strands_code_cli.model_switch import normalize_model_ref
+        from strands_code_cli.model.model_switch import normalize_model_ref
 
         assert normalize_model_ref(selection) == selection
 
     def test_apply_switch_accepts_full_profile_arn(self):
         from types import SimpleNamespace
 
-        from strands_code_cli.model_switch import apply_switch
+        from strands_code_cli.model.model_switch import apply_switch
 
         agent = SimpleNamespace(model="old", messages=[])
         _model, resolved = apply_switch(agent, self._ARN)
@@ -266,7 +267,7 @@ class TestCanonicalPrefixHash:
     def test_stable_across_thinking_and_media_conversion(self):
         import warnings
 
-        from strands_code_cli.model_switch import canonical_prefix_hash
+        from strands_code_cli.model.model_switch import canonical_prefix_hash
 
         fixture = _fixture_history()
         with warnings.catch_warnings():
@@ -284,7 +285,7 @@ class TestCanonicalPrefixHash:
     def test_breaks_on_real_edit(self):
         import copy
 
-        from strands_code_cli.model_switch import canonical_prefix_hash
+        from strands_code_cli.model.model_switch import canonical_prefix_hash
 
         fixture = _fixture_history()
         edited = copy.deepcopy(fixture)
@@ -294,7 +295,7 @@ class TestCanonicalPrefixHash:
     def test_legacy_labels_migrate_on_convert(self):
         import copy
 
-        from strands_code_cli.model_switch import _LEGACY_TRACE_LABELS
+        from strands_code_cli.model.model_switch import _LEGACY_TRACE_LABELS
 
         legacy_block = _LEGACY_TRACE_LABELS[0] + "\nThe user is asking about capitals."
         src = [
@@ -316,7 +317,7 @@ class TestCanonicalPrefixHash:
         import copy
         import warnings
 
-        from strands_code_cli.model_switch import (
+        from strands_code_cli.model.model_switch import (
             _LEGACY_TRACE_LABELS,
             TRACE_LABEL,
             canonical_prefix_hash,
@@ -495,15 +496,15 @@ class TestCapabilityAlmanac:
         assert len(_reasoning_blocks(same)) == 1
 
     def test_fallback_allowlist_without_harness(self, monkeypatch):
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.model_switch import supports_reasoning
+        import strands_code_cli.model.model_switch as model_switch_mod
+        from strands_code_cli.model.model_switch import supports_reasoning
 
         monkeypatch.setattr(model_switch_mod, "_harness_supports_thinking", None)
         assert supports_reasoning("bedrock/anthropic.claude-opus-5") is True
         assert supports_reasoning("qwen.qwen3-32b-v1:0") is False  # fail-closed
 
     def test_harness_verdicts_for_bedrock_families(self):
-        from strands_code_cli.model_switch import supports_reasoning
+        from strands_code_cli.model.model_switch import supports_reasoning
 
         assert supports_reasoning("bedrock/anthropic.claude-opus-5") is True
         assert supports_reasoning("qwen.qwen3-32b-v1:0") is True
@@ -552,7 +553,7 @@ class TestCapabilityAlmanac:
         assert dropped[0]["content"] == []  # no blank text block emitted
 
     def test_same_vendor_across_id_forms(self):
-        from strands_code_cli.model_switch import same_vendor
+        from strands_code_cli.model.model_switch import same_vendor
 
         assert same_vendor(
             "bedrock/global.anthropic.claude-opus-5", "us.anthropic.claude-haiku-1"
@@ -561,7 +562,7 @@ class TestCapabilityAlmanac:
         assert not same_vendor("bedrock/anthropic.claude-x", "qwen.qwen3-32b-v1:0")
 
     def test_media_rules_nova_micro_less_nova_pro_ok(self):
-        from strands_code_cli.model_switch import supports_media
+        from strands_code_cli.model.model_switch import supports_media
 
         assert supports_media("amazon.nova-micro-v1:0") is False
         assert supports_media("amazon.nova-lite-v1:0") is False
@@ -574,7 +575,7 @@ class TestCapabilityAlmanac:
         assert supports_media("bedrock/mystery-vision-1") is True  # fail-open
 
     def test_media_bedrock_openai_less_direct_openai_ok(self):
-        from strands_code_cli.model_switch import supports_media
+        from strands_code_cli.model.model_switch import supports_media
 
         # Harness-verified: OpenAI-family Converse models reject image
         # fields; direct OpenAI vision models are unaffected.
@@ -585,7 +586,11 @@ class TestCapabilityAlmanac:
 
 class TestAggregatorIds:
     def test_true_vendor_and_family_parsing(self):
-        from strands_code_cli.model_switch import _base_key, _vendor_family, _vendor_of
+        from strands_code_cli.model.model_switch import (
+            _base_key,
+            _vendor_family,
+            _vendor_of,
+        )
 
         entry = "litellm/openrouter/qwen/qwen3-32b"
         assert _base_key(entry) == "qwen/qwen3-32b"
@@ -593,20 +598,20 @@ class TestAggregatorIds:
         assert _vendor_family("qwen/qwen3-32b") == ("qwen", "qwen3")
 
     def test_reasoning_fail_closed_for_aggregators(self):
-        from strands_code_cli.model_switch import supports_reasoning
+        from strands_code_cli.model.model_switch import supports_reasoning
 
         # Even true-vendor anthropic via an aggregator strips: adapter
         # translation of thinking blocks is unverified there.
         assert supports_reasoning("litellm/openrouter/anthropic/claude-x") is False
 
     def test_media_rules_see_true_vendor(self):
-        from strands_code_cli.model_switch import supports_media
+        from strands_code_cli.model.model_switch import supports_media
 
         assert supports_media("litellm/openrouter/meta/llama-x") is False
         assert supports_media("litellm/openrouter/qwen/qwen3-32b") is True
 
     def test_cascade_groups_aggregator_under_true_vendor(self):
-        from strands_code_cli.model_switch import build_model_tree
+        from strands_code_cli.model.model_switch import build_model_tree
 
         tree = build_model_tree(
             ["qwen.qwen3-32b-v1:0", "litellm/openrouter/qwen/qwen3-32b"]
@@ -619,7 +624,7 @@ class TestAggregatorIds:
 
 class TestStreamingTools:
     def test_llama_families_warn_rest_fail_open(self):
-        from strands_code_cli.model_switch import supports_streaming_tools
+        from strands_code_cli.model.model_switch import supports_streaming_tools
 
         assert (
             supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is False
@@ -635,9 +640,9 @@ class TestStreamingTools:
         assert supports_streaming_tools("bedrock/mystery-model-1") is True
 
     def test_override_beats_shipped_rows(self, monkeypatch):
-        import strands_code_cli.model_capabilities as caps
-        from strands_code_cli.model_capabilities import CapabilityOverride
-        from strands_code_cli.model_switch import supports_streaming_tools
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.model.model_capabilities import CapabilityOverride
+        from strands_code_cli.model.model_switch import supports_streaming_tools
 
         monkeypatch.setattr(
             caps,
@@ -860,7 +865,7 @@ class TestRichHistory:
         RichHistory().save(None)
 
     def test_stash_path_rejects_traversal(self, tmp_path):
-        from strands_code_cli.session_index import rich_stash_path
+        from strands_code_cli.session.session_index import rich_stash_path
 
         assert rich_stash_path(tmp_path, "../../evil") is None
         assert rich_stash_path(tmp_path, "no/slash") is None
@@ -885,7 +890,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         # Isolate from the output proxy: StdoutProxy binds the global
         # AppSession output, which earlier tests may have attached to a dead
@@ -935,7 +940,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
         prompts = iter(["/model bedrock/x"])
@@ -980,7 +985,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
         prompts = iter(["hello"])
@@ -1030,7 +1035,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
         prompts = iter(["hello"])
@@ -1086,7 +1091,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
         prompts = iter(["hello"])
@@ -1165,7 +1170,7 @@ class TestTurnGuard:
         from types import SimpleNamespace
 
         import strands_code_cli.loop.core as loop_mod
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
 
@@ -1466,7 +1471,7 @@ class TestDiscoverModels:
 
 class TestGroupModels:
     def test_direct_and_profiles_group_once_profiles_first(self):
-        from strands_code_cli.model_switch import group_models
+        from strands_code_cli.model.model_switch import group_models
 
         direct = "anthropic.claude-haiku-4-5-20251001-v1:0"
         us_arn = (
@@ -1482,7 +1487,7 @@ class TestGroupModels:
         assert groups[0][1] == [global_arn, us_arn, direct]
 
     def test_groups_sorted_abc_custom_names_alone(self):
-        from strands_code_cli.model_switch import group_models
+        from strands_code_cli.model.model_switch import group_models
 
         groups = group_models(
             [
@@ -1498,7 +1503,7 @@ class TestGroupModels:
         ]
 
     def test_provider_name_merges_with_discovered(self):
-        from strands_code_cli.model_switch import group_models
+        from strands_code_cli.model.model_switch import group_models
 
         groups = group_models(
             [
@@ -1510,7 +1515,7 @@ class TestGroupModels:
         assert len(groups[0][1]) == 2
 
     def test_route_label_compacts_arns(self):
-        from strands_code_cli.model_switch import route_label
+        from strands_code_cli.model.model_switch import route_label
 
         assert (
             route_label("arn:aws:bedrock:us-west-2:1:inference-profile/global.foo")
@@ -1521,7 +1526,7 @@ class TestGroupModels:
 
 class TestBuildModelTree:
     def test_vendor_family_nesting_sorted(self):
-        from strands_code_cli.model_switch import build_model_tree
+        from strands_code_cli.model.model_switch import build_model_tree
 
         tree = build_model_tree(
             [
@@ -1541,14 +1546,14 @@ class TestBuildModelTree:
         ]
 
     def test_gpt_oss_stays_compound_family(self):
-        from strands_code_cli.model_switch import build_model_tree
+        from strands_code_cli.model.model_switch import build_model_tree
 
         tree = build_model_tree(["openai.gpt-oss-120b-1:0", "openai.gpt-5-mini"])
         families = dict(next(fams for vendor, fams in tree if vendor == "openai"))
         assert sorted(families) == ["gpt", "gpt-oss"]
 
     def test_dotless_id_groups_under_itself(self):
-        from strands_code_cli.model_switch import build_model_tree
+        from strands_code_cli.model.model_switch import build_model_tree
 
         tree = build_model_tree(["bedrock/x"])
         assert tree[0][0] == "x"
@@ -1566,10 +1571,10 @@ class TestCascadePicker:
     def _dispatch(self, monkeypatch, tmp_path, script, discovered):
         import sys
 
-        import strands_code_cli.choice as choice_mod
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        import strands_code_cli.model.model_switch as model_switch_mod
+        import strands_code_cli.ui.choice as choice_mod
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         calls = []
@@ -1642,7 +1647,7 @@ class TestCascadePicker:
         assert (action, message) == ("reply", "Model unchanged.")
 
     def test_back_from_family_returns_to_vendor(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _MODEL_BACK
+        from strands_code_cli.dispatch.core import _MODEL_BACK
 
         action, message, calls = self._dispatch(
             monkeypatch,
@@ -1654,7 +1659,7 @@ class TestCascadePicker:
         assert (action, message) == ("model", "qwen.qwen3-32b-v1:0")
 
     def test_back_from_route_returns_to_model(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _MODEL_BACK
+        from strands_code_cli.dispatch.core import _MODEL_BACK
 
         opus = "anthropic.claude-opus-5"
         action, message, calls = self._dispatch(
@@ -1673,7 +1678,7 @@ class TestCascadePicker:
         assert (action, message) == ("model", opus)
 
     def test_back_skips_auto_advance_levels(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import _MODEL_BACK
+        from strands_code_cli.dispatch.core import _MODEL_BACK
 
         # One vendor, one family: Back from the model step lands on the
         # vendor step, not on the auto-advanced family level.
@@ -1694,9 +1699,9 @@ class TestCascadePicker:
     def test_non_tty_lists_tree_sorted(self, tmp_path, monkeypatch):
         import sys
 
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        import strands_code_cli.model.model_switch as model_switch_mod
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(
@@ -1718,10 +1723,10 @@ class TestCascadePicker:
     def test_cancel_entry_stays_with_current(self, tmp_path, monkeypatch):
         import sys
 
-        import strands_code_cli.choice as choice_mod
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.router import _MODEL_CANCEL, dispatch
-        from strands_code_cli.session_index import SessionIndex
+        import strands_code_cli.model.model_switch as model_switch_mod
+        import strands_code_cli.ui.choice as choice_mod
+        from strands_code_cli.dispatch.core import _MODEL_CANCEL, dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         seen_options = []
@@ -1752,9 +1757,9 @@ class TestCascadePicker:
     def test_models_alias_lists_like_model(self, tmp_path, monkeypatch):
         import sys
 
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        import strands_code_cli.model.model_switch as model_switch_mod
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(
@@ -1769,8 +1774,8 @@ class TestCascadePicker:
         ) == dispatch("/model", session_id=session_id, index=index, current_model=None)
 
     def test_models_alias_validates_selection(self, tmp_path, monkeypatch):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1782,8 +1787,8 @@ class TestCascadePicker:
     def test_missing_sdk_names_the_extra(self, tmp_path, monkeypatch):
         import strands_harness.models as harness_models
 
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         def _boom(selection, default):
             raise ImportError("No module named 'litellm'")
@@ -1813,7 +1818,7 @@ class TestCascadePicker:
 
 class TestCompactReplaySpike:
     def test_compact_then_replay_on_replay_model(self, tmp_path):
-        from strands_code_cli.cost_context import SUMMARY_MARKER, compact_messages
+        from strands_code_cli.cost.cost_context import SUMMARY_MARKER, compact_messages
 
         session_id = str(uuid.uuid4())
         agent = _make_replay_agent(session_id, tmp_path / "sessions", "after")
@@ -1863,8 +1868,8 @@ class TestCompactReplaySpike:
 
 class TestModelRouterBranch:
     def test_valid_selection_returns_model_action(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         sid = index.mint()
@@ -1877,8 +1882,8 @@ class TestModelRouterBranch:
         assert message == "bedrock/global.anthropic.claude-sonnet-4-6"
 
     def test_router_never_swaps_inline(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
@@ -1892,8 +1897,8 @@ class TestModelRouterBranch:
         assert agent.model is before  # dispatch validates only; loop owns the swap
 
     def test_unknown_provider_reply_lists_providers(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1903,8 +1908,8 @@ class TestModelRouterBranch:
         assert "Supported providers" in message
 
     def test_uninstallable_provider_reply_fail_soft(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1916,8 +1921,8 @@ class TestModelRouterBranch:
         assert "anthropic/claude-3-7-sonnet-latest" in message
 
     def test_arn_prefix_preserved_verbatim(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1928,8 +1933,8 @@ class TestModelRouterBranch:
         assert (action, message) == ("model", "us.anthropic.claude-sonnet-4-6")
 
     def test_full_profile_arn_direct_maps_to_tail(self, tmp_path):
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1943,8 +1948,8 @@ class TestModelRouterBranch:
     def test_bare_model_offline_lists_configured(self, tmp_path, monkeypatch):
         import sys
 
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         index = SessionIndex(tmp_path / "index")
@@ -1960,9 +1965,9 @@ class TestModelRouterBranch:
     def test_bare_model_offline_empty_returns_pair(self, tmp_path, monkeypatch):
         import sys
 
-        import strands_code_cli.model_switch as model_switch_mod
-        from strands_code_cli.router import dispatch
-        from strands_code_cli.session_index import SessionIndex
+        import strands_code_cli.model.model_switch as model_switch_mod
+        from strands_code_cli.dispatch.core import dispatch
+        from strands_code_cli.session.session_index import SessionIndex
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(model_switch_mod, "discover_models", lambda **_: ([], True))
@@ -2108,7 +2113,7 @@ class TestIdleOnlySwap:
 
 class TestModelPersistence:
     def test_save_model_choice_round_trip_no_secrets(self, tmp_path):
-        from strands_code_cli.provider_config import ProviderConfig
+        from strands_code_cli.entry.provider_config import ProviderConfig
 
         path = tmp_path / "config.yaml"
         config = ProviderConfig(model="bedrock/old", base_url="https://proxy.local")
@@ -2122,7 +2127,7 @@ class TestModelPersistence:
     def test_model_for_config_shapes(self, monkeypatch):
         import builtins
 
-        from strands_code_cli.main import model_for_config
+        from strands_code_cli.entry.main import model_for_config
 
         assert model_for_config(None) is None
         assert (
@@ -2166,7 +2171,7 @@ class TestReportedWrapScope:
         return FakeLiteLLMModel
 
     def test_openrouter_ids_wrap(self, monkeypatch):
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         fake_base = self._stub_litellm_base(monkeypatch)
         resolved = fake_base()
@@ -2175,7 +2180,7 @@ class TestReportedWrapScope:
         assert callable(getattr(wrapped, "take_reported_costs", None))
 
     def test_non_openrouter_ids_pass_through_identical(self, monkeypatch):
-        from strands_code_cli.reported_cost import wrap_for_openrouter
+        from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
         fake_base = self._stub_litellm_base(monkeypatch)
         bedrock = fake_base()
@@ -2190,7 +2195,7 @@ class TestReportedWrapScope:
 
         import strands_harness.models as harness_models
 
-        from strands_code_cli.model_switch import apply_switch
+        from strands_code_cli.model.model_switch import apply_switch
 
         fake_base = self._stub_litellm_base(monkeypatch)
         calls: list = []

@@ -50,8 +50,10 @@ import pytest
 from strands.interventions.actions import Confirm
 from strands.vended_interventions.hitl import HumanInTheLoop
 
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
 from strands_code_cli.loop.steering import SteeringState, make_steering_hook
-from strands_code_cli.mode import (
+from strands_code_cli.policy.core import PolicyConfig, PolicyOptions
+from strands_code_cli.policy.mode import (
     APPROVE_EMPTY,
     APPROVE_OK,
     MODE_ACT_REPLY,
@@ -60,10 +62,8 @@ from strands_code_cli.mode import (
     PLAN_PREFIX,
     ModeState,
 )
-from strands_code_cli.policy import PolicyConfig, PolicyOptions
-from strands_code_cli.policy_gate import PolicyClassifier
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.policy.policy_gate import PolicyClassifier
+from strands_code_cli.session.session_index import SessionIndex
 
 BANNED_VOCAB = (
     "policy rule",
@@ -193,8 +193,8 @@ class TestTracerHookOrder:
         import uuid
         from pathlib import Path
 
-        from strands_code_cli.main import build_agent
-        from strands_code_cli.policy_gate import _active_classifier
+        from strands_code_cli.entry.main import build_agent
+        from strands_code_cli.policy.policy_gate import _active_classifier
         from tests.test_kill_resume import _ReplayModel
 
         session_dir = Path(tempfile.mkdtemp())
@@ -360,7 +360,7 @@ class TestRouterMode:
         assert mode.mode == "plan"
 
     def test_approve_with_plan_hands_off(self, tmp_path):
-        from strands_code_cli.mode import APPROVE_EXECUTE
+        from strands_code_cli.policy.mode import APPROVE_EXECUTE
 
         mode = ModeState()
         mode.set("plan")
@@ -395,7 +395,7 @@ class TestPlanPrefix:
         )
 
     def test_prefix_vocabulary_lock(self):
-        from strands_code_cli.mode import APPROVE_EXECUTE
+        from strands_code_cli.policy.mode import APPROVE_EXECUTE
 
         for copy in (PLAN_PREFIX, APPROVE_EXECUTE):
             lowered = copy.lower()
@@ -413,8 +413,8 @@ class TestWiring:
         import importlib
         import uuid
 
-        main_module = importlib.import_module("strands_code_cli.main")
-        from strands_code_cli.policy_gate import _active_classifier
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        from strands_code_cli.policy.policy_gate import _active_classifier
         from tests.test_kill_resume import _ReplayModel
 
         captured: dict[str, Any] = {}

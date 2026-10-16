@@ -15,7 +15,7 @@ from pathlib import Path
 
 from strands import tool
 
-from strands_code_cli.scope import confine
+from strands_code_cli.policy.scope import confine
 
 _RG_TIMEOUT_SECONDS = 30
 _DEFAULT_LIMIT = 50

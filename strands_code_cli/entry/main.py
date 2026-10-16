@@ -22,26 +22,29 @@ from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
 from strands_code_agent.search_tool import search as search_tool
-from strands_code_cli.diff_gate import (
+from strands_code_cli.dispatch.core import show_picker
+from strands_code_cli.entry.first_run import (
+    BEDROCK_SETUP_POINTER,
+    preflight_credentials,
+)
+from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.loop.btw import LockedHandler
+from strands_code_cli.loop.core import run_loop
+from strands_code_cli.loop.steering import register_steering_hook
+from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
+from strands_code_cli.policy.diff_gate import (
     PendingStore,
     bind_session,
     make_gated_edit,
     make_gated_write,
 )
-from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
-from strands_code_cli.loop.btw import LockedHandler
-from strands_code_cli.loop.core import run_loop
-from strands_code_cli.loop.steering import register_steering_hook
-from strands_code_cli.memory_file import load_memory, register_memory_plugin
-from strands_code_cli.policy_gate import (
+from strands_code_cli.policy.policy_gate import (
     bind_main_agent,
     bind_steering,
     build_interventions,
     set_mode,
 )
-from strands_code_cli.provider_config import ProviderConfig
-from strands_code_cli.router import show_picker
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 app = typer.Typer(
     add_completion=False,
@@ -176,8 +179,8 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         # resolved config; the stash keeps the STRING for side rebuilds
         # (which fresh-copy per build). Fail soft to the estimate path.
         try:
-            from strands_code_cli import live_pricing
-            from strands_code_cli.reported_cost import wrap_for_openrouter
+            import strands_code_cli.cost.live_pricing as live_pricing
+            from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
             resolved = getattr(agent, "model", None)
             if (

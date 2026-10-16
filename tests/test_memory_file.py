@@ -17,8 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
 from strands_code_cli.loop.core import flush_memory
-from strands_code_cli.memory_file import (
+from strands_code_cli.memory.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
     MEMORY_INJECT_CAP,
@@ -36,15 +37,14 @@ from strands_code_cli.memory_file import (
     render_memory_block,
     sweep_memory_files,
 )
-from strands_code_cli.memory_modes import (
+from strands_code_cli.memory.memory_modes import (
     MEMORY_MODE_CURATE_REPLY,
     MEMORY_MODE_SILENT_REPLY,
     MemoryModeConfig,
     MemoryModeState,
     silent_note,
 )
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _write(path: Path, text: str) -> Path:

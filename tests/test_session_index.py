@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _fresh_index(tmp_path):
@@ -88,7 +88,7 @@ class TestRename:
         assert not (root / "Sidecar Only").exists()
 
     def test_dispatch_rename_separator_rejected_without_agent_turn(self, tmp_path):
-        from strands_code_cli.router import dispatch
+        from strands_code_cli.dispatch.core import dispatch
 
         index = _fresh_index(tmp_path)
         sid = index.mint()

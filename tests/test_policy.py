@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from strands_code_cli.policy import (
+from strands_code_cli.policy.core import (
     Allow,
     Deny,
     PolicyConfig,

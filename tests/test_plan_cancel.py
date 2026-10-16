@@ -38,8 +38,8 @@ from strands_code_cli.loop.core import (
     resolve_cancel_targets,
     run_loop,
 )
-from strands_code_cli.mode import APPROVE_EMPTY, MODE_PLAN_REPLY, PLAN_PREFIX
-from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.policy.mode import APPROVE_EMPTY, MODE_PLAN_REPLY, PLAN_PREFIX
+from strands_code_cli.session.session_index import SessionIndex
 
 
 class _LoopAgent:
@@ -124,7 +124,7 @@ class TestPlanTurnPrefix:
     def test_approve_runs_execution_turn_with_prompt(
         self, tmp_path, monkeypatch, capsys
     ):
-        from strands_code_cli.mode import APPROVE_EXECUTE, APPROVE_OK
+        from strands_code_cli.policy.mode import APPROVE_EXECUTE, APPROVE_OK
 
         agent, _, _ = _run_script(
             ["/mode plan", "design it", "/approve", "/exit"],

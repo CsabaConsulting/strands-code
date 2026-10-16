@@ -2,7 +2,7 @@
 
 import pytest
 
-from strands_code_cli.model_capabilities import (
+from strands_code_cli.model.model_capabilities import (
     CapabilityOverride,
     _reset_overrides_cache,
     active_overrides,
@@ -84,7 +84,7 @@ class TestLoader:
             load_capability_overrides(link)
 
     def test_cache_loads_once_until_reset(self, tmp_path, monkeypatch):
-        import strands_code_cli.model_capabilities as caps
+        import strands_code_cli.model.model_capabilities as caps
 
         path = _write(tmp_path / "caps.yaml", "overrides: []\n")
         monkeypatch.setattr(caps, "default_capabilities_path", lambda: path)
@@ -97,8 +97,11 @@ class TestLoader:
 
 class TestMerge:
     def test_override_beats_harness_both_directions(self, monkeypatch):
-        import strands_code_cli.model_capabilities as caps
-        from strands_code_cli.model_switch import supports_media, supports_reasoning
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.model.model_switch import (
+            supports_media,
+            supports_reasoning,
+        )
 
         monkeypatch.setattr(
             caps,
@@ -116,8 +119,8 @@ class TestMerge:
         assert supports_media("bedrock/openai.gpt-oss-120b-1:0") is True  # enabled
 
     def test_first_match_wins_per_field(self, monkeypatch):
-        import strands_code_cli.model_capabilities as caps
-        from strands_code_cli.model_switch import supports_reasoning
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.model.model_switch import supports_reasoning
 
         monkeypatch.setattr(
             caps,
@@ -132,8 +135,8 @@ class TestMerge:
     def test_context_report_counts_overrides(self, monkeypatch):
         from types import SimpleNamespace
 
-        import strands_code_cli.model_capabilities as caps
-        from strands_code_cli.cost_context import context_report
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.cost.cost_context import context_report
 
         monkeypatch.setattr(caps, "active_overrides", lambda: [CapabilityOverride()])
         report = context_report(SimpleNamespace(messages=[]), "bedrock/x")

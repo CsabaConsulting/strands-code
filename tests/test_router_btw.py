@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import SkillIndex
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
+from strands_code_cli.memory.skills import SkillIndex
+from strands_code_cli.session.session_index import SessionIndex
 
 
 def _session_index(tmp_path: Path) -> SessionIndex:

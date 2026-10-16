@@ -134,7 +134,7 @@ class TestEntryRouting:
     def test_invalid_session_id_is_usage_error(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
-        from strands_code_cli.main import app
+        from strands_code_cli.entry.main import app
 
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["--session-id", "../../x"])
@@ -144,7 +144,7 @@ class TestEntryRouting:
     def test_invalid_session_id_creates_no_session_dir(self, tmp_path, monkeypatch):
         from typer.testing import CliRunner
 
-        from strands_code_cli.main import app
+        from strands_code_cli.entry.main import app
 
         monkeypatch.chdir(tmp_path)
         CliRunner().invoke(app, ["--session-id", "../../x"])
@@ -154,7 +154,7 @@ class TestEntryRouting:
         import importlib
         from unittest.mock import patch
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         session_id = str(uuid.uuid4())
         seen: dict[str, object] = {}
@@ -180,7 +180,7 @@ class TestEntryRouting:
         import importlib
         from unittest.mock import patch
 
-        main_module = importlib.import_module("strands_code_cli.main")
+        main_module = importlib.import_module("strands_code_cli.entry.main")
 
         monkeypatch.chdir(tmp_path)  # real SessionIndex must not touch the repo
         with (
@@ -196,7 +196,7 @@ class TestEntryRouting:
         uuid.UUID(minted)  # fresh id parses as a UUID
 
     def test_build_agent_wires_session_dict(self, tmp_path):
-        from strands_code_cli.main import build_agent
+        from strands_code_cli.entry.main import build_agent
 
         session_id = str(uuid.uuid4())
         agent = build_agent(session_id, tmp_path / "sessions", model=_ReplayModel("hi"))

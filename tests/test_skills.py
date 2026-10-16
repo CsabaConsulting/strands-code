@@ -18,10 +18,10 @@ from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
 import strands_code_cli.loop.core as loop_module
-from strands_code_cli.completer import SlashCompleter, build_completer
-from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex, remove_skill
+from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
+from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS, SkillIndex, remove_skill
+from strands_code_cli.session.session_index import SessionIndex
+from strands_code_cli.ui.completer import SlashCompleter, build_completer
 
 
 def _write_skill(
@@ -720,7 +720,7 @@ class TestSkillGapRound:
         )
 
     def test_markup_descriptions_render_verbatim_without_raising(self, tmp_path):
-        from strands_code_cli.output import print_plain
+        from strands_code_cli.ui.output import print_plain
 
         skills_dir = tmp_path / ".agent" / "skills"
         _write_skill(skills_dir, "markup", description="test [/] markup")

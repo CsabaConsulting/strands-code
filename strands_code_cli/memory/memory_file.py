@@ -26,7 +26,7 @@ from typing import Any, Callable
 import yaml
 from rich.console import Console
 
-from strands_code_cli.output import print_plain
+from strands_code_cli.ui.output import print_plain
 
 console = Console()
 

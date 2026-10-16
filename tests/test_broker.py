@@ -20,10 +20,10 @@ from strands.interventions.actions import Confirm, Proceed
 from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 
-import strands_code_cli.policy_gate as pg
+import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.loop.core import _invoke_agent, _poll_live
-from strands_code_cli.policy import PolicyConfig
-from strands_code_cli.policy_gate import (
+from strands_code_cli.policy.core import PolicyConfig
+from strands_code_cli.policy.policy_gate import (
     ApprovalBroker,
     PolicyClassifier,
     TurnCancelled,
@@ -365,7 +365,7 @@ class TestPerRequestCancel:
 
 class TestPendingStoreThreads:
     def test_ten_thread_hammer_loses_no_writes(self, tmp_path):
-        from strands_code_cli.diff_gate import PendingStore
+        from strands_code_cli.policy.diff_gate import PendingStore
 
         store = PendingStore(tmp_path / "pending")
         errors: list[BaseException] = []

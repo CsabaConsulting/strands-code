@@ -5,7 +5,7 @@ Runs the labeled probe set (``evals/routing-probe/probes.jsonl``) through
 one pinned decision engine and writes one JSONL verdict record per probe
 (top-1 probabilities, top1-minus-top2 margins, serving snapshots). The
 runner imports the production state builders, transports, and gate from
-``strands_code_cli.routing`` — no duplicated decision logic.
+``strands_code_cli.routing.core`` — no duplicated decision logic.
 
 Modes::
 
@@ -100,7 +100,7 @@ def _ensure_production_imports() -> None:
     genuinely broken venv from looping.
     """
     try:
-        import strands_code_cli.routing  # noqa: F401
+        import strands_code_cli.routing.core  # noqa: F401
     except ModuleNotFoundError:
         if os.environ.get("_ROUTE_PROBE_REEXEC"):
             raise
@@ -119,7 +119,7 @@ def _ensure_production_imports() -> None:
 
 _ensure_production_imports()
 
-from strands_code_cli.routing import (  # noqa: E402
+from strands_code_cli.routing.core import (  # noqa: E402
     RoutingCandidate,
     RoutingEngine,
     RoutingStrategy,

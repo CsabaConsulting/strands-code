@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 from strands.types.exceptions import EventLoopException
 
-import strands_code_cli.policy_gate as pg
+import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.loop.btw import (
     BTW_FORK_PREAMBLE,
     BTW_FRAMING,
@@ -44,7 +44,7 @@ from strands_code_cli.loop.steering import (
     is_btw_line,
     start_steering_reader,
 )
-from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
+from strands_code_cli.policy.policy_gate import ApprovalBroker, TurnCancelled
 
 
 def _history_trailing_assistant() -> list:
@@ -360,7 +360,7 @@ class TestIsBtwLine:
 
 class TestMidTurnCarveOut:
     def test_btw_carves_out_while_other_slash_refuses_and_text_steers(self):
-        from strands_code_cli.model_switch import MODEL_REFUSAL
+        from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
         state = SteeringState()
         gate = StdinGuard()
@@ -594,7 +594,7 @@ class TestBuildBtwAgent:
 
     def test_rebuild_replays_parent_with_delegate_overrides(self, monkeypatch):
         from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
-        from strands_code_cli.memory_file import load_memory
+        from strands_code_cli.memory.memory_file import load_memory
 
         created, mem_calls, reg_calls, sentinel_agent, sentinel_mem = (
             self._patch_factory(monkeypatch)
