@@ -4,14 +4,15 @@ milestone: v1
 current_phase: 12
 current_phase_name: Structural Review + Hygiene
 status: discussing
-stopped_at: Hindsight Removal retired as no-op (scrub committed); Structural Review renumbered 13 -> 12
-last_updated: "2026-10-16T04:45:00Z"
+stopped_at: Phase 12 context gathered
+last_updated: "2026-10-16T05:38:15.152Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase renumber (13 -> 12); hindsight shell archived
+state_head: 053a7ceebf3e6f6f369fd092b5c00c1c47c11ead
 progress:
   total_phases: 12
   completed_phases: 11
-  total_plans: 38
+  total_plans: 35
   completed_plans: 38
 ---
 
@@ -212,6 +213,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-16T04:59:11.492Z
-Stopped at: Phase renumber (13 -> 12)
-Resume file: (none — run $gsd-discuss-phase 12)
+Last session: 2026-10-16T05:38:15.002Z
+Stopped at: Phase 12 context gathered
+Resume file: .planning/phases/12-structural-review-hygiene/12-CONTEXT.md
