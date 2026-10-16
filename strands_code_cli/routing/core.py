@@ -2017,7 +2017,14 @@ def _resolve_effort(
         effort_truncated,
     ) = _decide_effort(strategy, candidate, state, chain)
     if effort is None:
-        return (None, None, (0, 0, None), effort_truncated, effort_engine, effort_detail)
+        return (
+            None,
+            None,
+            (0, 0, None),
+            effort_truncated,
+            effort_engine,
+            effort_detail,
+        )
     return (
         effort,
         effort_confidence,
@@ -2032,9 +2039,7 @@ def _resolve_effort(
     )
 
 
-def _find_candidate(
-    strategy: RoutingStrategy, model_id: str
-) -> RoutingCandidate:
+def _find_candidate(strategy: RoutingStrategy, model_id: str) -> RoutingCandidate:
     """Return the candidate the gate picked (always present: gated ids win)."""
     return next(entry for entry in strategy.candidates if entry.id == model_id)
 
