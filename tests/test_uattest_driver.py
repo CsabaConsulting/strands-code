@@ -182,3 +182,28 @@ class TestReportedSpendRig:
             "  (actual $0.0024 + estimated $0.0100)\n"
         )
         assert not driver.SPLIT_RE.search("Total $0.0124\n")
+
+
+class TestCodeactRig:
+    def test_scenarios_exist(self):
+        assert callable(driver.scenario_a1)
+        assert callable(driver.scenario_a2)
+
+    def test_dispatch_lists_codeact_scenarios(self):
+        src = DRIVER.read_text()
+        assert '"a1"' in src and '"a2"' in src
+
+    def test_start_cli_accepts_cli_args(self):
+        assert "cli_args" in inspect.signature(driver.start_cli).parameters
+
+    def test_a1_fails_fast_on_bare_flag_rejection(self):
+        src = inspect.getsource(driver.scenario_a1)
+        assert "requires an argument" in src
+        assert "A1 PASS" in src
+
+    def test_a2_asserts_labels_and_unshaped_tool_turn(self):
+        src = inspect.getsource(driver.scenario_a2)
+        assert "interface: codeact" in src
+        assert "interface: tool" in src
+        assert "[Tool] python_repl" in src
+        assert "A2 PASS" in src

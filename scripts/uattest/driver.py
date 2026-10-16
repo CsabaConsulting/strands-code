@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Scripted live-tmux UAT driver for strands-code Phase 7 + 8 + 9 + 10 confirmation.
+"""Scripted live-tmux UAT driver for strands-code Phase 7 + 8 + 9 + 10 + 11 confirmation.
 
-Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2}   (one scenario per
+Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2}   (one scenario per
 process; tmux session per scenario). s1/s2 cover Phase 7 (/btw);
 r1/r2/r3/r4 cover the Phase 8 rows (guided setup, local engine, e2e
 routed turn, side ask) against the Decision-API flow; n1/n2/n3/n4
 cover the Phase 9 native rows (setup proposal, hidden-until-key,
 validate ping, native-routed turn) against the TypeSafe native API;
 c1/c2 cover the Phase 10 reported-spend rows (marked actual on an
-OpenRouter main turn, blended total + split on a mixed session).
+OpenRouter main turn, blended total + split on a mixed session);
+a1/a2 cover the Phase 11 CodeAct rows (bare --codeact boots code
+mode, code turn labels codeact plus switch-back tool turn unshaped).
 Transcripts land in /tmp/uatr4/<scenario>.log (s*) or /tmp/uatr8/<scenario>.log
-(r*/n*/c*). Exit 0 = all asserts passed.
+(r*/n*/c*/a*). Exit 0 = all asserts passed.
 
 Key insight: a mid-turn Approve? dialog blocks the pump thread, so the driver
 must answer dialogs to make progress (like a human would). S1 retries until the
@@ -90,17 +92,19 @@ def send(sess, *keys):
     tmux("send-keys", "-t", sess, *keys)
 
 
-def start_cli(sess, workdir=WORKDIR, env_prefix=""):
+def start_cli(sess, workdir=WORKDIR, env_prefix="", cli_args=""):
     """Boot the CLI; env_prefix overrides the ambient env for one session.
 
     Native scenarios use it to hide the key (``env -u
     TYPESAFE_API_KEY``) or to boot with a bogus key
     (``TYPESAFE_API_KEY=probe-bogus-key``) — bogus values only,
-    never real key material.
+    never real key material. ``cli_args`` appends CLI arguments
+    (CodeAct scenarios boot with ``--codeact`` forms).
     """
     tmux("kill-session", "-t", sess)
     tmux("new-session", "-d", "-s", sess, "-x", "200", "-y", "60")
-    send(sess, f"cd {workdir} && {env_prefix}{CLI}", "Enter")
+    extra = f" {cli_args}" if cli_args else ""
+    send(sess, f"cd {workdir} && {env_prefix}{CLI}{extra}", "Enter")
     time.sleep(6)
     if "Recent sessions" in pane_text(sess):
         print("[picker] Enter for new session", flush=True)
@@ -954,6 +958,80 @@ def scenario_c2():
         stop_cli(sess)
 
 
+def scenario_a1():
+    """A1: bare --codeact boots the session into code mode (G-11-1).
+
+    RED before the gap fix (typer rejects the bare flag with
+    "requires an argument"); GREEN after (boots, /codeact reports
+    code). The early-pane check fails fast instead of hanging on
+    the boot wait.
+    """
+    workdir = ensure_workdir("w11")
+    sess = "uatr8a1"
+    tmux("kill-session", "-t", sess)
+    tmux("new-session", "-d", "-s", sess, "-x", "200", "-y", "60")
+    try:
+        send(sess, f"cd {workdir} && {CLI} --codeact", "Enter")
+        time.sleep(8)
+        early = pane_text(sess)
+        if "requires an argument" in early:
+            raise AssertionError(
+                "G-11-1 reproduced: bare --codeact rejected, want boot into code mode"
+            )
+        if "Recent sessions" in early:
+            print("[picker] Enter for new session", flush=True)
+            send(sess, "Enter")
+        wait_for(sess, r"Ctrl-D to exit", 90, "boot")
+        wait_for(sess, r"^> ?$", 30, "prompt", poll=2)
+        before = len(re.findall(r"Interface: code", pane_text(sess)))
+        send(sess, "/codeact", "Enter")
+        text = wait_for_new(sess, r"Interface: code", 30, "code-report", before=before)
+        assert "code-first actions through python_repl" in text, (
+            "bare /codeact did not report code mode"
+        )
+        print("A1 PASS", flush=True)
+    finally:
+        save(sess, "a1", LOGDIR8)
+        stop_cli(sess)
+
+
+def scenario_a2():
+    """A2: code turn labels codeact; switch-back tool turn is unshaped.
+
+    Boots with --codeact code, runs one minimal turn (asserts the
+    ``interface: codeact`` label), switches to tool, runs another
+    minimal turn (asserts a fresh ``interface: tool`` label and no
+    python_repl shaping after the switch). Covers UAT tests 2+5.
+    """
+    workdir = ensure_workdir("w12")
+    sess = "uatr8a2"
+    start_cli(sess, workdir, cli_args="--codeact code")
+    try:
+        after = len(COST_RE.findall(pane_text(sess)))
+        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        text, _ = wait_main_end(sess, after=after)
+        assert re.search(r"^interface: codeact", text, re.MULTILINE), (
+            "code turn lacks the codeact label"
+        )
+        before_switch = len(re.findall(r"Interface: tool", pane_text(sess)))
+        send(sess, "/codeact tool", "Enter")
+        wait_for_new(sess, r"Interface: tool", 30, "switched", before=before_switch)
+        after = len(COST_RE.findall(pane_text(sess)))
+        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        text, _ = wait_main_end(sess, after=after)
+        assert re.search(r"^interface: tool", text, re.MULTILINE), (
+            "tool turn lacks the tool label"
+        )
+        tail = text.split("Interface: tool")[-1]
+        assert "[Tool] python_repl" not in tail, (
+            "tool turn unexpectedly shaped code-first"
+        )
+        print("A2 PASS", flush=True)
+    finally:
+        save(sess, "a2", LOGDIR8)
+        stop_cli(sess)
+
+
 if __name__ == "__main__":
     os.makedirs(LOGDIR, exist_ok=True)
     os.makedirs(LOGDIR8, exist_ok=True)
@@ -982,5 +1060,10 @@ if __name__ == "__main__":
         scenario_c1()
     elif which == "c2":
         scenario_c2()
+    elif which == "a1":
+        scenario_a1()
+    elif which == "a2":
+        scenario_a2()
     else:
-        sys.exit("usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2}")
+        sys.exit("usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2}")
+
