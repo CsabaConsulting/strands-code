@@ -275,6 +275,55 @@ def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
     return hashlib.sha256(to_stash_json(canonical).encode("utf-8")).hexdigest()
 
 
+def _convert_reasoning_block(
+    block: dict[str, Any], new_id: str, reasoning_ok: bool
+) -> dict[str, Any] | None:
+    """Convert one reasoningContent block: round-trip, trace text, or drop.
+
+    Only signed/redacted thinking round-trips; unsigned or foreign
+    thinking becomes labeled trace text (warn), empty traces drop
+    (blank text blocks are rejected downstream). Returns None when
+    the block drops.
+    """
+    # LiteLLM precedent (BerriAI/litellm#9063, same crash class):
+    # only signed/redacted thinking round-trips; unsigned or
+    # foreign thinking becomes text, empty traces are dropped
+    # (blank text blocks are themselves rejected downstream).
+    payload = block["reasoningContent"] or {}
+    text = (payload.get("reasoningText") or {}).get("text", "")
+    signed = "signature" in (payload.get("reasoningText") or {})
+    if reasoning_ok and (signed or "redactedContent" in payload):
+        return copy.deepcopy(block)
+    warnings.warn(
+        f"Dropping reasoningContent for {new_id!r}; "
+        + ("trace kept as text." if text.strip() else "trace dropped."),
+        stacklevel=3,
+    )
+    if text.strip():
+        return {"text": f"{TRACE_LABEL}\n{text}"}
+    return None
+
+
+def _migrate_trace_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Migrate a retired trace label to the current one (heal on switch)."""
+    migrated = copy.deepcopy(block)
+    for legacy in _LEGACY_TRACE_LABELS:
+        if migrated["text"].startswith(legacy):
+            migrated["text"] = TRACE_LABEL + migrated["text"][len(legacy) :]
+            break
+    return migrated
+
+
+def _media_placeholder_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Placeholder text for an image/video block on a media-less target."""
+    kind = "image" if "image" in block else "video"
+    payload = block.get(kind, {})
+    media_format = payload.get("format", "unknown")
+    data = payload.get("source", {}).get("bytes", b"")
+    size = len(data) if data else 0
+    return {"text": f"[{kind}: {media_format}, {size} bytes]"}
+
+
 def convert_history(
     messages: list[dict[str, Any]], old_id: str, new_id: str
 ) -> list[dict[str, Any]]:
@@ -310,43 +359,17 @@ def convert_history(
                 new_message[key] = copy.deepcopy(value)
         for block in message.get("content", []):
             if "reasoningContent" in block:
-                # LiteLLM precedent (BerriAI/litellm#9063, same crash class):
-                # only signed/redacted thinking round-trips; unsigned or
-                # foreign thinking becomes text, empty traces are dropped
-                # (blank text blocks are themselves rejected downstream).
-                payload = block["reasoningContent"] or {}
-                text = (payload.get("reasoningText") or {}).get("text", "")
-                signed = "signature" in (payload.get("reasoningText") or {})
-                if reasoning_ok and (signed or "redactedContent" in payload):
-                    new_message["content"].append(copy.deepcopy(block))
-                    continue
-                warnings.warn(
-                    f"Dropping reasoningContent for {new_id!r}; "
-                    + ("trace kept as text." if text.strip() else "trace dropped."),
-                    stacklevel=2,
-                )
-                if text.strip():
-                    new_message["content"].append({"text": f"{TRACE_LABEL}\n{text}"})
+                converted_block = _convert_reasoning_block(block, new_id, reasoning_ok)
+                if converted_block is not None:
+                    new_message["content"].append(converted_block)
                 continue
             elif isinstance(block.get("text"), str) and block["text"].startswith(
                 _LEGACY_TRACE_LABELS
             ):
-                migrated = copy.deepcopy(block)
-                for legacy in _LEGACY_TRACE_LABELS:
-                    if migrated["text"].startswith(legacy):
-                        migrated["text"] = TRACE_LABEL + migrated["text"][len(legacy) :]
-                        break
-                new_message["content"].append(migrated)
+                new_message["content"].append(_migrate_trace_block(block))
                 continue
             elif ("image" in block or "video" in block) and not media_ok:
-                kind = "image" if "image" in block else "video"
-                payload = block.get(kind, {})
-                media_format = payload.get("format", "unknown")
-                data = payload.get("source", {}).get("bytes", b"")
-                size = len(data) if data else 0
-                new_message["content"].append(
-                    {"text": f"[{kind}: {media_format}, {size} bytes]"}
-                )
+                new_message["content"].append(_media_placeholder_block(block))
             else:
                 new_message["content"].append(copy.deepcopy(block))
         converted.append(new_message)
