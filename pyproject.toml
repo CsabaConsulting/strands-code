@@ -53,6 +53,10 @@ dev = [
     "matplotlib>=3.8",
     "seaborn>=0.13",
     "scipy>=1.10",
+    "radon>=6.0.1",
+    "xenon>=0.9.3",
+    "ruff>=0.17.1",
+    "import-linter>=2.15",
 ]
 
 [project.urls]
@@ -65,3 +69,26 @@ markers = [
     "integration: live integration tests requiring AWS credentials (deselected by default)",
 ]
 addopts = "-m 'not integration'"
+
+[tool.ruff]
+target-version = "py310"          # matches requires-python >=3.10
+force-exclude = true              # REQUIRED for D-24: explicit paths (pre-commit) bypass exclude otherwise
+exclude = [
+    "strands_code_agent",          # inherited upstream code stays byte-pristine (D-24); the one fork-added file (search_tool.py) is enforced by review
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]          # D-20: pyflakes + pycodestyle errors + isort (complexity stays with radon/xenon)
+ignore = ["E501"]                 # formatter owns line length (CF-04); rule-scope config, not a waiver
+
+[tool.ruff.lint.isort]
+known-first-party = ["strands_code_cli", "strands_code_agent"]
+
+[tool.importlinter]
+root_package = "strands_code_cli"
+
+[[tool.importlinter.contracts]]
+name = "CLI never reintroduces the removed knowledge subsystem (D-15)"
+type = "forbidden"
+source_modules = ["strands_code_cli"]
+forbidden_modules = ["strands_code_agent.knowledge"]
