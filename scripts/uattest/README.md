@@ -43,7 +43,7 @@ cd /tmp && python3 /path/to/scripts/uattest/driver.py r4
 ```
 
 Output lands in `/tmp/uatr4/`. Timing knobs (start wait, key spacing) are
-constants at the top of `driver.py`; tune per model speed. Live runs cost
+constants at the top of `uattest_lib.py`; tune per model speed. Live runs cost
 real model calls — use the cheap default model.
 
 ## Notes
