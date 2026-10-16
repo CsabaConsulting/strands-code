@@ -63,7 +63,7 @@
 
 ### Memory
 
-- **SKILL-05**: User can opt into Hindsight cross-session recall behind the same memory seam (on team demand)
+- **SKILL-05**: User can opt into OpenViking cross-session recall behind the same memory seam (on team demand; Hindsight explicitly out — Postgres + background loop too heavy for a coding harness)
 
 ### Interaction
 
@@ -71,6 +71,11 @@
 - **TOOL-06**: User can export trimmed session content to a text file via `/copy` (trailing whitespace stripped, optional back-scroll limit)
 - **MODE-03**: User can pick fast/thorough effort presets layered over Plan/Act (on demand)
 - **REVIEW-02**: User can run review flows with modes, locally and in CI through the headless runner
+
+### Structure & Hygiene
+
+- **STRUCT-01**: Codebase passes a measurement-first structural review: complexity and coupling measured, oversized modules broken up, CLI organized into packages, rig split into per-area files — full suite and rig green throughout
+- **CLEANUP-01**: Repo contains no dead example code; README references only shipped surfaces (examples/pdf_to_okf_bundle removed)
 
 ## Out of Scope
 
@@ -108,18 +113,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MODEL-02 | Phase 5 | Complete |
 | SKILL-01 | Phase 6 | Complete |
 | SKILL-02 | Phase 6 | Complete |
-| TOOL-07 | Phase 11 | Pending |
+| TOOL-07 | Phase 11 | Complete |
 | MODEL-03 | Phase 8 | Complete |
 | MODEL-04 | Phase 9 | Complete |
-| MODEL-05 | Phase 10 | Pending |
+| MODEL-05 | Phase 10 | Complete |
+| SKILL-05 | Phase 12 | Pending |
+| STRUCT-01 | Phase 13 | Pending |
+| CLEANUP-01 | Phase 13 | Pending |
 | GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | GITHUB-02 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | REVIEW-01 | Deferred (v2) | Small future `/review` slash |
 
 **Coverage:**
 
-- v1 requirements: 17 total
-- Mapped to phases: 17
+- v1 requirements: 19 total
+- Mapped to phases: 19
 - Unmapped: 0 ✓
 
 ---

@@ -56,13 +56,23 @@
     {
       "number": "11",
       "name": "CodeAct Action Interface",
-      "status": "in_progress"
+      "status": "complete"
+    },
+    {
+      "number": "12",
+      "name": "OpenViking Recall Backend",
+      "status": "not_started"
+    },
+    {
+      "number": "13",
+      "name": "Structural Review + Hygiene",
+      "status": "not_started"
     }
   ],
   "next": {
-    "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 11 of 11 · executing"
+    "command": "/gsd:discuss-phase 12",
+    "label": "Discuss phase 12 scope",
+    "reason": "Phase 12 of 13 \u00b7 ready to discuss"
   },
-  "updated_at": "2026-10-15T22:08:34.365Z"
+  "updated_at": "2026-10-16T04:00:00.000Z"
 }

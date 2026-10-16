@@ -21,9 +21,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: Skills + Memory File** - Local skills loading and repo conventions file (completed 2026-10-04)
 - [x] **Phase 7: Subagents + /btw Side Channel** - Side questions without disturbing the main task (completed 2026-10-11)
 - [x] **Phase 8: Model Routing with Decision Models** - Per-ask model + thinking-budget selection, manual override kept (completed 2026-10-12)
-- [ ] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines
+- [x] **Phase 9: Native TypeSafe Decision Engine** - Direct Jev API alongside OpenRouter and Ollama engines (completed 2026-10-12)
 - [x] **Phase 10: Provider-Reported Turn Spend** - OpenRouter actuals for main turns instead of catalog estimates
-- [ ] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default
+- [x] **Phase 11: CodeAct Action Interface** - Opt-in code-generation-first action, tool-calling stays default (completed 2026-10-16)
+- [ ] **Phase 12: OpenViking Recall Backend** - Opt-in viking:// cross-session recall behind the memory seam; Hindsight out
+- [ ] **Phase 13: Structural Review + Hygiene** - Measurement-first breakup (CLI packages, rig files), dead example removal
 
 ## Phase Details
 
@@ -294,10 +296,36 @@ Plans:
 
 - [x] 11-04-PLAN.md — Bare --codeact implies code (G-11-1)
 
+### Phase 12: OpenViking Recall Backend
+
+**Goal**: Users can opt into OpenViking cross-session recall (viking:// virtual filesystem) behind the same memory seam as Strands native memory; Hindsight is explicitly out of scope
+**Depends on**: Phase 6 (memory seam), Phase 11 (CodeAct ls/grep-style navigation synergy)
+**Requirements**: SKILL-05
+**Success Criteria** (what must be TRUE):
+
+  1. User can enable OpenViking recall per session or task; Strands native memory stays the default and OpenViking is never mandatory
+  2. Recall serves long-term preferences, repeated fixes, and project constraints across sessions without blocking the turn loop
+  3. Deployment stays within the AWS-optional offline posture (self-hosted or embedded; no mandatory cloud endpoint)
+
+**Plans**: TBD (not yet planned)
+
+### Phase 13: Structural Review + Hygiene
+
+**Goal**: Codebase passes a measurement-first structural review and sheds dead example code
+**Depends on**: Phase 11 (last feature phase; review covers the whole tree)
+**Requirements**: STRUCT-01, CLEANUP-01
+**Success Criteria** (what must be TRUE):
+
+  1. Cyclomatic complexity and module coupling are measured and reported; breakup decisions cite the numbers
+  2. Oversized modules (loop, routing, router) are broken into coherent packages; the uattest driver is split into helpers plus per-area scenario files
+  3. examples/pdf_to_okf_bundle is removed and the README references only shipped surfaces; full suite and rig stay green throughout
+
+**Plans**: TBD (not yet planned)
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -311,7 +339,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Model Routing with Decision Models | 7/7 | Complete | 2026-10-12 |
 | 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
 | 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
-| 11. CodeAct Action Interface | 3/3 | In Progress|  |
+| 11. CodeAct Action Interface | 4/4 | Complete | 2026-10-16 |
+| 12. OpenViking Recall Backend | 0/TBD | Not started | - |
+| 13. Structural Review + Hygiene | 0/TBD | Not started | - |
 
 ## Future (post-v1)
 

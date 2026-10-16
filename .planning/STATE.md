@@ -1,20 +1,18 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1
-current_phase: 11
-current_phase_name: CodeAct Action Interface
-current_plan: 4
-status: executing
-stopped_at: Completed 11-04-PLAN.md
-last_updated: "2026-10-16T03:40:00.000Z"
+current_phase: 12
+current_phase_name: OpenViking Recall Backend
+status: discussing
+stopped_at: Phase 11 complete (executed 4/4, UAT 20/20, secured 0 open, validated Nyquist); roadmap expanded with phases 12-13
+last_updated: "2026-10-16T04:00:00.000Z"
 last_activity: 2026-10-16
-last_activity_desc: Completed 11-04 bare --codeact implies code (G-11-1 closed, a1 green)
-state_head: 2bac598a83d27d1e227bbb788a0ed114810644e3
+last_activity_desc: Roadmap expanded (SKILL-05 -> OpenViking, new STRUCT-01/CLEANUP-01, phases 12-13)
 progress:
-  total_phases: 11
-  completed_phases: 10
-  total_plans: 34
-  completed_plans: 35
+  total_phases: 13
+  completed_phases: 11
+  total_plans: 38
+  completed_plans: 38
 ---
 
 # Project State
@@ -24,17 +22,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-12)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Phase 11 — codeact-action-interface
+**Current focus:** Phase 12 — openviking-recall-backend
 
 ## Current Position
 
-Phase: 11 (CodeAct Action Interface) — EXECUTING
-Current Plan: 4 of 4 (complete)
-Total Plans in Phase: 4
-Status: All plans complete, ready for verify/transition
-Last activity: 2026-10-16 — 11-04 complete (bare --codeact implies code, G-11-1 closed)
+Phase: 12 (OpenViking Recall Backend) — DISCUSSING
+Plan: 0 of TBD
+Status: Phase 11 complete — ready to discuss Phase 12 scope
+Last activity: 2026-10-16 — Phase 11 fully gated (UAT 20/20, secure 0 open, validate Nyquist); roadmap expanded to 13 phases
 
-Progress: [█████████░] 91%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
