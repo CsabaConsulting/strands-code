@@ -193,6 +193,68 @@ def _pump_spawn_next(
     return built_agent, btw_future, question
 
 
+def _pump_on_main_done(
+    btw: BtwContext,
+    broker: Any,
+    side_pool: ThreadPoolExecutor,
+    both_running: threading.Event | None,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+) -> tuple[Any, Any, str | None]:
+    """Settle side work when the main turn ends (D-11 outliving-main).
+
+    Reaps a completed side, starts the next queued question so it
+    runs across the idle gap, then returns WITHOUT waiting — the
+    live side stays attached for the idle drain and the next turn's
+    pump.
+
+    Returns:
+        The ``(agent, future, question)`` side triple after the
+        reap/spawn pass.
+    """
+    if btw_future is not None and btw_future.done():
+        btw_agent, btw_future, btw_question = _pump_reap_side(
+            btw, broker, btw_agent, btw_future, btw_question, both_running
+        )
+    if btw_future is None:
+        btw_agent, btw_future, btw_question = _pump_spawn_next(
+            btw, broker, side_pool, both_running, btw_agent, btw_future, btw_question
+        )
+    return btw_agent, btw_future, btw_question
+
+
+def _pump_service_side(
+    btw: BtwContext,
+    broker: Any,
+    side_pool: ThreadPoolExecutor,
+    both_running: threading.Event | None,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+) -> tuple[Any, Any, str | None]:
+    """One side-service pass: reap a done side, spawn when idle, poll approvals.
+
+    Returns:
+        The ``(agent, future, question)`` side triple after the pass.
+    """
+    if btw_future is not None and btw_future.done():
+        btw_agent, btw_future, btw_question = _pump_reap_side(
+            btw, broker, btw_agent, btw_future, btw_question, both_running
+        )
+    if btw_future is None:
+        btw_agent, btw_future, btw_question = _pump_spawn_next(
+            btw, broker, side_pool, both_running, btw_agent, btw_future, btw_question
+        )
+    if broker is not None:
+        req = _poll_live(broker)
+        if req is not None:
+            req.run_prompt()
+    else:
+        sleep(0.005)
+    return btw_agent, btw_future, btw_question
+
+
 def _pump_parallel(
     agent: Any,
     text: str,
@@ -217,43 +279,7 @@ def _pump_parallel(
                     if main_future.done():
                         if btw_future is None and btw.spawn_queue.empty():
                             break
-                        # Main done but side work remains: reap a
-                        # completed side, start the next queued question
-                        # so it runs across the idle gap, then return
-                        # WITHOUT waiting (D-11 outliving-main) — the
-                        # live side stays attached for the idle drain
-                        # and the next turn's pump.
-                        if btw_future is not None and btw_future.done():
-                            btw_agent, btw_future, btw_question = _pump_reap_side(
-                                btw,
-                                broker,
-                                btw_agent,
-                                btw_future,
-                                btw_question,
-                                both_running,
-                            )
-                        if btw_future is None:
-                            btw_agent, btw_future, btw_question = _pump_spawn_next(
-                                btw,
-                                broker,
-                                side_pool,
-                                both_running,
-                                btw_agent,
-                                btw_future,
-                                btw_question,
-                            )
-                        break
-                    if btw_future is not None and btw_future.done():
-                        btw_agent, btw_future, btw_question = _pump_reap_side(
-                            btw,
-                            broker,
-                            btw_agent,
-                            btw_future,
-                            btw_question,
-                            both_running,
-                        )
-                    if btw_future is None:
-                        btw_agent, btw_future, btw_question = _pump_spawn_next(
+                        btw_agent, btw_future, btw_question = _pump_on_main_done(
                             btw,
                             broker,
                             side_pool,
@@ -262,12 +288,16 @@ def _pump_parallel(
                             btw_future,
                             btw_question,
                         )
-                    if broker is not None:
-                        req = _poll_live(broker)
-                        if req is not None:
-                            req.run_prompt()
-                    else:
-                        sleep(0.005)
+                        break
+                    btw_agent, btw_future, btw_question = _pump_service_side(
+                        btw,
+                        broker,
+                        side_pool,
+                        both_running,
+                        btw_agent,
+                        btw_future,
+                        btw_question,
+                    )
                 except KeyboardInterrupt:
                     if btw_future is None or btw_future.done():
                         # Single worker (or side already reaped):
