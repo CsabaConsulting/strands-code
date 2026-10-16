@@ -306,7 +306,7 @@ Plans:
   2. Oversized modules (loop, routing, router) are broken into coherent packages; the uattest driver is split into helpers plus per-area scenario files
   3. examples/pdf_to_okf_bundle is removed and the README references only shipped surfaces; full suite and rig stay green throughout
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 
 Plans:
 **Wave 1**
@@ -327,7 +327,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 12-05-PLAN.md — README plus instruction refresh plus blocking gates plus final green proof
+- [x] 12-05-PLAN.md — README plus instruction refresh plus blocking gates plus final green proof
 
 ## Progress
 
@@ -347,7 +347,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9. Native TypeSafe Decision Engine | 3/3 | Complete | 2026-10-12 |
 | 10. Provider-Reported Turn Spend | 5/5 | Complete | 2026-10-13 |
 | 11. CodeAct Action Interface | 4/4 | Complete | 2026-10-16 |
-| 12. Structural Review + Hygiene | 4/5 | In Progress|  |
+| 12. Structural Review + Hygiene | 5/5 | Complete | 2026-10-16 |
 
 ## Future (post-v1)
 

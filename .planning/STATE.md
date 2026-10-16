@@ -5,16 +5,16 @@ current_phase: 12
 current_phase_name: Structural Review + Hygiene
 current_plan: 5
 status: discussing
-stopped_at: Completed 12-04-PLAN.md
-last_updated: "2026-10-16T08:33:44.429Z"
+stopped_at: Completed 12-05-PLAN.md
+last_updated: "2026-10-16T08:43:33.000Z"
 last_activity: 2026-10-16
-last_activity_desc: 12-04 executed (rig split, mirrored tests, live A1 PASS)
-state_head: 89df2e90282c13af5eab11b4919f311b827839f8
+last_activity_desc: 12-05 executed (README rewrite, blocking gates, final green proof)
+state_head: 3dd16c6b8325de06e2b8d948bef63b8c95f1eea7
 progress:
   total_phases: 12
-  completed_phases: 11
+  completed_phases: 12
   total_plans: 40
-  completed_plans: 40
+  completed_plans: 41
 ---
 
 # Project State
@@ -28,13 +28,13 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 
 ## Current Position
 
-Phase: 12 (Structural Review + Hygiene) — IN PROGRESS
+Phase: 12 (Structural Review + Hygiene) — COMPLETE
 Current Plan: 5
 Total Plans in Phase: 5
-Status: 12-04 rig split complete (shared lib, 5 per-area scenario files, 91-line thin driver, mirrored tests, live A1 PASS, suite 1538 green); ready for 12-05 README + gates
-Last activity: 2026-10-16 — 12-04 executed (12 scenarios moved verbatim, 26 assertions re-homed, 0 dropped, all gates exit 0)
+Status: 12-05 close-out complete (README rewritten, gates blocking on CI + pre-commit, suite 1538 green, live A1/A2 PASS); phase 12 done, 5/5 plans
+Last activity: 2026-10-16 — 12-05 executed (docs truthful, persistent gates wired, final tree proven green)
 
-Progress: [█████████░] 92%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -103,6 +103,7 @@ Progress: [█████████░] 92%
 | Phase 12 P02 | 38m | 3 tasks | 31 files |
 | Phase 12 P03 | 38m | 3 tasks | 107 files |
 | Phase 12 P04 | 8min | 3 tasks | 14 files |
+| Phase 12 P05 | 8min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,8 @@ Recent decisions affecting current work:
 - [Phase 12]: 12-03 layout: 10 CLI packages (loop/routing/dispatch/ui/entry/memory/policy/cost/model/session) with core.py convention on name collision; tests mirror the tree plus agent/rig; composition-root contract tracks entry.main; cli-root search_tool imports deferred to use site (mirror collection order exposed the cycle)
 - [Phase 12]: 12-04 rig split: wait_routed + ensure_workdir homed in uattest_lib; thin driver keeps _native_strategy + BOGUS_TYPESAFE_KEY re-exports for the unmodified calibration contract; constants single-homed in lib — Plan task 3 requires the pane_text monkeypatch target to be the library module, satisfiable with verbatim bodies only when the wait lives there; calibration file is outside plan scope so the driver preserves its two names
 - [Phase 12]: 12-04 plan repair: test split executed atomically with code moves (tasks 1-2), not in task 3; task 3 ran the 26/26 re-home audit + gates instead — Unmodified-tests-vs-split-code is unsatisfiable: monkeypatched driver.pane_text cannot affect lib-defined wait functions via from-imports (module-globals binding); every task-end state stayed green
+- [Phase 12]: 12-05 close-out: CI carries a sixth CLEANUP-01 absence-plus-anchored-grep step (only the anchored form is gate-safe — bare "knowledge" matches legit files); setup-uv pinned at v10.3.0; CI syncs --extra litellm for the full suite; task 3 verification-only with no commit
+- [Phase 12]: 12-05 instruction refresh: AGENTS.md edited directly per plan, so ARCHITECTURE.md/STACK.md sources now drift from it until the next codebase re-map; convention naming examples still cite deleted module names (follow-up, not blocking)
 
 ### Pending Todos
 
@@ -225,6 +228,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-16T08:33:11.734Z
-Stopped at: Completed 12-04-PLAN.md
+Last session: 2026-10-16T08:44:00.000Z
+Stopped at: Completed 12-05-PLAN.md
 Resume file: None
