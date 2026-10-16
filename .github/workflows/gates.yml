@@ -1,0 +1,19 @@
+name: gates
+
+on: [push, pull_request]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --extra litellm
+      - run: uv run pytest tests/ -q
+      - run: uv run ruff check strands_code_cli tests scripts
+      - run: uv run ruff format --check strands_code_cli tests scripts
+      - run: uv run --group dev xenon --max-absolute C strands_code_cli tests scripts
+      - run: uv run --group dev lint-imports
+      - run: test ! -e examples/pdf_to_okf_bundle && test ! -e strands_code_agent/knowledge && test -z "$(grep -rn 'strands_code_agent\.knowledge\|pdf_to_okf' --include='*.py' strands_code_cli tests scripts)"

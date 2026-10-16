@@ -1,0 +1,26 @@
+# Persistent structural gate (D-02): ruff lint + format plus xenon complexity
+# and import-linter contracts, scoped to fork-owned paths (D-24). CI is the
+# blocking authority; these hooks are fast local feedback only.
+# Docs: https://docs.astral.sh/ruff/integrations/#pre-commit, https://github.com/rubik/xenon, https://import-linter.readthedocs.io/
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1 # keep == locked dev ruff version (uv.lock) to avoid skew
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: xenon
+        name: xenon complexity gate
+        entry: uv run --group dev xenon --max-absolute C
+        language: system
+        types: [python]
+        exclude: ^strands_code_agent/(?!search_tool\.py).*
+        pass_filenames: true
+      - id: lint-imports
+        name: import-linter contracts
+        entry: uv run --group dev lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false # contracts analyze the whole package graph
