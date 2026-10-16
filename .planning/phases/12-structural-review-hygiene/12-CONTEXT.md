@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-A measurement-first structural review of the CLI tree plus dead-code hygiene. Complexity and coupling are measured with radon/xenon, the flat `strands_code_cli/` layout is repackaged by feature, the uattest driver is split into a shared lib plus per-area scenario files, and the dead OKF example (plus its knowledge module) is removed. No behavior changes — pure structure. Full suite and rig stay green throughout.
+A measurement-first structural review of the CLI tree plus dead-code hygiene. Complexity and coupling are measured with radon/xenon, the flat `strands_code_cli/` layout is repackaged by feature, the uattest driver is split into a shared lib plus per-area scenario files, ruff governs lint + format, and the dead OKF example (plus its knowledge module) is removed. No behavior changes — pure structure. Full suite and rig stay green throughout.
 
 </domain>
 
@@ -40,8 +40,12 @@ A measurement-first structural review of the CLI tree plus dead-code hygiene. Co
 - **D-16:** Full README rewrite of the features table for the post-cleanup tree (not just dropping the OKF row).
 - **D-17:** Cleanup first — dead code is deleted before measurement, so the numbers describe the tree being repackaged.
 
+### Lint and format (added post-discussion 2026-10-16)
+- **D-18:** Ruff governs general lint + format (`ruff check` and `ruff format`); config lives in `pyproject.toml`. The whole tree is formatted once during the phase, and the persistent gate (D-02) enforces ruff-clean on every run alongside the complexity thresholds.
+- **D-19:** Ruff formatting lands before the repackage moves (with cleanup first, D-17), so later diffs show moves, not reformatting.
+
 ### the agent's Discretion
-Exact package names and boundaries, the coupling metric choice, report location and format, pre-commit wiring details, and README prose are left to planner/executor judgment within the locked decisions above.
+Exact package names and boundaries, the coupling metric choice, report location and format, pre-commit wiring details, ruff rule selection and line length, and README prose are left to planner/executor judgment within the locked decisions above.
 
 </decisions>
 
@@ -94,7 +98,6 @@ Exact package names and boundaries, the coupling metric choice, report location 
 <deferred>
 ## Deferred Ideas
 
-- Ruff adoption (lint + C901) as a single tool — rejected in favor of radon/xenon this phase; revisit if the gate proves insufficient.
 - Agent-library restructuring — out of scope for upstream-merge safety (D-08).
 - External-importer migration note — rejected (D-11); break loudly instead.
 

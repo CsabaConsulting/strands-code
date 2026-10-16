@@ -230,3 +230,9 @@ Package names and boundaries, coupling metric choice, report format/location, pr
 ## Deferred Ideas
 
 - Ruff adoption, agent-library restructuring, external-importer migration note (recorded in CONTEXT.md).
+
+---
+
+## Amendment (2026-10-16, post-discussion)
+
+User: "Besides the cyclomatic complexity I also want to add ruff to this phase for general code formatting and hygiene." Recorded as D-18 (ruff check + format, config in pyproject.toml, enforced by the persistent gate) and D-19 (formatting lands before the repackage moves). Ruff removed from Deferred Ideas. Rule selection and line length left to planner/executor discretion.
