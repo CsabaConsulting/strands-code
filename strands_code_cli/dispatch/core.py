@@ -467,6 +467,187 @@ def _model_list_message(tree: ModelTree, seen: list) -> tuple[str, str | None]:
     return ("reply", "\n".join(lines))
 
 
+def _ask_radio(title, items, default):
+    """One radio prompt; RuntimeError (closed stdin) answers None."""
+    from strands_code_cli.ui.choice import radio_choice
+
+    try:
+        return radio_choice(title, items, default=default)
+    except RuntimeError:
+        return None
+
+
+def _default_index(items, contains):
+    """First index whose item contains the current model, else 0."""
+    return next((i for i, item in enumerate(items) if contains(item)), 0)
+
+
+class _ModelCascade:
+    """Bare-/model tty cascade: vendor → family → base → route with Back.
+
+    Each non-top level offers Back; going back re-shows the previous
+    level with the earlier pick preselected. picks[0..2] hold
+    vendor/family/base; deeper picks clear on change.
+    """
+
+    def __init__(self, tree: ModelTree, current_model: str | None) -> None:
+        self._tree = tree
+        self._current = current_model
+        self._picks: list = [None, None, None]
+        self._stage = 0
+        self._backing = False
+        self._vendor = ""
+        self._family = ""
+
+    def run(self) -> tuple:
+        """Drive stages until one returns the final action tuple."""
+        while True:
+            if self._stage == 0:
+                done = self._stage_vendor()
+            elif self._stage == 1:
+                done = self._stage_family()
+            elif self._stage == 2:
+                done = self._stage_model()
+            else:
+                done = self._stage_route()
+            if done is not None:
+                return done
+
+    def _stage_vendor(self) -> tuple | None:
+        """Pick the vendor (top level: cancel or custom instead of Back)."""
+        items = [
+            (
+                v,
+                _model_count_label(v, sum(len(m) for _, m in f)),
+            )
+            for v, f in self._tree
+        ]
+        values = [v for v, _ in items]
+        default = (
+            values.index(self._picks[0])
+            if self._picks[0] in values
+            else _default_index(
+                self._tree,
+                lambda vf: any(
+                    self._current in routes
+                    for _, models in vf[1]
+                    for _, routes in models
+                ),
+            )
+        )
+        cancel_label = (
+            f"Cancel (stay with {self._current})" if self._current else "Cancel"
+        )
+        picked = _ask_radio(
+            "Select vendor",
+            items
+            + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")]
+            + [(_MODEL_CANCEL, cancel_label)],
+            default,
+        )
+        if picked is None or picked == _MODEL_CANCEL:
+            return ("reply", "Model unchanged.")
+        if picked == _MODEL_CUSTOM:
+            return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
+        self._vendor = picked
+        self._picks = [self._vendor, None, None]
+        self._backing = False
+        self._stage = 1
+        return None
+
+    def _stage_family(self) -> tuple | None:
+        """Pick the vendor family (single family auto-advances)."""
+        families = next(f for v, f in self._tree if v == self._vendor)
+        if len(families) == 1:
+            if self._backing:
+                self._stage = 0
+                return None
+            self._family = families[0][0]
+            self._picks[1] = self._family
+            self._stage = 2
+            return None
+        self._backing = False
+        names = [name for name, _ in families]
+        picked = _ask_radio(
+            f"Select {self._vendor} family",
+            [(name, _model_count_label(name, len(m))) for name, m in families]
+            + [(_MODEL_BACK, "← Back to vendors")],
+            names.index(self._picks[1])
+            if self._picks[1] in names
+            else _default_index(
+                families,
+                lambda fm: any(self._current in routes for _, routes in fm[1]),
+            ),
+        )
+        if picked is None:
+            return ("reply", "Model unchanged.")
+        if picked == _MODEL_BACK:
+            self._backing = True
+            self._stage = 0
+            return None
+        self._family = picked
+        self._picks[1:] = [self._family, None]
+        self._stage = 2
+        return None
+
+    def _stage_model(self) -> tuple | None:
+        """Pick the base model (single base auto-advances)."""
+        families = next(f for v, f in self._tree if v == self._vendor)
+        models = next(m for name, m in families if name == self._family)
+        if len(models) == 1:
+            if self._backing:
+                self._stage = 1
+                return None
+            self._picks[2] = models[0][0]
+            self._stage = 3
+            return None
+        self._backing = False
+        bases = [b for b, _ in models]
+        picked = _ask_radio(
+            f"Select {self._vendor} {self._family} model",
+            [(b, b if len(r) == 1 else f"{b} ({len(r)} routes)") for b, r in models]
+            + [(_MODEL_BACK, "← Back to families")],
+            bases.index(self._picks[2])
+            if self._picks[2] in bases
+            else _default_index(models, lambda br: self._current in br[1]),
+        )
+        if picked is None:
+            return ("reply", "Model unchanged.")
+        if picked == _MODEL_BACK:
+            self._backing = True
+            self._stage = 1
+            return None
+        self._picks[2] = picked
+        self._stage = 3
+        return None
+
+    def _stage_route(self) -> tuple | None:
+        """Pick the route for the base (single route resolves directly)."""
+        from strands_code_cli.model.model_switch import (
+            normalize_model_ref,
+            route_label,
+        )
+
+        families = next(f for v, f in self._tree if v == self._vendor)
+        models = next(m for name, m in families if name == self._family)
+        routes = next(r for b, r in models if b == self._picks[2])
+        if len(routes) == 1:
+            return ("model", normalize_model_ref(routes[0]))
+        picked = _ask_radio(
+            f"Select route for {self._picks[2]}",
+            [(route, route_label(route)) for route in routes]
+            + [(_MODEL_BACK, "← Back to models")],
+            0,
+        )
+        if picked is None:
+            return ("reply", "Model unchanged.")
+        if picked == _MODEL_BACK:
+            self._backing = True
+            self._stage = 2
+            return None
+        return ("model", normalize_model_ref(picked))
+
+
 def _model_message(rest: str, current_model: str | None) -> tuple:
     """Handle /model: validate a selection or offer the discovered list.
 
@@ -483,7 +664,6 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         build_model_tree,
         discover_models,
         normalize_model_ref,
-        route_label,
     )
 
     if not rest:
@@ -492,156 +672,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         seen = list(dict.fromkeys(configured + options))
         tree = build_model_tree(seen)
         if sys.stdin.isatty():
-            from strands_code_cli.ui.choice import radio_choice
-
-            def _ask(title, items, default):
-                try:
-                    return radio_choice(title, items, default=default)
-                except RuntimeError:
-                    return None
-
-            def _default_index(items, contains):
-                return next((i for i, item in enumerate(items) if contains(item)), 0)
-
-            def _unchanged():
-                return ("reply", "Model unchanged.")
-
-            # Cascade loop: each non-top level offers Back; going back
-            # re-shows the previous level with the earlier pick preselected.
-            # picks[0..2] = vendor/family/base; deeper picks clear on change.
-            picks: list = [None, None, None]
-            stage = 0
-            backing = False
-            vendor = family = ""
-            while True:
-                if stage == 0:
-                    items = [
-                        (
-                            v,
-                            _model_count_label(v, sum(len(m) for _, m in f)),
-                        )
-                        for v, f in tree
-                    ]
-                    values = [v for v, _ in items]
-                    default = (
-                        values.index(picks[0])
-                        if picks[0] in values
-                        else _default_index(
-                            tree,
-                            lambda vf: any(
-                                current_model in routes
-                                for _, models in vf[1]
-                                for _, routes in models
-                            ),
-                        )
-                    )
-                    cancel_label = (
-                        f"Cancel (stay with {current_model})"
-                        if current_model
-                        else "Cancel"
-                    )
-                    picked = _ask(
-                        "Select vendor",
-                        items
-                        + [(_MODEL_CUSTOM, "Custom model id / ARN / endpoint…")]
-                        + [(_MODEL_CANCEL, cancel_label)],
-                        default,
-                    )
-                    if picked is None or picked == _MODEL_CANCEL:
-                        return _unchanged()
-                    if picked == _MODEL_CUSTOM:
-                        return ("reply", f"Enter a custom model as: {_MODEL_USAGE}")
-                    vendor = picked
-                    picks = [vendor, None, None]
-                    backing = False
-                    stage = 1
-                elif stage == 1:
-                    families = next(f for v, f in tree if v == vendor)
-                    if len(families) == 1:
-                        if backing:
-                            stage = 0
-                            continue
-                        family = families[0][0]
-                        picks[1] = family
-                        stage = 2
-                        continue
-                    backing = False
-                    names = [name for name, _ in families]
-                    picked = _ask(
-                        f"Select {vendor} family",
-                        [
-                            (name, _model_count_label(name, len(m)))
-                            for name, m in families
-                        ]
-                        + [(_MODEL_BACK, "← Back to vendors")],
-                        names.index(picks[1])
-                        if picks[1] in names
-                        else _default_index(
-                            families,
-                            lambda fm: any(
-                                current_model in routes for _, routes in fm[1]
-                            ),
-                        ),
-                    )
-                    if picked is None:
-                        return _unchanged()
-                    if picked == _MODEL_BACK:
-                        backing = True
-                        stage = 0
-                        continue
-                    family = picked
-                    picks[1:] = [family, None]
-                    stage = 2
-                elif stage == 2:
-                    families = next(f for v, f in tree if v == vendor)
-                    models = next(m for name, m in families if name == family)
-                    if len(models) == 1:
-                        if backing:
-                            stage = 1
-                            continue
-                        picks[2] = models[0][0]
-                        stage = 3
-                        continue
-                    backing = False
-                    bases = [b for b, _ in models]
-                    picked = _ask(
-                        f"Select {vendor} {family} model",
-                        [
-                            (b, b if len(r) == 1 else f"{b} ({len(r)} routes)")
-                            for b, r in models
-                        ]
-                        + [(_MODEL_BACK, "← Back to families")],
-                        bases.index(picks[2])
-                        if picks[2] in bases
-                        else _default_index(models, lambda br: current_model in br[1]),
-                    )
-                    if picked is None:
-                        return _unchanged()
-                    if picked == _MODEL_BACK:
-                        backing = True
-                        stage = 1
-                        continue
-                    picks[2] = picked
-                    stage = 3
-                else:
-                    families = next(f for v, f in tree if v == vendor)
-                    models = next(m for name, m in families if name == family)
-                    routes = next(r for b, r in models if b == picks[2])
-                    if len(routes) == 1:
-                        return ("model", normalize_model_ref(routes[0]))
-                    picked = _ask(
-                        f"Select route for {picks[2]}",
-                        [(route, route_label(route)) for route in routes]
-                        + [(_MODEL_BACK, "← Back to models")],
-                        0,
-                    )
-                    if picked is None:
-                        return _unchanged()
-                    if picked == _MODEL_BACK:
-                        backing = True
-                        stage = 2
-                        continue
-                    return ("model", normalize_model_ref(picked))
+            return _ModelCascade(tree, current_model).run()
         return _model_list_message(tree, seen)
     selection = rest.strip()
     try:
