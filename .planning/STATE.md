@@ -3,13 +3,13 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 12
 current_phase_name: Structural Review + Hygiene
-current_plan: 2
+current_plan: 3
 status: discussing
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-10-16T06:51:55.201Z"
+stopped_at: "2026-10-16T07:33:17Z"
+last_updated: "2026-10-16T07:34:27.724Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase renumber (13 -> 12); hindsight shell archived
-state_head: 03b129eea56195fae68123b29f63f1f1d0db6e24
+state_head: 7b193cf9a889977d5b566554baa0ea29c26376cf
 progress:
   total_phases: 12
   completed_phases: 11
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 12 (Structural Review + Hygiene) — IN PROGRESS
-Current Plan: 2
+Current Plan: 3
 Total Plans in Phase: 5
-Status: 12-01 hygiene spine complete (tooling, D-15 deletion, format, STRUCTURE.md); ready for 12-02 breakup
-Last activity: 2026-10-16 — 12-01 executed (tracer tooling, cleanup, format, measurement report)
+Status: 12-02 loop breakup complete (loop/ package, pump split, run_loop/pump/route at C or better, xenon-clean); ready for 12-03 rest-of-repackage
+Last activity: 2026-10-16 — 12-02 executed (repackage door approved + carve-out recorded for 12-03, loop/ package via pure moves, decomposition to xenon-clean)
 
 Progress: [█████████░] 92%
 
@@ -100,6 +100,7 @@ Progress: [█████████░] 92%
 | Phase 11 P03 | 6 min | 2 tasks | 4 files |
 | Phase 11 P04 | 2 min | 2 tasks | 2 files |
 | Phase 12 P01 | 8min | 3 tasks | 75 files |
+| Phase 12 P02 | 38m | 3 tasks | 31 files |
 
 ## Accumulated Context
 
@@ -187,6 +188,7 @@ Recent decisions affecting current work:
 - [Phase 11]: Bare --codeact implies code via pure argv pre-normalization in main() — the pinned typer never forwards flag_value/is_flag to click, so the helper rewrite is the mechanism; BadParameter pre-gate check byte-identical before the credential gate
 - [Phase 12]: Composition-root import-linter contract (feature modules never import strands_code_cli.main); D-15 knowledge contract inexpressible, CLEANUP-01 stays on the absence-plus-anchored-grep gate — import-linter rejects subpackages of external packages and the knowledge module no longer exists; lint-imports verifies KEPT with exit 0, and 12-05 wires the CI absence step
 - [Phase 12]: Xenon gating is absolute-only (--max-absolute C); A5 closed with no module-path-derived secret names on fork paths — Q5 resolution declines module/average grades; the env-name grep finds string literals only, the one dynamic lookup iterating a literal AWS_REGION tuple
+- [Phase 12]: 12-02 checkpoint: approved repackage plus one-line D-12 carve-out (auto-approved under user-locked D-05); 12-03 implements the search_tool.py:18 repoint
 
 ### Pending Todos
 
@@ -218,6 +220,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-16T06:51:42.627Z
-Stopped at: Completed 12-01-PLAN.md
+Last session: 2026-10-16T07:34:27.579Z
+Stopped at: Completed 12-02-PLAN.md
 Resume file: None
