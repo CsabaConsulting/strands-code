@@ -1883,6 +1883,95 @@ def _decide_effort(
     return (None, None, (0, 0, None), failed, detail, truncated)
 
 
+def _decide_single_candidate(
+    strategy: RoutingStrategy,
+    *,
+    current_model: str,
+    side: bool,
+    ask: str,
+) -> tuple[RoutingPick | None, str, tuple[int, int, float | None], str]:
+    """Route the degenerate one-candidate strategy (D-15 fast path).
+
+    No model choice exists, so the lone candidate's id rides through and
+    only the effort question runs over its levels; a lone single level
+    rides through with no decision call at all.
+    """
+    only = strategy.candidates[0]
+    if not only.levels:
+        return (
+            None,
+            "none",
+            (0, 0, None),
+            "only candidate advertises no levels",
+        )
+    if len(only.levels) == 1:
+        # Fully degenerate: no model choice and no effort choice —
+        # the lone level rides through with no decision call.
+        fast = RoutingPick(
+            model=only.id,
+            effort=only.levels[0],
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+        )
+        if only.id != current_model and not validate_routed_effort(
+            fast, strategy.candidates
+        ):
+            return (
+                None,
+                "none",
+                (0, 0, None),
+                f"effort {only.levels[0]!r} unsupported by {only.id}",
+            )
+        return (fast, "none", (0, 0, None), "")
+    state = build_decision_state(ask=ask, directives=strategy.directives, side=side)
+    chain = _chain_for(strategy)
+    if not chain:
+        order = _effective_order(strategy.engine)
+        head = order[0] if order else "off"
+        return (None, head, (0, 0, None), f"{head} failed")
+    (
+        effort,
+        effort_confidence,
+        usage,
+        name,
+        effort_detail,
+        effort_truncated,
+    ) = _decide_effort(strategy, only, state, chain)
+    if effort is None:
+        return (
+            None,
+            name,
+            (0, 0, None),
+            _with_truncation(effort_detail, effort_truncated),
+        )
+    fast = RoutingPick(
+        model=only.id,
+        effort=effort,
+        model_confidence=None,
+        effort_confidence=effort_confidence,
+        tie_break=False,
+    )
+    if only.id != current_model and not validate_routed_effort(
+        fast, strategy.candidates
+    ):
+        return (
+            None,
+            name,
+            (0, 0, None),
+            _with_truncation(
+                f"effort {effort!r} unsupported by {only.id}",
+                effort_truncated,
+            ),
+        )
+    return (
+        fast,
+        name,
+        usage,
+        _with_truncation("", effort_truncated),
+    )
+
+
 def decide(
     strategy: RoutingStrategy,
     *,
@@ -1928,79 +2017,8 @@ def decide(
     invalid (2-26) and there is no effort to pass through.
     """
     if _effective_order(strategy.engine) and len(strategy.candidates) == 1:
-        only = strategy.candidates[0]
-        if not only.levels:
-            return (
-                None,
-                "none",
-                (0, 0, None),
-                "only candidate advertises no levels",
-            )
-        if len(only.levels) == 1:
-            # Fully degenerate: no model choice and no effort choice —
-            # the lone level rides through with no decision call.
-            fast = RoutingPick(
-                model=only.id,
-                effort=only.levels[0],
-                model_confidence=None,
-                effort_confidence=None,
-                tie_break=False,
-            )
-            if only.id != current_model and not validate_routed_effort(
-                fast, strategy.candidates
-            ):
-                return (
-                    None,
-                    "none",
-                    (0, 0, None),
-                    f"effort {only.levels[0]!r} unsupported by {only.id}",
-                )
-            return (fast, "none", (0, 0, None), "")
-        state = build_decision_state(ask=ask, directives=strategy.directives, side=side)
-        chain = _chain_for(strategy)
-        if not chain:
-            order = _effective_order(strategy.engine)
-            head = order[0] if order else "off"
-            return (None, head, (0, 0, None), f"{head} failed")
-        (
-            effort,
-            effort_confidence,
-            usage,
-            name,
-            effort_detail,
-            effort_truncated,
-        ) = _decide_effort(strategy, only, state, chain)
-        if effort is None:
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(effort_detail, effort_truncated),
-            )
-        fast = RoutingPick(
-            model=only.id,
-            effort=effort,
-            model_confidence=None,
-            effort_confidence=effort_confidence,
-            tie_break=False,
-        )
-        if only.id != current_model and not validate_routed_effort(
-            fast, strategy.candidates
-        ):
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(
-                    f"effort {effort!r} unsupported by {only.id}",
-                    effort_truncated,
-                ),
-            )
-        return (
-            fast,
-            name,
-            usage,
-            _with_truncation("", effort_truncated),
+        return _decide_single_candidate(
+            strategy, current_model=current_model, side=side, ask=ask
         )
     state = build_decision_state(ask=ask, directives=strategy.directives, side=side)
     questions = {
