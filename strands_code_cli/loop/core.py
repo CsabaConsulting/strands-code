@@ -11,6 +11,7 @@ import signal
 import sys
 import threading
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
@@ -61,6 +62,7 @@ from strands_code_cli.loop.steering import (
 )
 from strands_code_cli.memory_file import (
     MEMORY_RELOAD_NOTE,
+    MemorySnapshot,
     load_memory,
     memory_banner,
     memory_section_names,
@@ -103,6 +105,7 @@ from strands_code_cli.policy_gate import (
 from strands_code_cli.policy_gate import (
     set_mode as set_gate_mode,
 )
+from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import (
     apply_approved_proposal,
     apply_memory_section,
@@ -1828,6 +1831,169 @@ def skill_match_note(skills: Any, text: str) -> str | None:
     return f"Matched skill '{entry.namespaced}' — {entry.description}"
 
 
+_INPUT_LINE = "line"
+"""Turn-input kind: a submitted line to dispatch."""
+
+_INPUT_SKIP = "skip"
+"""Turn-input kind: empty input, re-prompt."""
+
+_INPUT_EXIT = "exit"
+"""Turn-input kind: Ctrl-D, exit the loop."""
+
+
+def _reload_changed_memory(memory_snapshot: MemorySnapshot) -> MemorySnapshot:
+    """Reload changed memory files with one transcript note each.
+
+    Returns:
+        The (possibly reloaded) memory snapshot.
+    """
+    changed = sweep_memory_files(memory_snapshot)
+    if changed:
+        memory_snapshot = load_memory()
+        for changed_path in changed:
+            print_plain(console, MEMORY_RELOAD_NOTE.format(filename=changed_path))
+    return memory_snapshot
+
+
+def _print_review_lines(review_lines: list[str]) -> None:
+    """Print one turn-boundary curate review transcript line each."""
+    for review_line in review_lines:
+        print_plain(console, review_line)
+
+
+def _read_turn_input(
+    session: PromptSession,
+    broker: Any,
+    btw: BtwContext,
+    boundary_template: str | None,
+) -> tuple[str, str]:
+    """Read one turn input: armed revise template or the idle prompt.
+
+    An armed boundary revise runs without prompting. Ctrl-C cancels
+    the line, Ctrl-D exits, empty input submits nothing.
+
+    Returns:
+        ``(kind, text)`` where kind is ``_INPUT_LINE`` with the
+        submitted text, ``_INPUT_SKIP`` with ``""`` to re-prompt, or
+        ``_INPUT_EXIT`` with ``""`` to exit.
+    """
+    try:
+        if boundary_template is not None:
+            text = boundary_template
+        else:
+            # An outliving side streams through the idle proxy
+            # above the prompt line instead of tearing it (D-11
+            # idle delivery rides the documented patch_stdout
+            # shape; turn dialogs already nest this way).
+            with output_context():
+                text = _idle_prompt_multiplexed(session, broker, btw)
+    except KeyboardInterrupt:
+        return _INPUT_SKIP, ""
+    except EOFError:
+        return _INPUT_EXIT, ""
+    if not text.strip():
+        return _INPUT_SKIP, ""
+    return _INPUT_LINE, text
+
+
+def _dispatch_turn_input(
+    agent: Any,
+    text: str,
+    boundary_template: str | None,
+    revise_state: ReviseState,
+    session_id: str,
+    index: SessionIndex,
+    mode: ModeState,
+    current_model: str,
+    session_turns: list,
+    skills: Any,
+    harness_skills_refresh: Callable[[], str | None],
+    memory_mode: MemoryModeState,
+    curate_queue: CurateQueue,
+    init_state: InitState,
+    routing: routing_mod.RoutingState | None,
+    routing_events: list | None,
+    interface: CodeactState,
+    stint: CodeactStint,
+) -> tuple[str, str | None, str]:
+    """Dispatch one turn input through the router.
+
+    Armed boundary revises bypass dispatch as agent turns. A
+    ``/codeact`` flip persists as the last choice and resets the
+    stint (D-17).
+
+    Returns:
+        The ``(action, message, text)`` triple; ``text`` is rewritten
+        to the revise command on the boundary path.
+    """
+    if boundary_template is not None:
+        action, message = "agent", boundary_template
+        text = f"/memory revise {revise_state.section} {revise_state.instruction}"
+    else:
+        codeact_before = interface.interface
+        action, message = dispatch(
+            text,
+            session_id=session_id,
+            index=index,
+            mode=mode,
+            current_model=current_model,
+            agent=agent,
+            session_turns=session_turns,
+            skills=skills,
+            harness_skills_refresh=harness_skills_refresh,
+            memory_mode=memory_mode,
+            curate=curate_queue,
+            revise=revise_state,
+            init=init_state,
+            routing=routing,
+            routing_events=routing_events,
+            interface=interface,
+        )
+        if action == "reply" and interface.interface != codeact_before:
+            try:
+                ProviderConfig.load().save_codeact_choice(interface.interface)
+            except ValueError as exc:
+                logger.warning("CodeAct choice not persisted: %s", exc)
+            # D-17: each CodeAct stint starts fresh on every switch.
+            stint.reset()
+    return action, message, text
+
+
+def _emit_skill_match_note(skills: Any, action: str, text: str) -> None:
+    """Echo the accept line when a typed slash head matched a skill (D-13)."""
+    if action == "agent":
+        match_note = skill_match_note(skills, text)
+        if match_note is not None:
+            print_plain(console, match_note)
+
+
+def _handle_reply_action(
+    agent: Any,
+    message: str | None,
+    mode: ModeState,
+    text: str,
+    session_id: str,
+    index: SessionIndex,
+    rich: RichHistory,
+    stash_path: Path | None,
+) -> None:
+    """Serve one router reply: print, re-sync the gate, flush on mutation.
+
+    ``/compact`` and ``/clear`` mutate history, so the session
+    flushes immediately and the rich stash resets.
+    """
+    if message:
+        print_plain(console, message)
+    set_gate_mode(mode.mode)  # /mode or /approve may have flipped
+    head = text.strip().partition(" ")[0].lower()
+    if head in ("/compact", "/clear"):
+        explicit_save(agent)  # history mutated: flush immediately
+        flush_memory(agent)
+        index.ensure(session_id)
+        rich.reset()
+        rich.save(stash_path)  # empty stash removes the sidecar
+
+
 def run_loop(
     agent: Any,
     *,
@@ -1880,7 +2046,6 @@ def run_loop(
     from strands_harness.defaults import DEFAULT_MODEL
 
     from strands_code_cli.completer import build_completer
-    from strands_code_cli.provider_config import ProviderConfig
     from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
 
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
@@ -2008,12 +2173,8 @@ def run_loop(
     )
     side_pool = ThreadPoolExecutor(max_workers=1)
     while True:
-        changed = sweep_memory_files(memory_snapshot)
-        if changed:
-            memory_snapshot = load_memory()
-            for changed_path in changed:
-                print_plain(console, MEMORY_RELOAD_NOTE.format(filename=changed_path))
         boundary_revise["template"] = None
+        memory_snapshot = _reload_changed_memory(memory_snapshot)
         curate_queue.sweep_promotions(
             MEMORY_FACT_DIR,
             promotion_seen,
@@ -2028,73 +2189,41 @@ def run_loop(
             )
         except (OSError, ValueError) as exc:
             review_lines = [f"Memory review skipped — write failed: {exc}"]
-        for review_line in review_lines:
-            print_plain(console, review_line)
+        _print_review_lines(review_lines)
         boundary_template = boundary_revise["template"]
-        try:
-            if boundary_template is not None:
-                text = boundary_template
-            else:
-                # An outliving side streams through the idle proxy
-                # above the prompt line instead of tearing it (D-11
-                # idle delivery rides the documented patch_stdout
-                # shape; turn dialogs already nest this way).
-                with output_context():
-                    text = _idle_prompt_multiplexed(session, broker, btw_session)
-        except KeyboardInterrupt:
-            continue  # Ctrl-C cancels the line
-        except EOFError:
-            break  # Ctrl-D exits
-        if not text.strip():
+        kind, text = _read_turn_input(session, broker, btw_session, boundary_template)
+        if kind == _INPUT_SKIP:
             continue  # empty input submits nothing; re-prompt
+        if kind == _INPUT_EXIT:
+            break  # Ctrl-D exits
         _drain_idle_btw(agent, btw_session, broker, current_model, session_turns)
-        if boundary_template is not None:
-            action, message = "agent", boundary_template
-            text = f"/memory revise {revise_state.section} {revise_state.instruction}"
-        else:
-            codeact_before = interface.interface
-            action, message = dispatch(
-                text,
-                session_id=session_id,
-                index=index,
-                mode=mode,
-                current_model=current_model,
-                agent=agent,
-                session_turns=session_turns,
-                skills=skills,
-                harness_skills_refresh=_refresh_harness_skills,
-                memory_mode=memory_mode,
-                curate=curate_queue,
-                revise=revise_state,
-                init=init_state,
-                routing=routing,
-                routing_events=routing_events,
-                interface=interface,
-            )
-            if action == "reply" and interface.interface != codeact_before:
-                try:
-                    ProviderConfig.load().save_codeact_choice(interface.interface)
-                except ValueError as exc:
-                    logger.warning("CodeAct choice not persisted: %s", exc)
-                # D-17: each CodeAct stint starts fresh on every switch.
-                stint.reset()
-        if action == "agent":
-            match_note = skill_match_note(skills, text)
-            if match_note is not None:
-                print_plain(console, match_note)
+        action, message, text = _dispatch_turn_input(
+            agent,
+            text,
+            boundary_template,
+            revise_state,
+            session_id,
+            index,
+            mode,
+            current_model,
+            session_turns,
+            skills,
+            _refresh_harness_skills,
+            memory_mode,
+            curate_queue,
+            init_state,
+            routing,
+            routing_events,
+            interface,
+            stint,
+        )
+        _emit_skill_match_note(skills, action, text)
         if action == "exit":
             break
         if action == "reply":
-            if message:
-                print_plain(console, message)
-            set_gate_mode(mode.mode)  # /mode or /approve may have flipped
-            head = text.strip().partition(" ")[0].lower()
-            if head in ("/compact", "/clear"):
-                explicit_save(agent)  # history mutated: flush immediately
-                flush_memory(agent)
-                index.ensure(session_id)
-                rich.reset()
-                rich.save(stash_path)  # empty stash removes the sidecar
+            _handle_reply_action(
+                agent, message, mode, text, session_id, index, rich, stash_path
+            )
             continue
         if action == "model" and message is not None:
             try:
