@@ -571,6 +571,136 @@ def _sample_sources(base: Path) -> list[Path]:
     return found
 
 
+def _scan_readmes(base: Path, reader: _ScanReader) -> list[str]:
+    """Root README sections: one per readable README.*, else the absent note."""
+    readmes = sorted(
+        p for p in base.glob("README.*") if p.is_file() and not p.is_symlink()
+    )
+    if not readmes:
+        return ["README: (no root README.*)"]
+    return [
+        f"README ({path.name}):\n{_slice(text)}"
+        for path in readmes
+        if (text := reader.read(path)) is not None
+    ]
+
+
+def _scan_manifests(
+    base: Path, reader: _ScanReader
+) -> tuple[dict[str, str], list[str]]:
+    """Root manifest sections plus the texts the deep pass reuses."""
+    manifests: dict[str, str] = {}
+    sections = []
+    for name in ("pyproject.toml", "package.json", "Cargo.toml"):
+        path = base / name
+        if path.is_file() and not path.is_symlink():
+            text = reader.read(path)
+            if text is not None:
+                manifests[name] = text
+                sections.append(f"Manifest ({name}):\n{_slice(text)}")
+    if not manifests:
+        sections.append("Manifests: (none of pyproject.toml/package.json/Cargo.toml)")
+    return manifests, sections
+
+
+def _scan_docs(base: Path) -> str:
+    """Docs section: filenames only, never contents."""
+    docs = base / "docs"
+    if not (docs.is_dir() and not docs.is_symlink()):
+        return "Docs: (no docs/)"
+    try:
+        names = sorted(p.name for p in docs.iterdir())
+    except OSError:
+        names = []
+    return "Docs (filenames only):\n" + "\n".join(_truncate(names))
+
+
+def _scan_policy(base: Path, reader: _ScanReader) -> str:
+    """Policy section: .agent/policy.toml contents or the absent note."""
+    policy = base / ".agent" / "policy.toml"
+    policy_text = reader.read(policy) if policy.is_file() else None
+    if policy_text is None:
+        return "Policy: (no .agent/policy.toml)"
+    return f"Policy (.agent/policy.toml):\n{_slice(policy_text)}"
+
+
+def _scan_deep_sources(base: Path, reader: _ScanReader) -> list[str]:
+    """Deep sampled-source sections (imports plus docstrings only)."""
+    sections = []
+    for path in _sample_sources(base):
+        text = reader.read(path)
+        if text is not None:
+            rel = path.relative_to(base).as_posix()
+            sections.append(f"Source ({rel}):\n{_summarize_source(text)}")
+    return sections
+
+
+def _scan_deep_deps(manifests: dict[str, str]) -> str:
+    """Deep dependency-name section from the parsed manifests."""
+    dep_lines = []
+    if "pyproject.toml" in manifests:
+        dep_lines.extend(_dep_names_pyproject(manifests["pyproject.toml"]))
+    if "package.json" in manifests:
+        dep_lines.extend(_dep_names_package_json(manifests["package.json"]))
+    if "Cargo.toml" in manifests:
+        dep_lines.extend(_dep_names_cargo(manifests["Cargo.toml"]))
+    if not dep_lines:
+        return "Dependencies: (none parsed)"
+    return "Dependencies:\n  " + ", ".join(dep_lines)
+
+
+def _scan_deep_tests(base: Path) -> str:
+    """Deep tests-tree section: filenames only, never contents."""
+    tests_dir = base / "tests"
+    if not (tests_dir.is_dir() and not tests_dir.is_symlink()):
+        return "Tests: (no tests/)"
+    try:
+        test_files = sorted(
+            p.relative_to(base).as_posix()
+            for p in tests_dir.rglob("*")
+            if p.is_file() and not p.is_symlink()
+        )
+    except OSError:
+        test_files = []
+    return "Tests:\n" + "\n".join(_truncate(test_files))
+
+
+def _scan_runner_config(
+    base: Path, reader: _ScanReader, manifests: dict[str, str]
+) -> str:
+    """Deep runner-config section: ini files plus manifest test stanzas."""
+    runner_parts = []
+    for name in ("pytest.ini", "tox.ini", "setup.cfg"):
+        path = base / name
+        if path.is_file() and not path.is_symlink():
+            text = reader.read(path)
+            if text is not None:
+                runner_parts.append(f"### {name}\n{_slice(text)}")
+    if "pyproject.toml" in manifests:
+        match = re.search(
+            r"(\[tool\.pytest\.ini_options\].*?)(?=\n\[|\Z)",
+            manifests["pyproject.toml"],
+            re.DOTALL,
+        )
+        if match is not None:
+            runner_parts.append(
+                f"### pyproject [tool.pytest.ini_options]\n{match.group(1)}"
+            )
+    if "package.json" in manifests:
+        try:
+            scripts = json.loads(manifests["package.json"]).get("scripts")
+        except ValueError:
+            scripts = None
+        if isinstance(scripts, dict) and scripts:
+            runner_parts.append(
+                "### package.json scripts\n"
+                + "\n".join(f"  {k}: {v}" for k, v in sorted(scripts.items()))
+            )
+    if not runner_parts:
+        return "Runner config: (none found)"
+    return "Runner config:\n" + "\n".join(runner_parts)
+
+
 def scan_repo(root: str | Path, depth: str) -> ScanReport:
     """Pure repo scan for /init drafts: layout plus capped source reads.
 
@@ -592,105 +722,16 @@ def scan_repo(root: str | Path, depth: str) -> ScanReport:
     reader = _ScanReader(base)
     parts = [f"Repo scan ({depth}) of {base.name or base}."]
     parts.append("Layout (top 2 levels):\n" + "\n".join(_truncate(_layout_lines(base))))
-    readmes = sorted(
-        p for p in base.glob("README.*") if p.is_file() and not p.is_symlink()
-    )
-    if readmes:
-        for path in readmes:
-            text = reader.read(path)
-            if text is not None:
-                parts.append(f"README ({path.name}):\n{_slice(text)}")
-    else:
-        parts.append("README: (no root README.*)")
-    manifests: dict[str, str] = {}
-    for name in ("pyproject.toml", "package.json", "Cargo.toml"):
-        path = base / name
-        if path.is_file() and not path.is_symlink():
-            text = reader.read(path)
-            if text is not None:
-                manifests[name] = text
-                parts.append(f"Manifest ({name}):\n{_slice(text)}")
-    if not manifests:
-        parts.append("Manifests: (none of pyproject.toml/package.json/Cargo.toml)")
-    docs = base / "docs"
-    if docs.is_dir() and not docs.is_symlink():
-        try:
-            names = sorted(p.name for p in docs.iterdir())
-        except OSError:
-            names = []
-        parts.append("Docs (filenames only):\n" + "\n".join(_truncate(names)))
-    else:
-        parts.append("Docs: (no docs/)")
-    policy = base / ".agent" / "policy.toml"
-    policy_text = reader.read(policy) if policy.is_file() else None
-    parts.append(
-        f"Policy (.agent/policy.toml):\n{_slice(policy_text)}"
-        if policy_text is not None
-        else "Policy: (no .agent/policy.toml)"
-    )
+    parts.extend(_scan_readmes(base, reader))
+    manifests, manifest_sections = _scan_manifests(base, reader)
+    parts.extend(manifest_sections)
+    parts.append(_scan_docs(base))
+    parts.append(_scan_policy(base, reader))
     if depth == "deep":
-        for path in _sample_sources(base):
-            text = reader.read(path)
-            if text is not None:
-                rel = path.relative_to(base).as_posix()
-                parts.append(f"Source ({rel}):\n{_summarize_source(text)}")
-        dep_lines = []
-        if "pyproject.toml" in manifests:
-            dep_lines.extend(_dep_names_pyproject(manifests["pyproject.toml"]))
-        if "package.json" in manifests:
-            dep_lines.extend(_dep_names_package_json(manifests["package.json"]))
-        if "Cargo.toml" in manifests:
-            dep_lines.extend(_dep_names_cargo(manifests["Cargo.toml"]))
-        parts.append(
-            "Dependencies:\n  " + ", ".join(dep_lines)
-            if dep_lines
-            else "Dependencies: (none parsed)"
-        )
-        tests_dir = base / "tests"
-        if tests_dir.is_dir() and not tests_dir.is_symlink():
-            try:
-                test_files = sorted(
-                    p.relative_to(base).as_posix()
-                    for p in tests_dir.rglob("*")
-                    if p.is_file() and not p.is_symlink()
-                )
-            except OSError:
-                test_files = []
-            parts.append("Tests:\n" + "\n".join(_truncate(test_files)))
-        else:
-            parts.append("Tests: (no tests/)")
-        runner_parts = []
-        for name in ("pytest.ini", "tox.ini", "setup.cfg"):
-            path = base / name
-            if path.is_file() and not path.is_symlink():
-                text = reader.read(path)
-                if text is not None:
-                    runner_parts.append(f"### {name}\n{_slice(text)}")
-        if "pyproject.toml" in manifests:
-            match = re.search(
-                r"(\[tool\.pytest\.ini_options\].*?)(?=\n\[|\Z)",
-                manifests["pyproject.toml"],
-                re.DOTALL,
-            )
-            if match is not None:
-                runner_parts.append(
-                    f"### pyproject [tool.pytest.ini_options]\n{match.group(1)}"
-                )
-        if "package.json" in manifests:
-            try:
-                scripts = json.loads(manifests["package.json"]).get("scripts")
-            except ValueError:
-                scripts = None
-            if isinstance(scripts, dict) and scripts:
-                runner_parts.append(
-                    "### package.json scripts\n"
-                    + "\n".join(f"  {k}: {v}" for k, v in sorted(scripts.items()))
-                )
-        parts.append(
-            "Runner config:\n" + "\n".join(runner_parts)
-            if runner_parts
-            else "Runner config: (none found)"
-        )
+        parts.extend(_scan_deep_sources(base, reader))
+        parts.append(_scan_deep_deps(manifests))
+        parts.append(_scan_deep_tests(base))
+        parts.append(_scan_runner_config(base, reader, manifests))
     if reader.capped:
         parts.append(
             f"(scan capped at {MAX_SCAN_FILES} files / {MAX_SCAN_BYTES} bytes — "
