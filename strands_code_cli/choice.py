@@ -25,7 +25,7 @@ import shutil
 import sys
 from typing import Any, Sequence
 
-from strands_code_cli.steering import stdin_guard
+from strands_code_cli.loop.steering import stdin_guard
 
 CANCELLED = object()
 """Sentinel: the user pressed Ctrl-C inside the dialog (must re-raise)."""

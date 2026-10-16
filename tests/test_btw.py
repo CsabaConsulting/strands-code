@@ -18,7 +18,7 @@ import pytest
 from strands.types.exceptions import EventLoopException
 
 import strands_code_cli.policy_gate as pg
-from strands_code_cli.btw import (
+from strands_code_cli.loop.btw import (
     BTW_FORK_PREAMBLE,
     BTW_FRAMING,
     BTW_IDLE_APPROVAL,
@@ -32,19 +32,19 @@ from strands_code_cli.btw import (
     fork_btw_history,
     render_btw_error,
 )
-from strands_code_cli.loop import (
+from strands_code_cli.loop.core import (
     _drain_idle_btw,
     _finish_btw_turn,
     _invoke_agent,
     _note_dropped_side,
 )
-from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
-from strands_code_cli.steering import (
+from strands_code_cli.loop.steering import (
     StdinGuard,
     SteeringState,
     is_btw_line,
     start_steering_reader,
 )
+from strands_code_cli.policy_gate import ApprovalBroker, TurnCancelled
 
 
 def _history_trailing_assistant() -> list:
@@ -568,7 +568,7 @@ class TestParallelTurn:
 
 class TestBuildBtwAgent:
     def _patch_factory(self, monkeypatch):
-        import strands_code_cli.btw as btw_mod
+        import strands_code_cli.loop.btw as btw_mod
 
         created: dict = {}
         sentinel_agent = SimpleNamespace()
@@ -650,7 +650,7 @@ class TestBuildBtwAgent:
         assert "steering_hook" not in created
 
     def test_memory_off_parent_builds_memoryless_child(self, monkeypatch):
-        import strands_code_cli.btw as btw_mod
+        import strands_code_cli.loop.btw as btw_mod
 
         created: dict = {}
 

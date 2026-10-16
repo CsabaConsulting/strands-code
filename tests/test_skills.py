@@ -17,7 +17,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
-import strands_code_cli.loop as loop_module
+import strands_code_cli.loop.core as loop_module
 from strands_code_cli.completer import SlashCompleter, build_completer
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
@@ -474,7 +474,10 @@ class TestSkillCompleter:
 
     def test_loop_wires_completer_exactly_once(self):
         loop_source = (
-            Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
+            Path(__file__).resolve().parent.parent
+            / "strands_code_cli"
+            / "loop"
+            / "core.py"
         ).read_text(encoding="utf-8")
         assert loop_source.count("completer=build_completer") == 1
 

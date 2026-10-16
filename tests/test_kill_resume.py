@@ -127,7 +127,7 @@ class TestKillResume:
 
 class TestCleanExitFlush:
     def test_explicit_save_round_trips_last_turn(self, tmp_path):
-        from strands_code_cli.loop import explicit_save
+        from strands_code_cli.loop.core import explicit_save
 
         session_id = str(uuid.uuid4())
         session_dir = tmp_path / "sessions"
@@ -142,7 +142,7 @@ class TestCleanExitFlush:
         assert second.state.get("working_plan") == ["done-1"]
 
     def test_explicit_save_never_raises_without_session_manager(self):
-        from strands_code_cli.loop import explicit_save
+        from strands_code_cli.loop.core import explicit_save
 
         explicit_save(object())  # no _session_manager: must be a silent no-op
 

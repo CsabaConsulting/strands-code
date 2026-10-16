@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import strands_code_cli.loop as loop_mod
+import strands_code_cli.loop.core as loop_mod
 import strands_code_cli.routing as routing_mod
 from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import USAGE_HINT, dispatch
@@ -360,7 +360,7 @@ class TestPreTurnHook:
     def test_quiet_keeps_failure_note_on_decide_error(
         self, tmp_path, monkeypatch, capsys
     ):
-        from strands_code_cli.loop import _route_pre_turn
+        from strands_code_cli.loop.core import _route_pre_turn
 
         strategy = _strategy()
         strategy.quiet = True
@@ -952,7 +952,7 @@ def _event(**overrides):
 
 def _hook(tmp_path, monkeypatch, strategy, engine_result, events):
     """Drive the pre-turn hook directly with a canned engine result."""
-    from strands_code_cli.loop import _route_pre_turn
+    from strands_code_cli.loop.core import _route_pre_turn
 
     monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
     monkeypatch.setattr(
@@ -977,7 +977,7 @@ def _hook(tmp_path, monkeypatch, strategy, engine_result, events):
 
 def _hook_with_routing(tmp_path, monkeypatch, strategy, engine_result, events, routing):
     """Drive the pre-turn hook directly with a caller-owned toggle."""
-    from strands_code_cli.loop import _route_pre_turn
+    from strands_code_cli.loop.core import _route_pre_turn
 
     monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
     monkeypatch.setattr(
@@ -1147,7 +1147,7 @@ class TestCostRouting:
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: None)
         events: list = []
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
-        from strands_code_cli.loop import _route_pre_turn
+        from strands_code_cli.loop.core import _route_pre_turn
 
         served = _route_pre_turn(
             agent,

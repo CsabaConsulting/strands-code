@@ -26,8 +26,8 @@ from typing import Any
 
 from prompt_toolkit.history import InMemoryHistory
 
-import strands_code_cli.loop as loop_module
-from strands_code_cli.loop import (
+import strands_code_cli.loop.core as loop_module
+from strands_code_cli.loop.core import (
     CANCEL_CONFIRMED,
     CANCEL_FIRST_PRESS,
     CANCEL_STILL,
@@ -216,7 +216,7 @@ class TestKillAfterCancel:
         import uuid
         from pathlib import Path
 
-        from strands_code_cli.loop import explicit_save
+        from strands_code_cli.loop.core import explicit_save
         from tests.test_kill_resume import _make_session_agent, _transcript_text
 
         session_id = str(uuid.uuid4())
@@ -236,7 +236,7 @@ class TestTurnSigintHandler:
         import signal
         import threading
 
-        from strands_code_cli.loop import _make_turn_sigint_handler
+        from strands_code_cli.loop.core import _make_turn_sigint_handler
 
         event = threading.Event()
         handler = _make_turn_sigint_handler(event, signal.SIG_DFL)
@@ -252,7 +252,7 @@ class TestTurnSigintHandler:
         import signal
         import threading
 
-        from strands_code_cli.loop import _make_turn_sigint_handler
+        from strands_code_cli.loop.core import _make_turn_sigint_handler
 
         event = threading.Event()
         seen: list[str] = []
@@ -265,7 +265,7 @@ class TestTurnSigintHandler:
         import signal
         import threading
 
-        from strands_code_cli.loop import _make_turn_sigint_handler
+        from strands_code_cli.loop.core import _make_turn_sigint_handler
 
         event = threading.Event()
         handler = _make_turn_sigint_handler(event, signal.SIG_IGN)

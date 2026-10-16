@@ -284,7 +284,7 @@ class TestDialogGuard:
     """radio_choice choke point: guard hold plus typeahead hygiene (R2b)."""
 
     def test_holds_guard_during_dialog(self, monkeypatch):
-        from strands_code_cli.steering import stdin_guard
+        from strands_code_cli.loop.steering import stdin_guard
 
         monkeypatch.setattr(
             "sys.stdin",
@@ -305,7 +305,7 @@ class TestDialogGuard:
     def test_entry_clears_typeahead(self, monkeypatch):
         from prompt_toolkit.input.typeahead import get_typeahead, store_typeahead
 
-        from strands_code_cli.steering import stdin_guard
+        from strands_code_cli.loop.steering import stdin_guard
 
         monkeypatch.setattr(
             "sys.stdin",

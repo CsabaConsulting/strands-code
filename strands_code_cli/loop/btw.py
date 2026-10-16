@@ -1,7 +1,7 @@
 """Mid-turn /btw side channel: parallel side agent, fenced delivery (LOOP-03).
 
 A ``/btw <question>`` line typed mid-turn carves out of steering (see
-:mod:`strands_code_cli.steering`) and spawns a side agent that runs in
+:mod:`strands_code_cli.loop.steering`) and spawns a side agent that runs in
 parallel with the main turn: same model, same tools, same approval
 gate, forked main history, recall-only shared memory. Its answer
 streams live as a fenced block while main output flows outside it, and

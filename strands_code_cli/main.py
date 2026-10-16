@@ -22,7 +22,6 @@ from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
 from strands_code_agent.search_tool import search as search_tool
-from strands_code_cli.btw import LockedHandler
 from strands_code_cli.diff_gate import (
     PendingStore,
     bind_session,
@@ -30,7 +29,9 @@ from strands_code_cli.diff_gate import (
     make_gated_write,
 )
 from strands_code_cli.first_run import BEDROCK_SETUP_POINTER, preflight_credentials
-from strands_code_cli.loop import run_loop
+from strands_code_cli.loop.btw import LockedHandler
+from strands_code_cli.loop.core import run_loop
+from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.policy_gate import (
     bind_main_agent,
@@ -41,7 +42,6 @@ from strands_code_cli.policy_gate import (
 from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.steering import register_steering_hook
 
 app = typer.Typer(
     add_completion=False,

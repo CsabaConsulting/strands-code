@@ -666,7 +666,7 @@ class TestRichHistory:
     def test_switch_back_restores_thinking_plus_suffix(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import RichHistory, apply_model_action
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
 
         agent = self._agent_with_thinking(tmp_path)
         rich = RichHistory()
@@ -705,7 +705,7 @@ class TestRichHistory:
     def test_trim_below_stash_disables_restore(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import RichHistory, apply_model_action
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
 
         agent = self._agent_with_thinking(tmp_path)
         rich = RichHistory()
@@ -731,7 +731,7 @@ class TestRichHistory:
     def test_cross_vendor_back_does_not_restore(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import RichHistory, apply_model_action
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
 
         agent = self._agent_with_thinking(tmp_path)
         rich = RichHistory()
@@ -757,7 +757,7 @@ class TestRichHistory:
     def test_stash_survives_resume_restores_thinking(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import RichHistory, apply_model_action
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
 
         agent = self._agent_with_thinking(tmp_path)
         rich = RichHistory()
@@ -809,7 +809,7 @@ class TestRichHistory:
     def test_compact_summary_breaks_restore(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import RichHistory, apply_model_action
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
 
         agent = self._agent_with_thinking(tmp_path)
         rich = RichHistory()
@@ -840,7 +840,7 @@ class TestRichHistory:
         assert "thinking restored" not in reply
 
     def test_missing_and_corrupt_stash_load_empty(self, tmp_path):
-        from strands_code_cli.loop import RichHistory
+        from strands_code_cli.loop.core import RichHistory
 
         assert RichHistory.load(None).messages is None
         assert RichHistory.load(tmp_path / "nope.json").messages is None
@@ -851,7 +851,7 @@ class TestRichHistory:
         assert RichHistory.load(bad).messages is None
 
     def test_empty_save_removes_stale_file(self, tmp_path):
-        from strands_code_cli.loop import RichHistory
+        from strands_code_cli.loop.core import RichHistory
 
         path = tmp_path / "s.json"
         path.write_text("{}", encoding="utf-8")
@@ -876,7 +876,7 @@ class TestTurnGuard:
     def _hermetic_fact_dir(self, tmp_path, monkeypatch):
         # Hermetic curate boundary: ambient harness fact files must not
         # queue promotion proposals (and prompt on stdin) during runs.
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
 
         monkeypatch.setattr(loop_mod, "MEMORY_FACT_DIR", tmp_path / "memory")
 
@@ -884,7 +884,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         # Isolate from the output proxy: StdoutProxy binds the global
@@ -934,7 +934,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
@@ -979,7 +979,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
@@ -1029,7 +1029,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
@@ -1085,7 +1085,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
@@ -1132,7 +1132,7 @@ class TestTurnGuard:
         assert "returned empty twice" in capsys.readouterr().out
 
     def test_empty_detector_rejects_weird_shapes(self):
-        from strands_code_cli.loop import _turn_appended_empty
+        from strands_code_cli.loop.core import _turn_appended_empty
 
         assert _turn_appended_empty(0, []) is False  # nothing appended
         assert (
@@ -1164,7 +1164,7 @@ class TestTurnGuard:
         from contextlib import nullcontext
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         from strands_code_cli.session_index import SessionIndex
 
         monkeypatch.setattr(loop_mod, "output_context", nullcontext)
@@ -1979,7 +1979,7 @@ class TestModelRouterBranch:
 
 class TestIdleOnlySwap:
     def test_idle_switch_continues_conversation(self, tmp_path):
-        from strands_code_cli.loop import apply_model_action
+        from strands_code_cli.loop.core import apply_model_action
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
         agent("first ask")
@@ -2021,7 +2021,7 @@ class TestIdleOnlySwap:
         assert "first ask" in texts and "second ask" in texts
 
     def test_oversize_switch_compacts(self, tmp_path):
-        from strands_code_cli.loop import apply_model_action
+        from strands_code_cli.loop.core import apply_model_action
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         agent.messages.extend(
@@ -2037,7 +2037,7 @@ class TestIdleOnlySwap:
         assert "compacted" in reply
 
     def test_mid_turn_refusal_exact_text_model_unchanged(self, tmp_path):
-        from strands_code_cli.loop import apply_model_action
+        from strands_code_cli.loop.core import apply_model_action
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         before = agent.model
@@ -2057,7 +2057,7 @@ class TestIdleOnlySwap:
     def test_switch_to_llama_warns_in_reply(self, tmp_path):
         import warnings
 
-        from strands_code_cli.loop import apply_model_action
+        from strands_code_cli.loop.core import apply_model_action
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
         agent("first ask")
@@ -2087,7 +2087,7 @@ class TestIdleOnlySwap:
     def test_bad_selection_leaves_session_untouched(self, tmp_path):
         import copy
 
-        from strands_code_cli.loop import apply_model_action
+        from strands_code_cli.loop.core import apply_model_action
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
         agent("first ask")

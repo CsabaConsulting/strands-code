@@ -5,7 +5,7 @@ import stat
 
 from prompt_toolkit.history import FileHistory
 
-from strands_code_cli import loop
+import strands_code_cli.loop.core as loop
 
 
 def test_history_file_restricted(tmp_path, monkeypatch):

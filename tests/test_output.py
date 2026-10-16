@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 
-import strands_code_cli.loop as loop_module
+import strands_code_cli.loop.core as loop_module
 from strands_code_cli.output import output_context, print_plain
 from strands_code_cli.session_index import SessionIndex
 

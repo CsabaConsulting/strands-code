@@ -41,7 +41,8 @@ from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
 
-from strands_code_cli.btw import RENDER_LOCK
+from strands_code_cli.loop.btw import RENDER_LOCK
+from strands_code_cli.loop.steering import stdin_guard as gate_open
 from strands_code_cli.output import output_context, print_plain
 from strands_code_cli.policy import (
     Allow,
@@ -52,7 +53,6 @@ from strands_code_cli.policy import (
     decide,
     normalise_command,
 )
-from strands_code_cli.steering import stdin_guard as gate_open
 
 logger = logging.getLogger(__name__)
 console = Console()

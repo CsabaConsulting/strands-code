@@ -14,10 +14,10 @@ from typing import Any
 
 import pytest
 
-import strands_code_cli.loop as loop_mod
+import strands_code_cli.loop.pump as pump_mod
 import strands_code_cli.policy_gate as pg
-from strands_code_cli.btw import BtwContext, BtwQueue
-from strands_code_cli.loop import CANCEL_FIRST_PRESS, _invoke_agent
+from strands_code_cli.loop.btw import BtwContext, BtwQueue
+from strands_code_cli.loop.core import CANCEL_FIRST_PRESS, _invoke_agent
 from strands_code_cli.policy_gate import ApprovalBroker
 
 
@@ -38,14 +38,14 @@ class TestAckBeforeJoin:
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         order: list[str] = []
-        real_print_plain = loop_mod.print_plain
+        real_print_plain = pump_mod.print_plain
 
         def spy_print(console, text, **kwargs):
             if text == CANCEL_FIRST_PRESS:
                 order.append("ack")
             return real_print_plain(console, text, **kwargs)
 
-        monkeypatch.setattr(loop_mod, "print_plain", spy_print)
+        monkeypatch.setattr(pump_mod, "print_plain", spy_print)
         real_poll = broker.poll
         calls = {"n": 0}
 

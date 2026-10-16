@@ -91,7 +91,7 @@ def _write_skill(skills_dir: Path, name: str) -> Path:
 
 def _loop_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
+        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop" / "core.py"
     ).read_text(encoding="utf-8")
 
 
@@ -359,7 +359,7 @@ class TestCodeactHistory:
 
 class TestCodeactCostRows:
     def test_session_turn_row_keys_unchanged(self):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         turns: list = []
         record_turn_metrics(_Summary(1000, 200), "bedrock/x-model", turns)
@@ -960,7 +960,7 @@ class TestCodeactSwap:
     def test_turn_setup_loop_wires_swap_and_restore(self):
         import inspect
 
-        import strands_code_cli.loop as loop_module
+        import strands_code_cli.loop.core as loop_module
 
         run_source = inspect.getsource(loop_module.run_loop)
         assert "default_repl = default_repl_handle(agent)" in run_source
@@ -971,10 +971,16 @@ class TestCodeactSwap:
     def test_turn_setup_side_pool_path_performs_no_swap(self):
         import inspect
 
-        import strands_code_cli.loop as loop_module
+        import strands_code_cli.loop.core as core_module
+        import strands_code_cli.loop.pump as pump_module
 
-        for name in ("_invoke_parallel", "_pump_parallel", "_route_side_spawn"):
-            source = inspect.getsource(getattr(loop_module, name))
+        homes = (
+            (pump_module, "_invoke_parallel"),
+            (pump_module, "_pump_parallel"),
+            (core_module, "_route_side_spawn"),
+        )
+        for module, name in homes:
+            source = inspect.getsource(getattr(module, name))
             assert "swap_for_code_turn" not in source
             assert "restore_after_turn" not in source
             assert "stint" not in source
@@ -1137,7 +1143,7 @@ class TestCodeactBothRouting:
     def test_both_loop_fix_at_send_consumes_one_shot(self):
         import inspect
 
-        import strands_code_cli.loop as loop_module
+        import strands_code_cli.loop.core as loop_module
 
         run_source = inspect.getsource(loop_module.run_loop)
         assert "interface.resolve_turn()" in run_source
@@ -1150,7 +1156,7 @@ class TestCodeactBothRouting:
 
 class TestCodeactSwitchingCoherence:
     def test_turn_rows_exclude_interface_across_turns(self):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         turns: list = []
         interfaces: list[str] = []
@@ -1166,7 +1172,7 @@ class TestCodeactSwitchingCoherence:
 
     def test_cost_report_byte_identical_across_interfaces(self):
         from strands_code_cli.cost_context import cost_report
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         def _session(interfaces: list[str]) -> str:
             turns: list = []

@@ -21,7 +21,7 @@ from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 
 import strands_code_cli.policy_gate as pg
-from strands_code_cli.loop import _invoke_agent, _poll_live
+from strands_code_cli.loop.core import _invoke_agent, _poll_live
 from strands_code_cli.policy import PolicyConfig
 from strands_code_cli.policy_gate import (
     ApprovalBroker,

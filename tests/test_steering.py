@@ -19,9 +19,7 @@ import threading
 import time
 from types import SimpleNamespace
 
-from strands_code_cli.policy import PolicyConfig
-from strands_code_cli.policy_gate import PolicyClassifier, gate_open
-from strands_code_cli.steering import (
+from strands_code_cli.loop.steering import (
     STEERING_NOTED,
     STREAMING_LIMIT,
     StdinGuard,
@@ -33,6 +31,8 @@ from strands_code_cli.steering import (
     mid_turn_slash_reply,
     start_steering_reader,
 )
+from strands_code_cli.policy import PolicyConfig
+from strands_code_cli.policy_gate import PolicyClassifier, gate_open
 
 
 def _hook_event(name="shell", uid="u1", **tool_input):
@@ -412,8 +412,8 @@ class TestStdinGuard:
 
     def test_singleton_shared_by_gate_chooser_and_dialog(self):
         import strands_code_cli.choice as choice_module
-        import strands_code_cli.loop as loop_module
-        from strands_code_cli.steering import stdin_guard
+        import strands_code_cli.loop.core as loop_module
+        from strands_code_cli.loop.steering import stdin_guard
 
         assert gate_open is stdin_guard
         assert loop_module.gate_open is stdin_guard

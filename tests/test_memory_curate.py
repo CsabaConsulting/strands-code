@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from strands_code_cli.loop import (
+from strands_code_cli.loop.core import (
     _drain_revise_rounds,
     _result_text,
     consume_init_turn,
@@ -64,7 +64,7 @@ def _dispatch(text, tmp_path, **kwargs):
 
 def _loop_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
+        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop" / "core.py"
     ).read_text(encoding="utf-8")
 
 

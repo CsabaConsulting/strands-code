@@ -2313,7 +2313,7 @@ class TestRoutedEffort:
 
         import strands_harness.models as harness_models
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
 
         real_resolve = harness_models.resolve_model
         calls: list = []
@@ -2642,7 +2642,7 @@ class TestSingleCandidateFastPath:
         import urllib.request
         from types import SimpleNamespace
 
-        import strands_code_cli.loop as loop_mod
+        import strands_code_cli.loop.core as loop_mod
         import strands_code_cli.routing as routing_mod
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")

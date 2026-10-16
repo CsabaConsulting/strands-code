@@ -361,7 +361,7 @@ class TestIdleMultiplexBranch:
     """GO branch: canned broker events serve at idle (hermetic, no tty)."""
 
     def test_serves_canned_approval_at_idle(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         req = _FakeRequest()
         broker = _FakeBroker([req])
@@ -372,7 +372,7 @@ class TestIdleMultiplexBranch:
         assert btw.approval_announced is False  # latch bypassed: immediate
 
     def test_prompt_reissued_with_preserved_buffer(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         req = _FakeRequest()
         broker = _FakeBroker([req])
@@ -381,7 +381,7 @@ class TestIdleMultiplexBranch:
         assert session.defaults == ["", "half typed"]
 
     def test_line_wins_without_approval(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         broker = _FakeBroker()  # nothing pending, nothing queued
         session = _FakeSession(["just a line"])
@@ -389,7 +389,7 @@ class TestIdleMultiplexBranch:
         assert session.defaults == [""]  # single episode, no serve, no re-issue
 
     def test_dialog_ctrl_c_cancels_side_and_reissues(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         def _interrupt():
             raise KeyboardInterrupt
@@ -404,21 +404,21 @@ class TestIdleMultiplexBranch:
         assert session.defaults == ["", "kept"]  # line survives the cancel
 
     def test_prompt_ctrl_c_cancels_line(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         session = _FakeSession([KeyboardInterrupt()])
         with pytest.raises(KeyboardInterrupt):
             _idle_prompt_multiplexed(session, _FakeBroker(), _fake_btw())
 
     def test_prompt_eof_propagates(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         session = _FakeSession([EOFError()])
         with pytest.raises(EOFError):
             _idle_prompt_multiplexed(session, _FakeBroker(), _fake_btw())
 
     def test_no_broker_falls_back_to_sync_prompt(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         session = _FakeSession(["unused"])
         assert _idle_prompt_multiplexed(session, None, _fake_btw()) == "sync-line"
@@ -426,7 +426,7 @@ class TestIdleMultiplexBranch:
         assert session.defaults == []
 
     def test_prompt_only_session_falls_back_to_sync_prompt(self):
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         class _SyncOnly:
             def prompt(self, message):
@@ -440,7 +440,7 @@ class TestIdleMultiplexBranch:
     def test_dead_request_skipped_without_dialog(self):
         import threading
 
-        from strands_code_cli.loop import _idle_prompt_multiplexed
+        from strands_code_cli.loop.core import _idle_prompt_multiplexed
 
         dead = threading.Event()
         dead.set()

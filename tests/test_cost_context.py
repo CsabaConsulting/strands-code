@@ -677,7 +677,7 @@ class TestContextOps:
                 assert "toolResult" not in block or SUMMARY_MARKER not in str(block)
 
     def test_clear_keeps_session_id_with_empty_history(self, tmp_path):
-        from strands_code_cli.loop import explicit_save
+        from strands_code_cli.loop.core import explicit_save
 
         session_id = str(uuid.uuid4())
         agent = _make_replay_agent(session_id, tmp_path / "sessions")
@@ -820,7 +820,7 @@ class TestCostRouterBranches:
 
 class TestLoopUsageWiring:
     def test_record_turn_metrics_appends_row_and_usage_line(self):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         turns: list = []
         line = record_turn_metrics(
@@ -839,12 +839,12 @@ class TestLoopUsageWiring:
         ]
 
     def test_record_turn_metrics_without_metrics_returns_none(self):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         assert record_turn_metrics(None, "bedrock/x", []) is None
 
     def test_btw_spend_melts_into_session_totals(self):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         turns: list = []
         record_turn_metrics(_Summary(1000, 200), "bedrock/x-model", turns)
@@ -856,7 +856,7 @@ class TestLoopUsageWiring:
         assert "btw" not in report.lower()
 
     def test_auto_compact_fires_at_80_and_keeps_pairs(self, tmp_path):
-        from strands_code_cli.loop import maybe_auto_compact
+        from strands_code_cli.loop.core import maybe_auto_compact
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         agent.messages.extend(
@@ -884,7 +884,7 @@ class TestLoopUsageWiring:
         assert sorted(uses) == sorted(results)
 
     def test_auto_compact_quiet_below_threshold_and_unknown(self, tmp_path):
-        from strands_code_cli.loop import maybe_auto_compact
+        from strands_code_cli.loop.core import maybe_auto_compact
 
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         agent.messages.append({"role": "user", "content": [{"text": "hi"}]})
@@ -901,7 +901,8 @@ class TestLoopUsageWiring:
             _Path("strands_code_cli/model_switch.py"),
             _Path("strands_code_cli/cost_context.py"),
             _Path("strands_code_cli/router.py"),
-            _Path("strands_code_cli/loop.py"),
+            _Path("strands_code_cli/loop/core.py"),
+            _Path("strands_code_cli/loop/pump.py"),
             _Path("strands_code_agent/utils.py"),
         ]
         for path in roots:
@@ -934,6 +935,13 @@ class TestLoopUsageWiring:
 
         from pathlib import Path as _Path
 
-        for mod in ("model_switch", "cost_context", "router", "loop", "main"):
+        for mod in (
+            "model_switch",
+            "cost_context",
+            "router",
+            "loop/core",
+            "loop/pump",
+            "main",
+        ):
             text = _Path(f"strands_code_cli/{mod}.py").read_text(encoding="utf-8")
             assert "os.getenv" not in text and "os.environ" not in text, mod

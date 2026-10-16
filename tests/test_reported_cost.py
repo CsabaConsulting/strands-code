@@ -239,7 +239,7 @@ class TestUsageLineActual:
 
 class TestTracerEndToEnd:
     def test_fake_cost_flows_to_row_and_usage_line(self, _litellm_stub):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0024))
@@ -251,7 +251,7 @@ class TestTracerEndToEnd:
         assert line is not None and "$0.00 actual" in line
 
     def test_failed_turn_drains_without_bleed(self, _litellm_stub):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0024))
@@ -266,7 +266,7 @@ class TestTracerEndToEnd:
 
 class TestMainDrainAgentShape:
     def test_agent_shaped_model_drains_reported_cost(self, _litellm_stub):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0024))
@@ -336,7 +336,7 @@ class TestSideDrainCarrier:
     def test_finished_side_turns_carry_cost_to_rows(self, _litellm_stub):
         from concurrent.futures import Future
 
-        from strands_code_cli.loop import _finish_btw_turn, record_turn_metrics
+        from strands_code_cli.loop.core import _finish_btw_turn, record_turn_metrics
 
         def _side_agent(cost):
             model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
@@ -362,7 +362,7 @@ class TestSideDrainCarrier:
 
 class TestExplicitReportedWins:
     def test_explicit_none_wins_over_model_costs(self, _litellm_stub):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0024))
@@ -378,7 +378,7 @@ class TestExplicitReportedWins:
         assert model.take_reported_costs() == [0.0024]
 
     def test_explicit_value_wins_without_consulting_model(self, _litellm_stub):
-        from strands_code_cli.loop import record_turn_metrics
+        from strands_code_cli.loop.core import record_turn_metrics
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0099))

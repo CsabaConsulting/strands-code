@@ -284,7 +284,7 @@ class TestAutoTitle:
     def test_model_title_capped_at_six_words(self, tmp_path):
         from types import SimpleNamespace
 
-        from strands_code_cli.loop import _maybe_auto_title
+        from strands_code_cli.loop.core import _maybe_auto_title
 
         index = _fresh_index(tmp_path)
         sid = index.mint()
@@ -295,7 +295,7 @@ class TestAutoTitle:
         assert index.list_recent()[0]["title"] == "one two three four five six"
 
     def test_no_model_falls_back_to_first_ask(self, tmp_path):
-        from strands_code_cli.loop import _maybe_auto_title
+        from strands_code_cli.loop.core import _maybe_auto_title
 
         index = _fresh_index(tmp_path)
         sid = index.mint()

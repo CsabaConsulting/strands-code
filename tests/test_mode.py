@@ -50,6 +50,7 @@ import pytest
 from strands.interventions.actions import Confirm
 from strands.vended_interventions.hitl import HumanInTheLoop
 
+from strands_code_cli.loop.steering import SteeringState, make_steering_hook
 from strands_code_cli.mode import (
     APPROVE_EMPTY,
     APPROVE_OK,
@@ -63,7 +64,6 @@ from strands_code_cli.policy import PolicyConfig, PolicyOptions
 from strands_code_cli.policy_gate import PolicyClassifier
 from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
-from strands_code_cli.steering import SteeringState, make_steering_hook
 
 BANNED_VOCAB = (
     "policy rule",

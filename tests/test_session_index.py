@@ -124,7 +124,7 @@ class TestAutoTitle:
     def test_loop_auto_title_respects_manual_rename(self, tmp_path):
         from types import SimpleNamespace
 
-        from strands_code_cli.loop import _maybe_auto_title
+        from strands_code_cli.loop.core import _maybe_auto_title
 
         class _Model:
             def generate(self, prompt: str) -> str:

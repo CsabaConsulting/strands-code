@@ -21,17 +21,6 @@ from prompt_toolkit.history import FileHistory, History
 from rich.console import Console
 
 from strands_code_cli import routing as routing_mod
-from strands_code_cli.btw import (
-    BTW_IDLE_APPROVAL,
-    BtwContext,
-    BtwQueue,
-    append_btw_turn,
-    build_btw_agent,
-    render_btw_cancelled,
-    render_btw_dropped,
-    render_btw_error,
-    unregister_btw_cancel,
-)
 from strands_code_cli.choice import radio_choice
 from strands_code_cli.codeact import (
     CodeactState,
@@ -52,6 +41,23 @@ from strands_code_cli.cost_context import (
     model_summarize,
     usage_line,
     window_for,
+)
+from strands_code_cli.loop.btw import (
+    BTW_IDLE_APPROVAL,
+    BtwContext,
+    BtwQueue,
+    append_btw_turn,
+    build_btw_agent,
+    render_btw_cancelled,
+    render_btw_dropped,
+    render_btw_error,
+    unregister_btw_cancel,
+)
+from strands_code_cli.loop.steering import (
+    SteeringSlot,
+    SteeringState,
+    register_steering_hook,
+    start_steering_reader,
 )
 from strands_code_cli.memory_file import (
     MEMORY_RELOAD_NOTE,
@@ -104,12 +110,6 @@ from strands_code_cli.router import (
     read_memory_section,
 )
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
-from strands_code_cli.steering import (
-    SteeringSlot,
-    SteeringState,
-    register_steering_hook,
-    start_steering_reader,
-)
 
 logger = logging.getLogger(__name__)
 console = Console()

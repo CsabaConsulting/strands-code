@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from strands_code_cli.loop import flush_memory
+from strands_code_cli.loop.core import flush_memory
 from strands_code_cli.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
@@ -241,7 +241,10 @@ class TestMemoryReload:
 
     def test_loop_calls_flush_on_exit_and_mutation_paths(self):
         source = (
-            Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
+            Path(__file__).resolve().parent.parent
+            / "strands_code_cli"
+            / "loop"
+            / "core.py"
         ).read_text(encoding="utf-8")
         assert source.count("flush_memory(agent)") == 2
 
