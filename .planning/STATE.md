@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 12
 current_phase_name: Structural Review + Hygiene
-current_plan: 3
+current_plan: 4
 status: discussing
-stopped_at: "2026-10-16T07:33:17Z"
-last_updated: "2026-10-16T07:34:27.724Z"
+stopped_at: "2026-10-16T08:14:25Z"
+last_updated: "2026-10-16T08:14:57.000Z"
 last_activity: 2026-10-16
-last_activity_desc: Phase renumber (13 -> 12); hindsight shell archived
-state_head: 7b193cf9a889977d5b566554baa0ea29c26376cf
+last_activity_desc: 12-03 executed (flag-day repackage, test mirror, gates green)
+state_head: 0068ab9677c06f0748aac0409d781f3626bf423b
 progress:
   total_phases: 12
   completed_phases: 11
   total_plans: 40
-  completed_plans: 38
+  completed_plans: 39
 ---
 
 # Project State
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 12 (Structural Review + Hygiene) — IN PROGRESS
-Current Plan: 3
+Current Plan: 4
 Total Plans in Phase: 5
-Status: 12-02 loop breakup complete (loop/ package, pump split, run_loop/pump/route at C or better, xenon-clean); ready for 12-03 rest-of-repackage
-Last activity: 2026-10-16 — 12-02 executed (repackage door approved + carve-out recorded for 12-03, loop/ package via pure moves, decomposition to xenon-clean)
+Status: 12-03 repackage complete (10 CLI packages, mirrored tests, entry re-synced, all 14 red blocks at C or better, xenon-clean); ready for 12-04 rig split
+Last activity: 2026-10-16 — 12-03 executed (24 modules into 9 packages, 44 tests mirrored, 14 decompositions, suite 1532 green)
 
 Progress: [█████████░] 92%
 
@@ -101,6 +101,7 @@ Progress: [█████████░] 92%
 | Phase 11 P04 | 2 min | 2 tasks | 2 files |
 | Phase 12 P01 | 8min | 3 tasks | 75 files |
 | Phase 12 P02 | 38m | 3 tasks | 31 files |
+| Phase 12 P03 | 38m | 3 tasks | 107 files |
 
 ## Accumulated Context
 
@@ -189,6 +190,7 @@ Recent decisions affecting current work:
 - [Phase 12]: Composition-root import-linter contract (feature modules never import strands_code_cli.main); D-15 knowledge contract inexpressible, CLEANUP-01 stays on the absence-plus-anchored-grep gate — import-linter rejects subpackages of external packages and the knowledge module no longer exists; lint-imports verifies KEPT with exit 0, and 12-05 wires the CI absence step
 - [Phase 12]: Xenon gating is absolute-only (--max-absolute C); A5 closed with no module-path-derived secret names on fork paths — Q5 resolution declines module/average grades; the env-name grep finds string literals only, the one dynamic lookup iterating a literal AWS_REGION tuple
 - [Phase 12]: 12-02 checkpoint: approved repackage plus one-line D-12 carve-out (auto-approved under user-locked D-05); 12-03 implements the search_tool.py:18 repoint
+- [Phase 12]: 12-03 layout: 10 CLI packages (loop/routing/dispatch/ui/entry/memory/policy/cost/model/session) with core.py convention on name collision; tests mirror the tree plus agent/rig; composition-root contract tracks entry.main; cli-root search_tool imports deferred to use site (mirror collection order exposed the cycle)
 
 ### Pending Todos
 
