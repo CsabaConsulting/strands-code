@@ -1277,39 +1277,15 @@ def _setup_directives() -> str | None:
     return "\n".join(lines)
 
 
-def _route_setup_message() -> str:
-    """Guided ``/route setup``: scope, order, candidates, models, directives.
-
-    Proposes the availability-driven engine order (native first with
-    a key, else OpenRouter-then-local) with an order builder on
-    decline, then enumerates the live OpenRouter chat catalog for
-    candidates and — for listed engines only — the live decisions
-    catalog for the decider, the Ollama tag, and the pinned Jev
-    list — never hardcoded names (D-06), never key prompts
-    (T-08-34) — and writes a valid strategy atomically; a failed
-    catalog fetch falls back to a typed-id path instead of crashing
-    (T-08-33). ESC or empty input aborts with the session unchanged
-    (empty accepts the proposed order and the nimble default, and
-    keeps skip notes on).
-    """
+def _setup_gather_candidates(
+    order: list,
+) -> tuple[list[str], object, list[dict[str, Any]]] | None:
+    """Fetch catalogs and pick candidates; None aborts with session unchanged."""
     from strands_code_cli.cost.live_pricing import (
         fetch_openrouter_decision_models,
         fetch_openrouter_models,
     )
-    from strands_code_cli.routing.core import save_strategy
 
-    scope = _setup_ask(
-        "Where should the strategy live",
-        [
-            ("global", "Global — all repos"),
-            ("repo", "This repo only (./.agent/routing.yaml)"),
-        ],
-    )
-    if scope is None:
-        return _SETUP_ABORTED
-    order = _setup_engine_order()
-    if order is None:
-        return _SETUP_ABORTED
     try:
         models = fetch_openrouter_models()
     except Exception:
@@ -1328,7 +1304,7 @@ def _route_setup_message() -> str:
         else:
             candidates = _setup_pick_candidates_typed(entries)
         if candidates is None:
-            return _SETUP_ABORTED
+            return None
     else:
         print(
             "Live catalog unreachable — enter model ids manually "
@@ -1336,24 +1312,47 @@ def _route_setup_message() -> str:
         )
         candidates = _setup_typed_id_list("Candidate model ids, comma-separated")
         if candidates is None:
-            return _SETUP_ABORTED
+            return None
+    return (candidates, decision_models, decision_entries)
+
+
+def _setup_gather_engine_models(
+    order: list,
+    decision_entries: list[dict[str, Any]],
+    decision_models: object,
+) -> tuple[str | None, str | None, str | None] | None:
+    """Pick per-engine models for listed engines; None aborts unchanged."""
     decision: str | None = None
     if "openrouter" in order:
         decision = _setup_pick_decision(
             decision_entries, typed_only=decision_models is None
         )
         if decision is None:
-            return _SETUP_ABORTED
+            return None
     local_model: str | None = None
     if "local" in order:
         local_model = _setup_local_model()
         if local_model is None:
-            return _SETUP_ABORTED
+            return None
     native_model: str | None = None
     if "native" in order:
         native_model = _setup_pick_native_model()
         if native_model is None:
-            return _SETUP_ABORTED
+            return None
+    return (decision, local_model, native_model)
+
+
+def _setup_finalize(
+    scope: str,
+    order: list,
+    candidates: list[str],
+    decision: str | None,
+    local_model: str | None,
+    native_model: str | None,
+) -> str:
+    """Confirm notes/directives, write the strategy, report the outcome."""
+    from strands_code_cli.routing.core import save_strategy
+
     skip_notes = _setup_confirm(
         "Print a one-line note when a listed engine is skipped", default=True
     )
@@ -1392,6 +1391,46 @@ def _route_setup_message() -> str:
         f"{models_bit}.\n"
         "Manual /model always wins over routing.\n"
         "Run /route validate to check the file."
+    )
+
+
+def _route_setup_message() -> str:
+    """Guided ``/route setup``: scope, order, candidates, models, directives.
+
+    Proposes the availability-driven engine order (native first with
+    a key, else OpenRouter-then-local) with an order builder on
+    decline, then enumerates the live OpenRouter chat catalog for
+    candidates and — for listed engines only — the live decisions
+    catalog for the decider, the Ollama tag, and the pinned Jev
+    list — never hardcoded names (D-06), never key prompts
+    (T-08-34) — and writes a valid strategy atomically; a failed
+    catalog fetch falls back to a typed-id path instead of crashing
+    (T-08-33). ESC or empty input aborts with the session unchanged
+    (empty accepts the proposed order and the nimble default, and
+    keeps skip notes on).
+    """
+    scope = _setup_ask(
+        "Where should the strategy live",
+        [
+            ("global", "Global — all repos"),
+            ("repo", "This repo only (./.agent/routing.yaml)"),
+        ],
+    )
+    if scope is None:
+        return _SETUP_ABORTED
+    order = _setup_engine_order()
+    if order is None:
+        return _SETUP_ABORTED
+    gathered = _setup_gather_candidates(order)
+    if gathered is None:
+        return _SETUP_ABORTED
+    candidates, decision_models, decision_entries = gathered
+    picked = _setup_gather_engine_models(order, decision_entries, decision_models)
+    if picked is None:
+        return _SETUP_ABORTED
+    decision, local_model, native_model = picked
+    return _setup_finalize(
+        scope, order, candidates, decision, local_model, native_model
     )
 
 
