@@ -494,6 +494,36 @@ def _allowed_roots_text(cwd: str | Path, policy: PolicyConfig) -> str:
     return ", ".join(str(r) for r in roots)
 
 
+def _decide_shell(tool_input: dict[str, Any]) -> Allow | Prompt:
+    """Verdict for shell: GET-shaped fetch allows, else prompt the command."""
+    command = _tool_input_text("shell", tool_input)
+    if is_fetch_get(command):
+        return Allow()
+    if is_network_command(command):
+        return Prompt(reason=f"Network action: {normalise_command(command)[:200]}")
+    return Prompt(reason=f"Shell command: {normalise_command(command)[:200]}")
+
+
+def _decide_file_tool(
+    tool_name: str, tool_input: dict[str, Any], base: Path, policy: PolicyConfig
+) -> Prompt | Deny:
+    """Verdict for file tools: outside-scope paths deny, else prompt."""
+    raw = tool_input.get("path", "")
+    from strands_code_cli.policy.scope import effective_roots
+
+    roots = effective_roots(base, policy)
+    if isinstance(raw, str) and raw:
+        from strands_code_cli.policy.scope import resolve
+
+        canonical = Path(os.path.realpath(resolve(raw, base)))
+        if not any(canonical == r or r in canonical.parents for r in roots):
+            allowed = ", ".join(str(r) for r in roots)
+            return Deny(
+                reason=f"Path {canonical} is outside the allowed roots: {allowed}"
+            )
+    return Prompt(reason=f"File {tool_name}: {raw}")
+
+
 def decide(
     tool_name: str,
     tool_input: dict[str, Any],
@@ -524,30 +554,12 @@ def decide(
     if tool_name in ("web_fetch", "web_search"):
         return Allow()  # D-16: pre-allowed fetches may hit any host
     if tool_name == "shell":
-        command = _tool_input_text("shell", tool_input)
-        if is_fetch_get(command):
-            return Allow()
-        if is_network_command(command):
-            return Prompt(reason=f"Network action: {normalise_command(command)[:200]}")
-        return Prompt(reason=f"Shell command: {normalise_command(command)[:200]}")
+        return _decide_shell(tool_input)
     if tool_name == "python_repl":
         code = _tool_input_text("python_repl", tool_input)
         return Prompt(reason=f"Python execution: {code[:200]}")
     if tool_name in FILE_TOOLS:
-        raw = tool_input.get("path", "")
-        from strands_code_cli.policy.scope import effective_roots
-
-        roots = effective_roots(base, policy)
-        if isinstance(raw, str) and raw:
-            from strands_code_cli.policy.scope import resolve
-
-            canonical = Path(os.path.realpath(resolve(raw, base)))
-            if not any(canonical == r or r in canonical.parents for r in roots):
-                allowed = ", ".join(str(r) for r in roots)
-                return Deny(
-                    reason=f"Path {canonical} is outside the allowed roots: {allowed}"
-                )
-        return Prompt(reason=f"File {tool_name}: {raw}")
+        return _decide_file_tool(tool_name, tool_input, base, policy)
     if tool_name == "subagent":
         return Prompt(reason="Delegated subtask inherits the gate (D-12)")
     return Prompt(reason=f"Tool {tool_name} is not pre-allowed")
