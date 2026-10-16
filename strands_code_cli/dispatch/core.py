@@ -444,6 +444,29 @@ def _model_count_label(name: str, count: int) -> str:
     return f"{name} ({count} {noun})"
 
 
+ModelTree = list[tuple[str, list[tuple[str, list[tuple[str, list[str]]]]]]]
+"""Vendor → family → [(base, routes)] nesting from build_model_tree."""
+
+
+def _model_list_message(tree: ModelTree, seen: list) -> tuple[str, str | None]:
+    """Render the off-tty bare-/model catalog listing."""
+    if not seen:
+        return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
+    lines = ["Available models:"]
+    for vendor, families in tree:
+        lines.append(f"  {vendor}:")
+        for family, models in families:
+            lines.append(f"    {family}:")
+            for base, routes in models:
+                if len(routes) == 1:
+                    lines.append(f"      {routes[0]}")
+                else:
+                    lines.append(f"      {base}:")
+                    lines.extend(f"        {route}" for route in routes)
+    lines.append(f"Custom: {_MODEL_USAGE}")
+    return ("reply", "\n".join(lines))
+
+
 def _model_message(rest: str, current_model: str | None) -> tuple:
     """Handle /model: validate a selection or offer the discovered list.
 
@@ -619,21 +642,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                         stage = 2
                         continue
                     return ("model", normalize_model_ref(picked))
-        if not seen:
-            return ("reply", f"No models discovered offline. {_MODEL_USAGE}")
-        lines = ["Available models:"]
-        for vendor, families in tree:
-            lines.append(f"  {vendor}:")
-            for family, models in families:
-                lines.append(f"    {family}:")
-                for base, routes in models:
-                    if len(routes) == 1:
-                        lines.append(f"      {routes[0]}")
-                    else:
-                        lines.append(f"      {base}:")
-                        lines.extend(f"        {route}" for route in routes)
-        lines.append(f"Custom: {_MODEL_USAGE}")
-        return ("reply", "\n".join(lines))
+        return _model_list_message(tree, seen)
     selection = rest.strip()
     try:
         resolve_model(normalize_model_ref(selection), DEFAULT_MODEL)
