@@ -279,29 +279,8 @@ def _ranked(probs: dict[str, float]) -> list[tuple[str, float]]:
     return sorted(probs.items(), key=lambda item: (-item[1], item[0]))
 
 
-def run_probe(
-    probe: dict,
-    *,
-    engine: str,
-    decision_model: str,
-    local_model: str,
-    native_model: str | None = None,
-) -> dict:
-    """Execute one probe through one engine; return the verdict record."""
-    ask = expand_ask(probe)
-    single = probe.get("candidates") == "single"
-    native_tag = native_model or NATIVE_MODEL_PIN
-    strategy, tiers = calibration_strategy(
-        single=single,
-        decision_model=decision_model,
-        local_model=local_model,
-        native_model=native_tag,
-    )
-    state = build_decision_state(
-        ask=ask,
-        directives=strategy.directives,
-        side=bool(probe.get("side")),
-    )
+def _probe_question(strategy, single: bool):
+    """Build the probe question: effort for single-candidate, model else."""
     if single:
         question_key = "pick_effort"
         question = build_effort_question(
@@ -316,71 +295,63 @@ def run_probe(
             directives=strategy.directives,
         )
         membership = strategy.candidates
-    questions = {question_key: question}
-    fault = _fault_for(probe, engine)
-    with _FaultContext(fault, engine) as applied:
-        if engine == "openrouter":
-            kwargs: dict = {}
-            if applied.timeout is not None:
-                kwargs["timeout"] = applied.timeout
-            result = decide_via_openrouter(
-                decision_model=applied.model_override or decision_model,
-                state=state,
-                questions=questions,
-                **kwargs,
-            )
-        elif engine == "local":
-            kwargs = {}
-            if applied.timeout is not None:
-                kwargs["timeout"] = applied.timeout
-            if applied.base_override is not None:
-                kwargs["local_base_url"] = applied.base_override
-            result = decide_via_ollama(
-                local_model=applied.model_override or local_model,
-                state=state,
-                questions=questions,
-                **kwargs,
-            )
-        elif engine == "native":
-            kwargs = {}
-            if applied.timeout is not None:
-                kwargs["timeout"] = applied.timeout
-            result = decide_via_typesafe(
-                native_model=applied.model_override or native_tag,
-                state=state,
-                questions=questions,
-                **kwargs,
-            )
-        else:
-            raise SystemExit(f"unknown engine {engine!r}")
+    return question_key, question, membership
+
+
+def _probe_attempt(
+    engine: str,
+    applied,
+    decision_model: str,
+    local_model: str,
+    native_tag: str,
+    state: dict,
+    questions: dict,
+):
+    """Run one engine attempt with the fault overrides applied."""
     if engine == "openrouter":
-        pin = decision_model
-    elif engine == "local":
-        pin = local_model
-    else:
-        pin = native_tag
-    record: dict = {
-        "probe": probe["id"],
-        "category": probe.get("category"),
-        "engine": engine,
-        "pin": pin,
-        "snapshot": result.model,
-        "question": question_key,
-        "fault": fault,
-        "ask_chars": len(ask),
-        "sent_chars": len(state["ask"]),
-        "error": result.error,
-        "truncated": result.truncated,
-        "input_tokens": result.input_tokens,
-        "output_tokens": result.output_tokens,
-        "cost": result.cost,
-        "expected": probe.get("expected"),
-        "acceptable": probe.get("acceptable", []),
-        "knobs": {
-            "confidence_threshold": strategy.confidence_threshold,
-            "tie_margin": strategy.tie_margin,
-        },
-    }
+        kwargs: dict = {}
+        if applied.timeout is not None:
+            kwargs["timeout"] = applied.timeout
+        return decide_via_openrouter(
+            decision_model=applied.model_override or decision_model,
+            state=state,
+            questions=questions,
+            **kwargs,
+        )
+    if engine == "local":
+        kwargs = {}
+        if applied.timeout is not None:
+            kwargs["timeout"] = applied.timeout
+        if applied.base_override is not None:
+            kwargs["local_base_url"] = applied.base_override
+        return decide_via_ollama(
+            local_model=applied.model_override or local_model,
+            state=state,
+            questions=questions,
+            **kwargs,
+        )
+    if engine == "native":
+        kwargs = {}
+        if applied.timeout is not None:
+            kwargs["timeout"] = applied.timeout
+        return decide_via_typesafe(
+            native_model=applied.model_override or native_tag,
+            state=state,
+            questions=questions,
+            **kwargs,
+        )
+    raise SystemExit(f"unknown engine {engine!r}")
+
+
+def _record_answer_outcome(
+    record: dict,
+    result,
+    question_key: str,
+    membership,
+    single: bool,
+    strategy,
+) -> None:
+    """Fill the answer/gating cells of a probe record in place."""
     answer = None
     raw_answer = None
     if result.answers is not None:
@@ -433,6 +404,73 @@ def run_probe(
                     "detail": detail,
                 }
             )
+
+
+def run_probe(
+    probe: dict,
+    *,
+    engine: str,
+    decision_model: str,
+    local_model: str,
+    native_model: str | None = None,
+) -> dict:
+    """Execute one probe through one engine; return the verdict record."""
+    ask = expand_ask(probe)
+    single = probe.get("candidates") == "single"
+    native_tag = native_model or NATIVE_MODEL_PIN
+    strategy, tiers = calibration_strategy(
+        single=single,
+        decision_model=decision_model,
+        local_model=local_model,
+        native_model=native_tag,
+    )
+    state = build_decision_state(
+        ask=ask,
+        directives=strategy.directives,
+        side=bool(probe.get("side")),
+    )
+    question_key, question, membership = _probe_question(strategy, single)
+    questions = {question_key: question}
+    fault = _fault_for(probe, engine)
+    with _FaultContext(fault, engine) as applied:
+        result = _probe_attempt(
+            engine,
+            applied,
+            decision_model,
+            local_model,
+            native_tag,
+            state,
+            questions,
+        )
+    if engine == "openrouter":
+        pin = decision_model
+    elif engine == "local":
+        pin = local_model
+    else:
+        pin = native_tag
+    record: dict = {
+        "probe": probe["id"],
+        "category": probe.get("category"),
+        "engine": engine,
+        "pin": pin,
+        "snapshot": result.model,
+        "question": question_key,
+        "fault": fault,
+        "ask_chars": len(ask),
+        "sent_chars": len(state["ask"]),
+        "error": result.error,
+        "truncated": result.truncated,
+        "input_tokens": result.input_tokens,
+        "output_tokens": result.output_tokens,
+        "cost": result.cost,
+        "expected": probe.get("expected"),
+        "acceptable": probe.get("acceptable", []),
+        "knobs": {
+            "confidence_threshold": strategy.confidence_threshold,
+            "tie_margin": strategy.tie_margin,
+        },
+    }
+    _record_answer_outcome(record, result, question_key, membership, single, strategy)
     record["match"] = _matches(record, probe, tiers)
     return record
 
