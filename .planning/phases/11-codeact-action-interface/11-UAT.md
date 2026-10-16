@@ -24,10 +24,9 @@ evidence: User transcript — 'interface: tool' on both the first turn and a fol
 
 ### 3. Startup default and switch persistence (11-01 D4)
 expected: Sessions start on tool-calling unless --codeact or remember-last config says otherwise; switches apply next-ask and persist. Confirm with one live --codeact start plus a /codeact switch and restart.
-result: issue
-reported: "Can it be a switch without needing extra value? --codeact in itself tells me we'd start the harness in codeact mode. Or maybe --codeact on or --codeact true?"
-severity: minor
-evidence: Core behaviors confirmed by user transcript — fresh start defaults to tool, --codeact code starts on code, /codeact tool switches with announcement. Bare/import questions resolved as designed (see chat). Only the bare-flag ergonomics (G-11-1) remains.
+result: pass
+retest: 2026-10-16 after 11-04 fix (user transcript: bare --codeact booted, /codeact reports code; orchestrator: driver.py a1 -> A1 PASS)
+evidence: Core behaviors confirmed by user transcript — fresh start defaults to tool, --codeact code starts on code, /codeact tool switches with announcement. Bare/import questions resolved as designed (see chat). G-11-1 closed.
 
 ### 4. Stint reset on live switch (11-02 D2)
 expected: Stint REPL persists within the stint, resets on switch, never bleeds into tool turns. Confirm one live /codeact switch starts a fresh stint.
@@ -132,8 +131,8 @@ coverage_id: 11-03-D7
 ## Summary
 
 total: 20
-passed: 19
-issues: 1
+passed: 20
+issues: 0
 pending: 0
 skipped: 0
 
@@ -141,7 +140,7 @@ skipped: 0
 
 - gap_id: G-11-1
   truth: "Bare --codeact starts the session in code mode without requiring a value"
-  status: failed
+  status: closed-2026-10-16-test-3-retest-pass
   reason: "User reported: bare --codeact rejected with Option '--codeact' requires an argument; expects a value-less switch (or --codeact on/true)"
   severity: minor
   test: 3
