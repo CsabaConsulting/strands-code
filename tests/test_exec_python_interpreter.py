@@ -1,13 +1,17 @@
 """Tests for ExecPythonInterpreter — the lightweight exec()-based interpreter."""
 
 import pytest
-from strands_code_agent.python_environments.base import PythonInterpreter, STDOUT_LABEL, STDERR_LABEL
-from strands_code_agent.python_environments.local_exec import ExecPythonInterpreter
 
+from strands_code_agent.python_environments.base import (
+    STDERR_LABEL,
+    PythonInterpreter,
+)
+from strands_code_agent.python_environments.local_exec import ExecPythonInterpreter
 
 # ---------------------------------------------------------------------------
 # Base class is abstract
 # ---------------------------------------------------------------------------
+
 
 class TestPythonInterpreterABC:
     def test_cannot_instantiate_base(self):
@@ -18,6 +22,7 @@ class TestPythonInterpreterABC:
 # ---------------------------------------------------------------------------
 # ExecPythonInterpreter — execution
 # ---------------------------------------------------------------------------
+
 
 class TestExecExecution:
     def test_simple_print(self):
@@ -64,6 +69,7 @@ class TestExecExecution:
 # ExecPythonInterpreter — state
 # ---------------------------------------------------------------------------
 
+
 class TestExecState:
     def test_state_persists(self):
         interp = ExecPythonInterpreter()
@@ -93,6 +99,7 @@ class TestExecState:
 # ---------------------------------------------------------------------------
 # ExecPythonInterpreter — get_tool
 # ---------------------------------------------------------------------------
+
 
 class TestExecTool:
     def test_tool_returns_stdout(self):

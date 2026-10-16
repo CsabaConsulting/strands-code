@@ -120,7 +120,9 @@ class ProviderConfig:
             raise ValueError("Provider config 'base_url' must be a string")
         if self.codeact is not None and self.codeact not in CodeactState.VALID:
             raise ValueError("Provider config 'codeact' must be one of tool|code|both")
-        if self.codeact_remember is not None and not isinstance(self.codeact_remember, bool):
+        if self.codeact_remember is not None and not isinstance(
+            self.codeact_remember, bool
+        ):
             raise ValueError("Provider config 'codeact_remember' must be a bool")
         resolved = Path(path) if path is not None else default_config_path()
         if resolved.is_symlink():

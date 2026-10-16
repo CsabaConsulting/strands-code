@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from prompt_toolkit.completion import Completer, Completion, DynamicCompleter, FuzzyCompleter
+from prompt_toolkit.completion import (
+    Completer,
+    Completion,
+    DynamicCompleter,
+    FuzzyCompleter,
+)
 from prompt_toolkit.document import Document
 
 from strands_code_cli.skills import SKILLS_SOURCE

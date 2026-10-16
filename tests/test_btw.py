@@ -11,13 +11,13 @@ import os
 import queue
 import threading
 import time
+from concurrent.futures import Future
 from types import SimpleNamespace
 
 import pytest
+from strands.types.exceptions import EventLoopException
 
 import strands_code_cli.policy_gate as pg
-from concurrent.futures import Future
-from strands.types.exceptions import EventLoopException
 from strands_code_cli.btw import (
     BTW_FORK_PREAMBLE,
     BTW_FRAMING,
@@ -192,9 +192,7 @@ class TestForkScope:
     def test_trailing_toolresult_turn_gets_no_marker(self):
         forked = fork_btw_history(_history_trailing_user(), "why slow?")
         texts = [
-            block.get("text", "")
-            for block in forked[-1]["content"]
-            if "text" in block
+            block.get("text", "") for block in forked[-1]["content"] if "text" in block
         ]
         assert all(BTW_INFLIGHT_MARKER not in text for text in texts)
 
@@ -379,9 +377,7 @@ class TestMidTurnCarveOut:
             )
             os.write(write_fd, b"/btw what does retry do?\n/model\nsteer text\n")
             assert _wait_for(
-                lambda: len(spawned) == 1
-                and len(refused) == 1
-                and state.has_pending()
+                lambda: len(spawned) == 1 and len(refused) == 1 and state.has_pending()
             )
             assert spawned == ["what does retry do?"]
             assert refused == [("/model", MODEL_REFUSAL)]
@@ -482,9 +478,7 @@ def _metered_build(answer: str = "metered-side-answer", delay: float = 0.0):
             def __call__(self, prompt, **kwargs):
                 if delay:
                     time.sleep(delay)
-                fenced(
-                    message={"role": "assistant", "content": [{"text": SENTINEL}]}
-                )
+                fenced(message={"role": "assistant", "content": [{"text": SENTINEL}]})
                 return _MeteredResult(answer)
 
         return _BtwDouble(), [{"role": "user", "content": [{"text": question}]}]
@@ -505,9 +499,7 @@ def _fenced_build(inner_tag: str = "side", delay: float = 0.0, fail: bool = Fals
                     time.sleep(delay)
                 if fail:
                     raise ValueError("side boom")
-                fenced(
-                    message={"role": "assistant", "content": [{"text": SENTINEL}]}
-                )
+                fenced(message={"role": "assistant", "content": [{"text": SENTINEL}]})
                 return SENTINEL
 
         return _BtwDouble(), [{"role": "user", "content": [{"text": question}]}]
@@ -516,9 +508,7 @@ def _fenced_build(inner_tag: str = "side", delay: float = 0.0, fail: bool = Fals
 
 
 class TestParallelTurn:
-    def test_btw_answers_in_parallel_then_outlives_main(
-        self, monkeypatch, capsys
-    ):
+    def test_btw_answers_in_parallel_then_outlives_main(self, monkeypatch, capsys):
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble(delay=0.1)
@@ -975,9 +965,7 @@ class TestOutlivingMain:
         assert not btw.has_live
         assert btw.pending == []  # delivered, never double-recorded
 
-    def test_new_turn_adopts_live_side_without_respawn(
-        self, monkeypatch, capsys
-    ):
+    def test_new_turn_adopts_live_side_without_respawn(self, monkeypatch, capsys):
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         spawn = BtwQueue()
@@ -1071,16 +1059,12 @@ class TestExitDropNote:
 
     def _exit_sequence(self, main, btw, broker, session_turns):
         # The exact run_loop exit order: drain, name, cancel.
-        _drain_idle_btw(
-            main, btw, broker, "test-model", session_turns, from_exit=True
-        )
+        _drain_idle_btw(main, btw, broker, "test-model", session_turns, from_exit=True)
         _note_dropped_side(btw, broker)
         if btw.has_live:
             btw.cancel_event.set()
 
-    def test_live_parked_side_named_waiting_no_next_turn(
-        self, monkeypatch, capsys
-    ):
+    def test_live_parked_side_named_waiting_no_next_turn(self, monkeypatch, capsys):
         broker = ApprovalBroker()
         monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()

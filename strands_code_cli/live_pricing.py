@@ -301,7 +301,10 @@ def _bedrock_cache(region: str) -> dict[str, Any] | None:
     key = f"bedrock:{region}"
     path = _cache_dir() / f"bedrock-pricing-{region}.json"
     payload = _read_cache(path)
-    if payload is not None and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS:
+    if (
+        payload is not None
+        and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS
+    ):
         return payload
     if _in_cooldown(key):
         return payload  # serve stale (or miss) without another attempt
@@ -445,7 +448,10 @@ def _openrouter_cache() -> dict[str, Any] | None:
     key = "openrouter"
     path = _cache_dir() / "openrouter-models.json"
     payload = _read_cache(path)
-    if payload is not None and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS:
+    if (
+        payload is not None
+        and time.time() - float(payload.get("fetched_at", 0)) < CACHE_TTL_SECONDS
+    ):
         return payload
     if _in_cooldown(key):
         return payload

@@ -228,7 +228,9 @@ async def _fs_write(path: str, content: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _current_text(path: str, reader: AsyncReader | None, tool_context: Any) -> str | None:
+async def _current_text(
+    path: str, reader: AsyncReader | None, tool_context: Any
+) -> str | None:
     if reader is not None:
         return await reader(path)
     if tool_context is not None:
@@ -239,7 +241,9 @@ async def _current_text(path: str, reader: AsyncReader | None, tool_context: Any
     return await _fs_read(path)
 
 
-async def _persist_text(path: str, content: str, writer: AsyncWriter | None, tool_context: Any) -> None:
+async def _persist_text(
+    path: str, content: str, writer: AsyncWriter | None, tool_context: Any
+) -> None:
     if writer is not None:
         await writer(path, content)
         return
@@ -399,7 +403,9 @@ def make_gated_write(
             content: The full file content to write.
         """
         old_text = await _current_text(
-            str(confine(resolve(path, cwd), cwd, _policy_roots(cwd))), reader, tool_context
+            str(confine(resolve(path, cwd), cwd, _policy_roots(cwd))),
+            reader,
+            tool_context,
         )
         preview = unified_diff(old_text or "", content, path)
         return await _gate_and_apply(
@@ -442,7 +448,9 @@ def make_gated_edit(
     ask_fn = ask if ask is not None else _default_ask
 
     @tool(name="edit", context="tool_context")
-    async def gated_edit(path: str, old_str: str, new_str: str, tool_context: Any = None) -> str:
+    async def gated_edit(
+        path: str, old_str: str, new_str: str, tool_context: Any = None
+    ) -> str:
         """Replace an exact string in a file, subject to /diff review.
 
         Args:

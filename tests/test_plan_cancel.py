@@ -83,9 +83,13 @@ class _ScriptSession:
         return item
 
 
-def _run_script(script: list[Any], tmp_path, agent=None, monotonic=None, monkeypatch=None):
+def _run_script(
+    script: list[Any], tmp_path, agent=None, monotonic=None, monkeypatch=None
+):
     agent = agent if agent is not None else _LoopAgent()
-    monkeypatch.setattr(loop_module, "PromptSession", lambda **k: _ScriptSession(script))
+    monkeypatch.setattr(
+        loop_module, "PromptSession", lambda **k: _ScriptSession(script)
+    )
     monkeypatch.setattr(loop_module, "_history", lambda: InMemoryHistory())
     # Hermetic curate boundary: ambient harness fact files must not queue
     # promotion proposals (and prompt on stdin) during scripted loop runs.
@@ -104,7 +108,9 @@ def _flat(out: str) -> str:
 
 
 class TestPlanTurnPrefix:
-    def test_plan_turn_carries_prefix_act_turn_bare(self, tmp_path, monkeypatch, capsys):
+    def test_plan_turn_carries_prefix_act_turn_bare(
+        self, tmp_path, monkeypatch, capsys
+    ):
         agent, _, _ = _run_script(
             ["/mode plan", "design it", "/mode act", "build it", "/exit"],
             tmp_path,
@@ -115,7 +121,9 @@ class TestPlanTurnPrefix:
         out = _flat(capsys.readouterr().out)
         assert MODE_PLAN_REPLY in out
 
-    def test_approve_runs_execution_turn_with_prompt(self, tmp_path, monkeypatch, capsys):
+    def test_approve_runs_execution_turn_with_prompt(
+        self, tmp_path, monkeypatch, capsys
+    ):
         from strands_code_cli.mode import APPROVE_EXECUTE, APPROVE_OK
 
         agent, _, _ = _run_script(
@@ -128,8 +136,12 @@ class TestPlanTurnPrefix:
 
     def test_cancelled_plan_turn_arms_no_approve(self, tmp_path, monkeypatch, capsys):
         agent = _LoopAgent(behavior=_raise_keyboard_interrupt)
-        _run_script(["/mode plan", "doomed", "/approve", "/exit"], tmp_path, agent,
-                    monkeypatch=monkeypatch)
+        _run_script(
+            ["/mode plan", "doomed", "/approve", "/exit"],
+            tmp_path,
+            agent,
+            monkeypatch=monkeypatch,
+        )
         out = _flat(capsys.readouterr().out)
         assert CANCEL_FIRST_PRESS in out
         assert APPROVE_EMPTY in out  # cancelled turn proposed nothing
@@ -150,8 +162,11 @@ class TestTwoPressCancel:
         agent = _LoopAgent(behavior=_raise_keyboard_interrupt)
         ticks = iter([100.0, 101.0])
         _run_script(
-            ["t1", "t2", "/exit"], tmp_path, agent,
-            monotonic=lambda: next(ticks), monkeypatch=monkeypatch,
+            ["t1", "t2", "/exit"],
+            tmp_path,
+            agent,
+            monotonic=lambda: next(ticks),
+            monkeypatch=monkeypatch,
         )
         out = _flat(capsys.readouterr().out)
         assert CANCEL_FIRST_PRESS in out
@@ -162,8 +177,11 @@ class TestTwoPressCancel:
         agent = _LoopAgent(behavior=_raise_keyboard_interrupt)
         ticks = iter([100.0, 200.0])
         _run_script(
-            ["t1", "t2", "/exit"], tmp_path, agent,
-            monotonic=lambda: next(ticks), monkeypatch=monkeypatch,
+            ["t1", "t2", "/exit"],
+            tmp_path,
+            agent,
+            monotonic=lambda: next(ticks),
+            monkeypatch=monkeypatch,
         )
         out = _flat(capsys.readouterr().out)
         assert CANCEL_STILL in out
@@ -172,7 +190,9 @@ class TestTwoPressCancel:
 
     def test_idle_ctrl_c_still_clears_line(self, tmp_path, monkeypatch, capsys):
         agent = _LoopAgent()
-        _run_script([KeyboardInterrupt, "/exit"], tmp_path, agent, monkeypatch=monkeypatch)
+        _run_script(
+            [KeyboardInterrupt, "/exit"], tmp_path, agent, monkeypatch=monkeypatch
+        )
         out = _flat(capsys.readouterr().out)
         assert CANCEL_FIRST_PRESS not in out
         assert agent.inputs == []  # no turn ran
@@ -180,11 +200,15 @@ class TestTwoPressCancel:
     def test_post_cancel_mode_unchanged(self, tmp_path, monkeypatch, capsys):
         agent = _LoopAgent(behavior=_raise_keyboard_interrupt)
         _run_script(
-            ["/mode plan", "doomed", "/mode", "/exit"], tmp_path, agent,
+            ["/mode plan", "doomed", "/mode", "/exit"],
+            tmp_path,
+            agent,
             monkeypatch=monkeypatch,
         )
         out = _flat(capsys.readouterr().out)
-        assert out.count(MODE_PLAN_REPLY) == 2  # switch announce + still plan after cancel
+        assert (
+            out.count(MODE_PLAN_REPLY) == 2
+        )  # switch announce + still plan after cancel
 
 
 class TestKillAfterCancel:
@@ -259,13 +283,15 @@ class TestTurnSigintHandler:
     def test_handler_installed_during_turn(self, tmp_path, monkeypatch):
         import signal
 
-        import strands_code_cli.loop as loop_module
-
         seen: list[str] = []
 
         def behavior(text: str) -> None:
             current = signal.getsignal(signal.SIGINT)
-            seen.append("wrapped" if "turn_sigint" in repr(getattr(current, "__qualname__", "")) else "other")
+            seen.append(
+                "wrapped"
+                if "turn_sigint" in repr(getattr(current, "__qualname__", ""))
+                else "other"
+            )
 
         agent = _LoopAgent(behavior=behavior)
         _run_script(["hello", "/exit"], tmp_path, agent, monkeypatch=monkeypatch)
@@ -465,4 +491,3 @@ class TestHandleTurnCancelTarget:
         out = _flat(capsys.readouterr().out)
         assert CANCEL_FIRST_PRESS in out
         assert "[main]" not in out
-

@@ -73,7 +73,9 @@ class TestSlashDispatch:
         # Phase 5 (MODEL-01): /model is a first-class command. A bare Bedrock
         # id validates via resolve_model and returns the loop-owned action.
         index = _fresh_index(tmp_path)
-        action, message = dispatch("/model sonnet", session_id=index.mint(), index=index)
+        action, message = dispatch(
+            "/model sonnet", session_id=index.mint(), index=index
+        )
         assert action == "model"
         assert message == "sonnet"
 
@@ -157,7 +159,9 @@ class TestForgetCommand:
         index = _fresh_index(tmp_path)
         _, sid = self._backed_session(tmp_path, index)
         current = index.mint()
-        action, message = dispatch(f"/forget {sid[:8]}", session_id=current, index=index)
+        action, message = dispatch(
+            f"/forget {sid[:8]}", session_id=current, index=index
+        )
         assert action == "reply"
         assert sid[:8] in message
         assert sid not in {e["id"] for e in index.list_recent(limit=None)}
@@ -190,7 +194,9 @@ class TestForgetCommand:
         assert "No session matches" in message
         action, message = dispatch("/forget", session_id=current, index=index)
         assert message == "Usage: /forget <session-id-or-prefix>"
-        action, message = dispatch(f"/forget {current}", session_id=current, index=index)
+        action, message = dispatch(
+            f"/forget {current}", session_id=current, index=index
+        )
         assert action == "reply"
         assert "active session" in message
         assert current in {e["id"] for e in index.list_recent(limit=None)}
@@ -235,7 +241,8 @@ class TestPickerDeleteTyped:
         # then refreshed list (1 session): 3 = start new.
         prompts = iter([3, 1, 1, 3])
         with patch(
-            "strands_code_cli.router.typer.prompt", side_effect=lambda *a, **k: next(prompts)
+            "strands_code_cli.router.typer.prompt",
+            side_effect=lambda *a, **k: next(prompts),
         ):
             assert show_picker(index, session_dir=session_dir) is None
         assert first not in {e["id"] for e in index.list_recent(limit=None)}
@@ -251,7 +258,8 @@ class TestPickerDeleteTyped:
         # 2 = delete row, 2 = cancel in the sub-list, 3 = start new.
         prompts = iter([2, 2, 3])
         with patch(
-            "strands_code_cli.router.typer.prompt", side_effect=lambda *a, **k: next(prompts)
+            "strands_code_cli.router.typer.prompt",
+            side_effect=lambda *a, **k: next(prompts),
         ):
             assert show_picker(index, session_dir=session_dir) is None
         assert sid in {e["id"] for e in index.list_recent(limit=None)}
@@ -280,7 +288,9 @@ class TestAutoTitle:
 
         index = _fresh_index(tmp_path)
         sid = index.mint()
-        agent = SimpleNamespace(model=_FakeModel("one two three four five six seven eight"))
+        agent = SimpleNamespace(
+            model=_FakeModel("one two three four five six seven eight")
+        )
         _maybe_auto_title(agent, sid, index, "what does this do")
         assert index.list_recent()[0]["title"] == "one two three four five six"
 
@@ -357,8 +367,13 @@ class TestCliRouting:
         main_module = importlib.import_module("strands_code_cli.main")
 
         monkeypatch.chdir(tmp_path)
-        with _patched_launch(main_module) as loop, patch.object(
-            main_module, "show_picker", side_effect=AssertionError("picker must be skipped")
+        with (
+            _patched_launch(main_module) as _,
+            patch.object(
+                main_module,
+                "show_picker",
+                side_effect=AssertionError("picker must be skipped"),
+            ),
         ):
             from typer.testing import CliRunner
 
@@ -427,6 +442,8 @@ class TestPolicyDispatch:
 
     def test_policy_bogus_shows_usage_never_agent_turn(self, tmp_path):
         index = _fresh_index(tmp_path)
-        action, message = dispatch("/policy bogus", session_id=index.mint(), index=index)
+        action, message = dispatch(
+            "/policy bogus", session_id=index.mint(), index=index
+        )
         assert action == "reply"
         assert "Usage: /policy" in message

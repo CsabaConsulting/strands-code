@@ -1,18 +1,21 @@
 """Tests for strands_code_agent.python_environment — PythonInterpreter and get_import_string."""
 
-from strands_code_agent.python_environments.base import STDOUT_LABEL, STDERR_LABEL
-from strands_code_agent.python_environments.local_sandboxed import SandboxedPythonInterpreter
 from strands_code_agent.imports import get_import_string
-
+from strands_code_agent.python_environments.base import STDERR_LABEL, STDOUT_LABEL
+from strands_code_agent.python_environments.local_sandboxed import (
+    SandboxedPythonInterpreter,
+)
 
 # ---------------------------------------------------------------------------
 # get_import_string
 # ---------------------------------------------------------------------------
 
+
 class TestGetImportString:
     def test_single_symbol(self):
         def dummy():
             pass
+
         dummy.__module__ = "my_module"
         dummy.__qualname__ = "dummy"
         result = get_import_string([dummy])
@@ -21,8 +24,10 @@ class TestGetImportString:
     def test_multiple_symbols_same_module(self):
         def a():
             pass
+
         def b():
             pass
+
         a.__module__ = "mod"
         a.__qualname__ = "a"
         b.__module__ = "mod"
@@ -35,8 +40,10 @@ class TestGetImportString:
     def test_multiple_modules(self):
         def x():
             pass
+
         def y():
             pass
+
         x.__module__ = "alpha"
         x.__qualname__ = "x"
         y.__module__ = "beta"
@@ -48,6 +55,7 @@ class TestGetImportString:
     def test_skips_main_module(self):
         def local():
             pass
+
         local.__module__ = "__main__"
         local.__qualname__ = "local"
         result = get_import_string([local])
@@ -56,6 +64,7 @@ class TestGetImportString:
     def test_deduplicates_same_symbol(self):
         def dup():
             pass
+
         dup.__module__ = "mod"
         dup.__qualname__ = "dup"
         result = get_import_string([dup, dup])
@@ -64,6 +73,7 @@ class TestGetImportString:
     def test_class_method_uses_top_level_name(self):
         def method():
             pass
+
         method.__module__ = "mod"
         method.__qualname__ = "MyClass.method"
         result = get_import_string([method])
@@ -76,6 +86,7 @@ class TestGetImportString:
 # ---------------------------------------------------------------------------
 # PythonInterpreter — basic execution
 # ---------------------------------------------------------------------------
+
 
 class TestPythonInterpreterExecution:
     def test_simple_print(self):
@@ -116,6 +127,7 @@ class TestPythonInterpreterExecution:
 # PythonInterpreter — state persistence within a session
 # ---------------------------------------------------------------------------
 
+
 class TestPythonInterpreterState:
     def test_state_persists_across_calls(self):
         interp = SandboxedPythonInterpreter()
@@ -134,6 +146,7 @@ class TestPythonInterpreterState:
 # ---------------------------------------------------------------------------
 # PythonInterpreter — initialization code
 # ---------------------------------------------------------------------------
+
 
 class TestPythonInterpreterInit:
     def test_initialization_code_runs(self):
@@ -158,6 +171,7 @@ class TestPythonInterpreterInit:
 # PythonInterpreter — authorized imports
 # ---------------------------------------------------------------------------
 
+
 class TestPythonInterpreterImports:
     def test_authorized_import_succeeds(self):
         interp = SandboxedPythonInterpreter(authorized_imports=["json"])
@@ -175,10 +189,12 @@ class TestPythonInterpreterImports:
 # PythonInterpreter — additional_functions
 # ---------------------------------------------------------------------------
 
+
 class TestPythonInterpreterAdditionalFunctions:
     def test_additional_function_available(self):
         def double(x):
             return x * 2
+
         interp = SandboxedPythonInterpreter(additional_functions={"double": double})
         stdout, stderr = interp.execute_code("print(double(5))")
         assert "10" in stdout
@@ -188,6 +204,7 @@ class TestPythonInterpreterAdditionalFunctions:
 # ---------------------------------------------------------------------------
 # PythonInterpreter — get_tool (python_repl)
 # ---------------------------------------------------------------------------
+
 
 class TestPythonReplTool:
     def test_tool_returns_stdout(self):
@@ -218,6 +235,7 @@ class TestPythonReplTool:
 # ---------------------------------------------------------------------------
 # PythonInterpreter — __str__
 # ---------------------------------------------------------------------------
+
 
 class TestPythonInterpreterStr:
     def test_str_with_all_fields(self):

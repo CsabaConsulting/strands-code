@@ -37,6 +37,7 @@ def _tty_gate(monkeypatch, picked: Any):
     """Classifier + handler with a tty stdin and stubbed radio dialog."""
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
     if isinstance(picked, BaseException):
+
         def _raise(*args, **kwargs):
             raise picked
 
@@ -180,9 +181,7 @@ class TestRadioChoice:
         values = [(f"v{i}", f"Model-{i:02d}") for i in range(10)]
         text = "".join(
             chunk
-            for _, chunk in choice_module._choice_fragments(
-                values, 7, top=5, visible=4
-            )
+            for _, chunk in choice_module._choice_fragments(values, 7, top=5, visible=4)
         )
         assert "Model-07" in text
         assert text.count("(*)") == 1

@@ -98,6 +98,7 @@ class MemoryModeConfig:
         os.replace(tmp, resolved)
         return resolved
 
+
 MEMORY_MODE_CURATE_REPLY = "Memory mode: curate — every proposal prompts approve/deny."
 MEMORY_MODE_SILENT_REPLY = "Memory mode: silent — proposals auto-apply, writes logged."
 MEMORY_MODE_USAGE = "Usage: /memory mode [curate|silent]"
@@ -142,11 +143,17 @@ class MemoryModeState:
         if mode not in self.VALID:
             raise ValueError(f"unknown memory mode {mode!r}: expected curate|silent")
         self._mode = mode
-        return MEMORY_MODE_CURATE_REPLY if mode == "curate" else MEMORY_MODE_SILENT_REPLY
+        return (
+            MEMORY_MODE_CURATE_REPLY if mode == "curate" else MEMORY_MODE_SILENT_REPLY
+        )
 
     def announce(self) -> str:
         """Current-mode report for bare ``/memory mode``."""
-        return MEMORY_MODE_CURATE_REPLY if self._mode == "curate" else MEMORY_MODE_SILENT_REPLY
+        return (
+            MEMORY_MODE_CURATE_REPLY
+            if self._mode == "curate"
+            else MEMORY_MODE_SILENT_REPLY
+        )
 
 
 def silent_note(section: str, source: str) -> str:

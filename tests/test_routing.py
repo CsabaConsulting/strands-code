@@ -12,6 +12,7 @@ import urllib.error
 import pytest
 
 from strands_code_cli.routing import (
+    _ENGINE_REGISTRY,
     DECISION_BODY_MAX_BYTES,
     OLLAMA_DEFAULT_HOST,
     OPENROUTER_DECISIONS_URL,
@@ -24,7 +25,6 @@ from strands_code_cli.routing import (
     RoutingPick,
     RoutingState,
     RoutingStrategy,
-    _ENGINE_REGISTRY,
     _chain_for,
     _fit_decision_payload,
     _typesafe_attempt,
@@ -172,9 +172,7 @@ class TestDecisionBuilders:
 
     def test_state_truncates_long_ask_and_directives(self):
         # T-08-23: unbounded repo text must not reach the paid call.
-        state = build_decision_state(
-            ask="x" * 5000, directives="d" * 5000, side=False
-        )
+        state = build_decision_state(ask="x" * 5000, directives="d" * 5000, side=False)
         assert state["ask"] == "x" * 2000
         assert state["directives"] == "d" * 2000
 
@@ -298,9 +296,7 @@ class TestValidateChoiceAnswer:
             {HAIKU: 0.85, NOVA_MICRO: "0.15"},  # non-numeric
             {HAIKU: 0.85, NOVA_MICRO: True},  # bool is not a probability
         ):
-            assert (
-                validate_choice_answer(_answer(HAIKU, probs), _candidates()) is None
-            )
+            assert validate_choice_answer(_answer(HAIKU, probs), _candidates()) is None
 
     def test_bad_probability_sum_holds(self):
         assert (
@@ -320,16 +316,12 @@ class TestValidateChoiceAnswer:
 
     def test_near_sum_within_tolerance_passes(self):
         third = 1 / 3  # float thirds sum to 1 within 1e-6
-        answer = _answer(
-            HAIKU, {HAIKU: third, NOVA_MICRO: third, SONNET: third}
-        )
+        answer = _answer(HAIKU, {HAIKU: third, NOVA_MICRO: third, SONNET: third})
         assert validate_choice_answer(answer, _candidates()) is answer
 
     def test_choice_outside_table_holds(self):
         table = {HAIKU: 0.5, NOVA_MICRO: 0.5}
-        assert (
-            validate_choice_answer(_answer(SONNET, table), _candidates()) is None
-        )
+        assert validate_choice_answer(_answer(SONNET, table), _candidates()) is None
         answer = _answer(HAIKU, table)
         del answer["choice"]
         assert validate_choice_answer(answer, _candidates()) is None
@@ -337,13 +329,10 @@ class TestValidateChoiceAnswer:
     def test_stale_choice_holds_with_no_fuzzy_match(self):
         near_miss = HAIKU + "x"  # one char off: must NOT fuzzy-match
         table = {HAIKU: 0.5, near_miss: 0.5}
-        assert (
-            validate_choice_answer(_answer(near_miss, table), _candidates()) is None
-        )
+        assert validate_choice_answer(_answer(near_miss, table), _candidates()) is None
         ghost = {HAIKU: 0.5, "ghost/model": 0.5}
         assert (
-            validate_choice_answer(_answer("ghost/model", ghost), _candidates())
-            is None
+            validate_choice_answer(_answer("ghost/model", ghost), _candidates()) is None
         )
 
     def test_non_dict_answer_holds(self):
@@ -361,9 +350,7 @@ class TestUnhashableChoiceHolds:
     def test_unhashable_choice_holds_model_answer(self):
         table = {HAIKU: 0.85, NOVA_MICRO: 0.15}
         for bad in ([HAIKU], {"id": HAIKU}, (HAIKU,)):
-            assert (
-                validate_choice_answer(_answer(bad, table), _candidates()) is None
-            )
+            assert validate_choice_answer(_answer(bad, table), _candidates()) is None
 
     def test_unhashable_choice_holds_effort_answer(self):
         table = {"low": 0.7, "high": 0.3}
@@ -391,9 +378,7 @@ class TestGateModel:
 
     def test_below_threshold_holds_naming_both_percents(self):
         model, tie_break, detail = gate_model(
-            _answer(
-                HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}
-            ),
+            _answer(HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}),
             _strategy(candidates=_candidates()),
         )
         assert model is None
@@ -468,21 +453,15 @@ class TestGateModel:
         assert gate_model(table, low) == (HAIKU, False, "")
 
     def test_single_entry_table_routes_top(self):
-        model, tie_break, detail = gate_model(
-            _answer(HAIKU, {HAIKU: 1.0}), _strategy()
-        )
+        model, tie_break, detail = gate_model(_answer(HAIKU, {HAIKU: 1.0}), _strategy())
         assert (model, tie_break, detail) == (HAIKU, False, "")
 
     def test_vendor_confidence_never_gates(self):
         # Pitfall 1: the gate reads the table, never .confidence.
         strategy = _strategy()
-        confident_hold = _answer(
-            HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5}, confidence=0.99
-        )
+        confident_hold = _answer(HAIKU, {HAIKU: 0.5, NOVA_MICRO: 0.5}, confidence=0.99)
         assert gate_model(confident_hold, strategy)[0] is None
-        timid_route = _answer(
-            HAIKU, {HAIKU: 0.9, NOVA_MICRO: 0.1}, confidence=0.01
-        )
+        timid_route = _answer(HAIKU, {HAIKU: 0.9, NOVA_MICRO: 0.1}, confidence=0.01)
         assert gate_model(timid_route, strategy) == (HAIKU, False, "")
 
     def test_gate_reads_argmax_not_choice_field(self):
@@ -750,9 +729,7 @@ class TestEngineChain:
             raise _http_error(code)
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 1  # the request itself is wrong: hold
         assert pick is None
 
@@ -772,9 +749,7 @@ class TestEngineChain:
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 3  # one retry on call 1, then call 2
         assert pick is not None and pick.model == HAIKU
 
@@ -789,14 +764,10 @@ class TestEngineChain:
 
         monkeypatch.setattr(urllib.request, "urlopen", _slow)
         assert (
-            decide_via_openrouter(
-                decision_model="m", state={}, questions={}
-            ).answers
+            decide_via_openrouter(decision_model="m", state={}, questions={}).answers
             is None
         )
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 4  # one retry per call site, then hold
         assert pick is None
 
@@ -811,14 +782,10 @@ class TestEngineChain:
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
         assert (
-            decide_via_openrouter(
-                decision_model="m", state={}, questions={}
-            ).answers
+            decide_via_openrouter(decision_model="m", state={}, questions={}).answers
             is None
         )
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 2  # refused connections never retry
         assert pick is None
 
@@ -838,9 +805,7 @@ class TestEngineChain:
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 3  # one retry on call 1, then call 2
         assert pick is not None
 
@@ -882,13 +847,9 @@ class TestEngineChain:
                 return _FakeResponse(_decision_payload(bad))
             return _FakeResponse(_route_payload())
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            )
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble")
         )
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -915,22 +876,16 @@ class TestEngineChain:
         import urllib.request
 
         urls: list[str] = []
-        weak = _answer(
-            HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29}
-        )
+        weak = _answer(HAIKU, {HAIKU: 0.41, NOVA_MICRO: 0.30, SONNET: 0.29})
 
         def _fake_urlopen(request, timeout=None):
             urls.append(request.full_url)
             return _FakeResponse(_decision_payload(weak))
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
             candidates=_candidates(),
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            ),
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble"),
         )
         pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -949,9 +904,7 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             return _FakeResponse(
-                _route_payload(
-                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
-                )
+                _route_payload(choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9})
             )
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -989,9 +942,7 @@ class TestEngineChain:
 
         def _fake_urlopen(request, timeout=None):
             return _FakeResponse(
-                _route_payload(
-                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
-                )
+                _route_payload(choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9})
             )
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -1041,9 +992,7 @@ class TestEngineChain:
         assert detail == f"openrouter {code}"
 
     @pytest.mark.parametrize("code", [400, 401, 402, 403, 404, 413])
-    def test_local_4xx_holds_with_engine_and_code_detail(
-        self, monkeypatch, code
-    ):
+    def test_local_4xx_holds_with_engine_and_code_detail(self, monkeypatch, code):
         import urllib.request
 
         posts: list = []
@@ -1052,9 +1001,7 @@ class TestEngineChain:
             posts.append(request)
             raise _http_error(code)
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
             engine=RoutingEngine(primary="local", local_model="nimble")
         )
@@ -1078,9 +1025,7 @@ class TestEngineChain:
             if isinstance(step, Exception):
                 raise step
             return _FakeResponse(
-                _route_payload(
-                    choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
-                )
+                _route_payload(choice=NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9})
             )
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -1108,13 +1053,9 @@ class TestEngineChain:
                 return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(_route_payload(cost=None))
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            )
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble")
         )
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1124,9 +1065,7 @@ class TestEngineChain:
         assert posts.count(OPENROUTER_DECISIONS_URL) == 4  # retry per call
         assert posts.count(f"{OLLAMA_DEFAULT_HOST}/v1/systemone") == 2
 
-    def test_schema_invalid_table_holds_with_validation_detail(
-        self, monkeypatch
-    ):
+    def test_schema_invalid_table_holds_with_validation_detail(self, monkeypatch):
         import urllib.request
 
         calls: list = []
@@ -1173,9 +1112,7 @@ class TestEngineChain:
         assert engine == "openrouter"
         assert detail == "openrouter invalid body"
 
-    def test_all_links_refused_pauses_with_both_links_named(
-        self, monkeypatch
-    ):
+    def test_all_links_refused_pauses_with_both_links_named(self, monkeypatch):
         import urllib.request
 
         posts: list = []
@@ -1186,13 +1123,9 @@ class TestEngineChain:
                 ConnectionRefusedError(111, "Connection refused")
             )
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            )
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble")
         )
         pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1232,13 +1165,9 @@ class TestEngineChain:
                 raise _http_error(500)
             raise urllib.error.URLError("daemon down")
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = _strategy(
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            )
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble")
         )
         pick, engine, _, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1359,9 +1288,7 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload())
             return _FakeResponse(_route_payload())
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         pick, engine, _, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
@@ -1390,9 +1317,7 @@ class TestLocalEngine:
                 )
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         pick, engine, usage, _ = decide(
             self._dual(), current_model=SONNET, side=False, ask="hi"
         )
@@ -1439,9 +1364,7 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = self._dual(primary="local")
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1501,9 +1424,7 @@ class TestLocalEngine:
     def test_repo_off_shadows_global_on(self, tmp_path):
         repo_path = tmp_path / "repo.yaml"
         repo_path.write_text(
-            "candidates:\n"
-            f"  - id: {HAIKU}\n"
-            "engine: {primary: off}\n",
+            f"candidates:\n  - id: {HAIKU}\nengine: {{primary: off}}\n",
             encoding="utf-8",
         )
         global_path = tmp_path / "global.yaml"
@@ -1564,7 +1485,9 @@ class TestLocalEngine:
             encoding="utf-8",
         )
         with caplog.at_level("WARNING", logger="strands_code_cli.routing"):
-            strategy = load_strategy(global_path=path, repo_path=tmp_path / "missing.yaml")
+            strategy = load_strategy(
+                global_path=path, repo_path=tmp_path / "missing.yaml"
+            )
         assert strategy is not None
         assert strategy.engine.local_base_url == OLLAMA_DEFAULT_HOST
         assert "http/https only" in caplog.text
@@ -1581,9 +1504,7 @@ class TestLocalEngine:
                 return _FakeResponse(_effort_payload(cost=None))
             return _FakeResponse(self._local_payload())
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         strategy = self._dual(primary="local")
         pick, _, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert pick is not None
@@ -1631,12 +1552,8 @@ class TestLocalEngine:
                 )
             )
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
-        result = decide_via_ollama(
-            local_model="nimble", state={}, questions={}
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
+        result = decide_via_ollama(local_model="nimble", state={}, questions={})
         assert (result.input_tokens, result.output_tokens) == (90, 12)
         assert result.cost is None
         _, _, usage, _ = decide(
@@ -1673,9 +1590,7 @@ class TestLocalEngine:
             raise AssertionError("invalid base URL: no call")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
-        strategy = self._dual(
-            primary="local", local_base_url="gopher://daemon.local/"
-        )
+        strategy = self._dual(primary="local", local_base_url="gopher://daemon.local/")
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
@@ -1691,9 +1606,7 @@ class TestLocalEngine:
             table = {HAIKU: 0.2, near_miss: 0.8}
             return _FakeResponse(_decision_payload(_answer(near_miss, table)))
 
-        monkeypatch.setattr(
-            urllib.request, "urlopen", _with_preflight(_fake_urlopen)
-        )
+        monkeypatch.setattr(urllib.request, "urlopen", _with_preflight(_fake_urlopen))
         pick, engine, _, _ = decide(
             self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
         )
@@ -1725,9 +1638,7 @@ class TestLocalEngine:
             return _FakeResponse(self._local_payload())
 
         def _recording(request, timeout=None):
-            if request.full_url.endswith(
-                ("/api/version", "/api/tags")
-            ):
+            if request.full_url.endswith(("/api/version", "/api/tags")):
                 gets.append(request.full_url)
             return _with_preflight(_fake_urlopen)(request, timeout=timeout)
 
@@ -1751,9 +1662,7 @@ class TestLocalEngine:
 
         def _recording(request, timeout=None):
             gets.append(request.full_url)
-            return _with_preflight(_boom, version="0.34.0")(
-                request, timeout=timeout
-            )
+            return _with_preflight(_boom, version="0.34.0")(request, timeout=timeout)
 
         monkeypatch.setattr(urllib.request, "urlopen", _recording)
         pick, engine, usage, detail = decide(
@@ -1801,9 +1710,7 @@ class TestLocalEngine:
         monkeypatch.setattr(
             urllib.request,
             "urlopen",
-            _with_preflight(
-                _boom, version="0.35.1", tags=("clef", "clef-flash")
-            ),
+            _with_preflight(_boom, version="0.35.1", tags=("clef", "clef-flash")),
         )
         assert local_engine_ready(base, "clef") is True
         assert local_engine_ready(base, "clef-flash") is True
@@ -2009,9 +1916,7 @@ class TestNativeEngine:
         assert engine == "native"
         assert usage[0] == 484 and usage[1] == 46
         assert usage[2] is not None
-        assert usage[2] == pytest.approx(
-            484 * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
-        )
+        assert usage[2] == pytest.approx(484 * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000)
         assert detail == ""
         line = format_routed_line(
             model=pick.model,
@@ -2026,9 +1931,7 @@ class TestNativeEngine:
         assert "(low)" in line and "85%" in line and "70%" in line
         assert "~$" in line and "/ask vs" in line
 
-    def test_native_transport_reports_snapshot_and_computed_cost(
-        self, monkeypatch
-    ):
+    def test_native_transport_reports_snapshot_and_computed_cost(self, monkeypatch):
         import urllib.request
 
         def _fake_urlopen(request, timeout=None):
@@ -2054,9 +1957,7 @@ class TestNativeEngine:
             ("off", []),
         ],
     )
-    def test_legacy_primary_maps_to_identical_chain(
-        self, monkeypatch, primary, mapped
-    ):
+    def test_legacy_primary_maps_to_identical_chain(self, monkeypatch, primary, mapped):
         import strands_code_cli.routing as routing_mod
 
         monkeypatch.setattr(routing_mod, "local_engine_ready", lambda *args: True)
@@ -2065,12 +1966,8 @@ class TestNativeEngine:
         ordered = _strategy(engine=RoutingEngine(order=list(mapped), **base))
         legacy_chain = _chain_for(legacy)
         ordered_chain = _chain_for(ordered)
-        assert [name for name, _ in ordered_chain] == [
-            name for name, _ in legacy_chain
-        ]
-        assert [fn for _, fn in ordered_chain] == [
-            fn for _, fn in legacy_chain
-        ]
+        assert [name for name, _ in ordered_chain] == [name for name, _ in legacy_chain]
+        assert [fn for _, fn in ordered_chain] == [fn for _, fn in legacy_chain]
 
     def test_native_first_attempts_native_before_openrouter(self, monkeypatch):
         import urllib.request
@@ -2226,9 +2123,7 @@ class TestNativeFaults:
         assert result.answers is None
 
     @pytest.mark.parametrize("fault", ["429", "timeout"])
-    def test_native_retry_exhaustion_falls_to_next_link(
-        self, monkeypatch, fault
-    ):
+    def test_native_retry_exhaustion_falls_to_next_link(self, monkeypatch, fault):
         import urllib.request
 
         posts: list = []
@@ -2306,9 +2201,7 @@ class TestNativeFaults:
         )
         assert chain_skip_notes(unlisted) == []  # legacy order: no native
         unconfigured = _strategy(engine=RoutingEngine(order=["native"]))
-        assert (
-            _typesafe_attempt(unconfigured, state, {"pick_model": {}}) is None
-        )
+        assert _typesafe_attempt(unconfigured, state, {"pick_model": {}}) is None
         assert chain_skip_notes(unconfigured) == []  # no model: silent
 
     def test_keyed_native_routes_with_no_skip_note(self, monkeypatch):
@@ -2355,8 +2248,9 @@ class TestRoutedEffort:
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
 
     def test_apply_switch_forwards_effort_to_resolve(self, monkeypatch):
-        import strands_harness.models as harness_models
         from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
 
         from strands_code_cli.model_switch import apply_switch
 
@@ -2373,8 +2267,9 @@ class TestRoutedEffort:
         assert calls == [((HAIKU, HAIKU), {"effort": "high"})]
 
     def test_apply_switch_without_effort_calls_two_args(self, monkeypatch):
-        import strands_harness.models as harness_models
         from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
 
         from strands_code_cli.model_switch import apply_switch
 
@@ -2414,8 +2309,9 @@ class TestRoutedEffort:
         assert validate_routed_effort(pick, _candidates()) is False
 
     def test_apply_model_action_without_effort_resolves_as_before(self, monkeypatch):
-        import strands_harness.models as harness_models
         from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
 
         import strands_code_cli.loop as loop_mod
 
@@ -2483,9 +2379,7 @@ class TestRoutedEffort:
                 RoutingCandidate(id=other, levels=["medium", "max"]),
             ]
         )
-        pick, _, _, _ = decide(
-            strategy, current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert pick is not None and pick.model == HAIKU
         assert set(bodies[1]["questions"]["pick_effort"]["criteria"]) == {
             "low",
@@ -2505,9 +2399,7 @@ class TestRoutedEffort:
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
-        pick, _, _, _ = decide(
-            _strategy(), current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, _, _ = decide(_strategy(), current_model=SONNET, side=False, ask="hi")
         assert pick is not None
         assert (pick.effort, pick.effort_confidence) == ("low", 0.51)
         line = format_routed_line(
@@ -2529,9 +2421,7 @@ class TestRoutedEffort:
 
         def _fake_urlopen(request, timeout=None):
             if _wants_effort(request):
-                return _FakeResponse(
-                    _effort_payload("max", {"low": 0.15, "max": 0.85})
-                )
+                return _FakeResponse(_effort_payload("max", {"low": 0.15, "max": 0.85}))
             return _FakeResponse(_route_payload())
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
@@ -2559,9 +2449,7 @@ class TestRoutedEffort:
                 RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
             ]
         )
-        pick, _, usage, _ = decide(
-            strategy, current_model=SONNET, side=False, ask="hi"
-        )
+        pick, _, usage, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert len(calls) == 1  # degenerate choice: no effort question
         assert pick is not None
         assert (pick.effort, pick.effort_confidence) == ("high", None)
@@ -2614,9 +2502,7 @@ class TestSingleCandidateFastPath:
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = _strategy(
             candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
-            engine=RoutingEngine(
-                decision_model="cheap/decider", local_model="nimble"
-            ),
+            engine=RoutingEngine(decision_model="cheap/decider", local_model="nimble"),
         )
         pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -2660,9 +2546,7 @@ class TestSingleCandidateFastPath:
         assert usage == (0, 0, None)
         assert detail == "only candidate advertises no levels"
 
-    def test_single_candidate_with_empty_levels_holds_with_no_call(
-        self, monkeypatch
-    ):
+    def test_single_candidate_with_empty_levels_holds_with_no_call(self, monkeypatch):
         import urllib.request
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
@@ -2682,9 +2566,7 @@ class TestSingleCandidateFastPath:
         assert engine == "none"
         assert detail == "only candidate advertises no levels"
 
-    def test_single_candidate_with_rejected_first_level_holds(
-        self, monkeypatch
-    ):
+    def test_single_candidate_with_rejected_first_level_holds(self, monkeypatch):
         # Fully degenerate: the lone level rides through with no
         # decision call, then validation holds it.
         import urllib.request
@@ -2733,9 +2615,7 @@ class TestSingleCandidateFastPath:
         assert usage == (0, 0, None)
         assert detail == ""
 
-    def test_single_candidate_with_rejected_decided_level_holds(
-        self, monkeypatch
-    ):
+    def test_single_candidate_with_rejected_decided_level_holds(self, monkeypatch):
         import urllib.request
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
@@ -2743,9 +2623,7 @@ class TestSingleCandidateFastPath:
 
         def _fake_urlopen(request, timeout=None):
             calls.append(request)
-            return _FakeResponse(
-                _effort_payload("max", {"low": 0.15, "max": 0.85})
-            )
+            return _FakeResponse(_effort_payload("max", {"low": 0.15, "max": 0.85}))
 
         monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
         strategy = _strategy(
@@ -2760,9 +2638,7 @@ class TestSingleCandidateFastPath:
         assert engine == "openrouter"
         assert detail == f"effort 'max' unsupported by {HAIKU}"
 
-    def test_hook_prints_routed_line_with_effort_usage(
-        self, monkeypatch, capsys
-    ):
+    def test_hook_prints_routed_line_with_effort_usage(self, monkeypatch, capsys):
         import urllib.request
         from types import SimpleNamespace
 
@@ -2854,9 +2730,11 @@ class TestLiveEngines:
                 seen.setdefault("bodies", []).append(
                     json.loads(self.rfile.read(length).decode("utf-8"))
                 )
-                payload = canned_effort if (
-                    "pick_effort" in seen["bodies"][-1].get("questions", {})
-                ) else canned
+                payload = (
+                    canned_effort
+                    if ("pick_effort" in seen["bodies"][-1].get("questions", {}))
+                    else canned
+                )
                 body = json.dumps(payload).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -2936,9 +2814,7 @@ class TestLiveEngines:
             f"live decision call failed ({result.error}) — check key, "
             "quota, and network"
         )
-        answer = validate_choice_answer(
-            result.answers.get("pick_model"), candidates
-        )
+        answer = validate_choice_answer(result.answers.get("pick_model"), candidates)
         assert answer is not None, "live answer failed typed validation"
         probs = answer["probabilities"]
         assert abs(sum(probs.values()) - 1.0) < 1e-6
@@ -2980,17 +2856,13 @@ class TestLiveEngines:
             f"live native decision call failed ({result.error}) — check key, "
             "quota, and network"
         )
-        answer = validate_choice_answer(
-            result.answers.get("pick_model"), candidates
-        )
+        answer = validate_choice_answer(result.answers.get("pick_model"), candidates)
         assert answer is not None, "live answer failed typed validation"
         probs = answer["probabilities"]
         assert abs(sum(probs.values()) - 1.0) < 1e-6
         assert result.model, "live response logged no serving snapshot"
         assert result.model.startswith("jev-1.13"), result.model
-        assert result.input_tokens > 0, (
-            "live response reported no input tokens"
-        )
+        assert result.input_tokens > 0, "live response reported no input tokens"
         assert result.cost == (
             result.input_tokens * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
         )
@@ -3006,19 +2878,14 @@ class TestLiveEngines:
         # effort call, routed ungated, so usage is call-2-only and
         # the spend identity holds deterministically.
         strategy = _strategy(
-            candidates=[
-                RoutingCandidate(id="live/solo", levels=["auto", "off"])
-            ],
-            engine=RoutingEngine(
-                order=["native"], native_model="jev-1.13.0"
-            ),
+            candidates=[RoutingCandidate(id="live/solo", levels=["auto", "off"])],
+            engine=RoutingEngine(order=["native"], native_model="jev-1.13.0"),
         )
         pick, engine, usage, detail = decide(
             strategy, current_model="live/solo", side=False, ask="live probe"
         )
         assert pick is not None, (
-            f"live native effort read failed ({detail}) — check key, "
-            "quota, and network"
+            f"live native effort read failed ({detail}) — check key, quota, and network"
         )
         assert engine == "native"
         in_tok, _out_tok, cost = usage
@@ -3051,13 +2918,10 @@ class TestLiveEngines:
         wanted = os.environ.get("OLLAMA_TEST_MODEL")
         if wanted:
             assert wanted in names, (
-                f"OLLAMA_TEST_MODEL {wanted} not pulled "
-                f"(daemon has {sorted(names)})"
+                f"OLLAMA_TEST_MODEL {wanted} not pulled (daemon has {sorted(names)})"
             )
             model = wanted
-        elif any(
-            name == "nimble" or name.startswith("nimble:") for name in names
-        ):
+        elif any(name == "nimble" or name.startswith("nimble:") for name in names):
             model = "nimble"
         elif "tev1:0.8b" in names:
             model = "tev1:0.8b"
@@ -3082,9 +2946,7 @@ class TestLiveEngines:
         assert result.answers is not None, (
             f"live Ollama decision failed on {model} ({result.error})"
         )
-        answer = validate_choice_answer(
-            result.answers.get("pick_model"), candidates
-        )
+        answer = validate_choice_answer(result.answers.get("pick_model"), candidates)
         assert answer is not None, "live answer failed typed validation"
         probs = answer["probabilities"]
         assert abs(sum(probs.values()) - 1.0) < 1e-6

@@ -69,7 +69,9 @@ class CodeactState:
             ValueError: For anything outside ``tool|code|both``.
         """
         if interface not in self.VALID:
-            raise ValueError(f"unknown interface {interface!r}: expected tool|code|both")
+            raise ValueError(
+                f"unknown interface {interface!r}: expected tool|code|both"
+            )
         self._interface = interface
         if interface == "code":
             return CODEACT_CODE_REPLY

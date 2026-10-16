@@ -1,7 +1,5 @@
 """Suite-wide hermetic guard: live price layers stay off unless a test opts in."""
 
-import os
-
 import pytest
 
 

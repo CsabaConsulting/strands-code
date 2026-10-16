@@ -165,7 +165,8 @@ class TestWrapGate:
         monkeypatch.setitem(sys.modules, "strands.models.litellm", None)
         resolved = SimpleNamespace(model_id="litellm/openrouter/qwen/qwen3-32b")
         assert (
-            wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved) is resolved
+            wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved)
+            is resolved
         )
 
     def test_wrap_promotion_failure_returns_input_unchanged(
@@ -255,7 +256,9 @@ class TestTracerEndToEnd:
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model.format_chunk(_metadata(0.0024))
         assert (
-            record_turn_metrics(None, "litellm/openrouter/qwen/qwen3-32b", [], model=model)
+            record_turn_metrics(
+                None, "litellm/openrouter/qwen/qwen3-32b", [], model=model
+            )
             is None
         )
         assert model.take_reported_costs() == []
@@ -285,9 +288,7 @@ class TestMainDrainAgentShape:
 
         model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
         model._reported_costs.extend([0.005, None])
-        rewrapped = wrap_for_openrouter(
-            "litellm/openrouter/qwen/qwen3-32b", model
-        )
+        rewrapped = wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", model)
         assert rewrapped is model
         assert rewrapped.take_reported_costs() == []
         rewrapped.format_chunk(_metadata(0.0024))
@@ -410,13 +411,21 @@ def _build_agent_with_resolved(monkeypatch, tmp_path, model_string, resolved):
             return {}
 
         async def structured_output(  # type: ignore[override]
-            self, output_model: Any, prompt: Any, system_prompt: Any = None, **kwargs: Any
+            self,
+            output_model: Any,
+            prompt: Any,
+            system_prompt: Any = None,
+            **kwargs: Any,
         ) -> Any:
             raise NotImplementedError("offline test double")
             yield  # pragma: no cover - keeps this an async generator
 
         async def stream(  # type: ignore[override]
-            self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any
+            self,
+            messages: Any,
+            tool_specs: Any = None,
+            system_prompt: Any = None,
+            **kwargs: Any,
         ):
             yield {"messageStop": {"stopReason": "end_turn"}}
 
@@ -443,9 +452,7 @@ class TestInitialBuildWrap:
         assert agent.model is resolved
         assert callable(getattr(agent.model, "take_reported_costs", None))
         assert agent.model.effort == "high"
-        assert (
-            agent._harness_kwargs["model"] == "litellm/openrouter/qwen/qwen3-32b"
-        )
+        assert agent._harness_kwargs["model"] == "litellm/openrouter/qwen/qwen3-32b"
 
     def test_bedrock_initial_build_leaves_model_identical(
         self, _litellm_stub, monkeypatch, tmp_path
@@ -476,9 +483,7 @@ class TestWrapScope:
         resolved.client_args = {"base_url": "https://openrouter.ai/api/v1"}
         resolved.temperature = 0.7
         before = dict(vars(resolved))
-        promoted = wrap_for_openrouter(
-            "litellm/openrouter/qwen/qwen3-32b", resolved
-        )
+        promoted = wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved)
         assert promoted is resolved
         after = {
             key: value

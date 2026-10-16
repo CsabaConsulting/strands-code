@@ -34,16 +34,16 @@ class TestLoader:
         )
         rules = load_capability_overrides(path)
         assert rules == [
-            CapabilityOverride(provider="bedrock", vendor="amazon", family="nova", reasoning=True),
+            CapabilityOverride(
+                provider="bedrock", vendor="amazon", family="nova", reasoning=True
+            ),
             CapabilityOverride(name_contains="gpt-oss", media=True),
         ]
 
     def test_streaming_tools_field_parses(self, tmp_path):
         path = _write(
             tmp_path / "caps.yaml",
-            "overrides:\n"
-            "  - match: {vendor: meta}\n"
-            "    streaming_tools: false\n",
+            "overrides:\n  - match: {vendor: meta}\n    streaming_tools: false\n",
         )
         assert load_capability_overrides(path) == [
             CapabilityOverride(vendor="meta", streaming_tools=False)
@@ -110,7 +110,9 @@ class TestMerge:
             ],
         )
         assert supports_reasoning("google.gemma-3-27b-it") is True  # enabled by user
-        assert supports_reasoning("bedrock/anthropic.claude-opus-5") is False  # disabled
+        assert (
+            supports_reasoning("bedrock/anthropic.claude-opus-5") is False
+        )  # disabled
         assert supports_media("bedrock/openai.gpt-oss-120b-1:0") is True  # enabled
 
     def test_first_match_wins_per_field(self, monkeypatch):

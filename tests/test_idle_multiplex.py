@@ -93,11 +93,15 @@ class TestFirstCompletedPlumbing:
         return asyncio.run(_main())
 
     def test_approval_wins_cancels_prompt(self):
-        kind, text = self._race(prompt_result="typed", prompt_delay=10.0, poll_delay=0.0)
+        kind, text = self._race(
+            prompt_result="typed", prompt_delay=10.0, poll_delay=0.0
+        )
         assert (kind, text) == ("approval", None)
 
     def test_line_wins_cancels_poll(self):
-        kind, text = self._race(prompt_result="typed", prompt_delay=0.0, poll_delay=10.0)
+        kind, text = self._race(
+            prompt_result="typed", prompt_delay=0.0, poll_delay=10.0
+        )
         assert (kind, text) == ("line", "typed")
 
     def test_loser_task_settles(self):

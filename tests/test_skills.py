@@ -362,7 +362,9 @@ class TestSkillsCommand:
             skills=index,
         )
         assert action == "reply"
-        assert message is not None and "Refused to remove skill 'local:linky'" in message
+        assert (
+            message is not None and "Refused to remove skill 'local:linky'" in message
+        )
         assert (outside / "linky" / "SKILL.md").is_file()
 
     def test_unknown_verb_returns_usage(self, tmp_path):
@@ -404,9 +406,7 @@ class TestSkillCompleter:
         _write_skill(skills_dir, "pdf-tools")
         index = SkillIndex(skills_dir=skills_dir)
         completer = SlashCompleter(lambda: _loop_style_words(index))
-        completions = list(
-            completer.get_completions(Document("/pd"), CompleteEvent())
-        )
+        completions = list(completer.get_completions(Document("/pd"), CompleteEvent()))
         assert any(c.text == "/local:pdf-tools" for c in completions)
 
     def test_shadowed_skill_never_completes_builtin_head_intact(self, tmp_path):
@@ -431,9 +431,7 @@ class TestSkillCompleter:
             for c in completer.get_completions(Document("/pd"), CompleteEvent())
         )
         assert index.remove("pdf-tools") is True
-        assert (
-            list(completer.get_completions(Document("/pd"), CompleteEvent())) == []
-        )
+        assert list(completer.get_completions(Document("/pd"), CompleteEvent())) == []
 
     def test_trailing_space_yields_no_completions(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
@@ -441,9 +439,7 @@ class TestSkillCompleter:
         index = SkillIndex(skills_dir=skills_dir)
         completer = SlashCompleter(lambda: _loop_style_words(index))
         assert (
-            list(
-                completer.get_completions(Document("/pdf-tools "), CompleteEvent())
-            )
+            list(completer.get_completions(Document("/pdf-tools "), CompleteEvent()))
             == []
         )
 
@@ -453,9 +449,7 @@ class TestSkillCompleter:
         index = SkillIndex(skills_dir=skills_dir)
         completer = build_completer(lambda: _loop_style_words(index))
         assert isinstance(completer, DynamicCompleter)
-        completions = list(
-            completer.get_completions(Document("/pd"), CompleteEvent())
-        )
+        completions = list(completer.get_completions(Document("/pd"), CompleteEvent()))
         match = [c for c in completions if c.text == "/local:pdf-tools"]
         assert len(match) == 1
         assert match[0].start_position == -len("/pd")
@@ -465,12 +459,8 @@ class TestSkillCompleter:
         _write_skill(skills_dir, "pdf-tools")
         index = SkillIndex(skills_dir=skills_dir)
         completer = SlashCompleter(lambda: _loop_style_words(index))
-        completions = list(
-            completer.get_completions(Document("/pd"), CompleteEvent())
-        )
-        completed = next(
-            c.text for c in completions if c.text == "/local:pdf-tools"
-        )
+        completions = list(completer.get_completions(Document("/pd"), CompleteEvent()))
+        completed = next(c.text for c in completions if c.text == "/local:pdf-tools")
         action, message = dispatch(
             completed + " extract p3",
             session_id="s1",
@@ -484,9 +474,7 @@ class TestSkillCompleter:
 
     def test_loop_wires_completer_exactly_once(self):
         loop_source = (
-            Path(__file__).resolve().parent.parent
-            / "strands_code_cli"
-            / "loop.py"
+            Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
         ).read_text(encoding="utf-8")
         assert loop_source.count("completer=build_completer") == 1
 
@@ -715,8 +703,7 @@ class TestSkillGapRound:
         index = SkillIndex(skills_dir=skills_dir)
         completer = SlashCompleter(lambda: _loop_style_words(index))
         assert (
-            list(completer.get_completions(Document("/other:"), CompleteEvent()))
-            == []
+            list(completer.get_completions(Document("/other:"), CompleteEvent())) == []
         )
 
     def test_fuzzy_colon_prefix_keeps_skill_match(self, tmp_path):

@@ -47,7 +47,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from strands.interventions.actions import Confirm, Proceed
+from strands.interventions.actions import Confirm
 from strands.vended_interventions.hitl import HumanInTheLoop
 
 from strands_code_cli.mode import (
@@ -62,9 +62,8 @@ from strands_code_cli.mode import (
 from strands_code_cli.policy import PolicyConfig, PolicyOptions
 from strands_code_cli.policy_gate import PolicyClassifier
 from strands_code_cli.router import USAGE_HINT, dispatch
-from strands_code_cli.steering import SteeringState, make_steering_hook
 from strands_code_cli.session_index import SessionIndex
-
+from strands_code_cli.steering import SteeringState, make_steering_hook
 
 BANNED_VOCAB = (
     "policy rule",
@@ -90,9 +89,7 @@ def _event(name: str, tool_input: dict[str, Any], agent: Any = None, uid: str = 
 
 
 def _plan_classifier(**kwargs: Any) -> PolicyClassifier:
-    classifier = PolicyClassifier(
-        policy_loader=lambda: PolicyConfig(), **kwargs
-    )
+    classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig(), **kwargs)
     classifier.set_mode("plan")
     return classifier
 
@@ -106,7 +103,9 @@ class TestTracerPlanDeny:
     @pytest.mark.parametrize("tool", ["write", "edit", "shell", "python_repl"])
     def test_plan_denies_mutations_with_mode_vocabulary(self, tool):
         classifier = _plan_classifier()
-        result = classifier(_event(tool, {"path": "/x"} if tool in ("write", "edit") else {}))
+        result = classifier(
+            _event(tool, {"path": "/x"} if tool in ("write", "edit") else {})
+        )
         assert result.requires_human_in_the_loop is True
         assert "Plan mode is read-only" in result.reason
         for banned in BANNED_VOCAB:
@@ -128,7 +127,9 @@ class TestTracerPlanDeny:
         classifier.bind_main_agent(main_agent)
         classifier.set_mode("plan")
         # Delegated + trusted would Proceed in Act — still denied in Plan.
-        result = classifier(_event("shell", {"command": "make test"}, child_agent, "u1"))
+        result = classifier(
+            _event("shell", {"command": "make test"}, child_agent, "u1")
+        )
         assert result.requires_human_in_the_loop is True
         assert "Plan mode is read-only" in result.reason
 
@@ -142,21 +143,32 @@ class TestTracerPlanDeny:
     def test_act_mode_unaffected_by_flag(self, monkeypatch):
         classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
         classifier.set_mode("act")
-        _, handler = classifier, HumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        _, handler = (
+            classifier,
+            HumanInTheLoop(
+                allowed_tools=["read", "search"],
+                classifier=classifier,
+                ask=classifier.ask,
+            ),
         )
         monkeypatch.setattr("builtins.input", lambda *args: "n")
-        result = asyncio.run(handler.before_tool_call(_event("shell", {"command": "x"})))
+        result = asyncio.run(
+            handler.before_tool_call(_event("shell", {"command": "x"}))
+        )
         assert isinstance(result, Confirm)
 
     def test_plan_ask_refusal_uses_mode_vocabulary(self, monkeypatch):
         classifier = _plan_classifier()
         classifier(_event("write", {"path": "/x"}))
         shown: list[str] = []
-        monkeypatch.setattr("builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a))))
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
         monkeypatch.setattr(
             "builtins.input",
-            lambda _: (_ for _ in ()).throw(AssertionError("Plan deny must not prompt")),
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("Plan deny must not prompt")
+            ),
         )
         assert classifier.ask("Approve?") == "n"
         text = "\n".join(shown)
@@ -177,15 +189,18 @@ class TestTracerPlanDeny:
 
 class TestTracerHookOrder:
     def _wired_agent(self, model_text: str = "ok"):
+        import tempfile
+        import uuid
+        from pathlib import Path
+
         from strands_code_cli.main import build_agent
         from strands_code_cli.policy_gate import _active_classifier
         from tests.test_kill_resume import _ReplayModel
 
-        import tempfile, uuid
-        from pathlib import Path
-
         session_dir = Path(tempfile.mkdtemp())
-        agent = build_agent(str(uuid.uuid4()), session_dir, model=_ReplayModel(model_text))
+        agent = build_agent(
+            str(uuid.uuid4()), session_dir, model=_ReplayModel(model_text)
+        )
         return agent, _active_classifier()
 
     def test_steering_hook_before_prompt_with_redirect(self):
@@ -202,13 +217,19 @@ class TestTracerHookOrder:
         event = BeforeToolCallEvent(
             agent=agent,
             selected_tool=None,
-            tool_use={"name": "shell", "input": {"command": "pip install x"}, "toolUseId": "ord-1"},
+            tool_use={
+                "name": "shell",
+                "input": {"command": "pip install x"},
+                "toolUseId": "ord-1",
+            },
             invocation_state={},
         )
         _, interrupts = asyncio.run(agent.hooks.invoke_callbacks_async(event))
         # Redirect armed by the hook AND no approval interrupt raised:
         # the steering-cancelled call skips the HITL prompt.
-        assert "Steering redirected by user: use poetry instead" in str(event.cancel_tool)
+        assert "Steering redirected by user: use poetry instead" in str(
+            event.cancel_tool
+        )
         assert "the skipped call was not executed" in str(event.cancel_tool)
         assert interrupts == []
         assert not state.has_pending()  # one-shot consumption
@@ -236,7 +257,8 @@ class TestTracerHookOrder:
         state.note("skip this step")
         hook = make_steering_hook(state)
         event = SimpleNamespace(
-            tool_use={"name": "write", "input": {}, "toolUseId": "u9"}, cancel_tool=False
+            tool_use={"name": "write", "input": {}, "toolUseId": "u9"},
+            cancel_tool=False,
         )
         hook(event)
         assert "skip this step" in event.cancel_tool
@@ -252,7 +274,8 @@ class TestTracerHookOrder:
                 seen.append(text)
 
         event = SimpleNamespace(
-            agent=_Agent(), tool_use={"name": "read", "input": {}, "toolUseId": "u1"},
+            agent=_Agent(),
+            tool_use={"name": "read", "input": {}, "toolUseId": "u1"},
             cancel_tool=False,
         )
         hook(event)
@@ -315,7 +338,10 @@ class TestRouterMode:
 
     def test_mode_switch_reply_only_and_sticky(self, tmp_path):
         mode = ModeState()
-        assert self._dispatch("/mode plan", tmp_path, mode) == ("reply", MODE_PLAN_REPLY)
+        assert self._dispatch("/mode plan", tmp_path, mode) == (
+            "reply",
+            MODE_PLAN_REPLY,
+        )
         assert mode.mode == "plan"
         assert self._dispatch("/mode act", tmp_path, mode) == ("reply", MODE_ACT_REPLY)
         assert mode.mode == "act"
@@ -363,7 +389,10 @@ class TestPlanPrefix:
     def test_step_list_shape(self):
         assert "Files to touch:" in PLAN_PREFIX
         assert "Commands to run:" in PLAN_PREFIX
-        assert "Reply with revisions in plain words, or /approve to execute." in PLAN_PREFIX
+        assert (
+            "Reply with revisions in plain words, or /approve to execute."
+            in PLAN_PREFIX
+        )
 
     def test_prefix_vocabulary_lock(self):
         from strands_code_cli.mode import APPROVE_EXECUTE
@@ -381,9 +410,8 @@ class TestPlanPrefix:
 
 class TestWiring:
     def test_build_agent_single_hitl_hook_and_mode(self, tmp_path, monkeypatch):
-        import uuid
-
         import importlib
+        import uuid
 
         main_module = importlib.import_module("strands_code_cli.main")
         from strands_code_cli.policy_gate import _active_classifier
@@ -397,7 +425,9 @@ class TestWiring:
             return real_factory(**kwargs)
 
         monkeypatch.setattr(main_module, "create_harness", _spy)
-        agent = main_module.build_agent(str(uuid.uuid4()), tmp_path, model=_ReplayModel("hi"))
+        agent = main_module.build_agent(
+            str(uuid.uuid4()), tmp_path, model=_ReplayModel("hi")
+        )
         assert len(captured["interventions"]) == 1
         assert captured["builtin_tools"]["programmatic_tool_caller"] is False
         assert agent.hooks.has_callbacks()

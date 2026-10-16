@@ -49,10 +49,14 @@ class CapabilityOverride:
 
 def default_capabilities_path() -> Path:
     """User override file path (platformdirs home, never repo-relative)."""
-    return Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _CAPABILITIES_FILE_NAME
+    return (
+        Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _CAPABILITIES_FILE_NAME
+    )
 
 
-def load_capability_overrides(path: str | Path | None = None) -> list[CapabilityOverride]:
+def load_capability_overrides(
+    path: str | Path | None = None,
+) -> list[CapabilityOverride]:
     """Load override rules fail-soft: problems yield warnings, never raises.
 
     Raises:
@@ -71,7 +75,9 @@ def load_capability_overrides(path: str | Path | None = None) -> list[Capability
     if data is None:
         return []
     if not isinstance(data, dict) or not isinstance(data.get("overrides"), list):
-        logger.warning("Ignoring malformed capability overrides (want mapping with 'overrides' list)")
+        logger.warning(
+            "Ignoring malformed capability overrides (want mapping with 'overrides' list)"
+        )
         return []
     rules: list[CapabilityOverride] = []
     for pos, entry in enumerate(data["overrides"]):
@@ -89,7 +95,9 @@ def _parse_entry(entry: object, pos: int) -> CapabilityOverride | None:
         return None
     unknown = set(entry) - _ENTRY_KEYS
     if unknown:
-        logger.warning("Ignoring capability override #%d (unknown keys: %s)", pos, sorted(unknown))
+        logger.warning(
+            "Ignoring capability override #%d (unknown keys: %s)", pos, sorted(unknown)
+        )
         return None
     match = entry.get("match") or {}
     if not isinstance(match, dict):
@@ -98,13 +106,17 @@ def _parse_entry(entry: object, pos: int) -> CapabilityOverride | None:
     unknown_match = set(match) - _MATCH_KEYS
     if unknown_match:
         logger.warning(
-            "Ignoring capability override #%d (unknown match keys: %s)", pos, sorted(unknown_match)
+            "Ignoring capability override #%d (unknown match keys: %s)",
+            pos,
+            sorted(unknown_match),
         )
         return None
     normalized: dict[str, str] = {}
     for key, value in match.items():
         if not isinstance(value, str):
-            logger.warning("Ignoring capability override #%d (match %r not a string)", pos, key)
+            logger.warning(
+                "Ignoring capability override #%d (match %r not a string)", pos, key
+            )
             return None
         normalized[key] = value.lower()
     effects: dict[str, bool] = {}

@@ -169,9 +169,7 @@ class TestSetupOrderProposal:
         _setup_catalog(monkeypatch)
         monkeypatch.setattr(routing_mod, "local_engine_ready", lambda b, t: False)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(
-            monkeypatch, ["repo", "good/cheap", "decide/cheap"]
-        )
+        _scripted_radio(monkeypatch, ["repo", "good/cheap", "decide/cheap"])
         _scripted_input(monkeypatch, ["", "", "", "d", ""])
         action, _ = _run_setup(tmp_path)
         assert action == "reply"
@@ -247,9 +245,7 @@ class TestSetupOrderBuilder:
         assert data["engine"]["order"] == ["local", "openrouter"]
         assert "bogus" in capsys.readouterr().out
 
-    def test_off_tty_typed_order_second_unknown_aborts(
-        self, tmp_path, monkeypatch
-    ):
+    def test_off_tty_typed_order_second_unknown_aborts(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
@@ -285,9 +281,7 @@ class TestSetupNativePick:
         _scripted_input(monkeypatch, ["", "", "", "d", ""])
         return _run_setup(tmp_path), calls
 
-    def test_native_offer_is_exactly_pin_and_alias(
-        self, tmp_path, monkeypatch
-    ):
+    def test_native_offer_is_exactly_pin_and_alias(self, tmp_path, monkeypatch):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         (action, _), calls = self._run_with_native_pick(
             tmp_path, monkeypatch, NATIVE_JEV_PIN
@@ -302,9 +296,7 @@ class TestSetupNativePick:
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
         assert data["engine"]["native_model"] == NATIVE_JEV_PIN
 
-    def test_alias_choice_prints_drift_warning(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_alias_choice_prints_drift_warning(self, tmp_path, monkeypatch, capsys):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         (action, _), _ = self._run_with_native_pick(
             tmp_path, monkeypatch, NATIVE_JEV_ALIAS
@@ -326,16 +318,12 @@ class TestSetupNativePick:
 
 
 class TestSetupAbortAndRoundTrip:
-    def test_abort_at_native_pick_writes_nothing(
-        self, tmp_path, monkeypatch
-    ):
+    def test_abort_at_native_pick_writes_nothing(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
         monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(
-            monkeypatch, ["repo", "good/cheap", "decide/cheap", None]
-        )
+        _scripted_radio(monkeypatch, ["repo", "good/cheap", "decide/cheap", None])
         _scripted_input(monkeypatch, ["", ""])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
@@ -346,9 +334,7 @@ class TestSetupAbortAndRoundTrip:
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-        _scripted_radio(
-            monkeypatch, ["repo", "good/cheap", "decide/cheap"]
-        )
+        _scripted_radio(monkeypatch, ["repo", "good/cheap", "decide/cheap"])
         _scripted_input(monkeypatch, ["", "", "maybe", "huh"])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
@@ -429,9 +415,7 @@ class TestValidatePing:
         assert calls[0]["questions"]["ping"]["type"] == "choice"
 
     @pytest.mark.parametrize("code", ["HTTP 401", "HTTP 403"])
-    def test_ping_rejected_key_fails_with_key_fix(
-        self, tmp_path, monkeypatch, code
-    ):
+    def test_ping_rejected_key_fails_with_key_fix(self, tmp_path, monkeypatch, code):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _write_strategy_file(repo_path, _NATIVE_FILE)
         monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
@@ -442,9 +426,7 @@ class TestValidatePing:
         assert "native: INVALID — TypeSafe key rejected" in message
         assert "fix: set TYPESAFE_API_KEY" in message
 
-    def test_ping_unknown_model_fails_with_model_fix(
-        self, tmp_path, monkeypatch
-    ):
+    def test_ping_unknown_model_fails_with_model_fix(self, tmp_path, monkeypatch):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _write_strategy_file(repo_path, _NATIVE_FILE)
         monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
@@ -468,14 +450,10 @@ class TestValidatePing:
         assert message.startswith("Routing strategy VALID")
         assert f"native ping inconclusive ({error})" in message
 
-    def test_key_absent_skips_ping_without_calling(
-        self, tmp_path, monkeypatch
-    ):
+    def test_key_absent_skips_ping_without_calling(self, tmp_path, monkeypatch):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
         _write_strategy_file(repo_path, _NATIVE_FILE)
-        calls = _stub_ping(
-            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
-        )
+        calls = _stub_ping(monkeypatch, EngineResult(answers={"ping": {}}, model="x"))
         action, message = _run_validate(tmp_path)
         assert action == "reply"
         assert message.startswith("Routing strategy VALID")
@@ -491,9 +469,7 @@ class TestValidatePing:
             "engine: {order: [local], local_model: nimble}\n",
         )
         monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
-        calls = _stub_ping(
-            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
-        )
+        calls = _stub_ping(monkeypatch, EngineResult(answers={"ping": {}}, model="x"))
         action, message = _run_validate(tmp_path)
         assert action == "reply"
         assert message.startswith("Routing strategy VALID")
@@ -509,9 +485,7 @@ class TestValidatePing:
             f"engine: {{order: [native], native_model: {NATIVE_JEV_PIN}}}\n",
         )
         monkeypatch.setenv("TYPESAFE_API_KEY", "test-native-key")
-        calls = _stub_ping(
-            monkeypatch, EngineResult(answers={"ping": {}}, model="x")
-        )
+        calls = _stub_ping(monkeypatch, EngineResult(answers={"ping": {}}, model="x"))
         action, message = _run_validate(tmp_path)
         assert action == "reply"
         assert message.startswith("Routing strategy INVALID")

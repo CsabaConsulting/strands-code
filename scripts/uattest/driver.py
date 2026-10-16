@@ -18,6 +18,7 @@ Key insight: a mid-turn Approve? dialog blocks the pump thread, so the driver
 must answer dialogs to make progress (like a human would). S1 retries until the
 idle case materializes (max 2 attempts).
 """
+
 import os
 import re
 import subprocess
@@ -164,22 +165,35 @@ def scenario_s1():
         try:
             send(sess, "Reply with exactly these 3 words: alpha beta gamma", "Enter")
             time.sleep(2)
-            send(sess, "/btw list the files in /tmp and delete nothing, but check with me first", "Enter")
+            send(
+                sess,
+                "/btw list the files in /tmp and delete nothing, but check with me first",
+                "Enter",
+            )
             time.sleep(4)
             if "Side question noted" not in pane_text(sess):
-                print(f"[attempt {attempt}] /btw landed at idle (normal turn), retrying", flush=True)
+                print(
+                    f"[attempt {attempt}] /btw landed at idle (normal turn), retrying",
+                    flush=True,
+                )
                 save(sess, f"s1a{attempt}-nodispatch")
                 continue
             text, served = wait_main_end(sess)
             if served:
-                print(f"[attempt {attempt}] mid-turn serve (not the idle case), retrying", flush=True)
+                print(
+                    f"[attempt {attempt}] mid-turn serve (not the idle case), retrying",
+                    flush=True,
+                )
                 save(sess, f"s1a{attempt}-midturn")
                 continue
-            print("[idle] hands off — expecting live dialog, sending nothing", flush=True)
+            print(
+                "[idle] hands off — expecting live dialog, sending nothing", flush=True
+            )
             text = wait_for(sess, r"Approve\? \[btw\]", 180, "live-dialog")
             before = text.split("Approve? [btw]")[0][-500:]
-            assert "will prompt when the next turn starts" not in before, \
+            assert "will prompt when the next turn starts" not in before, (
                 "bounded-wait announce instead of multiplex"
+            )
             send(sess, "Enter")
             wait_for(sess, r"end btw", 180, "fenced-result")
             text = pane_text(sess)
@@ -204,12 +218,22 @@ def scenario_s2():
     sess = "uatr4s2"
     start_cli(sess)
     try:
-        send(sess, "Write a pure-Python benchmark comparing JSON vs pickle across 5 payload sizes and PRINT the whole script plus predicted results", "Enter")
+        send(
+            sess,
+            "Write a pure-Python benchmark comparing JSON vs pickle across 5 payload sizes and PRINT the whole script plus predicted results",
+            "Enter",
+        )
         time.sleep(2)
-        send(sess, "/btw explain in detail how rainbows form, at least 300 words, plain text, no tools", "Enter")
+        send(
+            sess,
+            "/btw explain in detail how rainbows form, at least 300 words, plain text, no tools",
+            "Enter",
+        )
         wait_for(sess, r"Side question noted", 60, "side-spawn")
         time.sleep(1)  # C-c during side startup latency; side needs no approval
-        assert "--- end btw ---" not in pane_text(sess), "side finished before C-c (void run)"
+        assert "--- end btw ---" not in pane_text(sess), (
+            "side finished before C-c (void run)"
+        )
         send(sess, "C-c")
         wait_for(sess, r"Cancel which\?", 60, "chooser")
         time.sleep(2)
@@ -228,6 +252,7 @@ def scenario_s2():
 
 
 # ---------------------------------------------------------------- Phase 8
+
 
 def ensure_workdir(name):
     """Fresh per-scenario workdir under /tmp/uatr8 (strategy files land here)."""
@@ -269,7 +294,7 @@ def strategy_order(workdir):
         stripped = line.strip()
         if stripped == "order:":
             order = []
-            for rest in text.splitlines()[lineno + 1:]:
+            for rest in text.splitlines()[lineno + 1 :]:
                 item = rest.strip()
                 if not item.startswith("- "):
                     break
@@ -300,7 +325,9 @@ def live_decision_id():
     )
     r = subprocess.run(
         ["uv", "run", "--project", REPO, "python", "-c", code],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
         cwd="/tmp",
     )
     assert r.returncode == 0, f"catalog fetch failed: {r.stderr[-300:]}"
@@ -334,9 +361,7 @@ def wait_routed(sess, timeout, label, after=0, side=False):
         text = pane_text(sess)
         failed = FAIL_RE.search(text)
         if failed:
-            raise AssertionError(
-                f"Turn failed during {label}: {failed.group(0)[:200]}"
-            )
+            raise AssertionError(f"Turn failed during {label}: {failed.group(0)[:200]}")
         fresh = text.count(marker) + text.count("Routing held") > after
         if fresh:
             return text, None
@@ -391,8 +416,10 @@ def scenario_r1():
         send(sess, "Enter")  # empty takes nimble
         # Native pick appears only with a key in the environment.
         text = wait_for(
-            sess, r"Pick the native Jev model|Print a one-line note",
-            60, "native-or-skip",
+            sess,
+            r"Pick the native Jev model|Print a one-line note",
+            60,
+            "native-or-skip",
         )
         if "Pick the native Jev model" in text.split("Local decision model tag")[-1]:
             time.sleep(3)  # let the radio options render past the title
@@ -441,20 +468,23 @@ def scenario_r2():
     start_cli(sess, workdir)
     try:
         current = current_model_from_boot(pane_text(sess))
-        write_strategy(workdir, (
-            "candidates:\n"
-            f"  - id: {RIG_NOVA_MICRO}\n"
-            "    tier: tiny\n"
-            "    levels: [auto, off]\n"
-            f"  - id: {current}\n"
-            "    tier: mid\n"
-            "    levels: [auto, off]\n"
-            "directives: >-\n"
-            "  Always stay on the current model.\n"
-            "engine:\n"
-            "  primary: local\n"
-            "  local_model: tev1:0.8b\n"
-        ))
+        write_strategy(
+            workdir,
+            (
+                "candidates:\n"
+                f"  - id: {RIG_NOVA_MICRO}\n"
+                "    tier: tiny\n"
+                "    levels: [auto, off]\n"
+                f"  - id: {current}\n"
+                "    tier: mid\n"
+                "    levels: [auto, off]\n"
+                "directives: >-\n"
+                "  Always stay on the current model.\n"
+                "engine:\n"
+                "  primary: local\n"
+                "  local_model: tev1:0.8b\n"
+            ),
+        )
         send(sess, "/route validate", "Enter")
         text = wait_for(sess, r"Routing strategy VALID", 60, "valid")
         assert text.count(": ok") >= 2, "candidates not ok"
@@ -503,23 +533,28 @@ def scenario_r3():
         current = current_model_from_boot(pane_text(sess))
         send(sess, "/cost refresh", "Enter")
         wait_for(sess, r"OpenRouter:", 120, "refresh-done")
-        write_strategy(workdir, (
-            "candidates:\n"
-            f"  - id: {RIG_NOVA_MICRO}\n"
-            "    tier: tiny\n"
-            "    levels: [auto, off]\n"
-            f"  - id: {current}\n"
-            "    tier: mid\n"
-            "    levels: [auto, off]\n"
-            "directives: >-\n"
-            "  Always stay on the current model.\n"
-            "engine:\n"
-            "  primary: openrouter\n"
-            f"  decision_model: {decision}\n"
-        ))
+        write_strategy(
+            workdir,
+            (
+                "candidates:\n"
+                f"  - id: {RIG_NOVA_MICRO}\n"
+                "    tier: tiny\n"
+                "    levels: [auto, off]\n"
+                f"  - id: {current}\n"
+                "    tier: mid\n"
+                "    levels: [auto, off]\n"
+                "directives: >-\n"
+                "  Always stay on the current model.\n"
+                "engine:\n"
+                "  primary: openrouter\n"
+                f"  decision_model: {decision}\n"
+            ),
+        )
         send(sess, "/route validate", "Enter")
         text = wait_for(sess, r"Routing strategy VALID", 60, "valid")
-        assert "not in the cached decisions catalog" not in text, "decision id cache miss"
+        assert "not in the cached decisions catalog" not in text, (
+            "decision id cache miss"
+        )
         send(sess, "/route on", "Enter")  # file landed after boot; enable explicitly
         wait_for(sess, r"Routing on", 60, "explicit-on")
         send(sess, "Reply with exactly these 3 words: alpha beta gamma", "Enter")
@@ -532,7 +567,9 @@ def scenario_r3():
         send(sess, "/cost", "Enter")
         text = wait_for_new(sess, r"Routing:", 60, "cost-routing", before=cost_before)
         assert "via openrouter" in text, "decision engine not openrouter"
-        assert re.search(r"\[model \d+%, effort \d+%]", text), "cost entry lacks confidences"
+        assert re.search(r"\[model \d+%, effort \d+%]", text), (
+            "cost entry lacks confidences"
+        )
         assert re.search(r"via openrouter \$\d+\.\d{4}", text), "cost entry lacks spend"
         assert "[held]" not in text, "held marker in cost report"
         snap = pane_text(sess)
@@ -586,23 +623,30 @@ def scenario_r4():
     start_cli(sess, workdir)
     try:
         current = current_model_from_boot(pane_text(sess))
-        write_strategy(workdir, (
-            "candidates:\n"
-            f"  - id: {RIG_NOVA_MICRO}\n"
-            "    tier: tiny\n"
-            "    levels: [auto, off]\n"
-            f"  - id: {current}\n"
-            "    tier: mid\n"
-            "    levels: [auto, off]\n"
-            "directives: >-\n"
-            "  Always stay on the current model.\n"
-            "engine:\n"
-            "  primary: openrouter\n"
-            f"  decision_model: {decision}\n"
-        ))
+        write_strategy(
+            workdir,
+            (
+                "candidates:\n"
+                f"  - id: {RIG_NOVA_MICRO}\n"
+                "    tier: tiny\n"
+                "    levels: [auto, off]\n"
+                f"  - id: {current}\n"
+                "    tier: mid\n"
+                "    levels: [auto, off]\n"
+                "directives: >-\n"
+                "  Always stay on the current model.\n"
+                "engine:\n"
+                "  primary: openrouter\n"
+                f"  decision_model: {decision}\n"
+            ),
+        )
         send(sess, "/route on", "Enter")
         wait_for(sess, r"Routing on", 60, "explicit-on")
-        send(sess, "Write a pure-Python benchmark comparing JSON vs pickle across 5 payload sizes and PRINT the whole script plus predicted results — do not save or run anything, just output text, no tools", "Enter")
+        send(
+            sess,
+            "Write a pure-Python benchmark comparing JSON vs pickle across 5 payload sizes and PRINT the whole script plus predicted results — do not save or run anything, just output text, no tools",
+            "Enter",
+        )
         time.sleep(6)  # stagger: let the main decision finish first
         send(sess, "/btw Reply with exactly: sidecheck", "Enter")
         wait_for(sess, r"Side question noted", 60, "side-spawn")
@@ -813,15 +857,16 @@ def scenario_n3():
         save(sess, "n3-ok", LOGDIR8)
         stop_cli(sess)
         start_cli(
-            sess, workdir,
+            sess,
+            workdir,
             env_prefix=f"TYPESAFE_API_KEY={BOGUS_TYPESAFE_KEY} ",
         )
         send(sess, "/route validate", "Enter")
         text = wait_for(sess, r"Routing strategy INVALID", 60, "invalid")
         assert "TypeSafe key rejected (HTTP 401)" in text, "bad key not loud"
-        assert (
-            "fix: set TYPESAFE_API_KEY to a valid key" in text
-        ), "key fix line missing"
+        assert "fix: set TYPESAFE_API_KEY to a valid key" in text, (
+            "key fix line missing"
+        )
         print("N3 PASS", flush=True)
     finally:
         save(sess, "n3", LOGDIR8)
@@ -847,7 +892,11 @@ def scenario_n4():
         # A mid ask, not the r2 trivial ask: Jev reads the trivial
         # ask 50/50 (trivial -> tiny vs directives -> current) and
         # holds 2/2, while the debug ask routes current at 0.95.
-        send(sess, "Debug the intermittent timeout failure in the API client test suite and propose a fix. Answer from general knowledge only; do not read, list, or run anything. End your reply with exactly: debugdone", "Enter")
+        send(
+            sess,
+            "Debug the intermittent timeout failure in the API client test suite and propose a fix. Answer from general knowledge only; do not read, list, or run anything. End your reply with exactly: debugdone",
+            "Enter",
+        )
         text, _ = wait_routed(sess, 120, "routed-line")
         routed_line_with_confidences(text)
         assert "Routing held" not in text, "native engine held current"
@@ -857,9 +906,7 @@ def scenario_n4():
         send(sess, "/cost", "Enter")
         text = wait_for_new(sess, r"Routing:", 60, "cost-routing", before=cost_before)
         assert "via native" in text, "decision engine not native"
-        assert re.search(r"via native \$\d+\.\d{4}", text), (
-            "cost entry lacks spend"
-        )
+        assert re.search(r"via native \$\d+\.\d{4}", text), "cost entry lacks spend"
         assert "[held]" not in text, "held marker in cost report"
         print("N4 PASS", flush=True)
     finally:
@@ -910,7 +957,11 @@ def scenario_c1():
     try:
         _switch_model(sess, CHEAP_OPENROUTER_ID)
         after = len(COST_RE.findall(pane_text(sess)))
-        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        send(
+            sess,
+            "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.",
+            "Enter",
+        )
         text, _ = wait_main_end(sess, after=after)
         assert ACTUAL_USAGE_RE.search(text), (
             f"usage line lacks the actual marker: {text[-300:]}"
@@ -937,14 +988,22 @@ def scenario_c2():
     sess = "uatr8c2"
     start_cli(sess, workdir)
     try:
-        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        send(
+            sess,
+            "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.",
+            "Enter",
+        )
         text, _ = wait_main_end(sess)
         assert "actual" not in text.splitlines()[-1], (
             "estimate turn unexpectedly marked actual"
         )
         _switch_model(sess, CHEAP_OPENROUTER_ID)
         after = len(COST_RE.findall(pane_text(sess)))
-        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        send(
+            sess,
+            "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.",
+            "Enter",
+        )
         text, _ = wait_main_end(sess, after=after)
         assert ACTUAL_USAGE_RE.search(text), (
             f"usage line lacks the actual marker: {text[-300:]}"
@@ -1008,7 +1067,11 @@ def scenario_a2():
     start_cli(sess, workdir, cli_args="--codeact code")
     try:
         after = len(COST_RE.findall(pane_text(sess)))
-        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        send(
+            sess,
+            "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.",
+            "Enter",
+        )
         text, _ = wait_main_end(sess, after=after)
         assert re.search(r"^interface: codeact", text, re.MULTILINE), (
             "code turn lacks the codeact label"
@@ -1017,7 +1080,11 @@ def scenario_a2():
         send(sess, "/codeact tool", "Enter")
         wait_for_new(sess, r"Interface: tool", 30, "switched", before=before_switch)
         after = len(COST_RE.findall(pane_text(sess)))
-        send(sess, "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.", "Enter")
+        send(
+            sess,
+            "Reply with the single word: ok. Answer from general knowledge only; do not read, list, or run anything.",
+            "Enter",
+        )
         text, _ = wait_main_end(sess, after=after)
         assert re.search(r"^interface: tool", text, re.MULTILINE), (
             "tool turn lacks the tool label"
@@ -1066,4 +1133,3 @@ if __name__ == "__main__":
         scenario_a2()
     else:
         sys.exit("usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2}")
-

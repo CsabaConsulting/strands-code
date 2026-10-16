@@ -85,12 +85,22 @@ class _ReplayModel(Model):
         return {}
 
     async def structured_output(  # type: ignore[override]
-        self, output_model: Any, prompt: Any, system_prompt: str | None = None, **kwargs: Any
+        self,
+        output_model: Any,
+        prompt: Any,
+        system_prompt: str | None = None,
+        **kwargs: Any,
     ) -> Any:
         raise NotImplementedError("offline test double")
         yield  # pragma: no cover - keeps this an async generator
 
-    async def stream(self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any):  # type: ignore[override]
+    async def stream(
+        self,
+        messages: Any,
+        tool_specs: Any = None,
+        system_prompt: Any = None,
+        **kwargs: Any,
+    ):  # type: ignore[override]
         yield {"messageStart": {"role": "assistant"}}
         yield {"contentBlockStart": {"start": {}}}
         yield {"contentBlockDelta": {"delta": {"text": self._text}}}
@@ -124,8 +134,18 @@ def _fixture_history() -> list[dict[str, Any]]:
         {
             "role": "assistant",
             "content": [
-                {"reasoningContent": {"reasoningText": {"text": "let me think", "signature": "sig-1"}}},
-                {"toolUse": {"toolUseId": "t-1", "name": "python_repl", "input": {"code": "1+1"}}},
+                {
+                    "reasoningContent": {
+                        "reasoningText": {"text": "let me think", "signature": "sig-1"}
+                    }
+                },
+                {
+                    "toolUse": {
+                        "toolUseId": "t-1",
+                        "name": "python_repl",
+                        "input": {"code": "1+1"},
+                    }
+                },
             ],
         },
         {
@@ -140,7 +160,12 @@ def _fixture_history() -> list[dict[str, Any]]:
                 }
             ],
         },
-        {"role": "user", "content": [{"image": {"format": "png", "source": {"bytes": b"0123456789"}}}]} ,
+        {
+            "role": "user",
+            "content": [
+                {"image": {"format": "png", "source": {"bytes": b"0123456789"}}}
+            ],
+        },
     ]
 
 
@@ -156,7 +181,9 @@ class TestResolveSpike:
             default="bedrock/global.anthropic.claude-opus-5",
         )
         assert type(model).__name__ == "BedrockModel"
-        assert model.get_config().get("model_id") == "global.anthropic.claude-sonnet-4-6"
+        assert (
+            model.get_config().get("model_id") == "global.anthropic.claude-sonnet-4-6"
+        )
 
     def test_bare_bedrock_id_defaults_to_bedrock(self):
         model = resolve_model("anthropic.claude-sonnet-4-6", default="bedrock/x")
@@ -247,7 +274,9 @@ class TestCanonicalPrefixHash:
             # Nemotron strips BOTH thinking and media: the canonical form
             # must survive the full round-trip.
             converted = convert_history(
-                fixture, "bedrock/global.anthropic.claude-sonnet-4-6", "openai/nemotron-70b"
+                fixture,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                "openai/nemotron-70b",
             )
         assert _reasoning_blocks(converted) == []
         assert canonical_prefix_hash(converted) == canonical_prefix_hash(fixture)
@@ -267,9 +296,7 @@ class TestCanonicalPrefixHash:
 
         from strands_code_cli.model_switch import _LEGACY_TRACE_LABELS
 
-        legacy_block = (
-            _LEGACY_TRACE_LABELS[0] + "\nThe user is asking about capitals."
-        )
+        legacy_block = _LEGACY_TRACE_LABELS[0] + "\nThe user is asking about capitals."
         src = [
             {"role": "user", "content": [{"text": "hi"}]},
             {"role": "assistant", "content": [{"text": legacy_block}]},
@@ -299,7 +326,9 @@ class TestCanonicalPrefixHash:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             converted = convert_history(
-                fixture, "bedrock/global.anthropic.claude-sonnet-4-6", "openai/nemotron-70b"
+                fixture,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                "openai/nemotron-70b",
             )
         # Rewrite new labels to the retired bracketed shape: pre-upgrade
         # sessions must keep matching the stash.
@@ -308,7 +337,7 @@ class TestCanonicalPrefixHash:
             for block in message.get("content", []):
                 text = block.get("text", "")
                 if text.startswith(TRACE_LABEL):
-                    block["text"] = _LEGACY_TRACE_LABELS[0] + text[len(TRACE_LABEL):]
+                    block["text"] = _LEGACY_TRACE_LABELS[0] + text[len(TRACE_LABEL) :]
         assert any(
             block.get("text", "").startswith(_LEGACY_TRACE_LABELS[0])
             for message in legacy
@@ -381,7 +410,11 @@ class TestConvertHistory:
             "bedrock/global.anthropic.claude-sonnet-4-6",
             "bedrock/global.anthropic.claude-opus-5",
         )
-        assert out[1]["content"][0] == {"reasoningContent": {"reasoningText": {"text": "let me think", "signature": "sig-1"}}}
+        assert out[1]["content"][0] == {
+            "reasoningContent": {
+                "reasoningText": {"text": "let me think", "signature": "sig-1"}
+            }
+        }
 
     def test_tool_pairs_byte_identical(self):
         src = _fixture_history()
@@ -441,7 +474,9 @@ class TestCapabilityAlmanac:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             out = convert_history(
-                _fixture_history(), "bedrock/anthropic.claude-x", "bedrock/acme-future-1"
+                _fixture_history(),
+                "bedrock/anthropic.claude-x",
+                "bedrock/acme-future-1",
             )
         assert _reasoning_blocks(out) == []
 
@@ -586,8 +621,12 @@ class TestStreamingTools:
     def test_llama_families_warn_rest_fail_open(self):
         from strands_code_cli.model_switch import supports_streaming_tools
 
-        assert supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is False
-        assert supports_streaming_tools("meta.llama4-maverick-17b-instruct-v1:0") is False
+        assert (
+            supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is False
+        )
+        assert (
+            supports_streaming_tools("meta.llama4-maverick-17b-instruct-v1:0") is False
+        )
         assert supports_streaming_tools("us.meta.llama3-3-70b-instruct-v1:0") is False
         assert (
             supports_streaming_tools("us.anthropic.claude-haiku-4-5-20251001-v1:0")
@@ -605,7 +644,9 @@ class TestStreamingTools:
             "active_overrides",
             lambda: [CapabilityOverride(vendor="meta", streaming_tools=True)],
         )
-        assert supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is True
+        assert (
+            supports_streaming_tools("us.meta.llama4-scout-17b-instruct-v1:0") is True
+        )
         monkeypatch.setattr(
             caps,
             "active_overrides",
@@ -748,7 +789,9 @@ class TestRichHistory:
                 rich=resumed,
             )
         assert "thinking restored" in reply
-        assert not [w for w in caught if "dropping reasoningcontent" in str(w.message).lower()]
+        assert not [
+            w for w in caught if "dropping reasoningcontent" in str(w.message).lower()
+        ]
         assert agent.messages[1]["content"][0] == {
             "reasoningContent": {
                 "reasoningText": {"text": "let me think", "signature": "sig-1"}
@@ -822,7 +865,10 @@ class TestRichHistory:
         assert rich_stash_path(tmp_path, "../../evil") is None
         assert rich_stash_path(tmp_path, "no/slash") is None
         ok = rich_stash_path(tmp_path, "91190877-b0cb-4521-b561-cb797c40ce58")
-        assert ok == tmp_path / "rich_history" / "91190877-b0cb-4521-b561-cb797c40ce58.json"
+        assert (
+            ok
+            == tmp_path / "rich_history" / "91190877-b0cb-4521-b561-cb797c40ce58.json"
+        )
 
 
 class TestTurnGuard:
@@ -876,7 +922,9 @@ class TestTurnGuard:
         )
         agent = SimpleNamespace(messages=[], _session_manager=None)
         index = SessionIndex(tmp_path / "index")
-        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        loop_mod.run_loop(
+            agent, session_id=index.mint(), index=index, model_id="bedrock/x"
+        )
         assert calls == ["hello", "again"]  # re-prompted after each failure
         assert "Turn failed (RuntimeError): boom" in capsys.readouterr().out
 
@@ -918,8 +966,12 @@ class TestTurnGuard:
         )
         agent = SimpleNamespace(messages=[], model="bedrock/x", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
-        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
-        assert "Model switch failed (boom); session unchanged." in capsys.readouterr().out
+        loop_mod.run_loop(
+            agent, session_id=index.mint(), index=index, model_id="bedrock/x"
+        )
+        assert (
+            "Model switch failed (boom); session unchanged." in capsys.readouterr().out
+        )
 
     def test_streaming_tool_error_hints_model_switch(
         self, tmp_path, monkeypatch, capsys
@@ -1002,7 +1054,9 @@ class TestTurnGuard:
             if len(calls) == 1:
                 agent.messages.append({"role": "assistant", "content": []})
             else:
-                agent.messages.append({"role": "assistant", "content": [{"text": "hi"}]})
+                agent.messages.append(
+                    {"role": "assistant", "content": [{"text": "hi"}]}
+                )
             return None
 
         monkeypatch.setattr(loop_mod, "_invoke_agent", _flake_then_answer)
@@ -1016,7 +1070,9 @@ class TestTurnGuard:
         )
         agent = SimpleNamespace(messages=[], _session_manager=None)
         index = SessionIndex(tmp_path / "index")
-        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        loop_mod.run_loop(
+            agent, session_id=index.mint(), index=index, model_id="bedrock/x"
+        )
         assert calls == ["hello", "hello"]  # retried exactly once
         # No-op attempt dropped: history shows the question once.
         assert agent.messages == [
@@ -1065,7 +1121,9 @@ class TestTurnGuard:
         )
         agent = SimpleNamespace(messages=[], _session_manager=None)
         index = SessionIndex(tmp_path / "index")
-        loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id="bedrock/x")
+        loop_mod.run_loop(
+            agent, session_id=index.mint(), index=index, model_id="bedrock/x"
+        )
         assert calls == ["hello", "hello"]  # one retry, then stop
         assert agent.messages == [
             {"role": "user", "content": [{"text": "hello"}]},
@@ -1078,9 +1136,7 @@ class TestTurnGuard:
 
         assert _turn_appended_empty(0, []) is False  # nothing appended
         assert (
-            _turn_appended_empty(
-                0, [{"role": "assistant", "content": []}]
-            )
+            _turn_appended_empty(0, [{"role": "assistant", "content": []}])
             is False  # no user message
         )
         assert (
@@ -1145,7 +1201,8 @@ class TestTurnGuard:
 class TestEstimateFit:
     def test_small_history_fits(self):
         fits, pct, tokens = estimate_fit(
-            [{"role": "user", "content": [{"text": "hi"}]}], "bedrock/global.anthropic.claude-sonnet-4-6"
+            [{"role": "user", "content": [{"text": "hi"}]}],
+            "bedrock/global.anthropic.claude-sonnet-4-6",
         )
         assert fits is True
         assert tokens > 0
@@ -1161,7 +1218,9 @@ class TestEstimateFit:
 
     def test_huge_history_does_not_fit(self):
         big = [{"role": "user", "content": [{"text": "x" * 4000}]} for _ in range(200)]
-        fits, pct, tokens = estimate_fit(big, "bedrock/anthropic.claude-3-haiku-20240307")
+        fits, pct, tokens = estimate_fit(
+            big, "bedrock/anthropic.claude-3-haiku-20240307"
+        )
         assert fits is False
         assert pct is not None and pct >= 70.0
 
@@ -1237,7 +1296,9 @@ class TestDiscoverModels:
             def list_inference_profiles(self, **kwargs):
                 return {
                     "inferenceProfileSummaries": [
-                        {"inferenceProfileArn": "arn:aws:bedrock:us-east-1:123:inference-profile/global.anthropic.claude-opus-5"}
+                        {
+                            "inferenceProfileArn": "arn:aws:bedrock:us-east-1:123:inference-profile/global.anthropic.claude-opus-5"
+                        }
                     ]
                 }
 
@@ -1311,7 +1372,9 @@ class TestDiscoverModels:
                 entry["models"] = [{"modelArn": arn} for arn in model_arns]
             return entry
 
-        _embed = "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"
+        _embed = (
+            "arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0"
+        )
         _chat = "arn:aws:bedrock:us-east-1::foundation-model/chat.text"
 
         class _Client:
@@ -1665,11 +1728,14 @@ class TestCascadePicker:
         monkeypatch.setattr(
             choice_mod,
             "radio_choice",
-            lambda title, options, **kwargs: seen_options.append(options)
-            or _MODEL_CANCEL,
+            lambda title, options, **kwargs: (
+                seen_options.append(options) or _MODEL_CANCEL
+            ),
         )
         monkeypatch.setattr(
-            model_switch_mod, "discover_models", lambda **_: (["qwen.qwen3-32b-v1:0"], False)
+            model_switch_mod,
+            "discover_models",
+            lambda **_: (["qwen.qwen3-32b-v1:0"], False),
         )
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
@@ -1692,7 +1758,9 @@ class TestCascadePicker:
 
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(
-            model_switch_mod, "discover_models", lambda **_: (["qwen.qwen3-32b-v1:0"], False)
+            model_switch_mod,
+            "discover_models",
+            lambda **_: (["qwen.qwen3-32b-v1:0"], False),
         )
         index = SessionIndex(tmp_path / "index")
         session_id = index.mint()
@@ -1713,6 +1781,7 @@ class TestCascadePicker:
 
     def test_missing_sdk_names_the_extra(self, tmp_path, monkeypatch):
         import strands_harness.models as harness_models
+
         from strands_code_cli.router import dispatch
         from strands_code_cli.session_index import SessionIndex
 
@@ -1781,7 +1850,10 @@ class TestCompactReplaySpike:
         assert callable(model_switch.discover_models)
         assert callable(model_switch.estimate_fit)
         assert callable(model_switch.apply_switch)
-        assert isinstance(model_switch.MODEL_REFUSAL, str) and "idle prompt" in model_switch.MODEL_REFUSAL
+        assert (
+            isinstance(model_switch.MODEL_REFUSAL, str)
+            and "idle prompt" in model_switch.MODEL_REFUSAL
+        )
 
 
 # ----------------------------------------------------------------------
@@ -1824,7 +1896,9 @@ class TestModelRouterBranch:
         from strands_code_cli.session_index import SessionIndex
 
         index = SessionIndex(tmp_path / "index")
-        action, message = dispatch("/model bogus/xyz", session_id=index.mint(), index=index)
+        action, message = dispatch(
+            "/model bogus/xyz", session_id=index.mint(), index=index
+        )
         assert action == "reply"
         assert "Supported providers" in message
 
@@ -1974,7 +2048,10 @@ class TestIdleOnlySwap:
             current_model="bedrock/global.anthropic.claude-opus-5",
         )
         assert resolved is None
-        assert reply == "Model switches apply at the idle prompt — wait for the turn to finish."
+        assert (
+            reply
+            == "Model switches apply at the idle prompt — wait for the turn to finish."
+        )
         assert agent.model is before
 
     def test_switch_to_llama_warns_in_reply(self, tmp_path):
@@ -2057,7 +2134,9 @@ class TestModelPersistence:
         real_import = builtins.__import__
 
         def _no_openai(name, *args, **kwargs):
-            if name == "strands.models.openai" or name.startswith("strands.models.openai."):
+            if name == "strands.models.openai" or name.startswith(
+                "strands.models.openai."
+            ):
                 raise ImportError(f"No module named {name!r} (test probe)")
             return real_import(name, *args, **kwargs)
 
@@ -2091,9 +2170,7 @@ class TestReportedWrapScope:
 
         fake_base = self._stub_litellm_base(monkeypatch)
         resolved = fake_base()
-        wrapped = wrap_for_openrouter(
-            "litellm/openrouter/qwen/qwen3-32b", resolved
-        )
+        wrapped = wrap_for_openrouter("litellm/openrouter/qwen/qwen3-32b", resolved)
         assert wrapped is resolved
         assert callable(getattr(wrapped, "take_reported_costs", None))
 
@@ -2102,9 +2179,7 @@ class TestReportedWrapScope:
 
         fake_base = self._stub_litellm_base(monkeypatch)
         bedrock = fake_base()
-        assert (
-            wrap_for_openrouter("bedrock/anthropic.claude-x", bedrock) is bedrock
-        )
+        assert wrap_for_openrouter("bedrock/anthropic.claude-x", bedrock) is bedrock
         assert not hasattr(bedrock, "take_reported_costs")
         direct = fake_base()
         assert wrap_for_openrouter("openai/gpt-4o", direct) is direct
@@ -2114,6 +2189,7 @@ class TestReportedWrapScope:
         from types import SimpleNamespace
 
         import strands_harness.models as harness_models
+
         from strands_code_cli.model_switch import apply_switch
 
         fake_base = self._stub_litellm_base(monkeypatch)

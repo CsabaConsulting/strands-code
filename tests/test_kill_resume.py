@@ -33,12 +33,22 @@ class _ReplayModel(Model):
         return {}
 
     async def structured_output(  # type: ignore[override]
-        self, output_model: Any, prompt: Any, system_prompt: str | None = None, **kwargs: Any
+        self,
+        output_model: Any,
+        prompt: Any,
+        system_prompt: str | None = None,
+        **kwargs: Any,
     ) -> Any:
         raise NotImplementedError("offline test double")
         yield  # pragma: no cover - keeps this an async generator
 
-    async def stream(self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any):  # type: ignore[override]
+    async def stream(
+        self,
+        messages: Any,
+        tool_specs: Any = None,
+        system_prompt: Any = None,
+        **kwargs: Any,
+    ):  # type: ignore[override]
         yield {"messageStart": {"role": "assistant"}}
         yield {"contentBlockStart": {"start": {}}}
         yield {"contentBlockDelta": {"delta": {"text": self._text}}}

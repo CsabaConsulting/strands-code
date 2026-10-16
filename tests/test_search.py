@@ -8,8 +8,6 @@ the live tree.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from strands_code_agent import search_tool
@@ -19,7 +17,9 @@ from strands_code_agent.search_tool import format_hits, run_search
 @pytest.fixture
 def repo(tmp_path):
     (tmp_path / "alpha.py").write_text("def target_fn():\n    return 1\n")
-    (tmp_path / "beta.py").write_text("x = 1\n" + "\n".join(f"match line {i}" for i in range(20)) + "\n")
+    (tmp_path / "beta.py").write_text(
+        "x = 1\n" + "\n".join(f"match line {i}" for i in range(20)) + "\n"
+    )
     (tmp_path / "notes.txt").write_text("nothing relevant here\n")
     return tmp_path
 

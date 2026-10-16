@@ -53,12 +53,12 @@ import fnmatch
 import logging
 import os
 import re
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import platformdirs
+import tomllib
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +143,12 @@ class Rule:
 
     def describe(self) -> str:
         """Short human form used in prompts and refusal text."""
-        selector = f'path "{self.path}"' if self.path is not None else f'command "{self.command}"'
-        return f'{self.tool} {selector}'
+        selector = (
+            f'path "{self.path}"'
+            if self.path is not None
+            else f'command "{self.command}"'
+        )
+        return f"{self.tool} {selector}"
 
 
 @dataclass
@@ -168,7 +172,9 @@ class PolicyConfig:
         (prompt-all-mutating, never allow-all). Symlinked paths raise
         ``ValueError`` fail-loud.
         """
-        home = Path(home_path) if home_path is not None else default_policy_config_path()
+        home = (
+            Path(home_path) if home_path is not None else default_policy_config_path()
+        )
         repo = Path(repo_path) if repo_path is not None else default_repo_policy_path()
         for candidate in (home, repo):
             if candidate.is_symlink():
@@ -177,7 +183,9 @@ class PolicyConfig:
             home_cfg = _load_one(home)
             repo_cfg = _load_one(repo)
         except (PolicySchemaError, tomllib.TOMLDecodeError, OSError, ValueError) as exc:
-            logger.warning("Ignoring policy config, falling back to prompt-all defaults: %s", exc)
+            logger.warning(
+                "Ignoring policy config, falling back to prompt-all defaults: %s", exc
+            )
             return cls()
         merged = cls()
         for single in (home_cfg, repo_cfg):
@@ -189,7 +197,9 @@ class PolicyConfig:
                 merged.options.trust_delegated = True
         # Repo rules first for explanation order only (deny-wins is order-free).
         if repo_cfg is not None:
-            merged.allow = list(repo_cfg.allow) + list(home_cfg.allow if home_cfg else [])
+            merged.allow = list(repo_cfg.allow) + list(
+                home_cfg.allow if home_cfg else []
+            )
             merged.deny = list(repo_cfg.deny) + list(home_cfg.deny if home_cfg else [])
         return merged
 
@@ -209,7 +219,9 @@ class PolicyConfig:
         _validate_rule(rule)
         if rule.tool == "*":
             raise ValueError("Derived rules must be narrow (tool '*' refused)")
-        resolved = Path(repo_path) if repo_path is not None else default_repo_policy_path()
+        resolved = (
+            Path(repo_path) if repo_path is not None else default_repo_policy_path()
+        )
         if resolved.is_symlink():
             raise ValueError(f"Policy file must not be a symlink: {resolved}")
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +265,9 @@ def _load_one(path: Path) -> PolicyConfig | None:
         raise PolicySchemaError("Policy [options] must be a mapping")
     unknown_options = set(raw_options) - _KNOWN_OPTION_KEYS
     if unknown_options:
-        raise PolicySchemaError(f"Unknown policy option keys: {sorted(unknown_options)}")
+        raise PolicySchemaError(
+            f"Unknown policy option keys: {sorted(unknown_options)}"
+        )
     if "trust_delegated" in raw_options:
         value = raw_options["trust_delegated"]
         if not isinstance(value, bool):
@@ -302,7 +316,9 @@ def _validate_rule(rule: Rule) -> None:
     if has_path and rule.tool not in FILE_TOOLS and rule.tool != "*":
         raise PolicySchemaError(f"'path' rules need a file tool, got {rule.tool!r}")
     if has_command and rule.tool not in COMMAND_TOOLS and rule.tool != "*":
-        raise PolicySchemaError(f"'command' rules need shell/python_repl, got {rule.tool!r}")
+        raise PolicySchemaError(
+            f"'command' rules need shell/python_repl, got {rule.tool!r}"
+        )
 
 
 def _serialise_rule(kind: str, rule: Rule) -> str:
@@ -357,7 +373,12 @@ def _tool_input_text(tool_name: str, tool_input: dict[str, Any]) -> str:
     return value
 
 
-def match_rule(rule: Rule, tool_name: str, tool_input: dict[str, Any], cwd: str | Path | None = None) -> bool:
+def match_rule(
+    rule: Rule,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    cwd: str | Path | None = None,
+) -> bool:
     """True when ``rule`` covers this (tool, input) pair.
 
     Path rules fnmatch against the raw input path, the absolute path, the
@@ -386,7 +407,9 @@ def match_rule(rule: Rule, tool_name: str, tool_input: dict[str, Any], cwd: str 
             pass
         return any(fnmatch.fnmatch(c, rule.path) for c in candidates)
     if rule.command is not None:
-        return normalise_command(_tool_input_text(tool_name, tool_input)).startswith(rule.command)
+        return normalise_command(_tool_input_text(tool_name, tool_input)).startswith(
+            rule.command
+        )
     return False
 
 
@@ -403,13 +426,19 @@ def is_fetch_get(command: str) -> bool:
     for pos, token in enumerate(tokens):
         low = token.lower()
         if low in _CURL_UPLOAD_FLAGS or any(
-            low == flag or low.startswith(flag + "=") for flag in _CURL_UPLOAD_FLAGS if flag.startswith("--")
+            low == flag or low.startswith(flag + "=")
+            for flag in _CURL_UPLOAD_FLAGS
+            if flag.startswith("--")
         ):
             return False
         if low in ("-X", "--request") and pos + 1 < len(tokens):
             if tokens[pos + 1].upper() in _CURL_MUTATING_METHODS:
                 return False
-        if low.startswith("-x") and len(low) > 2 and low[2:].upper() in _CURL_MUTATING_METHODS:
+        if (
+            low.startswith("-x")
+            and len(low) > 2
+            and low[2:].upper() in _CURL_MUTATING_METHODS
+        ):
             return False
     if re.search(r"(?i)-X\s*(POST|PUT|DELETE|PATCH)", text):
         return False
@@ -484,7 +513,9 @@ def decide(
         tool_input = {}
     for rule in policy.deny:
         if match_rule(rule, tool_name, tool_input, base):
-            return Deny(rule=rule, reason=f"Denied by policy rule [deny {rule.describe()}]")
+            return Deny(
+                rule=rule, reason=f"Denied by policy rule [deny {rule.describe()}]"
+            )
     for rule in policy.allow:
         if match_rule(rule, tool_name, tool_input, base):
             return Allow()
@@ -513,7 +544,9 @@ def decide(
             canonical = Path(os.path.realpath(resolve(raw, base)))
             if not any(canonical == r or r in canonical.parents for r in roots):
                 allowed = ", ".join(str(r) for r in roots)
-                return Deny(reason=f"Path {canonical} is outside the allowed roots: {allowed}")
+                return Deny(
+                    reason=f"Path {canonical} is outside the allowed roots: {allowed}"
+                )
         return Prompt(reason=f"File {tool_name}: {raw}")
     if tool_name == "subagent":
         return Prompt(reason="Delegated subtask inherits the gate (D-12)")

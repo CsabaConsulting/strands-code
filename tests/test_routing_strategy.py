@@ -171,9 +171,7 @@ class TestStrategyLoad:
 
         path = _write(
             tmp_path / "routing.yaml",
-            _strategy_yaml(
-                extra="tie_margin: wide\nconfidence_threshold: true\n"
-            ),
+            _strategy_yaml(extra="tie_margin: wide\nconfidence_threshold: true\n"),
         )
         with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
             strategy = load_strategy(
@@ -209,9 +207,7 @@ class TestStrategyLoad:
     def test_criteria_loads_onto_candidate(self, tmp_path):
         path = _write(
             tmp_path / "routing.yaml",
-            _strategy_yaml(
-                candidates="[{id: a/1, criteria: 'Cheap small model'}]"
-            ),
+            _strategy_yaml(candidates="[{id: a/1, criteria: 'Cheap small model'}]"),
         )
         strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert strategy is not None
@@ -239,9 +235,7 @@ class TestStrategyLoad:
             "engine": {"primary": "openrouter", "decision_model": "c/d"},
         }
         path = save_strategy(data, "repo", repo_path=tmp_path / "r.yaml")
-        strategy = load_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        strategy = load_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert strategy is not None
         assert strategy.tie_margin == 0.1
         assert strategy.confidence_threshold == 0.6
@@ -255,9 +249,7 @@ class TestStrategyLoad:
             "engine: {order: [native, openrouter], native_model: jev-1.13.0,"
             " decision_model: cheap/decider, skip_notes: false}\n",
         )
-        strategy = load_strategy(
-            global_path=path, repo_path=tmp_path / "absent.yaml"
-        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert strategy is not None
         assert strategy.engine.order == ["native", "openrouter"]
         assert strategy.engine.native_model == "jev-1.13.0"
@@ -265,9 +257,7 @@ class TestStrategyLoad:
 
     def test_order_defaults_when_absent(self, tmp_path):
         path = _write(tmp_path / "routing.yaml", _strategy_yaml())
-        strategy = load_strategy(
-            global_path=path, repo_path=tmp_path / "absent.yaml"
-        )
+        strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert strategy is not None
         assert strategy.engine.order is None
         assert strategy.engine.native_model is None
@@ -324,9 +314,7 @@ class TestStrategyLoad:
         assert strategy.engine.native_model is None
         assert "'native_model' (not a string)" in caplog.text
 
-    def test_skip_notes_wrong_type_warns_and_defaults_true(
-        self, tmp_path, caplog
-    ):
+    def test_skip_notes_wrong_type_warns_and_defaults_true(self, tmp_path, caplog):
         import logging
 
         path = _write(
@@ -471,7 +459,9 @@ def _setup_catalog(monkeypatch, payload=None, decisions=None):
 
     rows = payload if payload is not None else _SETUP_CATALOG
     monkeypatch.setattr(
-        live_pricing_mod, "fetch_openrouter_models", lambda: [dict(e) if isinstance(e, dict) else e for e in rows]
+        live_pricing_mod,
+        "fetch_openrouter_models",
+        lambda: [dict(e) if isinstance(e, dict) else e for e in rows],
     )
     decision_rows = decisions if decisions is not None else _SETUP_DECISIONS
     monkeypatch.setattr(
@@ -488,9 +478,7 @@ def _run_setup(tmp_path):
 
 
 class TestRouteSetup:
-    def test_full_run_writes_repo_scope_in_pick_order(
-        self, tmp_path, monkeypatch
-    ):
+    def test_full_run_writes_repo_scope_in_pick_order(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
         _setup_catalog(monkeypatch)
         monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
@@ -752,9 +740,7 @@ class TestRouteSetup:
         )
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         _scripted_radio(monkeypatch, ["repo", "good/cheap", _SETUP_DONE])
-        _scripted_input(
-            monkeypatch, ["", "custom/decider", "", "", "hands on", ""]
-        )
+        _scripted_input(monkeypatch, ["", "custom/decider", "", "", "hands on", ""])
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "saved" in message
@@ -871,9 +857,7 @@ class TestRouteSetup:
         link = tmp_path / "link.yaml"
         link.symlink_to(target)
         with pytest.raises(ValueError, match="symlink"):
-            save_strategy(
-                {"candidates": [{"id": "a/1"}]}, "repo", repo_path=link
-            )
+            save_strategy({"candidates": [{"id": "a/1"}]}, "repo", repo_path=link)
 
     def test_save_strategy_drops_api_key_shaped_keys(self, tmp_path, caplog):
         import logging
@@ -889,7 +873,9 @@ class TestRouteSetup:
             },
         }
         with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
-            path = save_strategy(data, "global", global_path=tmp_path / "cfg" / "g.yaml")
+            path = save_strategy(
+                data, "global", global_path=tmp_path / "cfg" / "g.yaml"
+            )
         saved = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert "api_key" not in saved
         assert "API_KEY" not in saved.get("engine", {})
@@ -899,9 +885,7 @@ class TestRouteSetup:
         assert "secret-shaped" in caplog.text
         assert path.parent.stat().st_mode & 0o777 == 0o700
 
-    def test_save_strategy_drops_typesafe_key_shaped_keys(
-        self, tmp_path, caplog
-    ):
+    def test_save_strategy_drops_typesafe_key_shaped_keys(self, tmp_path, caplog):
         import logging
 
         data = {
@@ -915,7 +899,9 @@ class TestRouteSetup:
             },
         }
         with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
-            path = save_strategy(data, "global", global_path=tmp_path / "cfg" / "g.yaml")
+            path = save_strategy(
+                data, "global", global_path=tmp_path / "cfg" / "g.yaml"
+            )
         saved = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert "TYPESAFE_API_KEY" not in saved
         assert "TYPESAFE_API_KEY" not in saved.get("engine", {})
@@ -940,9 +926,9 @@ class TestRouteSetup:
         assert not (tmp_path / "r.yaml").exists()
 
     def test_docs_routing_examples_are_valid_yaml(self):
-        text = (
-            Path(__file__).parent.parent / "docs" / "ROUTING.md"
-        ).read_text(encoding="utf-8")
+        text = (Path(__file__).parent.parent / "docs" / "ROUTING.md").read_text(
+            encoding="utf-8"
+        )
         blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
         examples = [block for block in blocks if "candidates:" in block]
         assert len(examples) == 2
@@ -986,9 +972,7 @@ class TestRouteValidate:
     def test_valid_file_reports_clean_naming_winning_source(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert report.source == path
         text = report.format()
@@ -1000,9 +984,7 @@ class TestRouteValidate:
 
     def test_unchecked_catalog_stays_valid(self, tmp_path):
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         text = report.format()
         assert "unchecked" in text and "/cost refresh" in text
@@ -1015,9 +997,7 @@ class TestRouteValidate:
             f"directives: {'d' * 5000}\n"
             "engine: {primary: openrouter, decision_model: cheap/decider}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True  # a warning, never a failure
         text = report.format()
         assert "directives: present (5000 chars)" in text
@@ -1054,18 +1034,14 @@ class TestRouteValidate:
             "directives: d\n"
             "engine: {primary: openrouter, decision_model: openrouter/auto}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "known in the cached decisions catalog" in report.format()
 
     def test_unknown_decision_model_reports_engine_failure(self, tmp_path):
         _seed_decision_ids(tmp_path, ["other/model"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert text.startswith("Routing strategy INVALID")
@@ -1074,9 +1050,7 @@ class TestRouteValidate:
 
     def test_corrupt_file_reports_invalid_with_loader_reason(self, tmp_path):
         repo = _write(tmp_path / "repo.yaml", "candidates: [unclosed\n")
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=repo
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=repo)
         assert report.valid is False
         text = report.format()
         assert f"repo strategy {repo} is unreadable" in text
@@ -1097,21 +1071,15 @@ class TestRouteValidate:
         assert report.source == home
         assert "using the global file instead" in report.format()
 
-    def test_entry_with_unknown_keys_reports_skip_reason_with_fix(
-        self, tmp_path
-    ):
+    def test_entry_with_unknown_keys_reports_skip_reason_with_fix(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(
-                candidates=(
-                    "\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n"
-                )
+                candidates=("\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n")
             ),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "candidate #0 good/1: ok" in text
@@ -1121,12 +1089,9 @@ class TestRouteValidate:
     def test_missing_decision_model_with_primary_openrouter(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
-            "candidates: [{id: a/1}]\ndirectives: d\n"
-            "engine: {primary: openrouter}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: openrouter}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "with no decision_model" in text
@@ -1137,9 +1102,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: local}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "with no local_model" in text
@@ -1151,9 +1114,7 @@ class TestRouteValidate:
             "candidates: [{id: a/1}]\ndirectives: d\n"
             "engine: {primary: local, local_model: qwen3:8b}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "unused while primary is local" in report.format()
 
@@ -1162,9 +1123,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: off}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "disabled by config" in report.format()
 
@@ -1200,19 +1159,13 @@ class TestRouteValidate:
         target = _write(tmp_path / "real.yaml", _strategy_yaml())
         link = tmp_path / "link.yaml"
         link.symlink_to(target)
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=link
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=link)
         assert report.valid is False
         assert "symlink" in report.format()
 
     def test_unknown_top_level_keys_are_notes_not_failures(self, tmp_path):
-        path = _write(
-            tmp_path / "repo.yaml", _strategy_yaml(extra="mystery: 42\n")
-        )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        path = _write(tmp_path / "repo.yaml", _strategy_yaml(extra="mystery: 42\n"))
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "unknown top-level keys ignored" in report.format()
 
@@ -1222,9 +1175,7 @@ class TestRouteValidate:
         path = _write(
             tmp_path / "repo.yaml",
             _strategy_yaml(
-                candidates=(
-                    "\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n"
-                )
+                candidates=("\n  - {id: good/1}\n  - {id: bad/1, bogus: true}\n")
             ),
         )
         with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing"):
@@ -1233,18 +1184,11 @@ class TestRouteValidate:
             )
         assert strategy is not None
         assert [c.id for c in strategy.candidates] == ["good/1"]
-        assert (
-            "Ignoring routing candidate #1 (unknown keys: ['bogus'])"
-            in caplog.text
-        )
-        report = validate_strategy(
-            global_path=path, repo_path=tmp_path / "absent.yaml"
-        )
+        assert "Ignoring routing candidate #1 (unknown keys: ['bogus'])" in caplog.text
+        report = validate_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert "candidate #1: SKIP — unknown keys: ['bogus']" in report.format()
 
-    def test_validate_dispatch_never_writes_or_fetches(
-        self, tmp_path, monkeypatch
-    ):
+    def test_validate_dispatch_never_writes_or_fetches(self, tmp_path, monkeypatch):
         import urllib.request
 
         repo = _write(tmp_path / "r.yaml", _strategy_yaml())
@@ -1262,9 +1206,7 @@ class TestRouteValidate:
             path: path.read_bytes() if path.is_file() else None
             for path in tmp_path.rglob("*")
         }
-        action, message = dispatch(
-            "/route validate", session_id="s", index=index
-        )
+        action, message = dispatch("/route validate", session_id="s", index=index)
         after = {
             path: path.read_bytes() if path.is_file() else None
             for path in tmp_path.rglob("*")
@@ -1278,9 +1220,7 @@ class TestRouteValidate:
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(27))
         path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "27 entries" in text
@@ -1291,9 +1231,7 @@ class TestRouteValidate:
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         rows = "\n".join(f"  - {{id: m/{n}}}" for n in range(26))
         path = _write(tmp_path / "repo.yaml", _strategy_yaml(candidates=f"\n{rows}\n"))
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
 
     def test_knob_out_of_range_fails_with_fix(self, tmp_path):
@@ -1301,9 +1239,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             _strategy_yaml(extra="tie_margin: 2.0\nconfidence_threshold: -1.0\n"),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "tie_margin: INVALID — 2.0 is outside 0..1" in text
@@ -1316,9 +1252,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             _strategy_yaml(extra="tie_margin: wide\n"),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "tie_margin: INVALID — 'wide' is not a number" in text
@@ -1327,9 +1261,7 @@ class TestRouteValidate:
     def test_knob_defaults_reported(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         text = report.format()
         assert "tie_margin: 0.04 (default)" in text
@@ -1341,9 +1273,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             _strategy_yaml(extra="tie_margin: 0.1\nconfidence_threshold: 0.6\n"),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         text = report.format()
         assert "tie_margin: 0.1" in text
@@ -1356,9 +1286,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             _strategy_yaml(candidates="[{id: a/1, criteria: [not, prose]}]"),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "candidate #0: SKIP — 'criteria' not a string" in text
@@ -1368,19 +1296,13 @@ class TestRouteValidate:
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(
             tmp_path / "repo.yaml",
-            _strategy_yaml(
-                candidates="[{id: a/1, criteria: 'Cheap small model'}]"
-            ),
+            _strategy_yaml(candidates="[{id: a/1, criteria: 'Cheap small model'}]"),
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "candidate #0 a/1: ok" in report.format()
 
-    def test_chat_only_model_as_decider_fails_with_decisions_fix(
-        self, tmp_path
-    ):
+    def test_chat_only_model_as_decider_fails_with_decisions_fix(self, tmp_path):
         # Known in the chat cache but absent from the decisions
         # cache: the decider check reads the decisions ids only.
         _seed_catalog_ids(tmp_path, ["chat/only"])
@@ -1391,9 +1313,7 @@ class TestRouteValidate:
             "directives: d\n"
             "engine: {primary: openrouter, decision_model: chat/only}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "not in the cached decisions catalog" in text
@@ -1407,9 +1327,7 @@ class TestRouteValidate:
             "directives: d\n"
             "engine: {primary: openrouter, decision_model: decide/yes}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert "known in the cached decisions catalog" in report.format()
 
@@ -1423,22 +1341,20 @@ class TestRouteValidate:
 
         monkeypatch.setattr(urllib.request, "urlopen", _count)
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert calls == []
 
     def test_docs_routing_examples_validate_verbatim(self, tmp_path):
-        text = (
-            Path(__file__).parent.parent / "docs" / "ROUTING.md"
-        ).read_text(encoding="utf-8")
+        text = (Path(__file__).parent.parent / "docs" / "ROUTING.md").read_text(
+            encoding="utf-8"
+        )
         blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
         examples = [block for block in blocks if "candidates:" in block]
         assert len(examples) == 2
         deciders = set()
         for example in examples:
-            engine = (yaml.safe_load(example).get("engine") or {})
+            engine = yaml.safe_load(example).get("engine") or {}
             if engine.get("decision_model"):
                 deciders.add(engine["decision_model"])
         assert deciders, "examples carry no decider to seed"
@@ -1458,9 +1374,7 @@ class TestRouteValidate:
             "directives: d\n"
             f"engine: {{order: [native], native_model: {model}}}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         assert f"engine: native model {model} — ok" in report.format()
 
@@ -1474,9 +1388,7 @@ class TestRouteValidate:
             "directives: d\n"
             f"engine: {{order: [native], native_model: {model}}}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "not a verified native id" in text
@@ -1485,13 +1397,9 @@ class TestRouteValidate:
     def test_native_missing_model_fails_with_setup_fix(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
-            "candidates: [{id: a/1}]\n"
-            "directives: d\n"
-            "engine: {order: [native]}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: [native]}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "order lists native with no native_model" in text
@@ -1505,9 +1413,7 @@ class TestRouteValidate:
             "directives: d\n"
             "engine: {order: [native, bogus], native_model: jev-1.13.0}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "unknown engine 'bogus' in engine.order" in text
@@ -1521,9 +1427,7 @@ class TestRouteValidate:
             "engine: {primary: openrouter, order: native,"
             " decision_model: cheap/decider}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
         text = report.format()
         assert "engine.order is not a list" in text
@@ -1532,13 +1436,9 @@ class TestRouteValidate:
     def test_legacy_primary_nudges_without_failing(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
-        assert (
-            "re-run /route setup to adopt the engines list" in report.format()
-        )
+        assert "re-run /route setup to adopt the engines list" in report.format()
 
     def test_order_and_primary_notes_primary_ignored(self, tmp_path):
         path = _write(
@@ -1548,9 +1448,7 @@ class TestRouteValidate:
             "engine: {primary: local, order: [native],"
             " native_model: jev-1.13.0}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         text = report.format()
         assert "engine.primary is ignored" in text
@@ -1574,13 +1472,9 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: []}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=path
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
-        assert (
-            "engine: primary off — routing disabled by config" in report.format()
-        )
+        assert "engine: primary off — routing disabled by config" in report.format()
 
     def test_ordered_openrouter_and_local_judge_per_engine(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
@@ -1590,9 +1484,7 @@ class TestRouteValidate:
             "directives: d\n"
             "engine: {order: [openrouter, local]}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=bare
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=bare)
         assert report.valid is False
         text = report.format()
         assert "order lists openrouter with no decision_model" in text
@@ -1604,9 +1496,7 @@ class TestRouteValidate:
             "engine: {order: [openrouter, local],"
             " decision_model: cheap/decider, local_model: nimble}\n",
         )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=full
-        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=full)
         assert report.valid is True
         text = report.format()
         assert "known in the cached decisions catalog" in text

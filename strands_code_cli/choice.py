@@ -134,11 +134,15 @@ def _build_app(
         _fragments, key_bindings=bindings, focusable=True, show_cursor=False
     )
     kwargs: dict[str, Any] = {
-        "layout": Layout(Frame(Window(content=control, dont_extend_height=True), title=title)),
+        "layout": Layout(
+            Frame(Window(content=control, dont_extend_height=True), title=title)
+        ),
         "full_screen": False,
         # Render straight to the real terminal: the turn's output proxy
         # must not capture raw escape sequences into the transcript.
-        "output": output if output is not None else create_output(stdout=sys.__stdout__),
+        "output": output
+        if output is not None
+        else create_output(stdout=sys.__stdout__),
     }
     if input is not None:
         kwargs["input"] = input

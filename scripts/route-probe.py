@@ -248,24 +248,16 @@ class _FaultContext:
         elif fault == "unknown-model":
             self.model_override = "probe-no-such-model-xyz"
         elif fault == "bad-key" and self._engine == "openrouter":
-            self._saved["OPENROUTER_API_KEY"] = os.environ.get(
-                "OPENROUTER_API_KEY"
-            )
+            self._saved["OPENROUTER_API_KEY"] = os.environ.get("OPENROUTER_API_KEY")
             os.environ["OPENROUTER_API_KEY"] = "probe-bogus-key"
         elif fault == "no-key" and self._engine == "openrouter":
-            self._saved["OPENROUTER_API_KEY"] = os.environ.get(
-                "OPENROUTER_API_KEY"
-            )
+            self._saved["OPENROUTER_API_KEY"] = os.environ.get("OPENROUTER_API_KEY")
             os.environ.pop("OPENROUTER_API_KEY", None)
         elif fault == "bad-key" and self._engine == "native":
-            self._saved["TYPESAFE_API_KEY"] = os.environ.get(
-                "TYPESAFE_API_KEY"
-            )
+            self._saved["TYPESAFE_API_KEY"] = os.environ.get("TYPESAFE_API_KEY")
             os.environ["TYPESAFE_API_KEY"] = "probe-bogus-key"
         elif fault == "no-key" and self._engine == "native":
-            self._saved["TYPESAFE_API_KEY"] = os.environ.get(
-                "TYPESAFE_API_KEY"
-            )
+            self._saved["TYPESAFE_API_KEY"] = os.environ.get("TYPESAFE_API_KEY")
             os.environ.pop("TYPESAFE_API_KEY", None)
         elif fault == "dead-port" and self._engine == "local":
             self.base_override = "http://127.0.0.1:1"
@@ -316,9 +308,7 @@ def run_probe(
             candidate=strategy.candidates[0],
             directives=strategy.directives,
         )
-        membership = [
-            RoutingCandidate(id=level) for level in CALIBRATION_LEVELS
-        ]
+        membership = [RoutingCandidate(id=level) for level in CALIBRATION_LEVELS]
     else:
         question_key = "pick_model"
         question = build_model_question(
@@ -423,11 +413,7 @@ def run_probe(
                 "top1": top1,
                 "top1_prob": top1_prob,
                 "top2_prob": top2_prob,
-                "margin": (
-                    top1_prob - top2_prob
-                    if top2_prob is not None
-                    else None
-                ),
+                "margin": (top1_prob - top2_prob if top2_prob is not None else None),
             }
         )
         if single:
@@ -458,15 +444,9 @@ def _matches(record: dict, probe: dict, tiers: dict[str, str]) -> bool:
         return record["gated"] is None
     if expected == "route":
         gated = record["gated"]
-        return (
-            gated is not None
-            and tiers.get(gated) in (probe.get("acceptable") or [])
-        )
+        return gated is not None and tiers.get(gated) in (probe.get("acceptable") or [])
     if expected == "effort-route":
-        return (
-            record["gated"] in CALIBRATION_LEVELS
-            and record["table"] is not None
-        )
+        return record["gated"] in CALIBRATION_LEVELS and record["table"] is not None
     return True  # route-or-hold: informational, always matches
 
 
@@ -495,7 +475,9 @@ def _warm_local(local_model: str) -> None:
         )
     }
     result = decide_via_ollama(
-        local_model=local_model, state=state, questions=questions,
+        local_model=local_model,
+        state=state,
+        questions=questions,
         timeout=300,
     )
     if result.answers is None:
@@ -568,9 +550,7 @@ def _load_run(path: Path) -> dict[str, dict]:
     return verdicts
 
 
-def _compare_engine(
-    engine: str, run_path: Path, baseline: dict
-) -> tuple[int, int]:
+def _compare_engine(engine: str, run_path: Path, baseline: dict) -> tuple[int, int]:
     """Diff one engine run against the baseline; (drifts, warnings)."""
     try:
         run = _load_run(run_path)
@@ -610,10 +590,7 @@ def _compare_engine(
                 and isinstance(new, (int, float))
                 and abs(new - old) > TOP1_WARN_DELTA
             ):
-                print(
-                    f"warn: {engine}/{probe_id}: {key} "
-                    f"{old:.2f} -> {new:.2f}"
-                )
+                print(f"warn: {engine}/{probe_id}: {key} {old:.2f} -> {new:.2f}")
                 warnings += 1
         if got.get("snapshot") != want.get("snapshot"):
             print(
@@ -643,9 +620,7 @@ def cmd_compare(
         return 2
     drifts = warnings = 0
     for engine, run_path in run_paths.items():
-        engine_drifts, engine_warnings = _compare_engine(
-            engine, run_path, baseline
-        )
+        engine_drifts, engine_warnings = _compare_engine(engine, run_path, baseline)
         drifts += engine_drifts
         warnings += engine_warnings
     if drifts:
@@ -676,23 +651,30 @@ def main(argv: list[str] | None = None) -> int:
         help="diff run files against the baseline",
     )
     parser.add_argument(
-        "--out", type=Path, default=None,
+        "--out",
+        type=Path,
+        default=None,
         help="run output path (default /tmp/route-probe-<engine>.jsonl)",
     )
     parser.add_argument(
-        "--baseline", type=Path, default=BASELINE_FILE,
+        "--baseline",
+        type=Path,
+        default=BASELINE_FILE,
         help="baseline path for --compare",
     )
     parser.add_argument(
-        "--decision-model", default=DECISION_MODEL_PIN,
+        "--decision-model",
+        default=DECISION_MODEL_PIN,
         help="OpenRouter decision id (default pinned)",
     )
     parser.add_argument(
-        "--local-model", default=None,
+        "--local-model",
+        default=None,
         help="local tag (default nimble-or-tev1 auto-resolve)",
     )
     parser.add_argument(
-        "--native-model", default=None,
+        "--native-model",
+        default=None,
         help="native Jev id (default pinned full semver)",
     )
     args = parser.parse_args(argv)

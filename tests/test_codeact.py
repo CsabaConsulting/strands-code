@@ -44,7 +44,6 @@ from strands_code_cli.router import USAGE_HINT, dispatch
 from strands_code_cli.session_index import SessionIndex
 from strands_code_cli.skills import BUILTIN_SLASH_HEADS, SkillIndex
 
-
 CODEACT_BANNED_VOCAB = (
     "Mode:",
     "plan mode",
@@ -145,9 +144,9 @@ class TestCodeactState:
         assert CodeactState(initial="both").announce() == CODEACT_BOTH_REPLY
 
     def test_replies_use_interface_vocabulary_only(self):
-        for copy in (CODEACT_TOOL_REPLY, CODEACT_CODE_REPLY, CODEACT_BOTH_REPLY):
+        for reply in (CODEACT_TOOL_REPLY, CODEACT_CODE_REPLY, CODEACT_BOTH_REPLY):
             for banned in CODEACT_BANNED_VOCAB:
-                assert banned not in copy
+                assert banned not in reply
 
 
 # ----------------------------------------------------------------------
@@ -162,11 +161,20 @@ class TestRouterCodeact:
 
     def test_codeact_bare_reports_current(self, tmp_path):
         holder = CodeactState()
-        assert self._dispatch("/codeact", tmp_path, holder) == ("reply", CODEACT_TOOL_REPLY)
+        assert self._dispatch("/codeact", tmp_path, holder) == (
+            "reply",
+            CODEACT_TOOL_REPLY,
+        )
         holder.set("code")
-        assert self._dispatch("/codeact", tmp_path, holder) == ("reply", CODEACT_CODE_REPLY)
+        assert self._dispatch("/codeact", tmp_path, holder) == (
+            "reply",
+            CODEACT_CODE_REPLY,
+        )
         holder.set("both")
-        assert self._dispatch("/codeact", tmp_path, holder) == ("reply", CODEACT_BOTH_REPLY)
+        assert self._dispatch("/codeact", tmp_path, holder) == (
+            "reply",
+            CODEACT_BOTH_REPLY,
+        )
 
     def test_codeact_switch_names_code_and_sticks(self, tmp_path):
         holder = CodeactState()
@@ -182,7 +190,10 @@ class TestRouterCodeact:
             ("code", CODEACT_CODE_REPLY),
             ("both", CODEACT_BOTH_REPLY),
         ):
-            assert self._dispatch(f"/codeact {verb}", tmp_path, holder) == ("reply", reply)
+            assert self._dispatch(f"/codeact {verb}", tmp_path, holder) == (
+                "reply",
+                reply,
+            )
             assert holder.interface == verb
 
     def test_codeact_bogus_usage_never_agent_turn(self, tmp_path):
@@ -193,14 +204,23 @@ class TestRouterCodeact:
         assert holder.interface == "code"
 
     def test_codeact_without_holder_replies_tool_default(self, tmp_path):
-        assert self._dispatch("/codeact", tmp_path, None) == ("reply", CODEACT_TOOL_REPLY)
+        assert self._dispatch("/codeact", tmp_path, None) == (
+            "reply",
+            CODEACT_TOOL_REPLY,
+        )
         action, message = self._dispatch("/codeact bogus", tmp_path, None)
         assert action == "reply"
         assert message == CODEACT_USAGE
 
     def test_codeact_never_starts_agent_turn(self, tmp_path):
         holder = CodeactState()
-        for text in ("/codeact", "/codeact tool", "/codeact code", "/codeact both", "/codeact nope"):
+        for text in (
+            "/codeact",
+            "/codeact tool",
+            "/codeact code",
+            "/codeact both",
+            "/codeact nope",
+        ):
             action, _ = self._dispatch(text, tmp_path, holder)
             assert action == "reply"
 
@@ -218,7 +238,11 @@ class TestRouterCodeact:
         holder = CodeactState()
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
-            "/codeact code", session_id="s", index=index, skills=skills, interface=holder
+            "/codeact code",
+            session_id="s",
+            index=index,
+            skills=skills,
+            interface=holder,
         )
         assert action == "reply"
         assert message == CODEACT_CODE_REPLY
@@ -284,7 +308,14 @@ class TestCodeactPrefix:
 
     def test_prefix_vocabulary_lock(self):
         lowered = CODEACT_PREFIX.lower()
-        for banned in ("policy", "approve-each", "on-demand", "auto", "yolo", "plan mode"):
+        for banned in (
+            "policy",
+            "approve-each",
+            "on-demand",
+            "auto",
+            "yolo",
+            "plan mode",
+        ):
             assert banned not in lowered
 
 
@@ -316,7 +347,13 @@ class TestCodeactHistory:
         before = copy.deepcopy(agent.messages)
         index = SessionIndex(tmp_path / "index")
         for verb in ("code", "both", "tool"):
-            dispatch("/codeact " + verb, session_id="s", index=index, agent=agent, interface=holder)
+            dispatch(
+                "/codeact " + verb,
+                session_id="s",
+                index=index,
+                agent=agent,
+                interface=holder,
+            )
         assert agent.messages == before
 
 
@@ -356,7 +393,9 @@ class TestTracer:
     def test_default_tool_turn_unshaped_with_tool_label(self, tmp_path):
         holder = CodeactState()
         index = SessionIndex(tmp_path / "index")
-        action, message = dispatch("/codeact", session_id="s", index=index, interface=holder)
+        action, message = dispatch(
+            "/codeact", session_id="s", index=index, interface=holder
+        )
         assert action == "reply"
         assert holder.interface == "tool"
         turn = resolve_turn_interface(holder.interface)
@@ -404,16 +443,26 @@ class TestCodeactStartupFlag:
         assert loop.call_args[1]["codeact"] is None
 
     @pytest.mark.parametrize("bad", ["turbo", "CODE", ""])
-    def test_invalid_flag_rejected_before_side_effects(self, tmp_path, monkeypatch, bad):
+    def test_invalid_flag_rejected_before_side_effects(
+        self, tmp_path, monkeypatch, bad
+    ):
         main_module = importlib.import_module("strands_code_cli.main")
         monkeypatch.chdir(tmp_path)
         with (
             patch.object(
-                main_module, "_preflight_credentials", side_effect=AssertionError("gate runs")
+                main_module,
+                "_preflight_credentials",
+                side_effect=AssertionError("gate runs"),
             ),
-            patch.object(main_module, "build_agent", side_effect=AssertionError("build runs")),
-            patch.object(main_module, "run_loop", side_effect=AssertionError("loop runs")),
-            patch.object(ProviderConfig, "load", side_effect=AssertionError("config loads")),
+            patch.object(
+                main_module, "build_agent", side_effect=AssertionError("build runs")
+            ),
+            patch.object(
+                main_module, "run_loop", side_effect=AssertionError("loop runs")
+            ),
+            patch.object(
+                ProviderConfig, "load", side_effect=AssertionError("config loads")
+            ),
         ):
             result = self._invoke(main_module, ["--codeact", bad])
         assert result.exit_code != 0
@@ -532,7 +581,9 @@ class TestCodeactStartupPrecedence:
 
     def test_missing_config_starts_tool(self, tmp_path):
         loaded = ProviderConfig.load(tmp_path / "missing.yaml")
-        initial = resolve_initial_interface(None, loaded.codeact, loaded.codeact_remember)
+        initial = resolve_initial_interface(
+            None, loaded.codeact, loaded.codeact_remember
+        )
         assert initial == "tool"
 
     def test_invalid_values_raise(self):
@@ -567,7 +618,9 @@ class TestCodeactStartupPersist:
         index = SessionIndex(tmp_path / "index")
         dispatch("/codeact code", session_id="s", index=index, interface=holder)
         # The loop's persist line: save the flipped holder value.
-        provider_config_module.ProviderConfig.load().save_codeact_choice(holder.interface)
+        provider_config_module.ProviderConfig.load().save_codeact_choice(
+            holder.interface
+        )
         assert provider_config_module.ProviderConfig.load().codeact == "code"
 
     def test_loop_wires_codeact_startup(self):
@@ -912,7 +965,7 @@ class TestCodeactSwap:
         run_source = inspect.getsource(loop_module.run_loop)
         assert "default_repl = default_repl_handle(agent)" in run_source
         assert "swapped = swap_for_code_turn(" in run_source
-        assert "stint.tool if turn_interface == \"code\" else None" in run_source
+        assert 'stint.tool if turn_interface == "code" else None' in run_source
         assert "restore_after_turn(agent, swapped, default_repl)" in run_source
 
     def test_turn_setup_side_pool_path_performs_no_swap(self):
@@ -1068,7 +1121,10 @@ class TestCodeactBothRouting:
             holder = CodeactState(initial="both")
             index = SessionIndex(tmp_path / "index")
             action, message = dispatch(
-                f"/{name} go", session_id="s", index=index, skills=skills,
+                f"/{name} go",
+                session_id="s",
+                index=index,
+                skills=skills,
                 interface=holder,
             )
             assert (action, message) == ("agent", "go")
@@ -1115,9 +1171,7 @@ class TestCodeactSwitchingCoherence:
         def _session(interfaces: list[str]) -> str:
             turns: list = []
             for in_tok, out_tok in ((1000, 200), (3000, 400)):
-                record_turn_metrics(
-                    _Summary(in_tok, out_tok), "bedrock/x-model", turns
-                )
+                record_turn_metrics(_Summary(in_tok, out_tok), "bedrock/x-model", turns)
             # The parallel list shadows the rows one-to-one, never a row key.
             assert len(turns) == len(interfaces)
             return cost_report(turns, "bedrock/x-model")

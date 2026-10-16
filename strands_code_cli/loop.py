@@ -14,15 +14,15 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from time import monotonic, sleep
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory, History
-
 from rich.console import Console
 
+from strands_code_cli import routing as routing_mod
 from strands_code_cli.btw import (
     BTW_IDLE_APPROVAL,
     BtwContext,
@@ -95,10 +95,11 @@ from strands_code_cli.policy_gate import (
     _active_broker,
     bind_turn,
     gate_open,
-    set_mode as set_gate_mode,
     worker_cancelled,
 )
-from strands_code_cli import routing as routing_mod
+from strands_code_cli.policy_gate import (
+    set_mode as set_gate_mode,
+)
 from strands_code_cli.router import (
     apply_approved_proposal,
     apply_memory_section,
@@ -186,7 +187,9 @@ def _fallback_title(first_text: str) -> str:
     return clipped[:TITLE_FALLBACK_CHARS].strip() or "untitled"
 
 
-def _maybe_auto_title(agent: Any, session_id: str, index: SessionIndex, first_text: str) -> None:
+def _maybe_auto_title(
+    agent: Any, session_id: str, index: SessionIndex, first_text: str
+) -> None:
     """Title once from the first exchange (D-04); a manual rename always wins.
 
     A cheap direct model call is attempted first; any failure falls back to
@@ -385,9 +388,7 @@ def _finish_btw_turn(
         render_btw_error(question, exc)
         return
     reported = _drain_reported_cost(getattr(btw_agent, "model", None))
-    btw.pending.append(
-        (question, _result_text(btw_agent, result), result, reported)
-    )
+    btw.pending.append((question, _result_text(btw_agent, result), result, reported))
     btw.done = True
 
 
@@ -530,7 +531,9 @@ def _pump_parallel(
                         # live side stays attached for the idle drain
                         # and the next turn's pump.
                         if btw_future is not None and btw_future.done():
-                            _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
+                            _finish_btw_turn(
+                                btw, btw_agent, btw_future, btw_question or ""
+                            )
                             unregister_btw_cancel(broker)
                             btw_future = None
                             btw_question = None
@@ -603,7 +606,9 @@ def _pump_parallel(
                             btw.cancel_event.set()
                             unregister_btw_cancel(broker)
                             if btw_future is not None:
-                                btw.attach_live(btw_agent, btw_future, btw_question or "")
+                                btw.attach_live(
+                                    btw_agent, btw_future, btw_question or ""
+                                )
                             if both_running is not None:
                                 both_running.clear()
                             print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
@@ -741,9 +746,7 @@ def _route_side_spawn(
         return
     if pick.model != current_model:
         try:
-            effort_ok = routing_mod.validate_routed_effort(
-                pick, strategy.candidates
-            )
+            effort_ok = routing_mod.validate_routed_effort(pick, strategy.candidates)
         except Exception:  # noqa: BLE001 — gate failure holds, never kills
             effort_ok = False
         if not effort_ok:
@@ -942,6 +945,7 @@ async def _poll_idle_approvals(broker: Any) -> str:
 
 async def _race_idle_episode(session: Any, broker: Any, buf: str) -> tuple[str, str]:
     """One prompt-vs-broker race; the loser is cancelled and settled."""
+
     # The prompt arm channels Ctrl-C/EOF as values: a KeyboardInterrupt
     # raised inside prompt_task would tear down run_until_complete
     # itself, stranding the poll task pending ("Task was destroyed but
@@ -1432,9 +1436,7 @@ def _record_routing_event(
             "output_tokens": usage[1],
             "decision_cost": usage[2],
             "held": held,
-            "decision_model": routing_mod.decision_model_for(
-                strategy, decision_engine
-            ),
+            "decision_model": routing_mod.decision_model_for(strategy, decision_engine),
         }
     )
 
@@ -1927,7 +1929,10 @@ def _drain_revise_rounds(
             revise_state.disarm()
             break
         usage = record_turn_metrics(
-            follow_result, current_model, session_turns, model=getattr(agent, "model", None)
+            follow_result,
+            current_model,
+            session_turns,
+            model=getattr(agent, "model", None),
         )
         if turn_interfaces is not None:
             turn_interfaces.append(turn_interface)
@@ -1937,7 +1942,9 @@ def _drain_revise_rounds(
         text = _result_text(agent, follow_result)
 
 
-_INIT_FENCE_RE = re.compile(r"```proposed:(?P<label>[^\n]*)\n(?P<body>.*?)```", re.DOTALL)
+_INIT_FENCE_RE = re.compile(
+    r"```proposed:(?P<label>[^\n]*)\n(?P<body>.*?)```", re.DOTALL
+)
 """Labeled-draft matcher for init consumer turns."""
 
 
@@ -2114,9 +2121,7 @@ def run_loop(
         _boot_strategy = None
     routing = routing_mod.RoutingState(
         initial=(
-            "on"
-            if _boot_strategy is not None and _boot_strategy.candidates
-            else "off"
+            "on" if _boot_strategy is not None and _boot_strategy.candidates else "off"
         )
     )
     try:
@@ -2140,9 +2145,7 @@ def run_loop(
         )
         return f"Revise armed for '{proposal.section}' — running."
 
-    current_model = (
-        model_id or ProviderConfig.load().model or DEFAULT_MODEL
-    )
+    current_model = model_id or ProviderConfig.load().model or DEFAULT_MODEL
     if not supports_streaming_tools(current_model):
         print_plain(
             console,
@@ -2185,9 +2188,7 @@ def run_loop(
         if changed:
             memory_snapshot = load_memory()
             for changed_path in changed:
-                print_plain(
-                    console, MEMORY_RELOAD_NOTE.format(filename=changed_path)
-                )
+                print_plain(console, MEMORY_RELOAD_NOTE.format(filename=changed_path))
         boundary_revise["template"] = None
         curate_queue.sweep_promotions(
             MEMORY_FACT_DIR,
@@ -2274,7 +2275,11 @@ def run_loop(
         if action == "model" and message is not None:
             try:
                 resolved_id, reply = apply_model_action(
-                    agent, message, turn_running=False, current_model=current_model, rich=rich
+                    agent,
+                    message,
+                    turn_running=False,
+                    current_model=current_model,
+                    rich=rich,
                 )
             except Exception as exc:  # noqa: BLE001 — a failed switch must not kill the session
                 print_plain(console, f"Model switch failed ({exc}); session unchanged.")
@@ -2317,9 +2322,7 @@ def run_loop(
                 steering.bind_turn(turn_id)
                 slot.state = steering
                 set_gate_mode(mode.mode)
-                reader = start_steering_reader(
-                    steering, gate_open, on_btw=btw.submit
-                )
+                reader = start_steering_reader(steering, gate_open, on_btw=btw.submit)
                 agent_text = message if message is not None else text
                 if mode.mode == "plan":
                     agent_text = f"{PLAN_PREFIX}\n\n{agent_text}"
@@ -2402,7 +2405,10 @@ def run_loop(
                             print_plain(console, btw_usage, style="dim")
                     btw.pending.clear()
                     usage = record_turn_metrics(
-                        result, current_model, session_turns, model=getattr(agent, "model", None)
+                        result,
+                        current_model,
+                        session_turns,
+                        model=getattr(agent, "model", None),
                     )
                     turn_interfaces.append(turn_interface)
                     if usage is not None:

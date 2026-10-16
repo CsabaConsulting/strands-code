@@ -72,8 +72,7 @@ FAILED_TURN = (
 CLEAN_MAIN_END = "turn output\n(12%) $0.0012\n> "
 NA_WINDOW_MAIN_END = "turn output\n4.49K (n/a) $0.00\n> "
 CLEAN_ROUTED = (
-    "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n"
-    "> "
+    "Routed \u2192 bedrock/us.amazon.nova-micro-v1:0 (off): model 68%, effort 100%\n> "
 )
 
 
@@ -155,9 +154,7 @@ class TestR3CostBaselines:
 
     def test_off_baseline_is_pre_send(self):
         src = inspect.getsource(driver.scenario_r3)
-        assert src.index("after_cost = ") < src.index(
-            '"Reply with exactly: offcheck"'
-        )
+        assert src.index("after_cost = ") < src.index('"Reply with exactly: offcheck"')
 
 
 class TestReportedSpendRig:
@@ -178,9 +175,7 @@ class TestReportedSpendRig:
         assert not driver.ACTUAL_ROW_RE.search("Turn 1 ... $0.0024\n")
 
     def test_split_line(self):
-        assert driver.SPLIT_RE.search(
-            "  (actual $0.0024 + estimated $0.0100)\n"
-        )
+        assert driver.SPLIT_RE.search("  (actual $0.0024 + estimated $0.0100)\n")
         assert not driver.SPLIT_RE.search("Total $0.0124\n")
 
 

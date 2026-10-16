@@ -13,6 +13,7 @@ No ``strands_tools`` import anywhere (deprecated editor/shell, not installed).
 
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -20,10 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS, CodeAgent
-import importlib
+from strands_code_cli.scope import ScopeGuard, confine, resolve
 
 main_module = importlib.import_module("strands_code_cli.main")
-from strands_code_cli.scope import ScopeGuard, confine, resolve
 
 
 def _tool_names(tools):
@@ -31,7 +31,9 @@ def _tool_names(tools):
 
 
 def _build_kwargs(tmp_path):
-    with patch.object(main_module, "create_harness", return_value=MagicMock()) as factory:
+    with patch.object(
+        main_module, "create_harness", return_value=MagicMock()
+    ) as factory:
         main_module.build_agent("test-session", tmp_path)
         return factory.call_args[1]
 
@@ -96,7 +98,9 @@ class TestScopeGuard:
             confine("/opt/other-repo/a.py", cwd)
 
     def test_tmp_admitted(self, tmp_path):
-        assert confine("/tmp/scratch-note.txt", tmp_path) == Path("/tmp/scratch-note.txt")
+        assert confine("/tmp/scratch-note.txt", tmp_path) == Path(
+            "/tmp/scratch-note.txt"
+        )
 
     def test_dotdot_traversal_refused(self, tmp_path):
         cwd = Path("/opt/scope-test-proj")
@@ -142,7 +146,9 @@ class TestPromptSteering:
     def test_repl_present_with_extra_tools(self):
         extra = MagicMock()
         extra.tool_name = "my_tool"
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tools=[extra], tmp_dir=False)
             tools = mock_init.call_args[1]["tools"]
             assert extra in tools
@@ -166,7 +172,11 @@ class TestScopePolicyOrdering:
         policy = PolicyConfig(allow=[Rule(tool="write", path="/opt/granted/*.md")])
         roots = effective_roots(cwd, policy)
         assert any(str(r).startswith("/opt/granted") for r in roots)
-        admitted = confine("/opt/granted/notes.md", cwd, [r for r in roots if str(r) not in (str(cwd), "/tmp")])
+        admitted = confine(
+            "/opt/granted/notes.md",
+            cwd,
+            [r for r in roots if str(r) not in (str(cwd), "/tmp")],
+        )
         assert str(admitted) == "/opt/granted/notes.md"
 
     def test_outside_path_without_rule_denied_names_roots(self):
@@ -184,4 +194,7 @@ class TestScopePolicyOrdering:
         from strands_code_cli.scope import effective_roots
 
         policy = PolicyConfig(allow=[Rule(tool="write", path="docs/*.md")])
-        assert [str(r) for r in effective_roots(tmp_path, policy)] == [str(tmp_path), "/tmp"]
+        assert [str(r) for r in effective_roots(tmp_path, policy)] == [
+            str(tmp_path),
+            "/tmp",
+        ]

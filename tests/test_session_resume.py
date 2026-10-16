@@ -34,12 +34,22 @@ class _ReplayModel(Model):
         return {}
 
     async def structured_output(  # type: ignore[override]
-        self, output_model: Any, prompt: Any, system_prompt: str | None = None, **kwargs: Any
+        self,
+        output_model: Any,
+        prompt: Any,
+        system_prompt: str | None = None,
+        **kwargs: Any,
     ) -> Any:
         raise NotImplementedError("offline test double")
         yield  # pragma: no cover - keeps this an async generator
 
-    async def stream(self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any):  # type: ignore[override]
+    async def stream(
+        self,
+        messages: Any,
+        tool_specs: Any = None,
+        system_prompt: Any = None,
+        **kwargs: Any,
+    ):  # type: ignore[override]
         yield {"messageStart": {"role": "assistant"}}
         yield {"contentBlockStart": {"start": {}}}
         yield {"contentBlockDelta": {"delta": {"text": self._text}}}
@@ -141,9 +151,8 @@ class TestEntryRouting:
         assert not Path(".agent").exists()
 
     def test_explicit_session_id_routes_to_loop(self, tmp_path):
-        from unittest.mock import patch
-
         import importlib
+        from unittest.mock import patch
 
         main_module = importlib.import_module("strands_code_cli.main")
 
@@ -168,9 +177,8 @@ class TestEntryRouting:
         index_cls.assert_called_once()
 
     def test_no_arg_mints_fresh_session(self, tmp_path, monkeypatch):
-        from unittest.mock import patch
-
         import importlib
+        from unittest.mock import patch
 
         main_module = importlib.import_module("strands_code_cli.main")
 

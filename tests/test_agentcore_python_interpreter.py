@@ -1,8 +1,11 @@
-import inspect
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from strands_code_agent.python_environments.agentcore import AgentCorePythonInterpreter, _get_source
+from strands_code_agent.python_environments.agentcore import (
+    AgentCorePythonInterpreter,
+    _get_source,
+)
 
 
 def _make_stream(stdout="", stderr=""):
@@ -15,6 +18,7 @@ def _make_stream(stdout="", stderr=""):
 
 
 # --- Domain-specific test fixtures ---
+
 
 def calculate_roi(investment: float, returns: float) -> float:
     """Calculate return on investment as a percentage."""
@@ -90,7 +94,9 @@ class TestSessionLifecycle:
         )
         assert interpreter._session_id is None
 
-    def test_clear_state_then_execute_starts_new_session(self, interpreter, mock_client):
+    def test_clear_state_then_execute_starts_new_session(
+        self, interpreter, mock_client
+    ):
         interpreter.execute_code("x = 1")
         interpreter.clear_state()
         interpreter.execute_code("y = 2")
@@ -197,7 +203,10 @@ class TestDomainSpecificFunctions:
             )
             # Source should be in state_initialization
             assert "def calculate_roi" in interp.state_initialization
-            assert "return (returns - investment) / investment * 100" in interp.state_initialization
+            assert (
+                "return (returns - investment) / investment * 100"
+                in interp.state_initialization
+            )
             interp.close()
 
     def test_function_source_sent_on_first_execute(self, mock_client):
@@ -253,6 +262,7 @@ class TestDomainSpecificFunctions:
     def test_installed_package_functions_skipped(self, mock_client):
         """Functions from installed packages are imported, not serialized."""
         import json
+
         mock_client.invoke_code_interpreter.return_value = _make_stream()
         with patch("boto3.client", return_value=mock_client):
             interp = AgentCorePythonInterpreter(
@@ -324,7 +334,6 @@ class TestGetSource:
         assert "def transform" in src
 
     def test_lambda_raises(self):
-        fn = lambda x: x + 1  # noqa: E731
         # Lambdas have source but may work; the key test is for builtins
         # which truly can't be sourced
         with pytest.raises(ValueError, match="Cannot serialize"):
@@ -337,7 +346,9 @@ class TestCodeAgentWithAgentCore:
     def test_code_agent_with_domain_function(self, mock_client):
         """Verify full CodeAgent wiring sends domain functions to remote session."""
         from strands_code_agent import CodeAgent, Toolkit
-        from strands_code_agent.python_environments.agentcore import AgentCorePythonInterpreter
+        from strands_code_agent.python_environments.agentcore import (
+            AgentCorePythonInterpreter,
+        )
 
         mock_client.invoke_code_interpreter.return_value = _make_stream()
 
@@ -357,7 +368,9 @@ class TestCodeAgentWithAgentCore:
     def test_code_agent_with_domain_class(self, mock_client):
         """Verify CodeAgent wiring sends domain classes to remote session."""
         from strands_code_agent import CodeAgent, Toolkit
-        from strands_code_agent.python_environments.agentcore import AgentCorePythonInterpreter
+        from strands_code_agent.python_environments.agentcore import (
+            AgentCorePythonInterpreter,
+        )
 
         mock_client.invoke_code_interpreter.return_value = _make_stream()
 
@@ -374,7 +387,9 @@ class TestCodeAgentWithAgentCore:
     def test_code_agent_with_toolkit_and_domain_code(self, mock_client):
         """Verify combined toolkit (libraries + init_code + domain code) works."""
         from strands_code_agent import CodeAgent, Toolkit
-        from strands_code_agent.python_environments.agentcore import AgentCorePythonInterpreter
+        from strands_code_agent.python_environments.agentcore import (
+            AgentCorePythonInterpreter,
+        )
 
         mock_client.invoke_code_interpreter.return_value = _make_stream()
 
@@ -401,7 +416,9 @@ class TestCodeAgentWithAgentCore:
     def test_code_agent_executes_domain_function_remotely(self, mock_client):
         """Simulate full execution: init + user code calls domain function."""
         from strands_code_agent import CodeAgent, Toolkit
-        from strands_code_agent.python_environments.agentcore import AgentCorePythonInterpreter
+        from strands_code_agent.python_environments.agentcore import (
+            AgentCorePythonInterpreter,
+        )
 
         mock_client.invoke_code_interpreter.return_value = _make_stream(stdout="25.0")
 
@@ -418,12 +435,15 @@ class TestCodeAgentWithAgentCore:
             calls = mock_client.invoke_code_interpreter.call_args_list
             assert len(calls) == 2  # init + user code
             assert "def calculate_roi" in calls[0][1]["arguments"]["code"]
-            assert "print(calculate_roi(1000, 1250))" in calls[1][1]["arguments"]["code"]
+            assert (
+                "print(calculate_roi(1000, 1250))" in calls[1][1]["arguments"]["code"]
+            )
             assert "25.0" in result
             agent.python_repl.close()
 
 
 # --- Live integration test (requires real AWS credentials) ---
+
 
 @pytest.mark.integration
 class TestAgentCoreLiveIntegration:
@@ -439,6 +459,7 @@ class TestAgentCoreLiveIntegration:
     @pytest.fixture
     def region(self):
         import os
+
         return os.environ.get("AWS_REGION", "us-east-1")
 
     def test_simple_execution(self, region):

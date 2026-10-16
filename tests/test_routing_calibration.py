@@ -32,7 +32,9 @@ DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
 
 
 def _load_probes():
-    return [json.loads(line) for line in PROBE_FILE.read_text().splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in PROBE_FILE.read_text().splitlines() if line.strip()
+    ]
 
 
 def _load_baseline():
@@ -50,7 +52,10 @@ class TestProbeRunner:
     def test_dry_run_lists_twenty_probe_ids_with_zero_exit(self):
         proc = subprocess.run(
             [sys.executable, str(RUNNER), "--dry-run"],
-            capture_output=True, text=True, timeout=120, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 0, proc.stderr
         assert "probes: 20" in proc.stdout
@@ -72,7 +77,9 @@ class TestProbeRunner:
     def test_probe_paths_are_trackable_not_ignored(self):
         proc = subprocess.run(
             ["git", "check-ignore", str(RUNNER), str(PROBE_FILE)],
-            capture_output=True, text=True, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
         )
         assert proc.returncode == 1, "probe runner or probe set is git-ignored"
 
@@ -92,7 +99,12 @@ class TestProbeComposition:
             assert not missing, f"{probe.get('id')}: missing {missing}"
             assert isinstance(probe["side"], bool)
             assert isinstance(probe["acceptable"], list)
-            assert probe["expected"] in {"route", "hold", "effort-route", "route-or-hold"}
+            assert probe["expected"] in {
+                "route",
+                "hold",
+                "effort-route",
+                "route-or-hold",
+            }
 
     def test_probe_ids_are_unique(self):
         ids = [p["id"] for p in _load_probes()]
@@ -102,7 +114,9 @@ class TestProbeComposition:
 class TestCalibrationBaseline:
     def test_shipped_knobs_equal_baseline_derived_values(self):
         derived = _load_baseline()["derived"]
-        assert routing_mod.DEFAULT_CONFIDENCE_THRESHOLD == derived["confidence_threshold"]
+        assert (
+            routing_mod.DEFAULT_CONFIDENCE_THRESHOLD == derived["confidence_threshold"]
+        )
         assert routing_mod.DEFAULT_TIE_MARGIN == derived["tie_margin"]
 
     def test_baseline_records_snapshots_distributions_and_derivation(self):
@@ -127,7 +141,9 @@ class TestCalibrationBaseline:
             ), f"{pid}: native record shape drift"
 
     def test_no_provisional_markers_remain_in_routing(self):
-        for line in routing_mod.__file__ and Path(routing_mod.__file__).read_text().splitlines():
+        for line in (
+            routing_mod.__file__ and Path(routing_mod.__file__).read_text().splitlines()
+        ):
             stripped = line.strip()
             if stripped.startswith("#"):
                 continue
@@ -183,7 +199,8 @@ class TestRigScenarioContracts:
     def test_driver_compiles(self):
         proc = subprocess.run(
             [sys.executable, "-m", "py_compile", str(DRIVER)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert proc.returncode == 0, proc.stderr
 
@@ -244,9 +261,7 @@ class TestLazyLocalTag:
     def _stub_probes(self, runner, monkeypatch):
         seen = []
 
-        def _fake_run(
-            probe, *, engine, decision_model, local_model, native_model=None
-        ):
+        def _fake_run(probe, *, engine, decision_model, local_model, native_model=None):
             seen.append(local_model)
             return _canned_record(probe["id"])
 
@@ -372,9 +387,7 @@ class TestNativeProbeArm:
         assert record["gated"] == "anthropic/claude-haiku-4-5"
         assert record["match"] is True
 
-    def test_native_arm_passes_timeout_only_no_base_override(
-        self, runner, monkeypatch
-    ):
+    def test_native_arm_passes_timeout_only_no_base_override(self, runner, monkeypatch):
         seen = []
         self._stub_transport(runner, monkeypatch, seen)
         probe = dict(self.PROBE, fault="timeout")
@@ -388,9 +401,7 @@ class TestNativeProbeArm:
         assert "local_base_url" not in seen[0]["kwargs"]
         assert record["fault"] == "timeout"
 
-    def test_native_unknown_model_override_reaches_transport(
-        self, runner, monkeypatch
-    ):
+    def test_native_unknown_model_override_reaches_transport(self, runner, monkeypatch):
         seen = []
         self._stub_transport(runner, monkeypatch, seen)
         probe = dict(self.PROBE, fault={"native": "unknown-model"})
@@ -402,9 +413,7 @@ class TestNativeProbeArm:
         )
         assert seen[0]["native_model"] == "probe-no-such-model-xyz"
 
-    def test_native_bad_key_restores_key_byte_identically(
-        self, runner, monkeypatch
-    ):
+    def test_native_bad_key_restores_key_byte_identically(self, runner, monkeypatch):
         monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
         with runner._FaultContext("bad-key", "native"):
             import os
@@ -414,9 +423,7 @@ class TestNativeProbeArm:
 
         assert os.environ["TYPESAFE_API_KEY"] == "sentinel-value-xyz"
 
-    def test_native_no_key_restores_presence_and_absence(
-        self, runner, monkeypatch
-    ):
+    def test_native_no_key_restores_presence_and_absence(self, runner, monkeypatch):
         import os
 
         monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
@@ -428,9 +435,7 @@ class TestNativeProbeArm:
             assert "TYPESAFE_API_KEY" not in os.environ
         assert "TYPESAFE_API_KEY" not in os.environ
 
-    def test_native_fault_records_carry_no_key_material(
-        self, runner, monkeypatch
-    ):
+    def test_native_fault_records_carry_no_key_material(self, runner, monkeypatch):
         import os
 
         monkeypatch.setenv("TYPESAFE_API_KEY", "sentinel-value-xyz")
@@ -470,9 +475,7 @@ class TestNativeProbeArm:
         monkeypatch.setattr(runner, "_warm_local", _warm_boom)
         seen = []
 
-        def _fake_run(
-            probe, *, engine, decision_model, local_model, native_model=None
-        ):
+        def _fake_run(probe, *, engine, decision_model, local_model, native_model=None):
             seen.append((engine, native_model))
             return _canned_record(probe["id"])
 

@@ -201,7 +201,9 @@ def fork_btw_history(messages: list | None, question: str) -> list:
             block
             for block in message.get("content", [])
             if "reasoningContent" not in block
-            and ("toolUse" not in block or block["toolUse"].get("toolUseId") in answered)
+            and (
+                "toolUse" not in block or block["toolUse"].get("toolUseId") in answered
+            )
         ]
         if content:
             forked.append({"role": message["role"], "content": copy.deepcopy(content)})

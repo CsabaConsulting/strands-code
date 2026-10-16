@@ -10,7 +10,6 @@ from strands_code_cli.policy import (
     Allow,
     Deny,
     PolicyConfig,
-    PolicyOptions,
     Prompt,
     Rule,
     decide,
@@ -101,9 +100,13 @@ class TestPolicyStore:
     def test_append_round_trips(self, tmp_path):
         repo = tmp_path / "repo.toml"
         cfg = PolicyConfig()
-        out = cfg.append_rule("allow", Rule(tool="shell", command="git status"), repo_path=repo)
+        out = cfg.append_rule(
+            "allow", Rule(tool="shell", command="git status"), repo_path=repo
+        )
         assert out == repo
-        reloaded = PolicyConfig.load(home_path=tmp_path / "missing.toml", repo_path=repo)
+        reloaded = PolicyConfig.load(
+            home_path=tmp_path / "missing.toml", repo_path=repo
+        )
         assert len(reloaded.allow) == 1
         assert reloaded.allow[0].command == "git status"
 
@@ -159,10 +162,14 @@ class TestDecide:
 
     def test_allow_proceeds_silently(self):
         cfg = self._cfg(allow=[Rule(tool="shell", command="git status")])
-        assert isinstance(decide("shell", {"command": "git status --short"}, cfg), Allow)
+        assert isinstance(
+            decide("shell", {"command": "git status --short"}, cfg), Allow
+        )
 
     def test_no_rule_prompts(self):
-        assert isinstance(decide("shell", {"command": "make test"}, self._cfg()), Prompt)
+        assert isinstance(
+            decide("shell", {"command": "make test"}, self._cfg()), Prompt
+        )
 
     def test_builtin_read_search_allowed(self):
         cfg = self._cfg()
@@ -176,19 +183,25 @@ class TestDecide:
 
     def test_get_allowed_vs_post_prompted(self):
         cfg = self._cfg()
-        assert isinstance(decide("shell", {"command": "curl https://example.com"}, cfg), Allow)
         assert isinstance(
-            decide("shell", {"command": "curl -d 'a=1' https://example.com"}, cfg), Prompt
+            decide("shell", {"command": "curl https://example.com"}, cfg), Allow
         )
         assert isinstance(
-            decide("shell", {"command": "curl -X POST https://example.com"}, cfg), Prompt
+            decide("shell", {"command": "curl -d 'a=1' https://example.com"}, cfg),
+            Prompt,
+        )
+        assert isinstance(
+            decide("shell", {"command": "curl -X POST https://example.com"}, cfg),
+            Prompt,
         )
         assert isinstance(decide("shell", {"command": "git fetch origin"}, cfg), Allow)
         assert isinstance(decide("shell", {"command": "git push origin"}, cfg), Prompt)
 
     def test_sh_c_curl_detected_as_network(self):
         cfg = self._cfg()
-        verdict = decide("shell", {"command": 'sh -c "curl https://example.com -d a=1"'}, cfg)
+        verdict = decide(
+            "shell", {"command": 'sh -c "curl https://example.com -d a=1"'}, cfg
+        )
         assert isinstance(verdict, Prompt)
         assert "curl" in verdict.reason
 
@@ -202,11 +215,15 @@ class TestDecide:
         outside = tmp_path / ".." / "granted"
         target = str(outside / "f.txt")
         cfg = self._cfg(allow=[Rule(tool="write", path=str(outside / "*.txt"))])
-        assert isinstance(decide("write", {"path": target}, cfg, cwd=str(tmp_path)), Allow)
+        assert isinstance(
+            decide("write", {"path": target}, cfg, cwd=str(tmp_path)), Allow
+        )
 
     def test_python_repl_prefix_match(self):
         cfg = self._cfg(allow=[Rule(tool="python_repl", command="import math")])
-        assert isinstance(decide("python_repl", {"code": "import math\nprint(1)"}, cfg), Allow)
+        assert isinstance(
+            decide("python_repl", {"code": "import math\nprint(1)"}, cfg), Allow
+        )
         assert isinstance(decide("python_repl", {"code": "import socket"}, cfg), Prompt)
 
     def test_path_rule_matches_relative_and_absolute(self, tmp_path):

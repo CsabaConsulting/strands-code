@@ -16,11 +16,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.interventions.actions import Confirm, Proceed
+from strands.types.exceptions import EventLoopException
+from strands.vended_interventions.hitl import HumanInTheLoop
 
 import strands_code_cli.policy_gate as pg
-from strands.types.exceptions import EventLoopException
 from strands_code_cli.loop import _invoke_agent, _poll_live
 from strands_code_cli.policy import PolicyConfig
 from strands_code_cli.policy_gate import (
@@ -84,9 +84,12 @@ class TestBrokerHandoff:
         cancel.set()
         box: dict[str, Any] = {}
         with broker.pump(cancel):
+
             def worker():
                 try:
-                    broker.request(lambda: (_ for _ in ()).throw(AssertionError("unserved")))
+                    broker.request(
+                        lambda: (_ for _ in ()).throw(AssertionError("unserved"))
+                    )
                 except TurnCancelled:
                     box["aborted"] = True
 
@@ -104,6 +107,7 @@ class TestBrokerHandoff:
         cancel.set()
         box: dict[str, Any] = {}
         with broker.pump(cancel):
+
             def worker():
                 try:
                     broker.request(lambda: "unserved")
@@ -210,12 +214,16 @@ class TestDenyFailClosed:
     def test_deny_retry_reprompts(self, monkeypatch):
         handler = self._handler(monkeypatch, ["n", "n"])
         first = asyncio.run(
-            handler.before_tool_call(_event("shell", {"command": "make test"}, uid="u1"))
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, uid="u1")
+            )
         )
         assert isinstance(first, Confirm)
         assert first.evaluate("n") is False
         second = asyncio.run(
-            handler.before_tool_call(_event("shell", {"command": "make test"}, uid="u2"))
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, uid="u2")
+            )
         )
         assert isinstance(second, Confirm)  # not Proceed: denials never cover
         assert second.evaluate("n") is False
@@ -223,11 +231,15 @@ class TestDenyFailClosed:
     def test_approve_retry_stays_silent(self, monkeypatch):
         handler = self._handler(monkeypatch, ["y"])
         first = asyncio.run(
-            handler.before_tool_call(_event("shell", {"command": "make test"}, uid="u1"))
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, uid="u1")
+            )
         )
         assert isinstance(first, Confirm)
         second = asyncio.run(
-            handler.before_tool_call(_event("shell", {"command": "make test"}, uid="u2"))
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, uid="u2")
+            )
         )
         assert isinstance(second, Proceed)
 
@@ -270,7 +282,9 @@ class TestPerRequestCancel:
         box: dict[str, str] = {}
 
         def main_worker():
-            box["main"] = broker.request(lambda: "main-answer", broker.cancel_for("main"))
+            box["main"] = broker.request(
+                lambda: "main-answer", broker.cancel_for("main")
+            )
 
         def btw_worker():
             try:
@@ -493,9 +507,7 @@ class TestDeadRequestSkip:
 
         def worker():
             try:
-                broker.request(
-                    lambda: calls.append("prompt") or "never", side_cancel
-                )
+                broker.request(lambda: calls.append("prompt") or "never", side_cancel)
                 box["side"] = "answered?!"
             except TurnCancelled:
                 box["side"] = "cancelled"

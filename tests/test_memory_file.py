@@ -75,12 +75,15 @@ class TestMemoryFileContract:
     def test_dual_load_injects_root_before_agent_with_precedence(self, tmp_path):
         root = _write(
             tmp_path / "STRANDS.md",
-            _with_frontmatter("scope: repo\nversion: 1\nupdated: 2026-10-01\n", ROOT_BODY),
+            _with_frontmatter(
+                "scope: repo\nversion: 1\nupdated: 2026-10-01\n", ROOT_BODY
+            ),
         )
         agent = _write(
             tmp_path / ".agent" / "MEMORY.md",
             _with_frontmatter(
-                "scope: repo\nversion: 1\nupdated: 2026-10-02\nsource: manual\n", AGENT_BODY
+                "scope: repo\nversion: 1\nupdated: 2026-10-02\nsource: manual\n",
+                AGENT_BODY,
             ),
         )
         snapshot = load_memory(root, agent)
@@ -133,7 +136,9 @@ class TestMemoryFileContract:
         assert snapshot.missing == [str(tmp_path / ".agent" / "MEMORY.md")]
 
     def test_oversized_content_ends_with_truncation_marker(self):
-        snapshot = MemorySnapshot(root_text="x" * (MEMORY_INJECT_CAP + 500), agent_text="")
+        snapshot = MemorySnapshot(
+            root_text="x" * (MEMORY_INJECT_CAP + 500), agent_text=""
+        )
         block = render_memory_block(snapshot)
         assert block is not None
         assert block.endswith(MEMORY_TRUNCATION_MARKER)
@@ -236,9 +241,7 @@ class TestMemoryReload:
 
     def test_loop_calls_flush_on_exit_and_mutation_paths(self):
         source = (
-            Path(__file__).resolve().parent.parent
-            / "strands_code_cli"
-            / "loop.py"
+            Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop.py"
         ).read_text(encoding="utf-8")
         assert source.count("flush_memory(agent)") == 2
 

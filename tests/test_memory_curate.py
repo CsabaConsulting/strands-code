@@ -46,8 +46,8 @@ from strands_code_cli.memory_modes import (
 )
 from strands_code_cli.mode import ModeState
 from strands_code_cli.router import (
-    USAGE_HINT,
     _MEMORY_USAGE,
+    USAGE_HINT,
     apply_memory_section,
     dispatch,
     read_memory_section,
@@ -130,10 +130,7 @@ class TestCurateLoop:
         def _must_not_write(proposal):
             raise AssertionError("deny must never write")
 
-        assert (
-            queue.deny("p2")
-            == "Denied p2 — skipped, will not re-ask this session."
-        )
+        assert queue.deny("p2") == "Denied p2 — skipped, will not re-ask this session."
         assert "p2" in queue.denied_ids
         assert queue.list_pending() == []
 
@@ -142,8 +139,7 @@ class TestCurateLoop:
         queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
         queue.deny("p2")
         assert (
-            queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
-            is None
+            queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2") is None
         )
         assert queue.list_pending() == []
 
@@ -166,8 +162,7 @@ class TestCurateLoop:
         action, message = _dispatch("/memory list", tmp_path, curate=queue)
         assert action == "reply"
         assert message == (
-            "p1 [promoted] Build — Run uv build.\n"
-            "p2 [manual] Test — Run pytest."
+            "p1 [promoted] Build — Run uv build.\np2 [manual] Test — Run pytest."
         )
 
     def test_memory_approve_verb_acts_immediately(self, tmp_path, monkeypatch):
@@ -278,9 +273,7 @@ class TestCurateLoop:
         assert review_memory_queue(queue, MemoryModeState(), lambda p: None) == []
         assert [p.id for p in queue.list_pending()] == ["p1"]
 
-    def test_review_eof_at_revise_instruction_keeps_proposal_pending(
-        self, monkeypatch
-    ):
+    def test_review_eof_at_revise_instruction_keeps_proposal_pending(self, monkeypatch):
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
         prompted: list = []
@@ -313,9 +306,7 @@ class TestCurateLoop:
         with pytest.raises(OSError, match="disk full"):
             review_memory_queue(queue, MemoryModeState("silent"), _failing)
 
-    def test_memory_approve_reports_write_failure_as_reply(
-        self, tmp_path, monkeypatch
-    ):
+    def test_memory_approve_reports_write_failure_as_reply(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         agent_dir = tmp_path / ".agent"
         agent_dir.mkdir(parents=True, exist_ok=True)
@@ -346,9 +337,7 @@ class TestCurateLoop:
         assert body.count("## Build") == 1
         assert "Use uv run." in body
 
-    def test_apply_memory_proposal_stamps_freshness_marker(
-        self, tmp_path, monkeypatch
-    ):
+    def test_apply_memory_proposal_stamps_freshness_marker(self, tmp_path, monkeypatch):
         from strands_code_cli.router import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
@@ -372,9 +361,7 @@ class TestCurateLoop:
         assert body.count(marker) == 1
         assert "## Test\nRun pytest.\n" in body
 
-    def test_apply_memory_proposal_refreshes_stale_marker(
-        self, tmp_path, monkeypatch
-    ):
+    def test_apply_memory_proposal_refreshes_stale_marker(self, tmp_path, monkeypatch):
         from strands_code_cli.router import apply_memory_proposal
 
         monkeypatch.chdir(tmp_path)
@@ -399,9 +386,16 @@ class TestCurateLoop:
         source = _loop_source()
         assert "curate_queue.sweep_promotions(" in source
         assert "MEMORY_FACT_DIR," in source
-        assert "skip_sections=memory_section_names(memory_snapshot.agent_text)" in source
-        assert "promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)" in source
-        assert "review_memory_queue(\n                curate_queue,\n                memory_mode" in source
+        assert (
+            "skip_sections=memory_section_names(memory_snapshot.agent_text)" in source
+        )
+        assert (
+            "promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)" in source
+        )
+        assert (
+            "review_memory_queue(\n                curate_queue,\n                memory_mode"
+            in source
+        )
         assert "apply_approved_proposal," in source
         assert "except (OSError, ValueError) as exc:" in source
         assert "Memory review skipped — write failed:" in source
@@ -469,9 +463,7 @@ class TestReviseRounds:
             assert action == "reply"
             assert message == _MEMORY_USAGE
 
-    def test_consume_accept_applies_block_verbatim(
-        self, tmp_path, monkeypatch
-    ):
+    def test_consume_accept_applies_block_verbatim(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = _write_memory(tmp_path, "## Build\nRun make.\n")
         _non_tty(monkeypatch, "accept")
@@ -494,9 +486,7 @@ class TestReviseRounds:
         assert "> Run uv build." in printed  # quoted for review
         assert "Summary: Switched to uv." in printed  # one-line summary
 
-    def test_consume_revert_leaves_file_byte_identical(
-        self, tmp_path, monkeypatch
-    ):
+    def test_consume_revert_leaves_file_byte_identical(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         path = _write_memory(tmp_path, "## Build\nRun make.\n")
         before = path.read_bytes()
@@ -642,9 +632,7 @@ class TestReviseRounds:
         assert "2020-01-01" not in body
         assert f"<!-- updated: {date.today().isoformat()} -->" in body
 
-    def test_apply_memory_section_appends_missing_section(
-        self, tmp_path, monkeypatch
-    ):
+    def test_apply_memory_section_appends_missing_section(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         _write_memory(tmp_path, "## Build\nRun make.\n")
         apply_memory_section("Test", "Run pytest.\n")
@@ -733,9 +721,7 @@ class TestInitScan:
             "pyproject.toml",
             ".agent/policy.toml",
         }
-        total = sum(
-            (tmp_path / name).stat().st_size for name in report.sources_read
-        )
+        total = sum((tmp_path / name).stat().st_size for name in report.sources_read)
         assert len(report.sources_read) <= MAX_SCAN_FILES
         assert total <= MAX_SCAN_BYTES
         assert "SESSION-SECRET-STUFF" not in report.outline
@@ -775,7 +761,9 @@ class TestInitScan:
         assert "(scan capped at 25 files / 50000 bytes" in report.outline
 
     def test_scan_single_file_over_byte_cap_is_skipped(self, tmp_path):
-        (tmp_path / "README.md").write_text("y" * (MAX_SCAN_BYTES + 1), encoding="utf-8")
+        (tmp_path / "README.md").write_text(
+            "y" * (MAX_SCAN_BYTES + 1), encoding="utf-8"
+        )
         report = scan_repo(tmp_path, "shallow")
         assert report.sources_read == []
         assert "(scan capped at 25 files / 50000 bytes" in report.outline
@@ -832,14 +820,14 @@ class TestInitScan:
             "Drafted 0 sections from deep scan — review with /memory."
         )
 
-    def test_apply_init_proposal_merges_without_clobbering(
-        self, tmp_path, monkeypatch
-    ):
+    def test_apply_init_proposal_merges_without_clobbering(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         fresh = date.today().isoformat()
         approved_span = f"<!-- updated: {fresh} -->\n## Build\nApproved line.\n"
         _write_memory(tmp_path, approved_span)
-        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
+        snapshot = load_memory(
+            tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md"
+        )
         apply_init_proposal(
             Proposal("p1", "Test", "init-shallow", "Run pytest.\nSecond line here.\n"),
             snapshot,
@@ -854,19 +842,34 @@ class TestInitScan:
 
     def test_apply_init_proposal_upserts_root_pointer(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
-        apply_init_proposal(Proposal("p1", "Build", "init-shallow", "Run uv.\n"), snapshot)
-        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
-        apply_init_proposal(Proposal("p2", "Test", "init-shallow", "Run pytest.\n"), snapshot)
-        snapshot = load_memory(tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md")
-        apply_init_proposal(Proposal("p3", "Build", "init-deep", "Run uv run.\n"), snapshot)
+        snapshot = load_memory(
+            tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md"
+        )
+        apply_init_proposal(
+            Proposal("p1", "Build", "init-shallow", "Run uv.\n"), snapshot
+        )
+        snapshot = load_memory(
+            tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md"
+        )
+        apply_init_proposal(
+            Proposal("p2", "Test", "init-shallow", "Run pytest.\n"), snapshot
+        )
+        snapshot = load_memory(
+            tmp_path / "STRANDS.md", tmp_path / ".agent" / "MEMORY.md"
+        )
+        apply_init_proposal(
+            Proposal("p3", "Build", "init-deep", "Run uv run.\n"), snapshot
+        )
         _frontmatter, root_body = parse_memory_file(tmp_path / "STRANDS.md")
         assert root_body.count("## Memory") == 1
         assert root_body.count("- Build:") == 1
         assert "- Build: Run uv run." in root_body  # latest wins
         assert "- Test: Run pytest." in root_body
         first = root_body.split("## Memory")[1].strip().splitlines()[0]
-        assert first == "Details live in .agent/MEMORY.md — see that file for full conventions."
+        assert (
+            first
+            == "Details live in .agent/MEMORY.md — see that file for full conventions."
+        )
 
     def test_init_dispatch_arms_and_names_only_stale(self, tmp_path):
         _write_repo(tmp_path)
@@ -877,8 +880,7 @@ class TestInitScan:
         assert action == "agent"
         assert message is not None
         assert (
-            "Draft ONLY these memory sections: Build, Test, Layout, Gotchas."
-            in message
+            "Draft ONLY these memory sections: Build, Test, Layout, Gotchas." in message
         )
         assert "Conventions" not in message.split("Draft ONLY")[1]
         assert holder.armed and holder.depth == "shallow"
@@ -913,9 +915,7 @@ class TestInitScan:
         assert message == "Memory is fresh — no sections to draft."
         assert not holder.armed
 
-    def test_approve_routes_init_proposal_to_init_writer(
-        self, tmp_path, monkeypatch
-    ):
+    def test_approve_routes_init_proposal_to_init_writer(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         queue = CurateQueue()
         queue.propose("Build", "init-shallow", "Run uv build.\n", proposal_id="p1")
@@ -971,7 +971,9 @@ class TestMemoryGapRound:
         fact_dir.mkdir(parents=True)
         (fact_dir / "Build.md").write_text("Run uv build.\n", encoding="utf-8")
         (fact_dir / "Fresh.md").write_text("Fresh fact.\n", encoding="utf-8")
-        skip = memory_section_names("<!-- updated: 2026-01-01 -->\n## Build\nRun uv build.\n")
+        skip = memory_section_names(
+            "<!-- updated: 2026-01-01 -->\n## Build\nRun uv build.\n"
+        )
         queue, seen = CurateQueue(), set()
         queued = queue.sweep_promotions(fact_dir, seen, skip_sections=skip)
         assert [p.section for p in queued] == ["Fresh"]

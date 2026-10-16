@@ -142,7 +142,9 @@ class BatchState:
         """
         return (tag, signature) in self._covered
 
-    def mark(self, signature: tuple[str, ...], description: str, tag: str = "main") -> None:
+    def mark(
+        self, signature: tuple[str, ...], description: str, tag: str = "main"
+    ) -> None:
         """Record a covered signature plus its human-readable description."""
         self._covered.add((tag, signature))
         self._log.append(description)
@@ -454,7 +456,9 @@ class PolicyClassifier:
         main = self._main_agent if self._main_bound else agent
         return tag_for(agent, main)
 
-    def __call__(self, event: Any, **kwargs: Any) -> ClassifierResult | Awaitable[ClassifierResult]:
+    def __call__(
+        self, event: Any, **kwargs: Any
+    ) -> ClassifierResult | Awaitable[ClassifierResult]:
         tool_use = event.tool_use or {}
         tool_name = tool_use.get("name", "")
         tool_input = tool_use.get("input", {})
@@ -488,7 +492,9 @@ class PolicyClassifier:
                 "signature": signature,
             }
             _ASK_TAG.tag = tag
-            return ClassifierResult(requires_human_in_the_loop=True, reason=f"DENY:{reason}")
+            return ClassifierResult(
+                requires_human_in_the_loop=True, reason=f"DENY:{reason}"
+            )
         policy = self._current_policy()
         agent = getattr(event, "agent", None)
         if (
@@ -504,14 +510,18 @@ class PolicyClassifier:
                     console,
                     f"Auto-trusted delegated call ({tool_name}) — trust_delegated is on.",
                 )
-            return ClassifierResult(requires_human_in_the_loop=False, reason="delegated-trusted")
+            return ClassifierResult(
+                requires_human_in_the_loop=False, reason="delegated-trusted"
+            )
         verdict = decide(tool_name, tool_input, policy)
         if isinstance(verdict, Allow):
             return ClassifierResult(requires_human_in_the_loop=False)
         signature = _signature(tool_name, verdict)
         tag = self._tag_for_event(event)
         if self._batch.is_covered(signature, tag=tag):
-            return ClassifierResult(requires_human_in_the_loop=False, reason="batch-covered")
+            return ClassifierResult(
+                requires_human_in_the_loop=False, reason="batch-covered"
+            )
         self._last_by_tag[tag] = {
             "tool_name": tool_name,
             "tool_input": tool_input,
@@ -520,7 +530,9 @@ class PolicyClassifier:
         }
         _ASK_TAG.tag = tag
         if isinstance(verdict, Deny):
-            rule_text = verdict.rule.describe() if verdict.rule is not None else verdict.reason
+            rule_text = (
+                verdict.rule.describe() if verdict.rule is not None else verdict.reason
+            )
             return ClassifierResult(
                 requires_human_in_the_loop=True, reason=f"DENY:{rule_text}"
             )
@@ -542,9 +554,12 @@ class PolicyClassifier:
                     return "n"
                 verdict = ctx["verdict"]
                 tool_name = ctx["tool_name"]
-                signature = ctx["signature"]
                 if isinstance(verdict, Deny):
-                    rule_text = verdict.rule.describe() if verdict.rule is not None else verdict.reason
+                    rule_text = (
+                        verdict.rule.describe()
+                        if verdict.rule is not None
+                        else verdict.reason
+                    )
                     if rule_text.startswith("Plan mode is read-only"):
                         # Plan denial: mode vocabulary only, never the
                         # policy-rule wrapper (vocabulary lock, T-04-10).
@@ -565,10 +580,13 @@ class PolicyClassifier:
                     # 500-char truncation (T-11-08: a truncated preview
                     # could hide trailing malicious code). One prompt
                     # per code action, at the boundary only (D-08).
-                    console.print(Syntax(str(ctx["tool_input"].get("code", "")), "python"))
+                    console.print(
+                        Syntax(str(ctx["tool_input"].get("code", "")), "python")
+                    )
                 else:
                     print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
+
                 def read_answer() -> str:
                     if sys.stdin.isatty():
                         # Arrow-key dialog (choice.radio_choice): prompt_toolkit
@@ -629,7 +647,9 @@ class PolicyClassifier:
         tool_name = ctx["tool_name"]
         signature = ctx["signature"]
         if answer in ("y", "yes"):
-            self._batch.mark(signature, f"[{tag}] approved {tool_name}: {verdict.reason}", tag=tag)
+            self._batch.mark(
+                signature, f"[{tag}] approved {tool_name}: {verdict.reason}", tag=tag
+            )
             return "y"
         if answer in ("always", "never"):
             derived = _derive_rule(tool_name, ctx["tool_input"])
@@ -637,14 +657,22 @@ class PolicyClassifier:
                 print("Cannot derive a narrow rule here; one-shot answer only.")
                 single = "y" if answer == "always" else "n"
                 if single == "y":
-                    self._batch.mark(signature, f"[{tag}] {single}-once {tool_name}: {verdict.reason}", tag=tag)
+                    self._batch.mark(
+                        signature,
+                        f"[{tag}] {single}-once {tool_name}: {verdict.reason}",
+                        tag=tag,
+                    )
                 else:
-                    self._batch.record(f"[{tag}] {single}-once {tool_name}: {verdict.reason}")
+                    self._batch.record(
+                        f"[{tag}] {single}-once {tool_name}: {verdict.reason}"
+                    )
                 return single
             kind = "allow" if answer == "always" else "deny"
             try:
                 if self._append_path is not None:
-                    PolicyConfig().append_rule(kind, derived, repo_path=self._append_path)
+                    PolicyConfig().append_rule(
+                        kind, derived, repo_path=self._append_path
+                    )
                 else:
                     PolicyConfig().append_rule(kind, derived)
             except (OSError, ValueError) as exc:
@@ -652,9 +680,15 @@ class PolicyClassifier:
                 return "n" if answer == "never" else "y"
             print(f"Appended standing rule [{kind} {derived.describe()}].")
             if answer == "always":
-                self._batch.mark(signature, f"[{tag}] {answer} {tool_name} [{derived.describe()}]", tag=tag)
+                self._batch.mark(
+                    signature,
+                    f"[{tag}] {answer} {tool_name} [{derived.describe()}]",
+                    tag=tag,
+                )
             else:
-                self._batch.record(f"[{tag}] {answer} {tool_name} [{derived.describe()}]")
+                self._batch.record(
+                    f"[{tag}] {answer} {tool_name} [{derived.describe()}]"
+                )
             return "y" if answer == "always" else "n"
         self._batch.record(f"[{tag}] denied {tool_name}: {verdict.reason}")
         return "n"

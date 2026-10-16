@@ -14,21 +14,45 @@ from strands_code_cli import cost_context, live_pricing
 # fields the parser reads. Standard Mistral Large 3: $0.50 in / $1.50
 # out per 1M; every other tier must be rejected.
 _FIXTURES = (
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-priority", "0.0008800000"),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-priority",
+        "0.0008800000",
+    ),
     ("USW2-Mistral-Large-3-675b-Instruct-output-tokens-batch", "0.0007500000"),
     ("USW2-Mistral-Large-3-675b-Instruct-output-tokens-flex", "0.0007500000"),
     ("USW2-Mistral-Large-3-675b-Instruct-input-tokens", "0.0005000000"),
     ("USW2-Mistral-Large-3-675b-Instruct-input-tokens-flex", "0.0002500000"),
     ("USW2-Mistral-Large-3-675b-Instruct-output-tokens", "0.0015000000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-flex", "0.0007500000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-standard", "0.0015000000"),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-flex",
+        "0.0007500000",
+    ),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-standard",
+        "0.0015000000",
+    ),
     ("USW2-Mistral-Large-3-675b-Instruct-input-tokens-priority", "0.0008800000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-batch", "0.0007500000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-standard", "0.0005000000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-flex", "0.0002500000"),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-batch",
+        "0.0007500000",
+    ),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-standard",
+        "0.0005000000",
+    ),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-flex",
+        "0.0002500000",
+    ),
     ("USW2-Mistral-Large-3-675b-Instruct-output-tokens-priority", "0.0026300000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-priority", "0.0026300000"),
-    ("USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-batch", "0.0002500000"),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-output-tokens-priority",
+        "0.0026300000",
+    ),
+    (
+        "USW2-mistral.mistral-large-3-675b-instruct-mantle-input-tokens-batch",
+        "0.0002500000",
+    ),
     ("USW2-Mistral-Large-3-675b-Instruct-input-tokens-batch", "0.0002500000"),
     ("USW2-Claude3Sonnet-input-tokens", "0.0030000000"),
     ("USW2-Claude3Haiku-input-tokens", "0.0002500000"),
@@ -191,9 +215,7 @@ class TestBedrockLivePrice:
 
     def test_unknown_model_misses(self, monkeypatch):
         _fake_fetch(monkeypatch)
-        assert (
-            live_pricing.bedrock_live_price("mystery/acme-1", "us-west-2") is None
-        )
+        assert live_pricing.bedrock_live_price("mystery/acme-1", "us-west-2") is None
 
     def test_no_region_skips_without_fetch(self, monkeypatch):
         def _boom(_region):
@@ -252,9 +274,7 @@ class TestBedrockCache:
         assert hit is not None and len(calls) == 1
 
     def test_no_cache_and_failed_fetch_misses(self, monkeypatch):
-        monkeypatch.setattr(
-            live_pricing, "fetch_bedrock_records", lambda _region: None
-        )
+        monkeypatch.setattr(live_pricing, "fetch_bedrock_records", lambda _region: None)
         assert (
             live_pricing.bedrock_live_price(
                 "mistral.mistral-large-3-675b-instruct", "us-west-2"
@@ -297,9 +317,7 @@ class TestOpenRouterEntry:
         monkeypatch.setattr(
             live_pricing, "fetch_openrouter_models", lambda: list(_OR_MODELS)
         )
-        assert (
-            live_pricing.openrouter_entry("openrouter/qwen/qwen3-32b") is not None
-        )
+        assert live_pricing.openrouter_entry("openrouter/qwen/qwen3-32b") is not None
         free = live_pricing.openrouter_entry("openrouter/qwen/qwen3-32b:free")
         assert free is not None and free["in"] == 0.0 and free["out"] == 0.0
 
@@ -423,17 +441,13 @@ class TestResolutionOrder:
             )
             == "LiteLLM bundled"
         )
-        assert (
-            cost_context.window_for("us.anthropic.claude-haiku-4-5-x") == 200000
-        )
+        assert cost_context.window_for("us.anthropic.claude-haiku-4-5-x") == 200000
 
     def test_openrouter_window_flows_to_window_for(self, monkeypatch):
         monkeypatch.setattr(
             live_pricing, "fetch_openrouter_models", lambda: list(_OR_MODELS)
         )
-        assert (
-            cost_context.window_for("litellm/openrouter/qwen/qwen3-32b") == 131072
-        )
+        assert cost_context.window_for("litellm/openrouter/qwen/qwen3-32b") == 131072
         price = cost_context.price_for("litellm/openrouter/qwen/qwen3-32b")
         assert price is not None and price[0] == pytest.approx(0.08)
 
@@ -705,7 +719,9 @@ class TestPriceTable:
 
     def test_row_cap(self, monkeypatch):
         rows = [(f"USW2-Model{i:02d}-input-tokens", "0.0010000000") for i in range(45)]
-        rows += [(f"USW2-Model{i:02d}-output-tokens", "0.0020000000") for i in range(45)]
+        rows += [
+            (f"USW2-Model{i:02d}-output-tokens", "0.0020000000") for i in range(45)
+        ]
         _fake_fetch(monkeypatch, rows)
         _fake_openrouter(monkeypatch, models=[])
         live_pricing.refresh_caches(region="us-west-2")

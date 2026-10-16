@@ -19,8 +19,8 @@ import threading
 import time
 from types import SimpleNamespace
 
-from strands_code_cli.policy_gate import PolicyClassifier, gate_open
 from strands_code_cli.policy import PolicyConfig
+from strands_code_cli.policy_gate import PolicyClassifier, gate_open
 from strands_code_cli.steering import (
     STEERING_NOTED,
     STREAMING_LIMIT,
@@ -350,9 +350,7 @@ class TestFdModeInvariant:
             assert os.get_blocking(read_fd) is True
             state = SteeringState()
             gate = StdinGuard()
-            reader = start_steering_reader(
-                state, gate, stdin=_PipeStdin(read_fd)
-            )
+            reader = start_steering_reader(state, gate, stdin=_PipeStdin(read_fd))
             os.write(write_fd, b"steer me\n")
             assert _wait_for(state.has_pending)
             assert state.take() == "steer me"

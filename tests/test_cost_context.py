@@ -44,7 +44,6 @@ from strands_code_cli.cost_context import (
     estimate_messages_tokens,
     format_tokens,
     format_usage,
-    price_for,
     usage_line,
     window_for,
 )
@@ -74,12 +73,22 @@ class _ReplayModel(Model):
         return {}
 
     async def structured_output(  # type: ignore[override]
-        self, output_model: Any, prompt: Any, system_prompt: str | None = None, **kwargs: Any
+        self,
+        output_model: Any,
+        prompt: Any,
+        system_prompt: str | None = None,
+        **kwargs: Any,
     ) -> Any:
         raise NotImplementedError("offline test double")
         yield  # pragma: no cover - keeps this an async generator
 
-    async def stream(self, messages: Any, tool_specs: Any = None, system_prompt: Any = None, **kwargs: Any):  # type: ignore[override]
+    async def stream(
+        self,
+        messages: Any,
+        tool_specs: Any = None,
+        system_prompt: Any = None,
+        **kwargs: Any,
+    ):  # type: ignore[override]
         yield {"messageStart": {"role": "assistant"}}
         yield {"contentBlockStart": {"start": {}}}
         yield {"contentBlockDelta": {"delta": {"text": self._text}}}
@@ -122,23 +131,51 @@ def _pair_history() -> list[dict[str, Any]]:
         {"role": "user", "content": [{"text": "old question one"}]},
         {
             "role": "assistant",
-            "content": [{"toolUse": {"toolUseId": "t-1", "name": "python_repl", "input": {"code": "1"}}}],
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "t-1",
+                        "name": "python_repl",
+                        "input": {"code": "1"},
+                    }
+                }
+            ],
         },
         {
             "role": "user",
             "content": [
-                {"toolResult": {"toolUseId": "t-1", "status": "success", "content": [{"text": "1"}]}}
+                {
+                    "toolResult": {
+                        "toolUseId": "t-1",
+                        "status": "success",
+                        "content": [{"text": "1"}],
+                    }
+                }
             ],
         },
         {"role": "user", "content": [{"text": "old question two"}]},
         {
             "role": "assistant",
-            "content": [{"toolUse": {"toolUseId": "t-2", "name": "python_repl", "input": {"code": "2"}}}],
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "t-2",
+                        "name": "python_repl",
+                        "input": {"code": "2"},
+                    }
+                }
+            ],
         },
         {
             "role": "user",
             "content": [
-                {"toolResult": {"toolUseId": "t-2", "status": "success", "content": [{"text": "2"}]}}
+                {
+                    "toolResult": {
+                        "toolUseId": "t-2",
+                        "status": "success",
+                        "content": [{"text": "2"}],
+                    }
+                }
             ],
         },
         {"role": "user", "content": [{"text": "latest ask"}]},
@@ -148,7 +185,9 @@ def _pair_history() -> list[dict[str, Any]]:
 class _Summary:
     """Minimal response double exposing metrics.get_summary()."""
 
-    def __init__(self, in_tok: int, out_tok: int, cycles: int = 1, duration: float = 0.5):
+    def __init__(
+        self, in_tok: int, out_tok: int, cycles: int = 1, duration: float = 0.5
+    ):
         self._summary = {
             "accumulated_usage": {"inputTokens": in_tok, "outputTokens": out_tok},
             "total_cycles": cycles,
@@ -189,7 +228,10 @@ class TestUsageFormat:
         assert window_for("mystery/acme-1") is None
 
     def test_money_only_on_price_hit(self):
-        assert cost_for(1_000_000, 1_000_000, "bedrock/global.anthropic.claude-sonnet-4-6") == 18.0
+        assert (
+            cost_for(1_000_000, 1_000_000, "bedrock/global.anthropic.claude-sonnet-4-6")
+            == 18.0
+        )
         assert cost_for(1_000_000, 1_000_000, "mystery/acme-1") is None
 
     def test_usage_line_money_on_hit(self):
@@ -243,12 +285,18 @@ class TestCostReport:
             {"turn": 2, "input_tokens": 2000, "output_tokens": 500},
         ]
         report = cost_report(turns, "bedrock/global.anthropic.claude-sonnet-4-6")
-        assert "turn 1" in report.lower() or "#1" in report or "1" in report.splitlines()[1]
+        assert (
+            "turn 1" in report.lower()
+            or "#1" in report
+            or "1" in report.splitlines()[1]
+        )
         assert "Display only" in report
         assert "no budgets or enforcement" in report
 
     def test_unknown_model_tokens_only(self):
-        report = cost_report([{"turn": 1, "input_tokens": 10, "output_tokens": 5}], "mystery/acme-1")
+        report = cost_report(
+            [{"turn": 1, "input_tokens": 10, "output_tokens": 5}], "mystery/acme-1"
+        )
         assert "$" not in report
         assert "Display only" in report
 
@@ -395,9 +443,7 @@ class TestBedrockOfflineParity:
                 "model": "bedrock/global.anthropic.claude-sonnet-4-6",
             },
         ]
-        assert cost_report(
-            turns, "bedrock/global.anthropic.claude-sonnet-4-6"
-        ) == (
+        assert cost_report(turns, "bedrock/global.anthropic.claude-sonnet-4-6") == (
             "Cost — bedrock/global.anthropic.claude-sonnet-4-6\n"
             "  turn 1: in 1.00M, out 500.00K, $10.5000\n"
             "  turn 2: in 2.00K, out 500, $0.0135\n"
@@ -492,8 +538,7 @@ class TestRoutingEntries:
         )
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
-            "  ask 1: a/routed (low) [model 85%, effort n/a]"
-            " via local $0.0000"
+            "  ask 1: a/routed (low) [model 85%, effort n/a] via local $0.0000"
         ]
 
     def test_native_entry_renders_computed_spend_with_marker(self):
@@ -508,8 +553,7 @@ class TestRoutingEntries:
         )
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
-            "  ask 1: a/routed (low) [model 85%, effort n/a]"
-            " via native $0.0420 actual"
+            "  ask 1: a/routed (low) [model 85%, effort n/a] via native $0.0420 actual"
         ]
         assert "Prices: native computed input rate." in report
 
@@ -532,8 +576,7 @@ class TestRoutingEntries:
         )
         report = cost_report([], "a/serving", routing=[event])
         assert _routing_lines(report) == [
-            "  ask 2: a/serving [model n/a, effort n/a]"
-            " via openrouter [held] $0.0000"
+            "  ask 2: a/serving [model n/a, effort n/a] via openrouter [held] $0.0000"
         ]
 
     def test_side_marker_and_tie_break(self):
@@ -555,9 +598,7 @@ class TestRoutingEntries:
                 "model": "amazon.nova-micro-v1:0",
             }
         ]
-        report = cost_report(
-            turns, "amazon.nova-micro-v1:0", routing=[_routed_event()]
-        )
+        report = cost_report(turns, "amazon.nova-micro-v1:0", routing=[_routed_event()])
         expected = cost_for(1000, 500, "amazon.nova-micro-v1:0") + 0.0002
         assert expected is not None
         total = next(line for line in report.splitlines() if line.startswith("Total:"))
@@ -603,7 +644,9 @@ class TestContextOps:
         agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
         agent.messages.extend(_pair_history())
         n_before = len(agent.messages)
-        compact_messages(agent, summarize=lambda old: f"summary of {len(old)}", keep_recent=2)
+        compact_messages(
+            agent, summarize=lambda old: f"summary of {len(old)}", keep_recent=2
+        )
         assert len(agent.messages) < n_before
         texts = _texts(agent)
         assert any(SUMMARY_MARKER in t for t in texts)

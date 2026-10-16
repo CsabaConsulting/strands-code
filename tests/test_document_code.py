@@ -1,12 +1,13 @@
 """Tests for strands_code_agent.document_code — format_function and get_documentation."""
 
 import pytest
-from strands_code_agent.document_code import format_function, get_documentation
 
+from strands_code_agent.document_code import format_function, get_documentation
 
 # ---------------------------------------------------------------------------
 # Helpers used as test subjects
 # ---------------------------------------------------------------------------
+
 
 def simple_func(x: int, y: int) -> int:
     """Add two numbers."""
@@ -57,6 +58,7 @@ class BareClass:
 # format_function
 # ---------------------------------------------------------------------------
 
+
 class TestFormatFunction:
     def test_includes_signature(self):
         out = format_function(simple_func)
@@ -95,6 +97,7 @@ class TestFormatFunction:
 # get_documentation — functions
 # ---------------------------------------------------------------------------
 
+
 class TestGetDocumentationFunction:
     def test_simple_function(self):
         doc = get_documentation(simple_func)
@@ -109,6 +112,7 @@ class TestGetDocumentationFunction:
 # ---------------------------------------------------------------------------
 # get_documentation — classes
 # ---------------------------------------------------------------------------
+
 
 class TestGetDocumentationClass:
     def test_class_header(self):

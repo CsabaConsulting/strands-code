@@ -40,7 +40,13 @@ from strands_code_cli.memory_modes import (
     format_init_prompt,
     format_revise_prompt,
 )
-from strands_code_cli.mode import APPROVE_EMPTY, APPROVE_EXECUTE, APPROVE_OK, MODE_USAGE, ModeState
+from strands_code_cli.mode import (
+    APPROVE_EMPTY,
+    APPROVE_EXECUTE,
+    APPROVE_OK,
+    MODE_USAGE,
+    ModeState,
+)
 from strands_code_cli.output import print_plain
 from strands_code_cli.session_index import SessionIndex, rich_stash_path
 
@@ -89,14 +95,15 @@ def _sdk_hint(selection: str) -> str:
         return " (provider SDK not installed)"
     return f" (install the '{extra}' extra: pip install strands-code-agent[{extra}])"
 
-_DIFF_USAGE = "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
+
+_DIFF_USAGE = (
+    "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
+)
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
 _SKILLS_USAGE = "Usage: /skills [show <name>|remove <name>|reload]"
 _MODE_USAGE = MODE_USAGE
-_MEMORY_USAGE = (
-    "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>]"
-)
+_MEMORY_USAGE = "Usage: /memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>]"
 _INIT_USAGE = "Usage: /init [deeper]"
 _MEMORY_MODE_USAGE = MEMORY_MODE_USAGE
 
@@ -321,7 +328,9 @@ def _clear_message(agent, session_id: str) -> str:
     return f"Context cleared — session {session_id} kept."
 
 
-def _context_message(agent, current_model: str | None, session_turns: list | None) -> str:
+def _context_message(
+    agent, current_model: str | None, session_turns: list | None
+) -> str:
     """Render /context: the exact item-3 field list, read-only."""
     if agent is None:
         return "No active session."
@@ -482,9 +491,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
                         + [(_MODEL_BACK, "← Back to families")],
                         bases.index(picks[2])
                         if picks[2] in bases
-                        else _default_index(
-                            models, lambda br: current_model in br[1]
-                        ),
+                        else _default_index(models, lambda br: current_model in br[1]),
                     )
                     if picked is None:
                         return _unchanged()
@@ -855,9 +862,7 @@ def _setup_pick_candidates_typed(entries: list[dict[str, Any]]) -> list[str] | N
         if not typed:
             return None
         valid = list(
-            dict.fromkeys(
-                part.strip() for part in typed.split(",") if part.strip()
-            )
+            dict.fromkeys(part.strip() for part in typed.split(",") if part.strip())
         )
         unknown = [piece for piece in valid if piece not in known]
         valid = [piece for piece in valid if piece in known]
@@ -889,9 +894,7 @@ def _setup_typed_id_list(prompt: str) -> list[str] | None:
         return None
     if not typed:
         return None
-    ids = list(
-        dict.fromkeys(part.strip() for part in typed.split(",") if part.strip())
-    )
+    ids = list(dict.fromkeys(part.strip() for part in typed.split(",") if part.strip()))
     return ids or None
 
 
@@ -907,10 +910,7 @@ def _setup_pick_decision(
     """
     if typed_only or not entries:
         if typed_only:
-            print(
-                "Decisions catalog unreachable — "
-                "enter a decision model id manually."
-            )
+            print("Decisions catalog unreachable — enter a decision model id manually.")
         else:
             print(
                 "No usable decision models in the live catalog — "
@@ -958,8 +958,7 @@ def _setup_local_model() -> str | None:
     EOF and Ctrl-C abort; an empty line accepts the nimble default tag.
     """
     print(
-        "Local decision model tag as pulled in Ollama [nimble] "
-        "(empty takes nimble): ",
+        "Local decision model tag as pulled in Ollama [nimble] (empty takes nimble): ",
         end="",
         flush=True,
     )
@@ -987,9 +986,7 @@ def _setup_pick_order_tty(available: list[str]) -> list[str] | None:
     while remaining:
         options = [(name, _ENGINE_LABELS[name]) for name in remaining]
         options.append((_SETUP_DONE, "Done — no more fallbacks"))
-        choice = _setup_ask(
-            "Add a fallback engine", options, default=len(options) - 1
-        )
+        choice = _setup_ask("Add a fallback engine", options, default=len(options) - 1)
         if choice is None:
             return None
         if choice == _SETUP_DONE:
@@ -1022,9 +1019,7 @@ def _setup_pick_order_typed(available: list[str]) -> list[str] | None:
         if not typed:
             return None
         names = list(
-            dict.fromkeys(
-                part.strip() for part in typed.split(",") if part.strip()
-            )
+            dict.fromkeys(part.strip() for part in typed.split(",") if part.strip())
         )
         unknown = [name for name in names if name not in available]
         names = [name for name in names if name in available]
@@ -1149,8 +1144,10 @@ def _route_setup_message() -> str:
     (empty accepts the proposed order and the nimble default, and
     keeps skip notes on).
     """
-    from strands_code_cli.live_pricing import fetch_openrouter_decision_models
-    from strands_code_cli.live_pricing import fetch_openrouter_models
+    from strands_code_cli.live_pricing import (
+        fetch_openrouter_decision_models,
+        fetch_openrouter_models,
+    )
     from strands_code_cli.routing import save_strategy
 
     scope = _setup_ask(
@@ -1579,7 +1576,9 @@ def _memory_message(
             try:
                 queue.approve(proposal.id, apply_approved_proposal)
             except (OSError, ValueError) as exc:
-                return f"Memory write failed — proposal {proposal.id} kept pending: {exc}"
+                return (
+                    f"Memory write failed — proposal {proposal.id} kept pending: {exc}"
+                )
         return f"Approved {len(pending)} proposal{'s' if len(pending) != 1 else ''}."
     if verb == "deny-all":
         pending = queue.list_pending()
@@ -1610,9 +1609,7 @@ def _revise_action(rest: str, revise: ReviseState | None) -> tuple:
     return ("agent", format_revise_prompt(section, current, instruction))
 
 
-def _init_action(
-    rest: str, root: str | Path, init: InitState | None
-) -> tuple:
+def _init_action(rest: str, root: str | Path, init: InitState | None) -> tuple:
     """Handle /init: scan the repo and draft stale sections through curate.
 
     Bare ``/init`` runs the shallow scan, ``/init deeper`` the deep
@@ -1756,7 +1753,11 @@ def _diff_message(session_id: str, rest: str, config_path: str | Path | None) ->
         target = arg.strip()
         if target:
             entry = store.pop(target)
-            return f"Discarded pending change to {target}." if entry else f"No pending change to {target}."
+            return (
+                f"Discarded pending change to {target}."
+                if entry
+                else f"No pending change to {target}."
+            )
         count = len(pending)
         store.clear()
         return f"Discarded {count} pending change(s)."
@@ -1881,14 +1882,18 @@ def _snapshot_ids(session_dir: str | Path | None) -> set[str]:
     return {n for n in names if rich_stash_path(Path("."), n) is not None}
 
 
-def _resolve_forget_target(index: SessionIndex, session_dir, target: str) -> tuple[str | None, str | None]:
+def _resolve_forget_target(
+    index: SessionIndex, session_dir, target: str
+) -> tuple[str | None, str | None]:
     """Resolve an id or unique prefix to a full session id.
 
     Candidates are the union of index ids and snapshot dir names, so
     pure-orphan dirs are forgettable too. Returns ``(id, None)`` or
     ``(None, error-reply)``.
     """
-    known = {e["id"] for e in index.list_recent(limit=None)} | _snapshot_ids(session_dir)
+    known = {e["id"] for e in index.list_recent(limit=None)} | _snapshot_ids(
+        session_dir
+    )
     if target in known:
         return (target, None)
     matches = sorted(sid for sid in known if sid.startswith(target))
@@ -1942,7 +1947,11 @@ def forget_session(
     if current_id is not None and resolved == current_id:
         return (False, "Cannot forget the active session — switch away or exit first.")
     title = next(
-        (e.get("title", "untitled") for e in index.list_recent(limit=None) if e["id"] == resolved),
+        (
+            e.get("title", "untitled")
+            for e in index.list_recent(limit=None)
+            if e["id"] == resolved
+        ),
         None,
     )
     _remove_snapshot_dir(session_dir, resolved)
@@ -1967,7 +1976,9 @@ def _forget_message(index: SessionIndex, session_id: str, rest: str) -> str:
     return reply
 
 
-def show_picker(index: SessionIndex, *, session_dir: str | Path | None = None) -> str | None:
+def show_picker(
+    index: SessionIndex, *, session_dir: str | Path | None = None
+) -> str | None:
     """Numbered resume picker over recent sessions plus start-new (D-02).
 
     A delete row nests a second picker plus an explicit confirm (Cancel
@@ -2009,7 +2020,10 @@ def _picker_tty_loop(index: SessionIndex, session_dir, radio_choice) -> str | No
             return None
         picked = radio_choice(
             "Recent sessions",
-            [(e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]") for e in entries]
+            [
+                (e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]")
+                for e in entries
+            ]
             + [(_SESSION_DELETE, "Delete a session…"), (None, "Start new session")],
             default=len(entries) + 1,
         )
@@ -2046,7 +2060,9 @@ def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) 
     print_plain(console, reply)
 
 
-def _picker_typed_loop(index: SessionIndex, session_dir: str | Path | None) -> str | None:
+def _picker_typed_loop(
+    index: SessionIndex, session_dir: str | Path | None
+) -> str | None:
     """Numbered resume picker with a nested delete flow (no tty)."""
     console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
     while True:
@@ -2056,7 +2072,8 @@ def _picker_typed_loop(index: SessionIndex, session_dir: str | Path | None) -> s
         console.print("Recent sessions:")
         for pos, entry in enumerate(entries, 1):
             print_plain(
-                console, f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]"
+                console,
+                f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]",
             )
         delete_at = len(entries) + 1
         console.print(f"  {delete_at}. Delete a session…")

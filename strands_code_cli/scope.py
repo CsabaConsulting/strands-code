@@ -33,7 +33,9 @@ def resolve(path: str | Path, cwd: str | Path) -> Path:
     return candidate
 
 
-def confine(path: str | Path, cwd: str | Path, extra_roots: Iterable[str | Path] = ()) -> Path:
+def confine(
+    path: str | Path, cwd: str | Path, extra_roots: Iterable[str | Path] = ()
+) -> Path:
     """Admit ``cwd`` + subdirs, ``/tmp`` + subdirs, plus policy-granted roots.
 
     Symlinks are resolved (``realpath``) so a link inside scope pointing

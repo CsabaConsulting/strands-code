@@ -66,7 +66,8 @@ def test_loop_reply_with_markup_chars_survives(tmp_path, monkeypatch, capfd):
 
 
 def test_loop_turn_failure_with_markup_chars_fails_turn_not_session(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
     monkeypatch.chdir(tmp_path)
     _oneshot_loop(monkeypatch, "hi")

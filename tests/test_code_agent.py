@@ -6,20 +6,25 @@ avoid requiring a live model.
 """
 
 import os
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from strands_code_agent.code_agent import CodeAgent, CODE_AGENT_INSTRUCTIONS
-from strands_code_agent.toolkits import Toolkit, VISUALIZATION_TOOLKIT, DATA_ANALYSIS_TOOLKIT
-from strands_code_agent.python_environments.local_sandboxed import SandboxedPythonInterpreter
+from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS, CodeAgent
 from strands_code_agent.python_environments.local_exec import ExecPythonInterpreter
-
+from strands_code_agent.python_environments.local_sandboxed import (
+    SandboxedPythonInterpreter,
+)
+from strands_code_agent.toolkits import (
+    Toolkit,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_agent(*, system_prompt=None, tools=None, toolkits=None, tmp_dir=True, **kwargs):
+
+def _make_agent(
+    *, system_prompt=None, tools=None, toolkits=None, tmp_dir=True, **kwargs
+):
     """Create a CodeAgent with the Strands Agent.__init__ mocked out."""
     with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None):
         return CodeAgent(
@@ -35,9 +40,12 @@ def _make_agent(*, system_prompt=None, tools=None, toolkits=None, tmp_dir=True, 
 # System prompt assembly
 # ---------------------------------------------------------------------------
 
+
 class TestCodeAgentSystemPrompt:
     def test_includes_base_instructions(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(system_prompt="Be helpful.", tmp_dir=False)
             call_kwargs = mock_init.call_args[1]
             prompt = call_kwargs["system_prompt"]
@@ -45,7 +53,9 @@ class TestCodeAgentSystemPrompt:
             assert "code agent" in prompt.lower()
 
     def test_none_system_prompt(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(system_prompt=None, tmp_dir=False)
             call_kwargs = mock_init.call_args[1]
             prompt = call_kwargs["system_prompt"]
@@ -53,26 +63,34 @@ class TestCodeAgentSystemPrompt:
 
     def test_usage_instructions_in_prompt(self):
         tk = Toolkit(usage_instructions="Always use pandas for CSV files.")
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(toolkits=[tk], tmp_dir=False)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "Always use pandas for CSV files." in prompt
 
     def test_code_preamble_in_prompt(self):
         tk = Toolkit(initialization_code="import json")
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(toolkits=[tk], tmp_dir=False)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "import json" in prompt
 
     def test_tmp_dir_in_prompt(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             agent = CodeAgent(tmp_dir=True)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "temporary directory" in prompt.lower() or agent.tmp_dir in prompt
 
     def test_no_tmp_dir(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tmp_dir=False)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "/tmp/" not in prompt
@@ -82,10 +100,15 @@ class TestCodeAgentSystemPrompt:
 # Toolkit wiring
 # ---------------------------------------------------------------------------
 
+
 class TestCodeAgentToolkitWiring:
     def test_authorized_imports_from_toolkit(self):
         tk = Toolkit(libraries=["json", "os"])
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "json" in agent.python_repl.authorized_imports
         assert "os" in agent.python_repl.authorized_imports
 
@@ -107,30 +130,48 @@ class TestCodeAgentToolkitWiring:
     def test_init_code_imports_auto_authorized(self):
         """Imports in initialization_code are auto-authorized even without explicit libraries."""
         tk = Toolkit(initialization_code="import json")
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "json" in agent.python_repl.authorized_imports
         stdout, _ = agent.python_repl.execute_code("print(json.dumps({'a': 1}))")
         assert '"a"' in stdout
 
     def test_init_code_from_import_auto_authorized(self):
         tk = Toolkit(initialization_code="from datetime import date")
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "datetime" in agent.python_repl.authorized_imports
 
     def test_from_import_submodule_auto_authorized(self):
         """'from scipy import stats' must authorize 'scipy.stats' so the agent can use stats.*."""
         tk = Toolkit(initialization_code="from scipy import stats")
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "scipy" in agent.python_repl.authorized_imports
         assert "scipy.stats" in agent.python_repl.authorized_imports
-        stdout, stderr = agent.python_repl.execute_code("print(stats.pearsonr([1,2,3], [4,5,6]))")
+        stdout, stderr = agent.python_repl.execute_code(
+            "print(stats.pearsonr([1,2,3], [4,5,6]))"
+        )
         assert stderr == ""
         assert "pvalue" in stdout.lower() or "PearsonR" in stdout
 
     def test_wildcard_library_authorizes_submodules(self):
         """'scipy.*' in libraries allows importing any scipy submodule without listing each one."""
         tk = Toolkit(libraries=["scipy.*"])
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "scipy.*" in agent.python_repl.authorized_imports
         stdout, stderr = agent.python_repl.execute_code(
             "from scipy import stats; print(stats.pearsonr([1,2,3], [4,5,6]))"
@@ -141,14 +182,21 @@ class TestCodeAgentToolkitWiring:
     def test_wildcard_library_authorizes_deep_submodules(self):
         """'numpy.*' allows access to deeply nested submodules like numpy.random."""
         tk = Toolkit(libraries=["numpy.*"], initialization_code="import numpy as np")
-        agent = _make_agent(toolkits=[tk], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
-        stdout, stderr = agent.python_repl.execute_code("print(np.random.randint(0, 10))")
+        agent = _make_agent(
+            toolkits=[tk],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
+        stdout, stderr = agent.python_repl.execute_code(
+            "print(np.random.randint(0, 10))"
+        )
         assert stderr == ""
 
 
 # ---------------------------------------------------------------------------
 # Domain-specific code
 # ---------------------------------------------------------------------------
+
 
 def _sample_func(x: int) -> int:
     """Double the input."""
@@ -157,6 +205,7 @@ def _sample_func(x: int) -> int:
 
 class _SampleClass:
     """A sample helper class."""
+
     def greet(self) -> str:
         return "hello"
 
@@ -176,14 +225,18 @@ class TestCodeAgentDomainSpecificCode:
 
     def test_domain_specific_doc_in_prompt(self):
         tk = Toolkit(domain_specific_code=[_sample_func])
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(toolkits=[tk], tmp_dir=False)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "Domain Specific Code" in prompt
             assert "_sample_func" in prompt
 
     def test_no_domain_specific_code_no_section(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tmp_dir=False)
             prompt = mock_init.call_args[1]["system_prompt"]
             assert "Domain Specific Code" not in prompt
@@ -193,25 +246,34 @@ class TestCodeAgentDomainSpecificCode:
 # Tools wiring
 # ---------------------------------------------------------------------------
 
+
 class TestCodeAgentTools:
     def test_python_repl_tool_always_present(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tmp_dir=False)
             tools = mock_init.call_args[1]["tools"]
-            tool_names = [getattr(t, "tool_name", getattr(t, "__name__", "")) for t in tools]
+            tool_names = [
+                getattr(t, "tool_name", getattr(t, "__name__", "")) for t in tools
+            ]
             assert any("python_repl" in n for n in tool_names)
 
     def test_additional_tools_preserved(self):
         extra_tool = MagicMock()
         extra_tool.tool_name = "my_tool"
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tools=[extra_tool], tmp_dir=False)
             tools = mock_init.call_args[1]["tools"]
             assert extra_tool in tools
             assert len(tools) == 2  # extra_tool + python_repl
 
     def test_kwargs_forwarded(self):
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(tmp_dir=False, callback_handler="my_handler")
             call_kwargs = mock_init.call_args[1]
             assert call_kwargs["callback_handler"] == "my_handler"
@@ -220,6 +282,7 @@ class TestCodeAgentTools:
 # ---------------------------------------------------------------------------
 # Temp directory
 # ---------------------------------------------------------------------------
+
 
 class TestCodeAgentTmpDir:
     def test_tmp_dir_created(self):
@@ -240,11 +303,16 @@ class TestCodeAgentTmpDir:
 # Combining multiple toolkits
 # ---------------------------------------------------------------------------
 
+
 class TestCodeAgentCombinedToolkits:
     def test_toolkit_with_overlapping_libraries(self):
         tk1 = Toolkit(libraries=["json", "os"])
         tk2 = Toolkit(libraries=["os", "sys"])
-        agent = _make_agent(toolkits=[tk1, tk2], tmp_dir=False, python_interpreter_class=SandboxedPythonInterpreter)
+        agent = _make_agent(
+            toolkits=[tk1, tk2],
+            tmp_dir=False,
+            python_interpreter_class=SandboxedPythonInterpreter,
+        )
         assert "json" in agent.python_repl.authorized_imports
         assert "os" in agent.python_repl.authorized_imports
         assert "sys" in agent.python_repl.authorized_imports
@@ -261,13 +329,16 @@ class TestCodeAgentCombinedToolkits:
 # python_interpreter_class selection
 # ---------------------------------------------------------------------------
 
+
 class TestCodeAgentInterpreterClass:
     def test_default_is_sandboxed(self):
         agent = _make_agent(tmp_dir=False)
         assert isinstance(agent.python_repl, SandboxedPythonInterpreter)
 
     def test_exec_when_requested(self):
-        agent = _make_agent(tmp_dir=False, python_interpreter_class=ExecPythonInterpreter)
+        agent = _make_agent(
+            tmp_dir=False, python_interpreter_class=ExecPythonInterpreter
+        )
         assert isinstance(agent.python_repl, ExecPythonInterpreter)
 
     def test_both_interpreters_execute(self):

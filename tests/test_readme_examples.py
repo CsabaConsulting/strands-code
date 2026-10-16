@@ -4,22 +4,23 @@ Each test corresponds to a specific README section and verifies the example
 works as documented (with the model mocked out).
 """
 
-import os
-from unittest.mock import patch, MagicMock
-
+from unittest.mock import patch
 
 # ---------------------------------------------------------------------------
 # Quick Start — public API imports
 # ---------------------------------------------------------------------------
 
+
 class TestReadmeQuickStart:
     def test_public_imports(self):
         from strands_code_agent import CodeAgent, Toolkit
+
         assert CodeAgent is not None
         assert Toolkit is not None
 
     def test_code_agent_with_system_prompt(self):
         from strands_code_agent import CodeAgent
+
         with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None):
             agent = CodeAgent(system_prompt="You are a helpful data analyst.")
         # The REPL should be functional
@@ -30,6 +31,7 @@ class TestReadmeQuickStart:
 # ---------------------------------------------------------------------------
 # Toolkit — construction with all fields (README "Toolkit" section)
 # ---------------------------------------------------------------------------
+
 
 class TestReadmeToolkitConstruction:
     def test_visualization_toolkit_pattern(self):
@@ -54,12 +56,14 @@ import seaborn as sns
 # Built-in Toolkits — importable
 # ---------------------------------------------------------------------------
 
+
 class TestReadmeBuiltinToolkits:
     def test_builtin_toolkits_importable(self):
         from strands_code_agent.toolkits import (
-            VISUALIZATION_TOOLKIT,
             DATA_ANALYSIS_TOOLKIT,
+            VISUALIZATION_TOOLKIT,
         )
+
         assert VISUALIZATION_TOOLKIT.libraries is not None
         assert DATA_ANALYSIS_TOOLKIT.libraries is not None
 
@@ -67,6 +71,7 @@ class TestReadmeBuiltinToolkits:
 # ---------------------------------------------------------------------------
 # Domain-Specific Code — calculate_roi example
 # ---------------------------------------------------------------------------
+
 
 def calculate_roi(investment: float, returns: float) -> float:
     """Calculate return on investment as a percentage."""
@@ -76,6 +81,7 @@ def calculate_roi(investment: float, returns: float) -> float:
 class TestReadmeDomainSpecificCode:
     def test_calculate_roi_available_in_repl(self):
         from strands_code_agent import CodeAgent, Toolkit
+
         with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None):
             agent = CodeAgent(
                 system_prompt="You are a finance assistant.",
@@ -90,7 +96,10 @@ class TestReadmeDomainSpecificCode:
 
     def test_calculate_roi_documented_in_prompt(self):
         from strands_code_agent import CodeAgent, Toolkit
-        with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None) as mock_init:
+
+        with patch(
+            "strands_code_agent.code_agent.Agent.__init__", return_value=None
+        ) as mock_init:
             CodeAgent(
                 system_prompt="You are a finance assistant.",
                 toolkits=[Toolkit(domain_specific_code=[calculate_roi])],
@@ -106,11 +115,17 @@ class TestReadmeDomainSpecificCode:
 # Combining Toolkits — DATA_ANALYSIS_TOOLKIT + VISUALIZATION_TOOLKIT
 # ---------------------------------------------------------------------------
 
+
 class TestReadmeCombiningToolkits:
     def test_data_analysis_plus_visualization(self):
         from strands_code_agent import CodeAgent
-        from strands_code_agent.toolkits import DATA_ANALYSIS_TOOLKIT, VISUALIZATION_TOOLKIT
-        from strands_code_agent.python_environments.local_sandboxed import SandboxedPythonInterpreter
+        from strands_code_agent.python_environments.local_sandboxed import (
+            SandboxedPythonInterpreter,
+        )
+        from strands_code_agent.toolkits import (
+            DATA_ANALYSIS_TOOLKIT,
+            VISUALIZATION_TOOLKIT,
+        )
 
         with patch("strands_code_agent.code_agent.Agent.__init__", return_value=None):
             agent = CodeAgent(
@@ -122,7 +137,9 @@ class TestReadmeCombiningToolkits:
         assert "matplotlib" in agent.python_repl.authorized_imports
         assert "seaborn" in agent.python_repl.authorized_imports
         # Both init codes ran — pd and plt should be available
-        stdout, _ = agent.python_repl.execute_code("print(pd.DataFrame({'a': [1]}).shape)")
+        stdout, _ = agent.python_repl.execute_code(
+            "print(pd.DataFrame({'a': [1]}).shape)"
+        )
         assert "(1, 1)" in stdout
         stdout, _ = agent.python_repl.execute_code("print(plt.figure())")
         assert "Figure" in stdout

@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from strands._identifier import Identifier
+from strands.session.snapshot_session_manager import validate_identifier
+from strands.vended_plugins.skills import AgentSkills
 from strands_harness import create_harness
 from strands_harness.defaults import DEFAULT_SESSION_DIR, DEFAULT_SKILLS_DIR
-from strands.session.snapshot_session_manager import validate_identifier
-from strands._identifier import Identifier
-from strands.vended_plugins.skills import AgentSkills
 
 from strands_code_agent.code_agent import (
     CODE_AGENT_INSTRUCTIONS,
@@ -38,10 +38,10 @@ from strands_code_cli.policy_gate import (
     build_interventions,
     set_mode,
 )
-from strands_code_cli.steering import register_steering_hook
 from strands_code_cli.provider_config import ProviderConfig
 from strands_code_cli.router import show_picker
 from strands_code_cli.session_index import SessionIndex
+from strands_code_cli.steering import register_steering_hook
 
 app = typer.Typer(
     add_completion=False,

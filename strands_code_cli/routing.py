@@ -396,7 +396,9 @@ def _parse_strategy(data: dict[str, Any], source: Path) -> RoutingStrategy:
         directives=directives,
         engine=_parse_engine(data.get("engine")),
         quiet=quiet,
-        tie_margin=_parse_knob(data.get("tie_margin"), "tie_margin", DEFAULT_TIE_MARGIN),
+        tie_margin=_parse_knob(
+            data.get("tie_margin"), "tie_margin", DEFAULT_TIE_MARGIN
+        ),
         confidence_threshold=_parse_knob(
             data.get("confidence_threshold"),
             "confidence_threshold",
@@ -803,7 +805,8 @@ def validate_strategy(
     explicit_order = isinstance(raw_engine, dict) and "order" in raw_engine
     if (
         isinstance(raw_primary, str)
-        and raw_primary not in (
+        and raw_primary
+        not in (
             "openrouter",
             "local",
             "off",
@@ -835,8 +838,7 @@ def validate_strategy(
         if not isinstance(raw_order, list):
             valid = False
             lines.append(
-                "engine: INVALID — engine.order is not a list "
-                "(the loader ignores it)"
+                "engine: INVALID — engine.order is not a list (the loader ignores it)"
             )
             lines.append("fix: set engine.order to a list like [native, openrouter]")
         else:
@@ -905,9 +907,7 @@ def validate_strategy(
                             "forms are rejected)"
                         )
                     else:
-                        lines.append(
-                            f"engine: native model {engine.native_model} — ok"
-                        )
+                        lines.append(f"engine: native model {engine.native_model} — ok")
     else:
         if isinstance(raw_engine, dict) and "primary" in raw_engine:
             lines.append(
@@ -919,17 +919,13 @@ def validate_strategy(
         elif engine.primary == "local":
             if not engine.local_model:
                 valid = False
-                lines.append(
-                    "engine: INVALID — primary is local with no local_model"
-                )
+                lines.append("engine: INVALID — primary is local with no local_model")
                 lines.append(
                     "fix: set engine.local_model to your Ollama tag, "
                     "or switch primary to openrouter"
                 )
             else:
-                lines.append(
-                    f"engine: primary local, model {engine.local_model} — ok"
-                )
+                lines.append(f"engine: primary local, model {engine.local_model} — ok")
             if engine.decision_model:
                 lines.append(
                     f"engine: decision model {engine.decision_model} "
@@ -999,9 +995,9 @@ def _criteria_text(candidate: RoutingCandidate) -> str:
     The option name describing itself is the last resort (the Clef
     ``criteria: null`` precedent); blank strings count as missing.
     """
-    for field in (candidate.criteria, candidate.note, candidate.tier):
-        if isinstance(field, str) and field.strip():
-            return field
+    for text in (candidate.criteria, candidate.note, candidate.tier):
+        if isinstance(text, str) and text.strip():
+            return text
     return candidate.id
 
 
@@ -1143,9 +1139,7 @@ def _refused_reason(reason: object) -> bool:
         return False
     if isinstance(reason, ConnectionRefusedError):
         return True
-    return (
-        isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED
-    )
+    return isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED
 
 
 def _failure_reason(exc: BaseException) -> str:
@@ -1281,9 +1275,7 @@ def decide_via_openrouter(
         return EngineResult(answers=None, error=error, truncated=truncated)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(
-            answers=None, error="invalid body", truncated=truncated
-        )
+        return EngineResult(answers=None, error="invalid body", truncated=truncated)
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1337,9 +1329,7 @@ def decide_via_typesafe(
         return EngineResult(answers=None, error=error, truncated=truncated)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(
-            answers=None, error="invalid body", truncated=truncated
-        )
+        return EngineResult(answers=None, error="invalid body", truncated=truncated)
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1456,8 +1446,7 @@ def local_engine_ready(base: str | None, tag: str) -> bool:
     if tag in names:
         return True
     bare = {
-        name[: -len(":latest")] if name.endswith(":latest") else name
-        for name in names
+        name[: -len(":latest")] if name.endswith(":latest") else name for name in names
     }
     return tag in bare
 
@@ -1503,9 +1492,7 @@ def decide_via_ollama(
         return EngineResult(answers=None, error=error, truncated=truncated)
     answers = data.get("answers")
     if not isinstance(answers, dict):
-        return EngineResult(
-            answers=None, error="invalid body", truncated=truncated
-        )
+        return EngineResult(answers=None, error="invalid body", truncated=truncated)
     usage = data.get("usage", {})
     if not isinstance(usage, dict):
         usage = {}
@@ -1624,11 +1611,7 @@ def gate_model(
         return (top, False, "")
     top_price = _price_total(top)
     second_price = _price_total(second)
-    if (
-        top_price is None
-        or second_price is None
-        or second_price >= top_price
-    ):
+    if top_price is None or second_price is None or second_price >= top_price:
         return (top, False, "")
     return (
         second,
@@ -1745,7 +1728,7 @@ def _link_detail(name: str, error: str | None) -> str:
     if error == "unready":
         return f"{name} unready (daemon version or tag not ready)"
     if error is not None and error.startswith("HTTP "):
-        return f"{name} {error[len('HTTP '):]}"
+        return f"{name} {error[len('HTTP ') :]}"
     if error in ("timeout", "refused", "unreachable"):
         return f"{name} {error}"
     if error in ("invalid body", "invalid table"):
@@ -1968,9 +1951,7 @@ def decide(
                     f"effort {only.levels[0]!r} unsupported by {only.id}",
                 )
             return (fast, "none", (0, 0, None), "")
-        state = build_decision_state(
-            ask=ask, directives=strategy.directives, side=side
-        )
+        state = build_decision_state(ask=ask, directives=strategy.directives, side=side)
         chain = _chain_for(strategy)
         if not chain:
             order = _effective_order(strategy.engine)
@@ -2016,9 +1997,7 @@ def decide(
             usage,
             _with_truncation("", effort_truncated),
         )
-    state = build_decision_state(
-        ask=ask, directives=strategy.directives, side=side
-    )
+    state = build_decision_state(ask=ask, directives=strategy.directives, side=side)
     questions = {
         "pick_model": build_model_question(
             candidates=strategy.candidates, directives=strategy.directives
@@ -2068,9 +2047,7 @@ def decide(
                 (0, 0, None),
                 _with_truncation(gate_detail, truncated_any),
             )
-        candidate = next(
-            entry for entry in strategy.candidates if entry.id == model_id
-        )
+        candidate = next(entry for entry in strategy.candidates if entry.id == model_id)
         if not candidate.levels:
             return (
                 None,
@@ -2099,9 +2076,7 @@ def decide(
                     None,
                     effort_engine,
                     (0, 0, None),
-                    _with_truncation(
-                        effort_detail, truncated_any or effort_truncated
-                    ),
+                    _with_truncation(effort_detail, truncated_any or effort_truncated),
                 )
             total = (
                 result.input_tokens + effort_usage[0],
@@ -2317,9 +2292,7 @@ class RoutingState:
         return route_status_text(self, strategy)
 
 
-def route_status_text(
-    routing: RoutingState, strategy: RoutingStrategy | None
-) -> str:
+def route_status_text(routing: RoutingState, strategy: RoutingStrategy | None) -> str:
     """Full ``/route status`` report: toggle, source, engine, count."""
     lines = [f"Routing: {routing.state}"]
     if strategy is None:

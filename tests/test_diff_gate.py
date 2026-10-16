@@ -99,7 +99,9 @@ class TestDiffRouter:
         store = PendingStore(tmp_path / "sess")
         store.stash("/tmp/x.py", "a", "b", "write")
         bind_session(sid, store)
-        action, message = dispatch("/diff show", session_id=sid, index=index, diff_config_path=cfg)
+        action, message = dispatch(
+            "/diff show", session_id=sid, index=index, diff_config_path=cfg
+        )
         assert action == "reply"
         assert "auto" in message
         assert "1 pending" in message
@@ -107,7 +109,10 @@ class TestDiffRouter:
     def test_diff_bare_is_show(self, tmp_path):
         index = _fresh_index(tmp_path)
         action, message = dispatch(
-            "/diff", session_id=index.mint(), index=index, diff_config_path=tmp_path / "d.yaml"
+            "/diff",
+            session_id=index.mint(),
+            index=index,
+            diff_config_path=tmp_path / "d.yaml",
         )
         assert action == "reply"
         assert "Diff mode:" in message
@@ -116,7 +121,10 @@ class TestDiffRouter:
         index = _fresh_index(tmp_path)
         cfg = tmp_path / "diff.yaml"
         action, message = dispatch(
-            "/diff approve-each", session_id=index.mint(), index=index, diff_config_path=cfg
+            "/diff approve-each",
+            session_id=index.mint(),
+            index=index,
+            diff_config_path=cfg,
         )
         assert action == "reply"
         assert "approve-each" in message
@@ -125,14 +133,19 @@ class TestDiffRouter:
     def test_diff_bogus_mode_usage_never_agent_turn(self, tmp_path):
         index = _fresh_index(tmp_path)
         action, message = dispatch(
-            "/diff yolo", session_id=index.mint(), index=index, diff_config_path=tmp_path / "d.yaml"
+            "/diff yolo",
+            session_id=index.mint(),
+            index=index,
+            diff_config_path=tmp_path / "d.yaml",
         )
         assert action == "reply"
         assert "Usage" in message
 
     def test_search_empty_pattern_usage_never_agent_turn(self, tmp_path):
         index = _fresh_index(tmp_path)
-        action, message = dispatch("/search", session_id=index.mint(), index=index, cwd=tmp_path)
+        action, message = dispatch(
+            "/search", session_id=index.mint(), index=index, cwd=tmp_path
+        )
         assert action == "reply"
         assert "Usage" in message
 
@@ -166,7 +179,9 @@ class TestDiffHelpers:
         assert "--- " in body and "+++ " in body
 
     def test_split_hunks(self):
-        body = unified_diff("l1\nl2\nl3\nl4\nl5\nl6\nl7\n", "L1\nl2\nl3\nl4\nl5\nl6\nL7\n", "f.py")
+        body = unified_diff(
+            "l1\nl2\nl3\nl4\nl5\nl6\nl7\n", "L1\nl2\nl3\nl4\nl5\nl6\nL7\n", "f.py"
+        )
         hunks = split_hunks(body)
         assert len(hunks) >= 1
         assert all("@@ " in h or "--- " in h for h in hunks)
@@ -182,8 +197,11 @@ class TestDiffGateModes:
         files: dict = {}
         read, write = _mem_io(files)
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "approve-each", ask=lambda prompt: True,
-            reader=read, writer=write,
+            cwd=tmp_path,
+            get_mode=lambda: "approve-each",
+            ask=lambda prompt: True,
+            reader=read,
+            writer=write,
         )
         result = _run(gated(path="n.txt", content="hello\n"))
         assert "Applied" in result
@@ -193,8 +211,11 @@ class TestDiffGateModes:
         files: dict = {}
         read, write = _mem_io(files)
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "approve-each", ask=lambda prompt: False,
-            reader=read, writer=write,
+            cwd=tmp_path,
+            get_mode=lambda: "approve-each",
+            ask=lambda prompt: False,
+            reader=read,
+            writer=write,
         )
         result = _run(gated(path="n.txt", content="hello\n"))
         assert "Discarded" in result
@@ -205,7 +226,11 @@ class TestDiffGateModes:
         read, write = _mem_io(files)
         store = PendingStore(tmp_path / "sess")
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "on-demand", store=store, reader=read, writer=write,
+            cwd=tmp_path,
+            get_mode=lambda: "on-demand",
+            store=store,
+            reader=read,
+            writer=write,
         )
         result = _run(gated(path="n.txt", content="hello\n"))
         assert "Stashed" in result
@@ -220,7 +245,10 @@ class TestDiffGateModes:
         files: dict = {}
         read, write = _mem_io(files)
         gated = make_gated_edit(
-            cwd=tmp_path, get_mode=lambda: "auto", reader=read, writer=write,
+            cwd=tmp_path,
+            get_mode=lambda: "auto",
+            reader=read,
+            writer=write,
         )
         files[str(tmp_path / "e.txt")] = "old line\n"
         result = _run(gated(path="e.txt", old_str="old line", new_str="new line"))
@@ -240,7 +268,10 @@ class TestDiffGateModes:
             written[path] = content
 
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "auto", reader=flaky_read, writer=mem_write,
+            cwd=tmp_path,
+            get_mode=lambda: "auto",
+            reader=flaky_read,
+            writer=mem_write,
         )
         with pytest.raises(ValueError, match="changed since preview"):
             _run(gated(path="s.txt", content="v2\n"))
@@ -294,10 +325,21 @@ class TestDiffRendering:
         handler = CodeAgentCallbackHandler()
         out = _rendered_output(
             handler,
-            {"role": "assistant", "content": [{"toolUse": {
-                "name": "edit",
-                "input": {"path": "/tmp/a.py", "old_str": "x = 1", "new_str": "x = 2"},
-            }}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "name": "edit",
+                            "input": {
+                                "path": "/tmp/a.py",
+                                "old_str": "x = 1",
+                                "new_str": "x = 2",
+                            },
+                        }
+                    }
+                ],
+            },
         )
         assert "+++" in out and "---" in out
 
@@ -305,10 +347,17 @@ class TestDiffRendering:
         handler = CodeAgentCallbackHandler()
         out = _rendered_output(
             handler,
-            {"role": "assistant", "content": [{"toolUse": {
-                "name": "write",
-                "input": {"path": "/tmp/b.py", "content": "print(1)\n"},
-            }}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "name": "write",
+                            "input": {"path": "/tmp/b.py", "content": "print(1)\n"},
+                        }
+                    }
+                ],
+            },
         )
         assert "+++" in out and "---" in out
 
@@ -316,10 +365,17 @@ class TestDiffRendering:
         handler = CodeAgentCallbackHandler()
         out = _rendered_output(
             handler,
-            {"role": "assistant", "content": [{"toolUse": {
-                "name": "search",
-                "input": {"pattern": "needle_fn", "path": "/tmp"},
-            }}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "name": "search",
+                            "input": {"pattern": "needle_fn", "path": "/tmp"},
+                        }
+                    }
+                ],
+            },
         )
         assert "needle_fn" in out
 
@@ -327,10 +383,17 @@ class TestDiffRendering:
         handler = CodeAgentCallbackHandler()
         out = _rendered_output(
             handler,
-            {"role": "assistant", "content": [{"toolResult": {
-                "status": "success",
-                "content": [{"text": "/tmp/hay.py:3:def needle_fn():"}],
-            }}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolResult": {
+                            "status": "success",
+                            "content": [{"text": "/tmp/hay.py:3:def needle_fn():"}],
+                        }
+                    }
+                ],
+            },
         )
         assert "/tmp/hay.py:3:" in out
 
@@ -338,9 +401,17 @@ class TestDiffRendering:
         handler = CodeAgentCallbackHandler()
         out = _rendered_output(
             handler,
-            {"role": "assistant", "content": [{"toolUse": {
-                "name": "mystery", "input": {"foo": "bar"},
-            }}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "name": "mystery",
+                            "input": {"foo": "bar"},
+                        }
+                    }
+                ],
+            },
         )
         assert "foo" in out and "bar" in out
 
@@ -369,8 +440,12 @@ class TestGateSubsumption:
             raise AssertionError("gate-active approve-each must not ask per hunk")
 
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "approve-each", ask=fail_ask,
-            reader=read, writer=write, gate_active=True,
+            cwd=tmp_path,
+            get_mode=lambda: "approve-each",
+            ask=fail_ask,
+            reader=read,
+            writer=write,
+            gate_active=True,
         )
         result = _run(gated(path="m.txt", content=new))
         assert "Applied" in result
@@ -388,8 +463,11 @@ class TestGateSubsumption:
             return True
 
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "approve-each", ask=count_ask,
-            reader=read, writer=write,
+            cwd=tmp_path,
+            get_mode=lambda: "approve-each",
+            ask=count_ask,
+            reader=read,
+            writer=write,
         )
         result = _run(gated(path="m.txt", content=new))
         assert "Applied" in result
@@ -413,7 +491,10 @@ class TestGateSubsumption:
         import builtins
 
         real_input = builtins.input
-        builtins.input = lambda *args: (gate_prompts.__setitem__("n", gate_prompts["n"] + 1), "y")[1]
+        builtins.input = lambda *args: (
+            gate_prompts.__setitem__("n", gate_prompts["n"] + 1),
+            "y",
+        )[1]
         try:
             import asyncio
             from types import SimpleNamespace
@@ -425,7 +506,11 @@ class TestGateSubsumption:
                 handler.before_tool_call(
                     SimpleNamespace(
                         agent=_Agent(),
-                        tool_use={"name": "write", "input": {"path": "n.txt"}, "toolUseId": "w1"},
+                        tool_use={
+                            "name": "write",
+                            "input": {"path": "n.txt"},
+                            "toolUseId": "w1",
+                        },
                     )
                 )
             )
@@ -439,8 +524,12 @@ class TestGateSubsumption:
             raise AssertionError("wrapper must not re-prompt under gate_active")
 
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "approve-each", ask=fail_ask,
-            reader=read, writer=write, gate_active=True,
+            cwd=tmp_path,
+            get_mode=lambda: "approve-each",
+            ask=fail_ask,
+            reader=read,
+            writer=write,
+            gate_active=True,
         )
         result = _run(gated(path="n.txt", content="hello\n"))
         assert "Applied" in result
@@ -451,8 +540,12 @@ class TestGateSubsumption:
         read, write = _mem_io(files)
         store = PendingStore(tmp_path / "sess")
         gated = make_gated_write(
-            cwd=tmp_path, get_mode=lambda: "on-demand", store=store,
-            reader=read, writer=write, gate_active=True,
+            cwd=tmp_path,
+            get_mode=lambda: "on-demand",
+            store=store,
+            reader=read,
+            writer=write,
+            gate_active=True,
         )
         assert "Stashed" in _run(gated(path="n.txt", content="hello\n"))
         applied = _run(apply_stashed(store, reader=read, writer=write))

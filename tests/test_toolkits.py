@@ -1,18 +1,20 @@
 """Tests for strands_code_agent.toolkits — Toolkit class and built-in toolkit instances."""
 
-import pytest
 from dataclasses import fields
-from strands_code_agent.toolkits import (
-    Toolkit,
-    VISUALIZATION_TOOLKIT,
-    DATA_ANALYSIS_TOOLKIT,
-)
-from strands_code_agent.imports import extract_imports
 
+import pytest
+
+from strands_code_agent.imports import extract_imports
+from strands_code_agent.toolkits import (
+    DATA_ANALYSIS_TOOLKIT,
+    VISUALIZATION_TOOLKIT,
+    Toolkit,
+)
 
 # ---------------------------------------------------------------------------
 # Toolkit construction
 # ---------------------------------------------------------------------------
+
 
 class TestToolkitInit:
     def test_defaults_are_none(self):
@@ -53,6 +55,7 @@ class TestToolkitInit:
 # Toolkit is a dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestToolkitDataclass:
     def test_is_dataclass(self):
         assert len(fields(Toolkit)) == 4
@@ -78,12 +81,16 @@ class TestToolkitDataclass:
 # extract_imports
 # ---------------------------------------------------------------------------
 
+
 class TestExtractImports:
     def test_import_statement(self):
         assert extract_imports("import json") == {"json"}
 
     def test_from_import(self):
-        assert extract_imports("from datetime import date") == {"datetime", "datetime.date"}
+        assert extract_imports("from datetime import date") == {
+            "datetime",
+            "datetime.date",
+        }
 
     def test_multiple_imports(self):
         code = "import os\nimport sys\nfrom json import dumps"
@@ -122,6 +129,7 @@ class TestExtractImports:
 # ---------------------------------------------------------------------------
 # Built-in toolkits
 # ---------------------------------------------------------------------------
+
 
 class TestBuiltinToolkits:
     def test_visualization_toolkit_libraries_use_wildcards(self):

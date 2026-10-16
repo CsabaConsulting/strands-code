@@ -55,7 +55,10 @@ class TestRename:
         sid = index.mint()
         entry = index.rename(sid, "Atlas Project")
         assert entry["title"] == "Atlas Project"
-        assert SessionIndex(tmp_path / "index").list_recent()[0]["title"] == "Atlas Project"
+        assert (
+            SessionIndex(tmp_path / "index").list_recent()[0]["title"]
+            == "Atlas Project"
+        )
 
     def test_rename_unknown_id_raises_key_error(self, tmp_path):
         with pytest.raises(KeyError):

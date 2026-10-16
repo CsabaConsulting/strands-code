@@ -117,7 +117,9 @@ class SkillIndex:
                 path=skill.path,
                 shadowed=shadowed,
                 instructions=skill.instructions or "",
-                allowed_tools=list(skill.allowed_tools) if skill.allowed_tools else None,
+                allowed_tools=list(skill.allowed_tools)
+                if skill.allowed_tools
+                else None,
             )
 
     def resolve(self, text: str) -> SkillEntry | None:

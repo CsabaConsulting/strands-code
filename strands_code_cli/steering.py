@@ -247,7 +247,9 @@ def make_steering_hook(source: SteeringState | SteeringSlot) -> Callable[[Any], 
         if not text:
             return  # no steering: the call proceeds untouched
         tool_use = getattr(event, "tool_use", None) or {}
-        tool_use_id = tool_use.get("toolUseId", "") if isinstance(tool_use, dict) else ""
+        tool_use_id = (
+            tool_use.get("toolUseId", "") if isinstance(tool_use, dict) else ""
+        )
         if tool_use_id:
             arm = getattr(source, "arm", None)
             state = getattr(source, "state", None)
@@ -282,7 +284,9 @@ hooks package at module scope.
 """
 
 
-def register_steering_hook(agent: Any, slot: SteeringSlot | None = None) -> SteeringSlot:
+def register_steering_hook(
+    agent: Any, slot: SteeringSlot | None = None
+) -> SteeringSlot:
     """Register the boundary hook on an agent (idempotent per agent).
 
     Args:
@@ -293,15 +297,21 @@ def register_steering_hook(agent: Any, slot: SteeringSlot | None = None) -> Stee
         The slot (also stashed as ``agent._steering_slot`` for the loop).
     """
     existing = getattr(agent, "_steering_slot", None)
-    if isinstance(existing, SteeringSlot) and getattr(agent, "_steering_hook_registered", False):
+    if isinstance(existing, SteeringSlot) and getattr(
+        agent, "_steering_hook_registered", False
+    ):
         return existing
     from strands.hooks import HookOrder
     from strands.hooks.events import BeforeToolCallEvent
 
-    owned = slot if slot is not None else (
-        existing if isinstance(existing, SteeringSlot) else SteeringSlot()
+    owned = (
+        slot
+        if slot is not None
+        else (existing if isinstance(existing, SteeringSlot) else SteeringSlot())
     )
-    agent.add_hook(make_steering_hook(owned), BeforeToolCallEvent, order=HookOrder.SDK_FIRST)
+    agent.add_hook(
+        make_steering_hook(owned), BeforeToolCallEvent, order=HookOrder.SDK_FIRST
+    )
     try:
         agent._steering_slot = owned
         agent._steering_hook_registered = True

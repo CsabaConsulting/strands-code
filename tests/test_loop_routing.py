@@ -8,12 +8,10 @@ for real.
 
 from __future__ import annotations
 
-import json
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-
-import sys
 
 import pytest
 
@@ -120,9 +118,7 @@ def _drive(monkeypatch, prompts, agent, index, model_id, invoke):
         "start_steering_reader",
         lambda *args, **kwargs: SimpleNamespace(stop=lambda: None),
     )
-    loop_mod.run_loop(
-        agent, session_id=index.mint(), index=index, model_id=model_id
-    )
+    loop_mod.run_loop(agent, session_id=index.mint(), index=index, model_id=model_id)
 
 
 def _serving_invoke(calls):
@@ -191,9 +187,7 @@ class TestPreTurnHook:
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
         calls: list = []
-        _drive(
-            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
-        )
+        _drive(monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls))
         assert saved == []  # FENCE: routed switch applies in memory only
         assert len(calls) == 1 and calls[0][0] == "hello"
         assert "haiku" in calls[0][1]  # turn served on the picked model
@@ -220,9 +214,7 @@ class TestPreTurnHook:
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
         calls: list = []
-        _drive(
-            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
-        )
+        _drive(monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls))
         assert saved == []  # no-op fast path: no switch, no persistence
         assert agent.model == "sentinel"
         assert len(_routed_lines(capsys.readouterr().out)) == 1
@@ -232,7 +224,9 @@ class TestPreTurnHook:
     ):
         monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: _strategy())
         monkeypatch.setattr(
-            routing_mod, "decide_via_openrouter", lambda **kw: EngineResult(answers=None)
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: EngineResult(answers=None),
         )
         seed = [
             {"role": "user", "content": [{"text": "earlier"}]},
@@ -299,9 +293,7 @@ class TestPreTurnHook:
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
         calls: list = []
-        _drive(
-            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
-        )
+        _drive(monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls))
         assert saved == []  # FENCE: switch applies in memory, never persists
         assert "Routed \u2192" not in capsys.readouterr().out
 
@@ -324,8 +316,7 @@ class TestPreTurnHook:
         flat = " ".join(out.split())  # console width may wrap the note
         assert (
             f"Routing held on {NOVA_MICRO} "
-            "(paused: all engines unreachable (openrouter); retrying next ask)"
-            in flat
+            "(paused: all engines unreachable (openrouter); retrying next ask)" in flat
         )
         assert "Routed \u2192" not in out
         assert events[0]["held"] is True
@@ -346,8 +337,7 @@ class TestPreTurnHook:
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the note
         assert (
-            f"Routing held on {NOVA_MICRO} (openrouter 503; retrying next ask)"
-            in flat
+            f"Routing held on {NOVA_MICRO} (openrouter 503; retrying next ask)" in flat
         )
 
     def test_quiet_keeps_pause_note(self, tmp_path, monkeypatch, capsys):
@@ -380,9 +370,7 @@ class TestPreTurnHook:
             raise RuntimeError("almanac down")
 
         monkeypatch.setattr(routing_mod, "decide", _boom)
-        agent = SimpleNamespace(
-            messages=[], model="sentinel", _session_manager=None
-        )
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         served = _route_pre_turn(
             agent,
             current_model=NOVA_MICRO,
@@ -398,8 +386,7 @@ class TestPreTurnHook:
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the note
         assert (
-            f"Routing held on {NOVA_MICRO} (decide failed; retrying next ask)"
-            in flat
+            f"Routing held on {NOVA_MICRO} (decide failed; retrying next ask)" in flat
         )
 
     def test_pause_resumes_on_next_ask(self, tmp_path, monkeypatch, capsys):
@@ -419,9 +406,7 @@ class TestPreTurnHook:
         assert routing.is_paused() is False
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
-    def test_routed_line_carries_truncation_marker(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_routed_line_carries_truncation_marker(self, tmp_path, monkeypatch, capsys):
         import dataclasses
 
         events: list = []
@@ -433,9 +418,7 @@ class TestPreTurnHook:
         assert len(_routed_lines(out)) == 1
         assert routing_mod.TRUNCATION_MARKER in flat
 
-    def test_hold_line_carries_truncation_marker(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_hold_line_carries_truncation_marker(self, tmp_path, monkeypatch, capsys):
         events: list = []
         served, _ = _hook(
             tmp_path,
@@ -469,9 +452,7 @@ class TestPreTurnHook:
         monkeypatch.setattr(
             routing_mod,
             "decide_via_openrouter",
-            lambda **kw: _table_result(
-                NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}
-            ),
+            lambda **kw: _table_result(NOVA_MICRO, probs={HAIKU: 0.1, NOVA_MICRO: 0.9}),
         )
         seed = [{"role": "user", "content": [{"text": "earlier"}]}]
         agent = SimpleNamespace(
@@ -513,16 +494,12 @@ class TestPreTurnHook:
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
         calls: list = []
-        _drive(
-            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
-        )
+        _drive(monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls))
         assert saved == []  # FENCE: routed switch never persists
         assert efforts == ["low"]  # first advertised level reached the model
         assert len(_routed_lines(capsys.readouterr().out)) == 1
 
-    def test_threshold_hold_prints_confidence_note(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_threshold_hold_prints_confidence_note(self, tmp_path, monkeypatch, capsys):
         strategy = _strategy(
             candidates=[
                 RoutingCandidate(id=HAIKU, levels=["low", "high"]),
@@ -550,14 +527,11 @@ class TestPreTurnHook:
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the note
         assert (
-            f"Routing held on {HAIKU} (confidence 41% < 62%; retrying next ask)"
-            in flat
+            f"Routing held on {HAIKU} (confidence 41% < 62%; retrying next ask)" in flat
         )
         assert "Routed \u2192" not in out
 
-    def test_near_tie_routes_cheaper_with_marker(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_near_tie_routes_cheaper_with_marker(self, tmp_path, monkeypatch, capsys):
         strategy = _strategy(
             candidates=[
                 RoutingCandidate(id=HAIKU, levels=["low", "high"]),
@@ -572,18 +546,14 @@ class TestPreTurnHook:
         monkeypatch.setattr(
             routing_mod,
             "decide_via_openrouter",
-            lambda **kw: _table_result(
-                HAIKU, probs={HAIKU: 0.52, SONNET: 0.48}
-            ),
+            lambda **kw: _table_result(HAIKU, probs={HAIKU: 0.52, SONNET: 0.48}),
         )
         saved: list[str] = []
         _no_persist(monkeypatch, saved)
         agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
         index = SessionIndex(tmp_path / "index")
         calls: list = []
-        _drive(
-            monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls)
-        )
+        _drive(monkeypatch, ["hello"], agent, index, NOVA_MICRO, _serving_invoke(calls))
         assert saved == []  # FENCE: tie-break switch never persists
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the line
@@ -658,17 +628,11 @@ class TestChainSkipNotes:
         assert len(calls) == 2  # both asks served through the hook
         return saved
 
-    def test_two_routed_asks_emit_one_skip_line(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        self._drive_two_asks(
-            tmp_path, monkeypatch, _keyless_native_strategy()
-        )
+    def test_two_routed_asks_emit_one_skip_line(self, tmp_path, monkeypatch, capsys):
+        self._drive_two_asks(tmp_path, monkeypatch, _keyless_native_strategy())
         out = capsys.readouterr().out
         assert len(_routed_lines(out)) == 2  # the hook ran for both asks
-        assert (
-            out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
-        )
+        assert out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
 
     def test_skip_notes_false_emits_zero(self, tmp_path, monkeypatch, capsys):
         self._drive_two_asks(
@@ -684,9 +648,7 @@ class TestChainSkipNotes:
         )
         out = capsys.readouterr().out
         assert _routed_lines(out) == []  # quiet suppresses the routine line
-        assert (
-            out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
-        )
+        assert out.count("native engine skipped: TYPESAFE_API_KEY not set") == 1
 
 
 def _write_skill(skills_dir, name: str):
@@ -909,7 +871,8 @@ class TestRoutingToggle:
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no radio")),
         )
         monkeypatch.setattr(
-            "builtins.input", lambda *a: (_ for _ in ()).throw(AssertionError("no input"))
+            "builtins.input",
+            lambda *a: (_ for _ in ()).throw(AssertionError("no input")),
         )
         holder = RoutingState(initial="off")
         action, message = dispatch(
@@ -931,7 +894,8 @@ class TestRoutingToggle:
             lambda *a, **k: (_ for _ in ()).throw(AssertionError("no radio")),
         )
         monkeypatch.setattr(
-            "builtins.input", lambda *a: (_ for _ in ()).throw(AssertionError("no input"))
+            "builtins.input",
+            lambda *a: (_ for _ in ()).throw(AssertionError("no input")),
         )
         holder = RoutingState(initial="on")
         action, message = dispatch(
@@ -1011,9 +975,7 @@ def _hook(tmp_path, monkeypatch, strategy, engine_result, events):
     return served, saved
 
 
-def _hook_with_routing(
-    tmp_path, monkeypatch, strategy, engine_result, events, routing
-):
+def _hook_with_routing(tmp_path, monkeypatch, strategy, engine_result, events, routing):
     """Drive the pre-turn hook directly with a caller-owned toggle."""
     from strands_code_cli.loop import _route_pre_turn
 
@@ -1086,9 +1048,7 @@ class TestCostRouting:
         expected = cost_for(1000, 500, NOVA_MICRO) + 0.000625  # reported spend
         assert expected is not None
         total = next(line for line in report.splitlines() if line.startswith("Total:"))
-        assert total == (
-            f"Total: in 3.00K, out 600, ${expected:.4f}"
-        )
+        assert total == (f"Total: in 3.00K, out 600, ${expected:.4f}")
         assert "Prices: static table." in report
 
     def test_dispatch_cost_forwards_routing_events(self, tmp_path):
@@ -1135,8 +1095,7 @@ class TestCostRouting:
         assert cost_report(turns, NOVA_MICRO, routing=None) == golden
         assert cost_report(turns, NOVA_MICRO, routing=[]) == golden
         assert (
-            cost_report([], "mystery/model-x")
-            == "Cost — mystery/model-x\n"
+            cost_report([], "mystery/model-x") == "Cost — mystery/model-x\n"
             "Total: in 0, out 0\n"
             "Prices: unknown.\n"
             "Display only — no budgets or enforcement."
@@ -1227,7 +1186,9 @@ def _capture_build(calls):
 
 def _side_ctx(monkeypatch, agent, engine, events, strategy=None):
     monkeypatch.setattr(
-        routing_mod, "load_strategy", lambda **kw: _strategy() if strategy is None else strategy
+        routing_mod,
+        "load_strategy",
+        lambda **kw: _strategy() if strategy is None else strategy,
     )
     monkeypatch.setattr(routing_mod, "decide_via_openrouter", engine)
     builds: list = []
@@ -1306,9 +1267,7 @@ class TestSideRouting:
         assert "85%" in flat and "70%" in flat  # both confidences inline
         assert "~$" in flat and "/ask vs" in flat
 
-    def test_engine_failure_spawns_on_parent_model_silently(
-        self, monkeypatch, capsys
-    ):
+    def test_engine_failure_spawns_on_parent_model_silently(self, monkeypatch, capsys):
         events: list = []
         agent = _side_agent()
         ctx, builds = _side_ctx(
@@ -1371,9 +1330,7 @@ class TestSideRouting:
         agent = _side_agent()
         routing = RoutingState(initial="on")
         routing.pause()
-        ctx = loop_mod._btw_context_for(
-            agent, routing=routing, routing_events=events
-        )
+        ctx = loop_mod._btw_context_for(agent, routing=routing, routing_events=events)
         ctx.build("quick question")
         assert len(builds) == 1
         assert builds[0][0]["model"] is agent.model
@@ -1456,9 +1413,7 @@ class TestSideRouting:
         assert events[0]["held"] is True
         assert events[0]["engine"] == "resolve"
 
-    def test_same_model_pick_skips_resolve_and_still_routes(
-        self, monkeypatch, capsys
-    ):
+    def test_same_model_pick_skips_resolve_and_still_routes(self, monkeypatch, capsys):
         # Same-model stay picks never resolve: the hook applies no
         # switch and no effort, so there is nothing to judge.
         import strands_harness.models as harness_models
@@ -1491,16 +1446,12 @@ class TestSideRouting:
         assert events[0]["side"] is True
         assert "Routed (btw)" in capsys.readouterr().out
 
-    def test_unreasoned_effort_holds_to_parent_silently(
-        self, monkeypatch, capsys
-    ):
+    def test_unreasoned_effort_holds_to_parent_silently(self, monkeypatch, capsys):
         # Thinking effort on a non-reasoning candidate passes the
         # effort call but the switch-path effort check must still hold.
         strategy = _strategy(
             candidates=[
-                RoutingCandidate(
-                    id="openrouter/some-chat", levels=["low", "high"]
-                ),
+                RoutingCandidate(id="openrouter/some-chat", levels=["low", "high"]),
             ]
         )
         events: list = []
@@ -1554,9 +1505,7 @@ class TestSideRouting:
         ctx, builds = _side_ctx(
             monkeypatch,
             agent,
-            lambda **kw: _table_result(
-                HAIKU, probs={HAIKU: 0.41, NOVA_MICRO: 0.59}
-            ),
+            lambda **kw: _table_result(HAIKU, probs={HAIKU: 0.41, NOVA_MICRO: 0.59}),
             events,
         )
         ctx.build("ambiguous ask?")
