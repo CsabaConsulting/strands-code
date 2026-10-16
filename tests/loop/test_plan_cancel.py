@@ -217,7 +217,7 @@ class TestKillAfterCancel:
         from pathlib import Path
 
         from strands_code_cli.loop.core import explicit_save
-        from tests.test_kill_resume import _make_session_agent, _transcript_text
+        from tests.session.test_kill_resume import _make_session_agent, _transcript_text
 
         session_id = str(uuid.uuid4())
         session_dir = Path(tmp_path) / "sessions"

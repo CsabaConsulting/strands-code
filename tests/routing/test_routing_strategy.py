@@ -926,7 +926,7 @@ class TestRouteSetup:
         assert not (tmp_path / "r.yaml").exists()
 
     def test_docs_routing_examples_are_valid_yaml(self):
-        text = (Path(__file__).parent.parent / "docs" / "ROUTING.md").read_text(
+        text = (Path(__file__).parents[2] / "docs" / "ROUTING.md").read_text(
             encoding="utf-8"
         )
         blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)
@@ -1346,7 +1346,7 @@ class TestRouteValidate:
         assert calls == []
 
     def test_docs_routing_examples_validate_verbatim(self, tmp_path):
-        text = (Path(__file__).parent.parent / "docs" / "ROUTING.md").read_text(
+        text = (Path(__file__).parents[2] / "docs" / "ROUTING.md").read_text(
             encoding="utf-8"
         )
         blocks = re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)

@@ -211,7 +211,7 @@ class TestEntryRouting:
 
 class TestCliConstructionContract:
     def test_no_bare_agent_construction_in_cli(self):
-        cli_dir = Path(__file__).resolve().parent.parent / "strands_code_cli"
+        cli_dir = Path(__file__).resolve().parents[2] / "strands_code_cli"
         sources = sorted(cli_dir.glob("*.py"))
         assert sources, "strands_code_cli package must contain modules"
         offenders = []

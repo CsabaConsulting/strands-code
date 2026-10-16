@@ -21,7 +21,6 @@ from strands_code_agent.code_agent import (
 from strands_code_agent.python_environments.local_sandboxed import (
     SandboxedPythonInterpreter,
 )
-from strands_code_agent.search_tool import search as search_tool
 from strands_code_cli.dispatch.core import show_picker
 from strands_code_cli.entry.first_run import (
     BEDROCK_SETUP_POINTER,
@@ -131,6 +130,10 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     # when the dir is missing — the tool then reports no skills, and a
     # later reload picks up the created dir).
     skills_plugin = AgentSkills(skills=[DEFAULT_SKILLS_DIR])
+    # Deferred: search_tool imports strands_code_cli at module level, so a
+    # top-level import here would cycle (cli root -> main -> search_tool).
+    from strands_code_agent.search_tool import search as search_tool
+
     kwargs: dict[str, Any] = {
         "tools": [
             interpreter.get_tool(),

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
 
 PROFILE_FORM = "bedrock/us.amazon.nova-micro-v1:0"

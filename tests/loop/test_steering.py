@@ -116,7 +116,7 @@ class TestArmedSkipPrompt:
         state.note("steer me")
         make_steering_hook(slot)(_hook_event(uid="u5"))
 
-        from tests.test_mode import _event
+        from tests.policy.test_mode import _event
 
         first = classifier(_event("shell", {"command": "x"}, uid="u5"))
         assert first.requires_human_in_the_loop is False
@@ -303,7 +303,7 @@ class TestMidTurnSlashReply:
         # While gate_open is set, the classifier still returns its normal
         # verdict — the reader never diverts the y/n answer.
         classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
-        from tests.test_mode import _event
+        from tests.policy.test_mode import _event
 
         gate_open.set()
         try:

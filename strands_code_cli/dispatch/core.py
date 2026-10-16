@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 import typer
 
 from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
-from strands_code_agent.search_tool import format_hits, run_search
 from strands_code_cli.memory.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
@@ -1802,6 +1801,10 @@ def _policy_message(rest: str) -> str:
 
 def _search_message(rest: str, cwd: str | Path) -> str:
     """Run the search tool synchronously; never triggers a model turn."""
+    # Deferred: search_tool imports strands_code_cli at module level, so a
+    # top-level import here would cycle (cli root -> dispatch -> search_tool).
+    from strands_code_agent.search_tool import format_hits, run_search
+
     pattern, file_glob, limit = _parse_search_args(rest)
     if not pattern:
         return _SEARCH_USAGE

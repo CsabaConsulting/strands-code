@@ -23,7 +23,7 @@ import pytest
 
 import strands_code_cli.routing.core as routing_mod
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = REPO_ROOT / "scripts" / "route-probe.py"
 PROBE_FILE = REPO_ROOT / "evals" / "routing-probe" / "probes.jsonl"
 BASELINE_FILE = REPO_ROOT / "evals" / "routing-probe" / "baseline.json"

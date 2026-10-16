@@ -241,7 +241,7 @@ class TestMemoryReload:
 
     def test_loop_calls_flush_on_exit_and_mutation_paths(self):
         source = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parents[2]
             / "strands_code_cli"
             / "loop"
             / "core.py"

@@ -474,7 +474,7 @@ class TestSkillCompleter:
 
     def test_loop_wires_completer_exactly_once(self):
         loop_source = (
-            Path(__file__).resolve().parent.parent
+            Path(__file__).resolve().parents[2]
             / "strands_code_cli"
             / "loop"
             / "core.py"

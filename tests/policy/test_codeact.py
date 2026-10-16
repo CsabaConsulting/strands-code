@@ -91,7 +91,7 @@ def _write_skill(skills_dir: Path, name: str) -> Path:
 
 def _loop_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop" / "core.py"
+        Path(__file__).resolve().parents[2] / "strands_code_cli" / "loop" / "core.py"
     ).read_text(encoding="utf-8")
 
 
@@ -636,7 +636,7 @@ class TestCodeactStartupPersist:
 
 def _codeact_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[2]
         / "strands_code_cli"
         / "policy"
         / "codeact.py"

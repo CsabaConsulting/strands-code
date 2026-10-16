@@ -64,7 +64,7 @@ def _dispatch(text, tmp_path, **kwargs):
 
 def _loop_source() -> str:
     return (
-        Path(__file__).resolve().parent.parent / "strands_code_cli" / "loop" / "core.py"
+        Path(__file__).resolve().parents[2] / "strands_code_cli" / "loop" / "core.py"
     ).read_text(encoding="utf-8")
 
 

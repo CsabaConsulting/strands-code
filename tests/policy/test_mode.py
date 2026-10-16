@@ -195,7 +195,7 @@ class TestTracerHookOrder:
 
         from strands_code_cli.entry.main import build_agent
         from strands_code_cli.policy.policy_gate import _active_classifier
-        from tests.test_kill_resume import _ReplayModel
+        from tests.session.test_kill_resume import _ReplayModel
 
         session_dir = Path(tempfile.mkdtemp())
         agent = build_agent(
@@ -415,7 +415,7 @@ class TestWiring:
 
         main_module = importlib.import_module("strands_code_cli.entry.main")
         from strands_code_cli.policy.policy_gate import _active_classifier
-        from tests.test_kill_resume import _ReplayModel
+        from tests.session.test_kill_resume import _ReplayModel
 
         captured: dict[str, Any] = {}
         real_factory = main_module.create_harness
