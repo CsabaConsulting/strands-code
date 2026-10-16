@@ -112,6 +112,87 @@ def _invoke_parallel(
             own_side_pool.shutdown(wait=False)
 
 
+def _pump_reap_side(
+    btw: BtwContext,
+    broker: Any,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+    both_running: threading.Event | None,
+) -> tuple[Any, Any, str | None]:
+    """Reap one completed side run; the caller adopts the cleared triple.
+
+    Holds the finished Q&A for the boundary flush and unregisters
+    the side cancel. The pump triple resets: the next loop pass
+    spawns the following queued question, if any.
+
+    Returns:
+        The cleared ``(None, None, None)`` side triple.
+    """
+    _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
+    unregister_btw_cancel(broker)
+    if both_running is not None:
+        both_running.clear()
+    return None, None, None
+
+
+def _pump_attach_live(
+    btw: BtwContext, btw_agent: Any, btw_future: Any, btw_question: str | None
+) -> None:
+    """Attach a live side run to the session context (D-11 outliving)."""
+    btw.attach_live(btw_agent, btw_future, btw_question or "")
+
+
+def _pump_spawn_next(
+    btw: BtwContext,
+    broker: Any,
+    side_pool: ThreadPoolExecutor,
+    both_running: threading.Event | None,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+) -> tuple[Any, Any, str | None]:
+    """Start one queued side run on the session pool (no-op when idle).
+
+    Idle (nothing live, nothing queued) clears ``running`` and returns
+    the triple unchanged — cleared only here (never at reap) so a
+    submit landing mid-respawn still reads running. A failed build
+    renders fenced and returns the triple unchanged, never failing
+    the main turn.
+
+    Returns:
+        The ``(agent, future, question)`` side triple: the fresh run
+        when one spawned, else the input triple unchanged.
+    """
+    try:
+        question = btw.spawn_queue.get_nowait()
+    except queue.Empty:
+        # No side live, nothing queued: idle-side.
+        # Cleared only here (never at reap) so a submit
+        # landing mid-respawn still reads running.
+        btw.running.clear()
+        return btw_agent, btw_future, btw_question
+    try:
+        built_agent, prompt = btw.build(question)
+    except Exception as exc:  # noqa: BLE001 — a failed spawn must never fail the main turn
+        render_btw_error(question, exc)
+        return btw_agent, btw_future, btw_question
+    # Fresh event per side run: the session context outlives
+    # turns, so the live run always owns a pristine signal.
+    btw.cancel_event = threading.Event()
+    btw_kwargs = (
+        {"cancel_signal": btw.cancel_event}
+        if hasattr(built_agent, "cancel_signal")
+        else {}
+    )
+    btw_future = side_pool.submit(built_agent, prompt, **btw_kwargs)
+    register_btw_cancel(broker, btw)
+    btw.running.set()
+    if both_running is not None:
+        both_running.set()
+    return built_agent, btw_future, question
+
+
 def _pump_parallel(
     agent: Any,
     text: str,
@@ -131,38 +212,6 @@ def _pump_parallel(
         with ThreadPoolExecutor(max_workers=1) as turn_pool:
             main_future = turn_pool.submit(agent, text, **kwargs)
 
-            def _spawn_next() -> None:
-                """Start one queued side run on the session pool (no-op when idle)."""
-                nonlocal btw_future, btw_agent, btw_question
-                try:
-                    question = btw.spawn_queue.get_nowait()
-                except queue.Empty:
-                    # No side live, nothing queued: idle-side.
-                    # Cleared only here (never at reap) so a submit
-                    # landing mid-respawn still reads running.
-                    btw.running.clear()
-                    return
-                try:
-                    built_agent, prompt = btw.build(question)
-                except Exception as exc:  # noqa: BLE001 — a failed spawn must never fail the main turn
-                    render_btw_error(question, exc)
-                    return
-                # Fresh event per side run: the session context outlives
-                # turns, so the live run always owns a pristine signal.
-                btw.cancel_event = threading.Event()
-                btw_kwargs = (
-                    {"cancel_signal": btw.cancel_event}
-                    if hasattr(built_agent, "cancel_signal")
-                    else {}
-                )
-                btw_future = side_pool.submit(built_agent, prompt, **btw_kwargs)
-                register_btw_cancel(broker, btw)
-                btw_agent = built_agent
-                btw_question = question
-                btw.running.set()
-                if both_running is not None:
-                    both_running.set()
-
             while True:
                 try:
                     if main_future.done():
@@ -175,28 +224,44 @@ def _pump_parallel(
                         # live side stays attached for the idle drain
                         # and the next turn's pump.
                         if btw_future is not None and btw_future.done():
-                            _finish_btw_turn(
-                                btw, btw_agent, btw_future, btw_question or ""
+                            btw_agent, btw_future, btw_question = _pump_reap_side(
+                                btw,
+                                broker,
+                                btw_agent,
+                                btw_future,
+                                btw_question,
+                                both_running,
                             )
-                            unregister_btw_cancel(broker)
-                            btw_future = None
-                            btw_question = None
-                            btw_agent = None
-                            if both_running is not None:
-                                both_running.clear()
                         if btw_future is None:
-                            _spawn_next()
+                            btw_agent, btw_future, btw_question = _pump_spawn_next(
+                                btw,
+                                broker,
+                                side_pool,
+                                both_running,
+                                btw_agent,
+                                btw_future,
+                                btw_question,
+                            )
                         break
                     if btw_future is not None and btw_future.done():
-                        _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
-                        unregister_btw_cancel(broker)
-                        btw_future = None
-                        btw_question = None
-                        btw_agent = None
-                        if both_running is not None:
-                            both_running.clear()
+                        btw_agent, btw_future, btw_question = _pump_reap_side(
+                            btw,
+                            broker,
+                            btw_agent,
+                            btw_future,
+                            btw_question,
+                            both_running,
+                        )
                     if btw_future is None:
-                        _spawn_next()
+                        btw_agent, btw_future, btw_question = _pump_spawn_next(
+                            btw,
+                            broker,
+                            side_pool,
+                            both_running,
+                            btw_agent,
+                            btw_future,
+                            btw_question,
+                        )
                     if broker is not None:
                         req = _poll_live(broker)
                         if req is not None:
@@ -250,26 +315,27 @@ def _pump_parallel(
                             btw.cancel_event.set()
                             unregister_btw_cancel(broker)
                             if btw_future is not None:
-                                btw.attach_live(
-                                    btw_agent, btw_future, btw_question or ""
+                                _pump_attach_live(
+                                    btw, btw_agent, btw_future, btw_question
                                 )
                             if both_running is not None:
                                 both_running.clear()
                             print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
                             raise
-                        _finish_btw_turn(btw, btw_agent, btw_future, btw_question or "")
-                        unregister_btw_cancel(broker)
-                        btw_future = None
-                        btw_question = None
-                        btw_agent = None
-                        if both_running is not None:
-                            both_running.clear()
+                        btw_agent, btw_future, btw_question = _pump_reap_side(
+                            btw,
+                            broker,
+                            btw_agent,
+                            btw_future,
+                            btw_question,
+                            both_running,
+                        )
                     else:
                         # Both picked: the side aborts on its event; it
                         # stays attached so the next turn reaps the
                         # abort (fenced cancel note, flag hygiene).
                         if btw_future is not None:
-                            btw.attach_live(btw_agent, btw_future, btw_question or "")
+                            _pump_attach_live(btw, btw_agent, btw_future, btw_question)
                         if both_running is not None:
                             both_running.clear()
                     print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
@@ -278,7 +344,7 @@ def _pump_parallel(
                 # Outliving-main: the side keeps running past the turn
                 # boundary; the idle drain and the next turn's pump
                 # reap it from the session context.
-                btw.attach_live(btw_agent, btw_future, btw_question or "")
+                _pump_attach_live(btw, btw_agent, btw_future, btw_question)
             try:
                 result = main_future.result()
             except TurnCancelled:
