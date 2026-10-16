@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
+NATIVE = REPO_ROOT / "scripts" / "uattest" / "scenarios_native.py"
 
 BARE_FORM = "bedrock/amazon.nova-micro-v1:0"
 
@@ -24,7 +25,7 @@ def _load(name, path):
     return module
 
 
-native = _load("uattest_driver", DRIVER)
+native = _load("scenarios_native", NATIVE)
 
 
 class TestRigModelId:

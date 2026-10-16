@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
 LIB = REPO_ROOT / "scripts" / "uattest" / "uattest_lib.py"
+CODEACT = REPO_ROOT / "scripts" / "uattest" / "scenarios_codeact.py"
 
 
 def _load(name, path):
@@ -25,7 +26,7 @@ def _load(name, path):
 
 
 lib = _load("uattest_lib", LIB)
-codeact = _load("uattest_driver", DRIVER)
+codeact = _load("scenarios_codeact", CODEACT)
 
 
 class TestCodeactRig:

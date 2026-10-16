@@ -3,7 +3,7 @@
 Re-homed pins over the shared Bedrock profile-form id, the fail-fast
 waits, and the r1/r2/r3/r4 scenarios. Wait behavior plus the pane_text
 monkeypatch target live in the shared library (D-13); scenario sources
-stay behind the thin driver dispatch until the per-area move.
+live in the per-area module behind the thin driver dispatch (D-14).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
 LIB = REPO_ROOT / "scripts" / "uattest" / "uattest_lib.py"
+ROUTING = REPO_ROOT / "scripts" / "uattest" / "scenarios_routing.py"
 
 PROFILE_FORM = "bedrock/us.amazon.nova-micro-v1:0"
 BARE_FORM = "bedrock/amazon.nova-micro-v1:0"
@@ -30,7 +31,7 @@ def _load(name, path):
 
 
 lib = _load("uattest_lib", LIB)
-routing = _load("uattest_driver", DRIVER)
+routing = _load("scenarios_routing", ROUTING)
 
 
 class TestRigModelId:
@@ -38,9 +39,12 @@ class TestRigModelId:
         assert lib.RIG_NOVA_MICRO == PROFILE_FORM
 
     def test_no_bare_form_in_driver_source(self):
-        lines = [ln for ln in DRIVER.read_text().splitlines() if not ln.startswith("#")]
-        hits = [ln for ln in lines if BARE_FORM in ln]
-        assert hits == []
+        for path in (DRIVER, ROUTING):
+            lines = [
+                ln for ln in path.read_text().splitlines() if not ln.startswith("#")
+            ]
+            hits = [ln for ln in lines if BARE_FORM in ln]
+            assert hits == [], f"bare form in {path.name}"
 
     def test_scenarios_build_from_shared_constant(self):
         for name in ("scenario_r2", "scenario_r3", "scenario_r4"):

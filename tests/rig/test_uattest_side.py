@@ -12,6 +12,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
+SIDE = REPO_ROOT / "scripts" / "uattest" / "scenarios_side.py"
 
 
 def _load(name, path):
@@ -21,7 +22,7 @@ def _load(name, path):
     return module
 
 
-side = _load("uattest_driver", DRIVER)
+side = _load("scenarios_side", SIDE)
 
 
 class TestSideScenarios:

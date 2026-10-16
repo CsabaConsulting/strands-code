@@ -13,6 +13,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "scripts" / "uattest" / "driver.py"
+COST = REPO_ROOT / "scripts" / "uattest" / "scenarios_cost.py"
 
 
 def _load(name, path):
@@ -22,7 +23,7 @@ def _load(name, path):
     return module
 
 
-cost = _load("uattest_driver", DRIVER)
+cost = _load("scenarios_cost", COST)
 
 
 class TestReportedSpendRig:
