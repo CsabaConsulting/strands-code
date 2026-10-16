@@ -38,7 +38,7 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - smolagents 1.26.0 - Sandboxed execution backend; `SandboxedPythonInterpreter` wraps `smolagents.local_python_executor.LocalPythonExecutor` (`strands_code_agent/python_environments/local_sandboxed.py`)
 - Jinja2 3.1.6 - System-prompt templating (`CODE_PREAMBLE_TEMPLATE`, `TEMP_DIR_TEMPLATE`, `DOMAIN_SPECIFIC_DOC_TEMPLATE` in `strands_code_agent/code_agent.py`)
 - Rich 15.0.0 - Terminal rendering in `CodeAgentCallbackHandler` (`strands_code_agent/callback_handler.py`: `Syntax`, `JSON`, `Markdown`, `Pretty`, `Console`)
-- PyYAML 6.0.3 - OKF bundle frontmatter parse/dump (`strands_code_agent/knowledge/bundle.py`, `strands_code_agent/knowledge/pdf_to_okf_bundle.py`)
+- PyYAML 6.0.3 - YAML strategy, capability, provider, and memory config parse (`strands_code_cli/routing/core.py`, `strands_code_cli/model/model_capabilities.py`, `strands_code_cli/entry/provider_config.py`)
 - pytest >=8 (locked 9.1.1) - Test runner; `integration` marker deselected by default via `[tool.pytest.ini_options]` in `pyproject.toml`
 - numpy / pandas / matplotlib / seaborn / scipy (dev dependency group) - Required at test runtime because toolkit wiring tests execute real plotting/analysis code (noted in `pyproject.toml` comment)
 - hatchling - Build backend (`[build-system]` in `pyproject.toml`)
@@ -51,10 +51,9 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - smolagents >=1.0.0 (locked 1.26.0) - Powers the default `SandboxedPythonInterpreter` (import allowlisting, timeouts)
 - Jinja2 >=3.0 - System-prompt assembly; removing it breaks `CodeAgent.__init__`
 - Rich >=13.0 - Callback handler rendering only; safe to make optional for headless use
-- PyYAML >=6.0 - OKF bundle read/write; required by `strands_code_agent/knowledge/`
+- PyYAML >=6.0 - YAML strategy, capability, provider, and memory config parse in `strands_code_cli/`
 - boto3 >=1.35.0 (locked 1.43.100, optional `agentcore` extra) - Only import is `strands_code_agent/python_environments/agentcore.py`; local-only installs never touch it
 - botocore (via boto3) - Monkey-patched in `strands_code_agent/solution_user_agent.py` to append `AWSSOLUTION/SO0353/v0.4.0` to User-Agent; imported at package init (`strands_code_agent/__init__.py`)
-- pymupdf (`fitz`) - Lazily imported inside `pdf_to_okf_bundle()` (`strands_code_agent/knowledge/pdf_to_okf_bundle.py`); NOT declared in `pyproject.toml`, so `pip install pymupdf` is required manually before PDF conversion (the example documents this)
 
 ## Configuration
 
@@ -64,13 +63,13 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - `pyproject.toml` - Project metadata, dependencies, optional `agentcore` extra, dev group, pytest config; no `[tool.hatch]` overrides (hatchling defaults)
 - `uv.lock` - Pinned dependency tree
 - `.github/workflows/publish.yml` - Release-to-PyPI build pipeline (checkout, setup-python 3.11, `python -m build`, `pypa/gh-action-pypi-publish`)
-- No `tsconfig.json`, `.nvmrc`, `.python-version`, Dockerfiles, or linter/formatter configs detected
+- No `tsconfig.json`, `.nvmrc`, `.python-version`, or Dockerfiles detected; lint/format config lives in `[tool.ruff]` in `pyproject.toml`
 
 ## Platform Requirements
 
 - Python >=3.10 with `uv` (`uv sync` reproduces project-local `.venv`)
 - Dev/test extras: `numpy`, `pandas`, `matplotlib`, `seaborn`, `scipy` (test-only runtime needs)
-- Optional: `pip install .[agentcore]` + AWS credentials for `AgentCorePythonInterpreter`; `pip install pymupdf` for PDF-to-OKF conversion
+- Optional: `pip install .[agentcore]` + AWS credentials for `AgentCorePythonInterpreter`
 - Published as a PyPI library (`strands-code-agent 0.4.0`, `hatchling.build`); consumers embed `CodeAgent` in their own process
 - No server, container, or hosting target in this repo; no deployment manifests
 
@@ -95,15 +94,15 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 
 ## Code Style
 
-- No formatter or linter is configured (no `ruff`, `black`, `flake8`, `mypy`, `pylint`, or `isort` config in `pyproject.toml`; no config files at repo root). Match the surrounding file's existing style by hand.
-- Observed style: 4-space indentation, double quotes for strings, single quotes accepted inside strings, ~100-120 char lines, blank line between top-level definitions, section banners in tests (`# ---...---` comment blocks).
-- Keep imports at the top of the file, one import per line; `from __future__ import annotations` first where present (`strands_code_agent/knowledge/bundle.py`, `strands_code_agent/knowledge/concept.py`, `strands_code_agent/knowledge/search.py`).
-- No linting tool is enforced. `pyproject.toml` contains only `[build-system]`, `[project]`, `[project.optional-dependencies]`, `[dependency-groups]`, `[project.urls]`, and `[tool.pytest.ini_options]`.
-- The only lint-adjacent convention is `# noqa: F401` on the intentional re-export side-effect import in `strands_code_agent/__init__.py`.
+- Ruff governs lint + format: run `uv run ruff check strands_code_cli tests scripts` and `uv run ruff format --check strands_code_cli tests scripts`. Config lives in `[tool.ruff]` in `pyproject.toml` (target py310, `force-exclude`, `strands_code_agent/` excluded for upstream-merge safety). Style is ruff defaults: 88 columns, double quotes.
+- Observed style: 4-space indentation, double quotes for strings, single quotes accepted inside strings, blank line between top-level definitions, section banners in tests (`# ---...---` comment blocks).
+- Keep imports at the top of the file, one import per line; `from __future__ import annotations` first where present.
+- Ruff is enforced with `select = ["E", "F", "I"]` (pyflakes + pycodestyle errors + isort) and `ignore = ["E501"]` (the formatter owns line length); complexity stays with radon/xenon. Waivers are per-line `# noqa` with a reason only — no file-level ignores.
+- The `# noqa: F401` re-export precedent in `strands_code_agent/__init__.py` still applies; the rig `noqa: E402` sibling-import precedent in `scripts/uattest/` shows the reason-citing form.
 
 ## Import Organization
 
-- None. Use absolute imports rooted at `strands_code_agent` everywhere (e.g. `from strands_code_agent.toolkits import Toolkit`). Do not use relative imports or `sys.path` manipulation.
+- None. Use absolute imports rooted at the package everywhere (e.g. `from strands_code_agent.toolkits import Toolkit`). Do not use relative imports. Exception: `scripts/uattest/` rig scripts insert their own directory via `sys.path` and use absolute sibling imports (loader-safe: the contract tests load the driver via `importlib` with no package path; rig scripts have no package path).
 
 ## Error Handling
 
@@ -111,7 +110,7 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - Salvage partial output on failure: `SandboxedPythonInterpreter.execute_code` reads `self.executor.state["_print_outputs"]` for print output captured before the exception.
 - Raise `TypeError` for wrong input types where the caller is a programmer, not the agent: `PythonInterpreter()` cannot be instantiated (abstract `ABC` with `@abstractmethod` in `strands_code_agent/python_environments/base.py`); `get_documentation` raises `TypeError(f"Expected a function or class, got {type(obj)}")` (`strands_code_agent/document_code.py`).
 - Convert low-level introspection failures into actionable `ValueError` with chaining: `_get_source` in `strands_code_agent/python_environments/agentcore.py` catches `(OSError, TypeError)` from `inspect.getsource` and raises `ValueError(... remote execution ...) from e`.
-- Fail soft on missing data in read paths: `OKFBundle.read` / `children` (`strands_code_agent/knowledge/bundle.py`) return formatted "not found" strings with suggestions instead of raising; `_parse_frontmatter` returns `({}, text)` when frontmatter is absent; `KeywordSearchIndex.query` returns `[]` for empty queries.
+- Fail soft on missing data in read paths: return formatted "not found" strings with suggestions instead of raising; return empty defaults (`{}`, `[]`) when optional data is absent.
 - Log-and-continue only for best-effort cleanup: `AgentCorePythonInterpreter._stop_session` catches `Exception` and calls `logger.warning(...)` so `clear_state` / `close` / `__del__` never raise.
 
 ## Logging
@@ -158,10 +157,6 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 | AgentCorePythonInterpreter | Remote Bedrock AgentCore code-interpreter sessions (lazy boto3 session, user-code serialization) | `strands_code_agent/python_environments/agentcore.py` |
 | Prompt builders | `get_documentation` (signature + docstring rendering) and `get_import_string` / `extract_imports` (AST-based) feed the system prompt and import allowlist | `strands_code_agent/document_code.py`, `strands_code_agent/imports.py` |
 | CodeAgentCallbackHandler | Rich terminal rendering of messages, code tool uses, and tool results | `strands_code_agent/callback_handler.py` |
-| OKFBundle | Lazy-loaded, read-optimized navigator over a directory of markdown concepts (`find`/`read`/`children`/`toc`, `expand`, `context`, backlinks) | `strands_code_agent/knowledge/bundle.py` |
-| Concept | Atomic knowledge unit dataclass (one `.md` file: id, type, title, body, links) | `strands_code_agent/knowledge/concept.py` |
-| SearchIndex / KeywordSearchIndex | ABC plus default AND-with-OR-fallback keyword backend; seam for embedding backends | `strands_code_agent/knowledge/search.py` |
-| pdf_to_okf_bundle | PDF TOC-bookmark → OKF bundle converter (pymupdf, lazy import) | `strands_code_agent/knowledge/pdf_to_okf_bundle.py` |
 | Solution user-agent hook | Monkeypatches `botocore.session.Session.__init__` to append `AWSSOLUTION/SO0353` tag; imported for side effect on package init | `strands_code_agent/solution_user_agent.py` |
 | Helpers | `image_to_base64`, `get_response_metrics` (Bedrock token/cost summary) | `strands_code_agent/utils.py` |
 
@@ -169,7 +164,7 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 
 - `CodeAgent` does not orchestrate tool chains; it gives the model one primary action interface (`python_repl`) and injects domain capability as importable Python symbols.
 - Toolkits are declarative capability bundles: allowlist entries, startup preamble, prompt guidance, and documented callables are merged at construction time (`strands_code_agent/code_agent.py:87-137`).
-- Execution backends are swappable behind the `PythonInterpreter` ABC via the `python_interpreter_class` constructor argument; the knowledge subsystem is an independent, dependency-light library consumable either directly or inside a toolkit.
+- Execution backends are swappable behind the `PythonInterpreter` ABC via the `python_interpreter_class` constructor argument.
 
 ## Layers
 
@@ -177,17 +172,12 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - Location: `strands_code_agent/code_agent.py`, `strands_code_agent/toolkits.py`, `strands_code_agent/__init__.py`
 - Contains: Prompt templates (`CODE_AGENT_INSTRUCTIONS`, `CODE_PREAMBLE_TEMPLATE`, `TEMP_DIR_TEMPLATE`, `DOMAIN_SPECIFIC_DOC_TEMPLATE`), toolkit merge logic, `tools=[python_repl]` wiring.
 - Depends on: Execution layer (interpreters), prompt-builder helpers, upstream `strands.Agent`.
-- Used by: Consumer scripts such as `examples/pdf_to_okf_bundle/agent_with_knowledge.py`; downstream CLI (planned, not yet implemented).
+- Used by: the `strands_code_cli` conversational CLI (the `strands-code` console script).
 - Purpose: Runs model-generated Python and returns STDOUT/STDERR observations; controls isolation (unrestricted vs allowlisted vs remote).
 - Location: `strands_code_agent/python_environments/`
 - Contains: `PythonInterpreter` ABC plus three implementations (`local_exec.py`, `local_sandboxed.py`, `agentcore.py`).
 - Depends on: `smolagents` (sandboxed), `boto3` (AgentCore, optional extra), `strands.tool` decorator for tool exposure.
 - Used by: `CodeAgent` only (constructed in `code_agent.py:131-138`).
-- Purpose: File-based knowledge navigation (OKF bundles) usable standalone or injected into the REPL as domain symbols.
-- Location: `strands_code_agent/knowledge/`
-- Contains: `Concept` dataclass, `OKFBundle` navigator, `SearchIndex` ABC + keyword backend, PDF converter.
-- Depends on: `pyyaml` (frontmatter parse); `pymupdf` lazily inside `pdf_to_okf_bundle` only.
-- Used by: Consumer code directly, or via `Toolkit(domain_specific_code=[OKFBundle], initialization_code=...)` as shown in `examples/pdf_to_okf_bundle/agent_with_knowledge.py`.
 - Purpose: Human-facing terminal output and cost telemetry; no control-flow role.
 - Location: `strands_code_agent/callback_handler.py`, `strands_code_agent/utils.py`
 - Contains: Rich-based message/code/result rendering; `get_response_metrics` token/cost helper; `image_to_base64`.
@@ -198,18 +188,15 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 
 ### Primary Request Path
 
-### Knowledge Navigation Flow
-
 ### Remote Execution Flow (AgentCore)
 
 - REPL state persists across tool calls within one interpreter lifetime but `CodeAgent` documents reset between user messages; `clear_state()` re-runs the preamble (local) or drops the remote session (AgentCore).
-- `OKFBundle` caches concepts/backlinks/search index after first load per instance (`_ensure_loaded` guard); no cross-instance cache.
 - Per-agent `tmp_dir` created under `/tmp` when `tmp_dir=True` and advertised in the system prompt (`strands_code_agent/code_agent.py:118-120`).
 
 ## Key Abstractions
 
 - Purpose: Single public entry point that turns declarative toolkits into a capable coding agent.
-- Examples: `strands_code_agent/code_agent.py`, `examples/pdf_to_okf_bundle/agent_with_knowledge.py`
+- Examples: `strands_code_agent/code_agent.py`
 - Pattern: Constructor-assembled system prompt + tool injection; extra behavior via `tools=[...]` and Strands `**kwargs` (model, etc.).
 - Purpose: The unit of domain capability: allowlist + preamble + prompt guidance + documented symbols.
 - Examples: `strands_code_agent/toolkits.py` (`VISUALIZATION_TOOLKIT`, `DATA_ANALYSIS_TOOLKIT`)
@@ -217,9 +204,6 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - Purpose: Uniform execution seam: `execute_code(code) -> (stdout, stderr)` plus Strands `@tool`-wrapped `python_repl`.
 - Examples: `strands_code_agent/python_environments/base.py`, `local_exec.py`, `local_sandboxed.py`, `agentcore.py`
 - Pattern: Strategy — `CodeAgent(python_interpreter_class=...)` selects the backend; `python_interpreter_kwargs` forwarded.
-- Purpose: Filesystem-backed, read-optimized knowledge graph with a pluggable search backend.
-- Examples: `strands_code_agent/knowledge/bundle.py`, `concept.py`, `search.py`
-- Pattern: Lazy index build; `SearchIndex` ABC lets consumers substitute embedding search without touching navigation code.
 
 ## Entry Points
 
@@ -229,16 +213,13 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 - Location: `strands_code_agent/code_agent.py:77-149`
 - Triggers: Consumer code (e.g. `agent = CodeAgent(toolkits=[...])` then `agent("...")` via `strands.Agent.__call__`).
 - Responsibilities: Toolkit merge, prompt assembly, interpreter construction, tool registration.
-- Location: `strands_code_agent/knowledge/__init__.py`, `examples/pdf_to_okf_bundle/agent_with_knowledge.py`
-- Triggers: Direct import/use; example run downloads a PDF, converts, and starts a bundle-backed agent.
-- Responsibilities: Offline knowledge preparation and runtime navigation.
-- There is no `__main__.py`, console-script, or service handler; the README describes the CLI as planned direction layered on `strands-harness`. Do not assume one exists.
+- There is no `__main__.py` or service handler; the CLI ships as the `strands-code` console script (`strands_code_cli.entry.main:main`).
 
 ## Architectural Constraints
 
 - **Threading:** Single-threaded synchronous model. No threads, asyncio, or workers in this repo; long runs are bounded by per-call `timeout_seconds` (default 180 in `CodeAgent`, 60 in interpreters) and AgentCore `session_timeout_seconds` (default 900).
 - **Global state:** `DEFAULT_CODE_AGENT_CALLBACK_HANDLER` module-level singleton shared by all `CodeAgent()` instances that omit `callback_handler` (`strands_code_agent/code_agent.py:36`); `botocore.session.Session.__init__` monkeypatched at import (`strands_code_agent/solution_user_agent.py:18`). `OKFBundle` caches are per-instance only.
-- **Circular imports:** None detected. Dependency direction is one-way: `code_agent.py` → interpreters/helpers; `knowledge/bundle.py` → `concept.py` + `search.py`; `python_environments/*` → `base.py`. `TYPE_CHECKING`-only import of `Concept` in `search.py` avoids a runtime cycle.
+- **Circular imports:** None detected. Dependency direction is one-way: `code_agent.py` → interpreters/helpers; `python_environments/*` → `base.py`.
 - **AWS-optional:** `boto3` is an optional `agentcore` extra; `AgentCorePythonInterpreter` is importable from the top level but only usable with credentials. Defaults stay local.
 
 ## Anti-Patterns

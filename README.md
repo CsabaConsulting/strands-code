@@ -49,7 +49,8 @@ First run without AWS credentials stops with a Bedrock setup pointer
 REPL basics: type an ask, keep asking — one conversation. `/resume`,
 `/rename`, `/forget`, `/model`, `/cost [refresh|table]`, `/compact`,
 `/clear`, `/context`, `/mode`, `/approve`, `/diff`, `/search`,
-`/policy`, `/skills`, `/init`, `/memory`, `/btw`, `/exit` work;
+`/policy`, `/skills`, `/init`, `/memory`, `/btw`, `/route`,
+`/codeact`, `/exit` work;
 unknown `/slash` shows a usage hint. Ask a side question mid-task with
 `/btw` — the main task keeps running. Ctrl-C cancels a running task
 (asks which when main + side both run), Ctrl-D exits with state saved.
@@ -73,7 +74,6 @@ The agent receives a `python_repl` tool automatically and solves tasks by writin
 | `CodeAgent` | `strands.Agent` subclass; auto-registers `python_repl`, assembles the system prompt from toolkits (`strands_code_agent/code_agent.py`). Extra tools via `tools=[...]`; model etc. via `**kwargs`. |
 | `Toolkit` | Domain bundle: `libraries` → interpreter allowlist, `initialization_code` → REPL preamble, `usage_instructions` → prompt guidance, `domain_specific_code` → auto-imported + documented symbols. Ships `VISUALIZATION_TOOLKIT`, `DATA_ANALYSIS_TOOLKIT`. |
 | Interpreters | `SandboxedPythonInterpreter` (default, allowlisted), `ExecPythonInterpreter` (trusted, unrestricted), `AgentCorePythonInterpreter` (remote Bedrock AgentCore sandbox; needs `uv sync --extra agentcore` + AWS creds). Selected via `python_interpreter_class`. |
-| Knowledge (OKF) | `strands_code_agent.knowledge`: convert PDFs to OKF concept bundles, navigate via `find` / `read` / `children` / `toc`. See `examples/pdf_to_okf_bundle/`. |
 | Callback | `CodeAgentCallbackHandler`: Rich terminal rendering (code highlighting, Markdown/JSON detection). |
 
 ```python
@@ -88,17 +88,21 @@ agent = CodeAgent(
 
 ## CLI status
 
-Working today (Phase 7 complete): resumable multi-ask REPL, resume
+Working today (Phase 11 complete): resumable multi-ask REPL, resume
 picker with session deletion, `--session-id`, `/resume` `/rename`
 `/forget` `/exit`, `/model` switching with history conversion, `/cost`
 `/context` display, `/compact` `/clear`, Plan/Act modes (`/mode`,
 `/approve`), anytime steering, gated `/diff` review, `/search`,
 `/policy` with standing rules, local skills (`/skills`), repo memory
 (`/init`, `/memory`), session auto-titles, Bedrock-or-stop first-run
-gate, kill-safe persistence, and the `/btw` side channel (parallel
-side questions under the same deny-first gate). Coming next:
-decision-model routing (Phase 8), opt-in CodeAct (Phase 9), `/review`,
-fuzzy file picker.
+gate, kill-safe persistence, the `/btw` side channel (parallel
+side questions under the same deny-first gate), decision-model
+routing (`/route`: per-ask model + effort selection via OpenRouter,
+Ollama, and native TypeSafe engines, with calibration), native
+TypeSafe decision engine, provider-reported spend (marked `/cost`
+actuals plus estimated split), and the opt-in CodeAct action
+interface (`--codeact`, `/codeact`: code mode alongside the default
+tool-calling mode). Coming next: `/review`, fuzzy file picker.
 
 ## Upstream sync
 

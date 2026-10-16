@@ -34,14 +34,14 @@ last_mapped_at: 2026-09-22
 
 **Formatting:**
 
-- No formatter or linter is configured (no `ruff`, `black`, `flake8`, `mypy`, `pylint`, or `isort` config in `pyproject.toml`; no config files at repo root). Match the surrounding file's existing style by hand.
-- Observed style: 4-space indentation, double quotes for strings, single quotes accepted inside strings, ~100-120 char lines, blank line between top-level definitions, section banners in tests (`# ---...---` comment blocks).
-- Keep imports at the top of the file, one import per line; `from __future__ import annotations` first where present (`strands_code_agent/knowledge/bundle.py`, `strands_code_agent/knowledge/concept.py`, `strands_code_agent/knowledge/search.py`).
+- Ruff governs lint + format: run `uv run ruff check strands_code_cli tests scripts` and `uv run ruff format --check strands_code_cli tests scripts`. Config lives in `[tool.ruff]` in `pyproject.toml` (target py310, `force-exclude`, `strands_code_agent/` excluded for upstream-merge safety). Style is ruff defaults: 88 columns, double quotes.
+- Observed style: 4-space indentation, double quotes for strings, single quotes accepted inside strings, blank line between top-level definitions, section banners in tests (`# ---...---` comment blocks).
+- Keep imports at the top of the file, one import per line; `from __future__ import annotations` first where present.
 
 **Linting:**
 
-- No linting tool is enforced. `pyproject.toml` contains only `[build-system]`, `[project]`, `[project.optional-dependencies]`, `[dependency-groups]`, `[project.urls]`, and `[tool.pytest.ini_options]`.
-- The only lint-adjacent convention is `# noqa: F401` on the intentional re-export side-effect import in `strands_code_agent/__init__.py`.
+- Ruff is enforced with `select = ["E", "F", "I"]` (pyflakes + pycodestyle errors + isort) and `ignore = ["E501"]` (the formatter owns line length); complexity stays with radon/xenon. Waivers are per-line `# noqa` with a reason only — no file-level ignores.
+- The `# noqa: F401` re-export precedent in `strands_code_agent/__init__.py` still applies; the rig `noqa: E402` sibling-import precedent in `scripts/uattest/` shows the reason-citing form.
 
 ## Import Organization
 
@@ -67,7 +67,7 @@ from strands_code_agent.callback_handler import CodeAgentCallbackHandler
 
 **Path Aliases:**
 
-- None. Use absolute imports rooted at `strands_code_agent` everywhere (e.g. `from strands_code_agent.toolkits import Toolkit`). Do not use relative imports or `sys.path` manipulation.
+- None. Use absolute imports rooted at the package everywhere (e.g. `from strands_code_agent.toolkits import Toolkit`). Do not use relative imports. Exception: `scripts/uattest/` rig scripts insert their own directory via `sys.path` and use absolute sibling imports (loader-safe: the contract tests load the driver via `importlib` with no package path; rig scripts have no package path).
 
 ## Error Handling
 
@@ -77,7 +77,7 @@ from strands_code_agent.callback_handler import CodeAgentCallbackHandler
 - Salvage partial output on failure: `SandboxedPythonInterpreter.execute_code` reads `self.executor.state["_print_outputs"]` for print output captured before the exception.
 - Raise `TypeError` for wrong input types where the caller is a programmer, not the agent: `PythonInterpreter()` cannot be instantiated (abstract `ABC` with `@abstractmethod` in `strands_code_agent/python_environments/base.py`); `get_documentation` raises `TypeError(f"Expected a function or class, got {type(obj)}")` (`strands_code_agent/document_code.py`).
 - Convert low-level introspection failures into actionable `ValueError` with chaining: `_get_source` in `strands_code_agent/python_environments/agentcore.py` catches `(OSError, TypeError)` from `inspect.getsource` and raises `ValueError(... remote execution ...) from e`.
-- Fail soft on missing data in read paths: `OKFBundle.read` / `children` (`strands_code_agent/knowledge/bundle.py`) return formatted "not found" strings with suggestions instead of raising; `_parse_frontmatter` returns `({}, text)` when frontmatter is absent; `KeywordSearchIndex.query` returns `[]` for empty queries.
+- Fail soft on missing data in read paths: return formatted "not found" strings with suggestions instead of raising; return empty defaults (`{}`, `[]`) when optional data is absent.
 - Log-and-continue only for best-effort cleanup: `AgentCorePythonInterpreter._stop_session` catches `Exception` and calls `logger.warning(...)` so `clear_state` / `close` / `__del__` never raise.
 
 ## Logging
