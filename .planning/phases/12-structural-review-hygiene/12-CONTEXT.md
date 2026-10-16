@@ -40,12 +40,17 @@ A measurement-first structural review of the CLI tree plus dead-code hygiene. Co
 - **D-16:** Full README rewrite of the features table for the post-cleanup tree (not just dropping the OKF row).
 - **D-17:** Cleanup first — dead code is deleted before measurement, so the numbers describe the tree being repackaged.
 
-### Lint and format (added post-discussion 2026-10-16)
+### Lint and format (added post-discussion 2026-10-16, discussed same day)
 - **D-18:** Ruff governs general lint + format (`ruff check` and `ruff format`); config lives in `pyproject.toml`. The whole tree is formatted once during the phase, and the persistent gate (D-02) enforces ruff-clean on every run alongside the complexity thresholds.
 - **D-19:** Ruff formatting lands before the repackage moves (with cleanup first, D-17), so later diffs show moves, not reformatting.
+- **D-20:** Rule scope is F+E+I core (pyflakes + pycodestyle errors + isort); radon/xenon keep the complexity gate — no ruff C901 overlap (D-01 unchanged).
+- **D-21:** Format style is ruff defaults: 88 columns, double quotes.
+- **D-22:** All pre-existing violations are fixed in one pass (no grandfathering); waivers are per-line `noqa` with a reason only — no file-level ignores.
+- **D-23:** Auto-fix runs freely (`ruff format` plus `ruff check --fix`); the green suite is the safety proof.
+- **D-24:** Fork-added code only (user pressed twice — amends D-01/D-02/D-18): ruff AND the complexity gate apply exclusively to code added in this fork (`strands_code_cli/`, `tests/`, `scripts/`, and other fork-owned paths). Inherited upstream code (`strands_code_agent/` minus fork-added parts) is neither measured, gated, formatted, nor fixed — keeping it byte-pristine for upstream merges. — **Reversibility:** costly — the gate's path scope shapes CI config and merge hygiene; widening it later re-opens the upstream question.
 
 ### the agent's Discretion
-Exact package names and boundaries, the coupling metric choice, report location and format, pre-commit wiring details, ruff rule selection and line length, and README prose are left to planner/executor judgment within the locked decisions above.
+Exact package names and boundaries, the coupling metric choice, report location and format, pre-commit wiring details, the fork-added path list derivation, and README prose are left to planner/executor judgment within the locked decisions above.
 
 </decisions>
 

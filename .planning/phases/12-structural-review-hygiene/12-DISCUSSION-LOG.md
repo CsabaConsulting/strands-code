@@ -236,3 +236,17 @@ Package names and boundaries, coupling metric choice, report format/location, pr
 ## Amendment (2026-10-16, post-discussion)
 
 User: "Besides the cyclomatic complexity I also want to add ruff to this phase for general code formatting and hygiene." Recorded as D-18 (ruff check + format, config in pyproject.toml, enforced by the persistent gate) and D-19 (formatting lands before the repackage moves). Ruff removed from Deferred Ideas. Rule selection and line length left to planner/executor discretion.
+
+---
+
+## Ruff discussion (2026-10-16, user-requested follow-up)
+
+User: "Don't we need to discuss ruff?" — ran 4 areas, all resolved:
+
+**Rule scope.** Rules: F+E+I core (pyflakes + pycodestyle errors + isort) over Core+B+UP and Wide+C901. Complexity ownership: radon keeps it, no ruff C901 overlap.
+
+**Format style.** Line length 88 (default) over longer lines. Quotes: double (default) over single.
+
+**Pre-existing violations.** Fix all in one pass over grandfather. Waivers per-line noqa-with-reason only, no file ignores. User note (pressed twice, second time at wrap-up): gates apply ONLY to fork-added code, never inherited upstream code — for ruff AND cyclomatic complexity — to avoid fork merge conflicts. Recorded as D-24, amending D-01/D-02/D-18.
+
+**Auto-fix bounds.** Auto-fix freely (format + check --fix), green suite proves safety — over format-only-auto and batched+green.
