@@ -1703,6 +1703,59 @@ def apply_approved_proposal(proposal: Proposal) -> None:
         apply_memory_proposal(proposal)
 
 
+def _memory_list(queue: CurateQueue) -> str:
+    """Render the pending curate queue, one line per proposal."""
+    pending = queue.list_pending()
+    if not pending:
+        return MEMORY_EMPTY_QUEUE
+    return "\n".join(
+        f"{p.id} [{p.source}] {p.section} — {_first_body_line(p.body)}" for p in pending
+    )
+
+
+def _memory_mode_verb(
+    arg: str,
+    memory_mode: MemoryModeState | None,
+    memory_mode_path: str | Path | None,
+) -> str:
+    """Handle /memory mode: announce, switch (persisted fail-soft), or usage."""
+    holder = _memory_mode_holder(memory_mode)
+    pick = arg.strip().lower()
+    if not pick:
+        return holder.announce()
+    if pick in ("curate", "silent"):
+        reply = holder.set(pick)
+        try:
+            MemoryModeConfig(mode=pick).save(memory_mode_path)
+        except (OSError, ValueError):
+            pass
+        return reply
+    return _MEMORY_MODE_USAGE
+
+
+def _memory_approve_all(queue: CurateQueue) -> str:
+    """Approve every pending proposal; first write failure stops the batch."""
+    pending = queue.list_pending()
+    if not pending:
+        return MEMORY_EMPTY_QUEUE
+    for proposal in pending:
+        try:
+            queue.approve(proposal.id, apply_approved_proposal)
+        except (OSError, ValueError) as exc:
+            return f"Memory write failed — proposal {proposal.id} kept pending: {exc}"
+    return f"Approved {len(pending)} proposal{'s' if len(pending) != 1 else ''}."
+
+
+def _memory_deny_all(queue: CurateQueue) -> str:
+    """Deny every pending proposal (never re-asked this session)."""
+    pending = queue.list_pending()
+    if not pending:
+        return MEMORY_EMPTY_QUEUE
+    for proposal in pending:
+        queue.deny(proposal.id)
+    return f"Denied {len(pending)} proposal{'s' if len(pending) != 1 else ''} — will not re-ask this session."
+
+
 def _memory_message(
     rest: str,
     memory_mode: MemoryModeState | None,
@@ -1722,26 +1775,9 @@ def _memory_message(
     verb, _, arg = rest.partition(" ")
     verb = verb.strip().lower()
     if verb in ("", "list"):
-        pending = queue.list_pending()
-        if not pending:
-            return MEMORY_EMPTY_QUEUE
-        return "\n".join(
-            f"{p.id} [{p.source}] {p.section} — {_first_body_line(p.body)}"
-            for p in pending
-        )
+        return _memory_list(queue)
     if verb == "mode":
-        holder = _memory_mode_holder(memory_mode)
-        pick = arg.strip().lower()
-        if not pick:
-            return holder.announce()
-        if pick in ("curate", "silent"):
-            reply = holder.set(pick)
-            try:
-                MemoryModeConfig(mode=pick).save(memory_mode_path)
-            except (OSError, ValueError):
-                pass
-            return reply
-        return _MEMORY_MODE_USAGE
+        return _memory_mode_verb(arg, memory_mode, memory_mode_path)
     if verb == "approve":
         target = arg.strip()
         if not target:
@@ -1756,24 +1792,9 @@ def _memory_message(
             return _MEMORY_USAGE
         return queue.deny(target)
     if verb == "approve-all":
-        pending = queue.list_pending()
-        if not pending:
-            return MEMORY_EMPTY_QUEUE
-        for proposal in pending:
-            try:
-                queue.approve(proposal.id, apply_approved_proposal)
-            except (OSError, ValueError) as exc:
-                return (
-                    f"Memory write failed — proposal {proposal.id} kept pending: {exc}"
-                )
-        return f"Approved {len(pending)} proposal{'s' if len(pending) != 1 else ''}."
+        return _memory_approve_all(queue)
     if verb == "deny-all":
-        pending = queue.list_pending()
-        if not pending:
-            return MEMORY_EMPTY_QUEUE
-        for proposal in pending:
-            queue.deny(proposal.id)
-        return f"Denied {len(pending)} proposal{'s' if len(pending) != 1 else ''} — will not re-ask this session."
+        return _memory_deny_all(queue)
     return _MEMORY_USAGE
 
 
