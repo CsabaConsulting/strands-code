@@ -11,23 +11,23 @@ last_mapped_at: 2026-09-22
 **Files:**
 
 - `snake_case.py` for all modules: `code_agent.py`, `callback_handler.py`, `document_code.py`, `local_sandboxed.py`, `local_exec.py`
-- Test files mirror the module under test: `test_<module>.py` in `tests/` (e.g. `tests/test_code_agent.py` for `strands_code_agent/code_agent.py`)
+- Test files mirror the module under test: `test_<module>.py` in mirrored `tests/` subpackages (e.g. `tests/agent/test_code_agent.py` for `strands_code_agent/code_agent.py`).
 
 **Functions:**
 
 - Use `snake_case` for all functions and methods: `get_documentation`, `format_function`, `extract_imports`, `get_import_string`, `execute_code`, `clear_state`, `format_message`
-- Private module helpers use a leading underscore: `_parse_frontmatter`, `_extract_links`, `_get_source`, `_make_stream` (test helper in `tests/test_agentcore_python_interpreter.py`), `_make_agent` (test helper in `tests/test_code_agent.py`)
-- Private methods on classes use a leading underscore: `PythonInterpreter.get_tool` internals, `OKFBundle._ensure_loaded`, `OKFBundle._search`, `SandboxedPythonInterpreter._init_executor`, `AgentCorePythonInterpreter._ensure_session`, `_run_code`, `_stop_session`, `_build_initialization`
+- Private module helpers use a leading underscore: `_parse_frontmatter`, `_extract_links`, `_get_source`, `_make_stream` (test helper in `tests/agent/test_agentcore_python_interpreter.py`), `_make_agent` (test helper in `tests/agent/test_code_agent.py`)
+- Private methods on classes use a leading underscore: `PythonInterpreter.get_tool` internals, `SandboxedPythonInterpreter._init_executor`, `AgentCorePythonInterpreter._ensure_session`, `_run_code`, `_stop_session`, `_build_initialization`
 
 **Variables:**
 
 - Use `snake_case` for locals and parameters: `authorized_imports`, `initialization_code`, `domain_specific_code`, `timeout_seconds`, `stdout_label`, `stderr_label`
 - Use `UPPER_SNAKE_CASE` for module-level constants: `CODE_AGENT_INSTRUCTIONS` in `strands_code_agent/code_agent.py`, `CODE_PREAMBLE_TEMPLATE`, `TEMP_DIR_TEMPLATE`, `DOMAIN_SPECIFIC_DOC_TEMPLATE`, `DEFAULT_CODE_AGENT_CALLBACK_HANDLER`, `VISUALIZATION_TOOLKIT`, `DATA_ANALYSIS_TOOLKIT` in `strands_code_agent/toolkits.py`, `STDOUT_LABEL`, `STDERR_LABEL` in `strands_code_agent/python_environments/base.py`, `EXTRA_BUILTINS` in `strands_code_agent/python_environments/local_sandboxed.py`, `SOLUTION_UA` in `strands_code_agent/solution_user_agent.py`
-- Test-local helper names use leading underscore plus descriptive name: `_sample_func`, `_SampleClass` in `tests/test_code_agent.py`
+- Test-local helper names use leading underscore plus descriptive name: `_sample_func`, `_SampleClass` in `tests/agent/test_code_agent.py`
 
 **Types:**
 
-- Use `PascalCase` for all classes: `CodeAgent` (`strands_code_agent/code_agent.py`), `Toolkit` (`strands_code_agent/toolkits.py`), `PythonInterpreter` (`strands_code_agent/python_environments/base.py`), `SandboxedPythonInterpreter`, `ExecPythonInterpreter`, `AgentCorePythonInterpreter`, `OKFBundle`, `Concept`, `SearchIndex`, `KeywordSearchIndex`, `CodeAgentCallbackHandler`
+- Use `PascalCase` for all classes: `CodeAgent` (`strands_code_agent/code_agent.py`), `Toolkit` (`strands_code_agent/toolkits.py`), `PythonInterpreter` (`strands_code_agent/python_environments/base.py`), `SandboxedPythonInterpreter`, `ExecPythonInterpreter`, `AgentCorePythonInterpreter`, `CodeAgentCallbackHandler`
 - Use `PascalCase` for test classes grouping a unit under test: `TestCodeAgentSystemPrompt`, `TestPythonInterpreterExecution`, `TestGetImportString` — one class per behavior area, not per method
 
 ## Code Style
@@ -107,15 +107,15 @@ from strands_code_agent.callback_handler import CodeAgentCallbackHandler
 
 ## Function Design
 
-**Size:** Keep functions small and single-purpose (most are under ~30 lines). The largest units are `CodeAgent.__init__` (~60 lines, prompt assembly + REPL wiring in `strands_code_agent/code_agent.py`) and `OKFBundle._ensure_loaded` (~35 lines). Split when a function mixes prompt/config assembly with execution.
+**Size:** Keep functions small and single-purpose (most are under ~30 lines). The largest unit is `CodeAgent.__init__` (~60 lines, prompt assembly + REPL wiring in `strands_code_agent/code_agent.py`). Split when a function mixes prompt/config assembly with execution.
 
 **Parameters:** Use keyword-friendly signatures with `None` defaults for optional wiring (`system_prompt: str | None = None`, `tools: list | None = None`, `toolkits: list | None = None`), then normalize `None` to a working default inside the body (`tools = [python_repl_tool]`, `**(python_interpreter_kwargs or {})`). Pass timeouts and labels explicitly through each interpreter constructor (`timeout_seconds=60` default in `PythonInterpreter`, `180` default in `CodeAgent`).
 
-**Return Values:** Return tuples for dual-channel results (`execute_code` returns `tuple[str, str]`), formatted strings for agent-facing reads (`OKFBundle.read` / `find` / `children` / `toc` return `str`), and `str` observations from the `@tool`-decorated `python_repl`. Return empty string / empty list for "nothing to report" (`get_import_string([]) == ""`, `extract_imports` returns `set()` on `SyntaxError`).
+**Return Values:** Return tuples for dual-channel results (`execute_code` returns `tuple[str, str]`), formatted strings for agent-facing reads (`get_documentation` in `strands_code_agent/document_code.py` returns `str`), and `str` observations from the `@tool`-decorated `python_repl`. Return empty string / empty list for "nothing to report" (`get_import_string([]) == ""`, `extract_imports` returns `set()` on `SyntaxError`).
 
 ## Module Design
 
-**Exports:** Define one primary class or small function group per module and re-export the public surface from `strands_code_agent/__init__.py` with an explicit `__all__ = ["CodeAgent", "Toolkit", "AgentCorePythonInterpreter"]`. Keep subpackage `__init__.py` files minimal (`strands_code_agent/python_environments/__init__.py` is empty; `strands_code_agent/knowledge/__init__.py` re-exports `OKFBundle`, `Concept`, search backends).
+**Exports:** Define one primary class or small function group per module and re-export the public surface from `strands_code_agent/__init__.py` with an explicit `__all__ = ["CodeAgent", "Toolkit", "AgentCorePythonInterpreter"]`. Keep subpackage `__init__.py` files minimal (`strands_code_agent/python_environments/__init__.py` is empty).
 
 **Barrel Files:** `strands_code_agent/__init__.py` is the only barrel file. Import public names from it in examples and tests where possible (`from strands_code_agent import CodeAgent, Toolkit`). Do not create new barrel files; import new modules via their canonical path (`strands_code_agent.<subpackage>.<module>`).
 
