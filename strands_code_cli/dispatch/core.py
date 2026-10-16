@@ -757,6 +757,34 @@ _ENGINE_LABELS = {
 """Display labels for the setup order builder (D-01, D-06)."""
 
 
+def _arch_is_chat(arch: object) -> bool:
+    """True when the architecture allows chat (missing keys fail open)."""
+    if not isinstance(arch, dict):
+        return True
+    for side in ("input_modalities", "output_modalities"):
+        modalities = arch.get(side)
+        if isinstance(modalities, list) and not any(
+            isinstance(entry, str) and entry.lower() == "text" for entry in modalities
+        ):
+            return False
+    return True
+
+
+def _catalog_entry_prices(pricing: object) -> tuple[float | None, float | None]:
+    """Per-1M (prompt, completion) prices; hostile shapes yield Nones."""
+    if not isinstance(pricing, dict):
+        return (None, None)
+    try:
+        if "prompt" in pricing and "completion" in pricing:
+            return (
+                float(pricing["prompt"]) * 1_000_000,
+                float(pricing["completion"]) * 1_000_000,
+            )
+    except (TypeError, ValueError):
+        pass
+    return (None, None)
+
+
 def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
     """Chat-capable catalog entries, validated and price-sorted (T-08-11).
 
@@ -782,28 +810,9 @@ def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
         lowered = model_id.lower()
         if "embed" in lowered or "rerank" in lowered:
             continue
-        arch = model.get("architecture")
-        if isinstance(arch, dict):
-            chat = True
-            for side in ("input_modalities", "output_modalities"):
-                modalities = arch.get(side)
-                if isinstance(modalities, list) and not any(
-                    isinstance(entry, str) and entry.lower() == "text"
-                    for entry in modalities
-                ):
-                    chat = False
-            if not chat:
-                continue
-        in_price: float | None = None
-        out_price: float | None = None
-        pricing = model.get("pricing")
-        if isinstance(pricing, dict):
-            try:
-                if "prompt" in pricing and "completion" in pricing:
-                    in_price = float(pricing["prompt"]) * 1_000_000
-                    out_price = float(pricing["completion"]) * 1_000_000
-            except (TypeError, ValueError):
-                in_price = out_price = None
+        if not _arch_is_chat(model.get("architecture")):
+            continue
+        in_price, out_price = _catalog_entry_prices(model.get("pricing"))
         params = model.get("supported_parameters")
         structured = isinstance(params, list) and any(
             param in ("response_format", "structured_outputs") for param in params
