@@ -35,6 +35,12 @@ from strands_code_cli.loop.core import (
 from strands_code_cli.output import print_plain
 from strands_code_cli.policy_gate import TurnCancelled, worker_cancelled
 
+_PUMP_RESUME = "resume"
+"""Pump interrupt verdict: continue pumping (no unwinding cancel)."""
+
+_PUMP_RAISE = "raise"
+"""Pump interrupt verdict: ack and unwind for the cancel UX."""
+
 
 def _invoke_parallel(
     agent: Any,
@@ -255,6 +261,150 @@ def _pump_service_side(
     return btw_agent, btw_future, btw_question
 
 
+def _pump_drain_side_for_cancel(
+    btw: BtwContext,
+    broker: Any,
+    both_running: threading.Event | None,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+) -> None:
+    """Hold the pump until the side answer lands (cancel-path hold only).
+
+    Serves approvals while draining. A second interrupt stops
+    everything rather than parking shutdown; the aborting side
+    stays attached so the next turn reaps it instead of orphaning
+    it.
+
+    Raises:
+        KeyboardInterrupt: On a second interrupt while draining.
+    """
+    try:
+        while btw_future is not None and not btw_future.done():
+            if broker is not None:
+                req = _poll_live(broker)
+                if req is not None:
+                    req.run_prompt()
+            else:
+                sleep(0.005)
+    except KeyboardInterrupt:
+        # Second interrupt while draining: stop
+        # everything rather than park shutdown; the
+        # aborting side stays attached so the next
+        # turn reaps it instead of orphaning it.
+        btw.cancel_targets = ("main", "btw")
+        btw.cancel_event.set()
+        unregister_btw_cancel(broker)
+        if btw_future is not None:
+            _pump_attach_live(btw, btw_agent, btw_future, btw_question)
+        if both_running is not None:
+            both_running.clear()
+        print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
+        raise
+
+
+def _pump_handle_interrupt(
+    btw: BtwContext,
+    broker: Any,
+    cancel_event: threading.Event,
+    both_running: threading.Event | None,
+    btw_agent: Any,
+    btw_future: Any,
+    btw_question: str | None,
+) -> tuple[str, tuple[Any, Any, str | None]]:
+    """Route one pump-loop KeyboardInterrupt; the caller acts on the verdict.
+
+    Single worker (or side already reaped): legacy path — both
+    events set (idempotent; a stale ``both_running`` flag may have
+    suppressed the SIGINT handler) and the turn always stops.
+    Otherwise the cancel chooser names the targets: no choice, or a
+    side-only pick, resumes the pump; a main pick unwinds after the
+    cancel-path hold drains the side answer; a both pick attaches
+    the aborting side for the next turn's reap.
+
+    Returns:
+        ``(_PUMP_RESUME, triple)`` to continue the pump, or
+        ``(_PUMP_RAISE, triple)`` to ack and unwind. A second
+        interrupt during the cancel-path hold raises instead of
+        returning.
+    """
+    if btw_future is None or btw_future.done():
+        # Single worker (or side already reaped):
+        # legacy path, the main event is normally set
+        # by the turn SIGINT handler — but a stale
+        # both_running flag may have suppressed it, so
+        # set here too (idempotent) and the turn always
+        # stops.
+        cancel_event.set()
+        btw.cancel_event.set()
+        unregister_btw_cancel(broker)
+        return _PUMP_RAISE, (btw_agent, btw_future, btw_question)
+    targets = _choose_cancel_targets()
+    if not targets:
+        # No choice: cancel nothing, the turn continues.
+        return _PUMP_RESUME, (btw_agent, btw_future, btw_question)
+    btw.cancel_targets = targets
+    if "main" in targets:
+        cancel_event.set()
+    if "btw" in targets:
+        btw.cancel_event.set()
+        unregister_btw_cancel(broker)
+    if "main" not in targets:
+        # Side aborts on its event, the main turn continues.
+        return _PUMP_RESUME, (btw_agent, btw_future, btw_question)
+    if "btw" not in targets:
+        # Main aborts; hold the pump until the side
+        # answer lands (cancel-path hold only — normal
+        # completion never joins since D-11 outliving),
+        # then unwind for the cancel UX.
+        _pump_drain_side_for_cancel(
+            btw, broker, both_running, btw_agent, btw_future, btw_question
+        )
+        btw_agent, btw_future, btw_question = _pump_reap_side(
+            btw, broker, btw_agent, btw_future, btw_question, both_running
+        )
+    else:
+        # Both picked: the side aborts on its event; it
+        # stays attached so the next turn reaps the
+        # abort (fenced cancel note, flag hygiene).
+        if btw_future is not None:
+            _pump_attach_live(btw, btw_agent, btw_future, btw_question)
+        if both_running is not None:
+            both_running.clear()
+    return _PUMP_RAISE, (btw_agent, btw_future, btw_question)
+
+
+def _pump_collect_result(
+    agent: Any, btw: BtwContext, broker: Any, main_future: Any
+) -> Any:
+    """Collect the main result, mapping worker cancels onto KeyboardInterrupt.
+
+    A worker that aborted on cancel without a main-thread interrupt
+    (bare or SDK-wrapped) takes the same cancel path. Completed side
+    Q&A flushes to history on the main thread before returning.
+    """
+    try:
+        result = main_future.result()
+    except TurnCancelled:
+        # Worker aborted on cancel without a main-thread
+        # KeyboardInterrupt reaching us: same cancel path.
+        btw.cancel_event.set()
+        unregister_btw_cancel(broker)
+        raise KeyboardInterrupt from None
+    except Exception as exc:
+        if not worker_cancelled(exc):
+            raise
+        # SDK-wrapped cancel (EventLoopException): same path.
+        btw.cancel_event.set()
+        unregister_btw_cancel(broker)
+        raise KeyboardInterrupt from None
+    history = getattr(agent, "messages", None)
+    if isinstance(history, list):
+        for question, answer, _, _ in btw.pending:
+            append_btw_turn(history, question, answer)
+    return result
+
+
 def _pump_parallel(
     agent: Any,
     text: str,
@@ -299,75 +449,20 @@ def _pump_parallel(
                         btw_question,
                     )
                 except KeyboardInterrupt:
-                    if btw_future is None or btw_future.done():
-                        # Single worker (or side already reaped):
-                        # legacy path, the main event is normally set
-                        # by the turn SIGINT handler — but a stale
-                        # both_running flag may have suppressed it, so
-                        # set here too (idempotent) and the turn always
-                        # stops.
-                        cancel_event.set()
-                        btw.cancel_event.set()
-                        unregister_btw_cancel(broker)
-                        # Ack before the pool-exit join waits out the step.
-                        print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
-                        raise
-                    targets = _choose_cancel_targets()
-                    if not targets:
-                        continue  # no choice: cancel nothing, turn continues
-                    btw.cancel_targets = targets
-                    if "main" in targets:
-                        cancel_event.set()
-                    if "btw" in targets:
-                        btw.cancel_event.set()
-                        unregister_btw_cancel(broker)
-                    if "main" not in targets:
-                        continue  # side aborts, main continues
-                    if "btw" not in targets:
-                        # Main aborts; hold the pump until the side
-                        # answer lands (cancel-path hold only — normal
-                        # completion never joins since D-11 outliving),
-                        # then unwind for the cancel UX.
-                        try:
-                            while btw_future is not None and not btw_future.done():
-                                if broker is not None:
-                                    req = _poll_live(broker)
-                                    if req is not None:
-                                        req.run_prompt()
-                                else:
-                                    sleep(0.005)
-                        except KeyboardInterrupt:
-                            # Second interrupt while draining: stop
-                            # everything rather than park shutdown; the
-                            # aborting side stays attached so the next
-                            # turn reaps it instead of orphaning it.
-                            btw.cancel_targets = ("main", "btw")
-                            btw.cancel_event.set()
-                            unregister_btw_cancel(broker)
-                            if btw_future is not None:
-                                _pump_attach_live(
-                                    btw, btw_agent, btw_future, btw_question
-                                )
-                            if both_running is not None:
-                                both_running.clear()
-                            print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
-                            raise
-                        btw_agent, btw_future, btw_question = _pump_reap_side(
+                    action, (btw_agent, btw_future, btw_question) = (
+                        _pump_handle_interrupt(
                             btw,
                             broker,
+                            cancel_event,
+                            both_running,
                             btw_agent,
                             btw_future,
                             btw_question,
-                            both_running,
                         )
-                    else:
-                        # Both picked: the side aborts on its event; it
-                        # stays attached so the next turn reaps the
-                        # abort (fenced cancel note, flag hygiene).
-                        if btw_future is not None:
-                            _pump_attach_live(btw, btw_agent, btw_future, btw_question)
-                        if both_running is not None:
-                            both_running.clear()
+                    )
+                    if action == _PUMP_RESUME:
+                        continue
+                    # Ack before the pool-exit join waits out the step.
                     print_plain(console, CANCEL_FIRST_PRESS, style="yellow")
                     raise
             if btw_future is not None:
@@ -375,23 +470,4 @@ def _pump_parallel(
                 # boundary; the idle drain and the next turn's pump
                 # reap it from the session context.
                 _pump_attach_live(btw, btw_agent, btw_future, btw_question)
-            try:
-                result = main_future.result()
-            except TurnCancelled:
-                # Worker aborted on cancel without a main-thread
-                # KeyboardInterrupt reaching us: same cancel path.
-                btw.cancel_event.set()
-                unregister_btw_cancel(broker)
-                raise KeyboardInterrupt from None
-            except Exception as exc:
-                if not worker_cancelled(exc):
-                    raise
-                # SDK-wrapped cancel (EventLoopException): same path.
-                btw.cancel_event.set()
-                unregister_btw_cancel(broker)
-                raise KeyboardInterrupt from None
-    history = getattr(agent, "messages", None)
-    if isinstance(history, list):
-        for question, answer, _, _ in btw.pending:
-            append_btw_turn(history, question, answer)
-    return result
+            return _pump_collect_result(agent, btw, broker, main_future)
