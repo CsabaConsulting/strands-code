@@ -477,6 +477,52 @@ def _run_setup(tmp_path):
     )
 
 
+def _assert_repo_setup_payload(action, message, data, repo_path, global_path):
+    """Assert the full-run setup wrote the repo file with pick-order content."""
+    assert action == "reply"
+    assert repo_path.exists() and not global_path.exists()
+    assert [c["id"] for c in data["candidates"]] == [
+        "good/pricey",
+        "good/cheap",
+    ]
+    assert data["directives"] == "trivial asks go cheap\ndeep work goes big"
+    assert data["engine"] == {
+        "order": ["openrouter", "local"],
+        "skip_notes": True,
+        "decision_model": "decide/cheap",
+        "local_model": "nimble",
+    }
+    assert "(repo)" in message
+    assert "2 candidates" in message
+    assert "engine order openrouter, local" in message
+    assert "/route validate" in message
+    assert "Manual /model always wins" in message
+
+
+def _assert_setup_catalog_hygiene(calls):
+    """Assert price-ascending offers with non-chat/malformed rows hidden."""
+    first_pick = [value for value, _ in calls[1][1]]
+    assert first_pick == [
+        "good/cheap",
+        "good/pricey",
+        "broken/entry",
+        "good/unpriced",
+        _SETUP_DONE,
+    ]
+    offered = [value for _, opts in calls for value, _ in opts]
+    assert "vendor/embed-large" not in offered
+    assert "vendor/rerank-pro" not in offered
+    decision_pick = [value for value, _ in calls[4][1]]
+    assert decision_pick == [
+        "decide/cheap",
+        "decide/pricey",
+        "decide/unpriced",
+    ]
+    assert "~decide/alias" not in decision_pick
+    assert "decide/zero-ctx" not in decision_pick
+    assert "chat/only" not in decision_pick
+
+
 class TestRouteSetup:
     def test_full_run_writes_repo_scope_in_pick_order(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
@@ -506,47 +552,11 @@ class TestRouteSetup:
             ],
         )
         action, message = _run_setup(tmp_path)
-        assert action == "reply"
-        assert repo_path.exists() and not global_path.exists()
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
-        assert [c["id"] for c in data["candidates"]] == [
-            "good/pricey",
-            "good/cheap",
-        ]
-        assert data["directives"] == "trivial asks go cheap\ndeep work goes big"
-        assert data["engine"] == {
-            "order": ["openrouter", "local"],
-            "skip_notes": True,
-            "decision_model": "decide/cheap",
-            "local_model": "nimble",
-        }
-        assert "(repo)" in message
-        assert "2 candidates" in message
-        assert "engine order openrouter, local" in message
-        assert "/route validate" in message
-        assert "Manual /model always wins" in message
+        _assert_repo_setup_payload(action, message, data, repo_path, global_path)
         # Catalog hygiene: price-ascending offer, non-chat and malformed
         # rows never offered, unpriced chat-shaped rows offered last.
-        first_pick = [value for value, _ in calls[1][1]]
-        assert first_pick == [
-            "good/cheap",
-            "good/pricey",
-            "broken/entry",
-            "good/unpriced",
-            _SETUP_DONE,
-        ]
-        offered = [value for _, opts in calls for value, _ in opts]
-        assert "vendor/embed-large" not in offered
-        assert "vendor/rerank-pro" not in offered
-        decision_pick = [value for value, _ in calls[4][1]]
-        assert decision_pick == [
-            "decide/cheap",
-            "decide/pricey",
-            "decide/unpriced",
-        ]
-        assert "~decide/alias" not in decision_pick
-        assert "decide/zero-ctx" not in decision_pick
-        assert "chat/only" not in decision_pick
+        _assert_setup_catalog_hygiene(calls)
 
     def test_global_scope_run_writes_global_path(self, tmp_path, monkeypatch):
         repo_path, global_path = _setup_paths(monkeypatch, tmp_path)
