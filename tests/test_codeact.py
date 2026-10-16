@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import importlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -418,6 +419,55 @@ class TestCodeactStartupFlag:
         assert result.exit_code != 0
         assert "codeact" in result.output.lower()
         assert not Path(".agent").exists()
+
+    def test_bare_flag_at_end_implies_code(self):
+        main_module = importlib.import_module("strands_code_cli.main")
+        assert main_module._expand_bare_codeact(["p", "--codeact"]) == [
+            "p",
+            "--codeact",
+            "code",
+        ]
+
+    def test_bare_flag_before_other_flag_implies_code(self):
+        main_module = importlib.import_module("strands_code_cli.main")
+        assert main_module._expand_bare_codeact(
+            ["p", "--codeact", "--session-id", "x"]
+        ) == ["p", "--codeact", "code", "--session-id", "x"]
+
+    @pytest.mark.parametrize(
+        "argv", [["p", "--codeact", "both"], ["p", "--codeact=tool"]]
+    )
+    def test_valued_and_equals_forms_untouched(self, argv):
+        main_module = importlib.import_module("strands_code_cli.main")
+        assert main_module._expand_bare_codeact(argv) == argv
+
+    def test_sentinel_stops_expansion(self):
+        main_module = importlib.import_module("strands_code_cli.main")
+        assert main_module._expand_bare_codeact(["p", "--", "--codeact"]) == [
+            "p",
+            "--",
+            "--codeact",
+        ]
+
+    def test_helper_never_mutates_input(self):
+        main_module = importlib.import_module("strands_code_cli.main")
+        argv = ["p", "--codeact"]
+        main_module._expand_bare_codeact(argv)
+        assert argv == ["p", "--codeact"]
+
+    def test_main_expands_bare_flag_to_code(self, tmp_path, monkeypatch):
+        main_module = importlib.import_module("strands_code_cli.main")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(sys, "argv", ["strands-code", "--codeact"])
+        with (
+            patch.object(main_module, "_preflight_credentials", return_value=None),
+            patch.object(main_module, "build_agent", return_value=object()),
+            patch.object(main_module, "run_loop") as loop,
+        ):
+            with pytest.raises(SystemExit) as exc:
+                main_module.main()
+        assert exc.value.code == 0
+        assert loop.call_args[1]["codeact"] == "code"
 
 
 class TestCodeactStartupConfig:
