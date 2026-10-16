@@ -3,12 +3,12 @@ gsd_state_version: "1.0"
 milestone: v1
 current_phase: 12
 current_phase_name: Structural Review + Hygiene
-current_plan: 5
+current_plan: 6
 status: discussing
-stopped_at: Completed 12-05-PLAN.md
-last_updated: "2026-10-16T08:43:33.000Z"
+stopped_at: Completed 12-06-PLAN.md
+last_updated: "2026-10-16T19:26:39.000Z"
 last_activity: 2026-10-16
-last_activity_desc: 12-05 executed (README rewrite, blocking gates, final green proof)
+last_activity_desc: 12-06 executed (G-12-1 stale-block sweep, AGENTS.md + CONVENTIONS.md re-synced)
 state_head: 3dd16c6b8325de06e2b8d948bef63b8c95f1eea7
 progress:
   total_phases: 12
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-10-12)
 ## Current Position
 
 Phase: 12 (Structural Review + Hygiene) — COMPLETE
-Current Plan: 5
-Total Plans in Phase: 5
-Status: 12-05 close-out complete (README rewritten, gates blocking on CI + pre-commit, suite 1538 green, live A1/A2 PASS); phase 12 done, 5/5 plans
-Last activity: 2026-10-16 — 12-05 executed (docs truthful, persistent gates wired, final tree proven green)
+Current Plan: 6
+Total Plans in Phase: 6
+Status: 12-06 gap closure complete (G-12-1 closed: project block re-synced, stale examples swept, all six gates green); phase 12 done, 6/6 plans
+Last activity: 2026-10-16 — 12-06 executed (AGENTS.md + CONVENTIONS.md stale-block sweep, both files re-read coherent)
 
 Progress: [██████████] 100%
 
@@ -104,6 +104,7 @@ Progress: [██████████] 100%
 | Phase 12 P03 | 38m | 3 tasks | 107 files |
 | Phase 12 P04 | 8min | 3 tasks | 14 files |
 | Phase 12 P05 | 8min | 3 tasks | 5 files |
+| Phase 12 P06 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -197,6 +198,7 @@ Recent decisions affecting current work:
 - [Phase 12]: 12-04 plan repair: test split executed atomically with code moves (tasks 1-2), not in task 3; task 3 ran the 26/26 re-home audit + gates instead — Unmodified-tests-vs-split-code is unsatisfiable: monkeypatched driver.pane_text cannot affect lib-defined wait functions via from-imports (module-globals binding); every task-end state stayed green
 - [Phase 12]: 12-05 close-out: CI carries a sixth CLEANUP-01 absence-plus-anchored-grep step (only the anchored form is gate-safe — bare "knowledge" matches legit files); setup-uv pinned at v10.3.0; CI syncs --extra litellm for the full suite; task 3 verification-only with no commit
 - [Phase 12]: 12-05 instruction refresh: AGENTS.md edited directly per plan, so ARCHITECTURE.md/STACK.md sources now drift from it until the next codebase re-map; convention naming examples still cite deleted module names (follow-up, not blocking)
+- [Phase 12]: 12-06 gap closure: G-12-1 closed (AGENTS.md:7 re-synced verbatim from PROJECT.md:5; OKF examples + flat test paths swept at CONVENTIONS.md source and AGENTS.md mirror; line 221 keeps its sentence-final period); ARCHITECTURE.md/STACK.md drift still reserved for the next re-map
 
 ### Pending Todos
 
@@ -228,6 +230,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-16T08:44:00.000Z
-Stopped at: Completed 12-05-PLAN.md
+Last session: 2026-10-16T19:26:03.000Z
+Stopped at: Completed 12-06-PLAN.md
 Resume file: None

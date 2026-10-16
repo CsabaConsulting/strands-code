@@ -118,7 +118,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MODEL-04 | Phase 9 | Complete |
 | MODEL-05 | Phase 10 | Complete |
 | SKILL-05 | — | Complete (Hindsight scrubbed 2026-10-16; phase shell retired as no-op, see .planning/archive/12-hindsight-removal/) |
-| STRUCT-01 | Phase 12 | Pending |
+| STRUCT-01 | Phase 12 | Complete |
 | CLEANUP-01 | Phase 12 | Pending |
 | GITHUB-01 | Covered (no phase) | General tool competence + `gh`, verifiable today |
 | GITHUB-02 | Covered (no phase) | General tool competence + `gh`, verifiable today |
