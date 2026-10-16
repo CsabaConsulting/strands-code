@@ -290,6 +290,10 @@ Plans:
 
 - [x] 11-03-PLAN.md — Whole-block approval plus coherence pins
 
+**Wave 4** *(gap closure, blocked on Wave 1 completion)*
+
+- [ ] 11-04-PLAN.md — Bare --codeact implies code (G-11-1)
+
 ## Progress
 
 **Execution Order:**
