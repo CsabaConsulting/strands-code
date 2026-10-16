@@ -1857,6 +1857,36 @@ def _approve_message(mode: ModeState | None) -> tuple:
     return ("agent", f"{APPROVE_OK}\n{APPROVE_EXECUTE}")
 
 
+def _skills_list(entries: list) -> str:
+    """Render bare-/skills: one line per entry, shadow notes included."""
+    if not entries:
+        return "No skills loaded (./.agent/skills missing or empty)."
+    lines = []
+    for entry in entries:
+        if entry.shadowed:
+            lines.append(
+                f"{entry.namespaced} — shadowed by builtin '/{entry.name.lower()}'"
+            )
+        else:
+            lines.append(f"{entry.namespaced} — {entry.description}")
+    return "\n".join(lines)
+
+
+def _skills_reload(skills: SkillIndex, harness_refresh: Any) -> str:
+    """Reload the harness registry first, then the CLI index (both-or-stale)."""
+    deferred_note = None
+    if harness_refresh is not None:
+        try:
+            deferred_note = harness_refresh()
+        except Exception as exc:
+            return f"Skills reload failed to refresh the model registry: {exc}"
+    count = skills.reload()
+    reply = f"Reloaded {count} skill{'s' if count != 1 else ''}."
+    if deferred_note:
+        reply += f" ({deferred_note}.)"
+    return reply
+
+
 def _skills_message(
     rest: str, skills: SkillIndex | None, harness_refresh: Any = None
 ) -> str:
@@ -1875,17 +1905,7 @@ def _skills_message(
     """
     entries = skills.list_entries() if skills is not None else []
     if not rest:
-        if not entries:
-            return "No skills loaded (./.agent/skills missing or empty)."
-        lines = []
-        for entry in entries:
-            if entry.shadowed:
-                lines.append(
-                    f"{entry.namespaced} — shadowed by builtin '/{entry.name.lower()}'"
-                )
-            else:
-                lines.append(f"{entry.namespaced} — {entry.description}")
-        return "\n".join(lines)
+        return _skills_list(entries)
     verb, _, arg = rest.partition(" ")
     verb = verb.lower()
     name = arg.strip()
@@ -1905,17 +1925,7 @@ def _skills_message(
     if verb in ("reload", "refresh"):
         if skills is None:
             return "No skills loaded (./.agent/skills missing or empty)."
-        deferred_note = None
-        if harness_refresh is not None:
-            try:
-                deferred_note = harness_refresh()
-            except Exception as exc:
-                return f"Skills reload failed to refresh the model registry: {exc}"
-        count = skills.reload()
-        reply = f"Reloaded {count} skill{'s' if count != 1 else ''}."
-        if deferred_note:
-            reply += f" ({deferred_note}.)"
-        return reply
+        return _skills_reload(skills, harness_refresh)
     if verb == "remove":
         entry = skills.resolve(name) if skills is not None else None
         if entry is None:
