@@ -2215,6 +2215,168 @@ def _finish_successful_turn(
         index.ensure(session_id)
 
 
+def _print_skill_warnings(skills: Any) -> None:
+    """Print skill-index load warnings (bad manifests stay visible)."""
+    for warning in skills.warnings:
+        print_plain(console, warning, style="yellow")
+
+
+def _init_routing_state() -> routing_mod.RoutingState:
+    """Boot the session routing toggle: on when a strategy configures, else off.
+
+    Boot once, decide per ask: each ask re-reads the strategy file
+    for pause/quiet/candidates while the paused flag rides the session.
+    """
+    try:
+        boot_strategy = routing_mod.load_strategy()
+    except ValueError as exc:
+        logger.warning("Routing disabled: %s", exc)
+        print_plain(console, f"Routing disabled ({exc}).")
+        boot_strategy = None
+    return routing_mod.RoutingState(
+        initial=(
+            "on" if boot_strategy is not None and boot_strategy.candidates else "off"
+        )
+    )
+
+
+def _load_initial_memory_mode() -> MemoryModeState:
+    """Load the opening memory mode; a tampered config starts curate."""
+    try:
+        initial_mode = MemoryModeConfig.load().mode
+    except ValueError:
+        logger.warning("Ignoring tampered memory mode config; starting in curate.")
+        initial_mode = "curate"
+    return MemoryModeState(initial=initial_mode)
+
+
+def _warn_if_no_streaming_tools(current_model: str) -> None:
+    """Warn when the opening model rejects tool use in streaming mode."""
+    if not supports_streaming_tools(current_model):
+        print_plain(
+            console,
+            f"Warning: {current_model} rejects tool use in streaming "
+            "mode — turns will fail; /model to switch.",
+            style="yellow",
+        )
+
+
+def _enter_session_pump(broker: Any, session_cancel: threading.Event) -> Any:
+    """Enter the session broker pump across idle gaps (None without a broker).
+
+    Entered and exited manually around the loop; the only exits are
+    the loop breaks plus a crashing exception (whose process death
+    moots the broker flag anyway).
+    """
+    session_pump = broker.pump(session_cancel) if broker is not None else None
+    if session_pump is not None:
+        session_pump.__enter__()
+    return session_pump
+
+
+def _handle_turn_cancel_path(
+    agent: Any,
+    session_id: str,
+    index: SessionIndex,
+    cancel_event: threading.Event,
+    btw: BtwContext,
+    cancel_armed_at: float | None,
+    revise_state: ReviseState,
+    init_state: InitState,
+) -> float | None:
+    """Run the per-target cancel UX after a turn interrupt (D-08).
+
+    Armed revise/init rounds drop with memory unchanged. The pump
+    records the named targets on the turn context; each gets its
+    own two-press line against its own event, all judged against
+    the same arm snapshot so a first-press "both" reads first-press
+    for both. No record means the legacy single-worker path.
+
+    Returns:
+        The rearmed cancel timestamp for the two-press window.
+    """
+    if revise_state.armed:
+        revise_state.disarm()
+        console.print("Revise round dropped — interrupted, memory unchanged.")
+    if init_state.armed:
+        init_state.disarm()
+        console.print("Init draft dropped — interrupted, memory unchanged.")
+    targets = getattr(btw, "cancel_targets", None) or ("main",)
+    armed_snapshot = cancel_armed_at
+    for target in targets:
+        event = btw.cancel_event if target == "btw" else cancel_event
+        cancel_armed_at = _handle_turn_cancel(
+            agent, session_id, index, event, armed_snapshot, target=target
+        )
+    return cancel_armed_at
+
+
+def _restore_turn_handlers(prev_sigint: Any, reader: Any, slot: Any) -> None:
+    """Restore the pre-turn SIGINT disposition, stop the reader, clear the slot."""
+    if prev_sigint is not None:
+        signal.signal(signal.SIGINT, prev_sigint)
+    if reader is not None:
+        reader.stop()
+    slot.state = None
+
+
+def _finish_turn(
+    mode: ModeState,
+    cancelled: bool,
+    titled: bool,
+    agent: Any,
+    session_id: str,
+    index: SessionIndex,
+    text: str,
+) -> bool:
+    """Close the turn: note plan proposals, auto-title once per session.
+
+    Returns:
+        The updated titled flag.
+    """
+    if not cancelled and mode.mode == "plan":
+        mode.note_plan_proposed()
+    if not titled:
+        titled = True
+        _maybe_auto_title(agent, session_id, index, text)
+    return titled
+
+
+def _close_loop_session(
+    agent: Any,
+    btw: BtwContext,
+    broker: Any,
+    current_model: str,
+    session_turns: list,
+    side_pool: ThreadPoolExecutor,
+    session_pump: Any,
+    index: SessionIndex,
+    session_id: str,
+) -> None:
+    """Drain side work and persist the session at loop exit.
+
+    A side run completed just before exit still lands (history plus
+    metrics); a still-running one is named and gets a graceful stop —
+    the session is over, so D-11's never-cut rule yields to a clean
+    exit — and the pool join waits for the abort, never for full work.
+    """
+    _drain_idle_btw(agent, btw, broker, current_model, session_turns, from_exit=True)
+    _note_dropped_side(btw, broker)
+    if btw.has_live:
+        btw.cancel_event.set()
+    try:
+        side_pool.shutdown(wait=True)
+    except KeyboardInterrupt:
+        side_pool.shutdown(wait=False)
+        raise
+    if session_pump is not None:
+        session_pump.__exit__(None, None, None)
+    explicit_save(agent)
+    flush_memory(agent)
+    index.ensure(session_id)
+    console.print("[dim]Session saved.[/dim]")
+
+
 def run_loop(
     agent: Any,
     *,
@@ -2271,8 +2433,7 @@ def run_loop(
 
     console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
     skills = SkillIndex()
-    for warning in skills.warnings:
-        print_plain(console, warning, style="yellow")
+    _print_skill_warnings(skills)
     memory_snapshot = load_memory()
     print_plain(console, memory_banner(memory_snapshot))
 
@@ -2323,23 +2484,8 @@ def run_loop(
     # turns swap the stint tool in at send and restore this at the
     # boundary (None when absent — code turns stay prefix-shaped).
     default_repl = default_repl_handle(agent)
-    try:
-        _boot_strategy = routing_mod.load_strategy()
-    except ValueError as exc:
-        logger.warning("Routing disabled: %s", exc)
-        print_plain(console, f"Routing disabled ({exc}).")
-        _boot_strategy = None
-    routing = routing_mod.RoutingState(
-        initial=(
-            "on" if _boot_strategy is not None and _boot_strategy.candidates else "off"
-        )
-    )
-    try:
-        initial_mode = MemoryModeConfig.load().mode
-    except ValueError:
-        logger.warning("Ignoring tampered memory mode config; starting in curate.")
-        initial_mode = "curate"
-    memory_mode = MemoryModeState(initial=initial_mode)
+    routing = _init_routing_state()
+    memory_mode = _load_initial_memory_mode()
     curate_queue = CurateQueue()
     promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)
     revise_state = ReviseState()
@@ -2356,13 +2502,7 @@ def run_loop(
         return f"Revise armed for '{proposal.section}' — running."
 
     current_model = model_id or ProviderConfig.load().model or DEFAULT_MODEL
-    if not supports_streaming_tools(current_model):
-        print_plain(
-            console,
-            f"Warning: {current_model} rejects tool use in streaming "
-            "mode — turns will fail; /model to switch.",
-            style="yellow",
-        )
+    _warn_if_no_streaming_tools(current_model)
     session_turns: list = []
     # Per-turn interface record (D-15) parallel to session_turns —
     # the cost rows keep their shape (D-16), so the interface lives
@@ -2386,9 +2526,7 @@ def run_loop(
     # process death moots the broker flag anyway).
     broker = _active_broker()
     session_cancel = threading.Event()
-    session_pump = broker.pump(session_cancel) if broker is not None else None
-    if session_pump is not None:
-        session_pump.__enter__()
+    session_pump = _enter_session_pump(broker, session_cancel)
     btw_session = _btw_context_for(
         agent, routing=routing, routing_events=routing_events
     )
@@ -2552,58 +2690,31 @@ def run_loop(
                 )
         except KeyboardInterrupt:
             cancelled = True
-            if revise_state.armed:
-                revise_state.disarm()
-                console.print("Revise round dropped — interrupted, memory unchanged.")
-            if init_state.armed:
-                init_state.disarm()
-                console.print("Init draft dropped — interrupted, memory unchanged.")
-            # Chooser path (D-08): the pump records the named targets on
-            # the turn context; each gets its own two-press line against
-            # its own event, all judged against the same arm snapshot so
-            # a first-press "both" reads first-press for both. No record
-            # means the legacy single-worker path.
-            targets = getattr(btw, "cancel_targets", None) or ("main",)
-            armed_snapshot = cancel_armed_at
-            for target in targets:
-                event = btw.cancel_event if target == "btw" else cancel_event
-                cancel_armed_at = _handle_turn_cancel(
-                    agent, session_id, index, event, armed_snapshot, target=target
-                )
+            cancel_armed_at = _handle_turn_cancel_path(
+                agent,
+                session_id,
+                index,
+                cancel_event,
+                btw,
+                cancel_armed_at,
+                revise_state,
+                init_state,
+            )
         finally:
             # Turn boundary (D-19): the run always finishes on its
             # starting interface — covers the attempts loop plus revise
             # rounds, and still restores on mid-turn failure or cancel.
             restore_after_turn(agent, swapped, default_repl)
-            if prev_sigint is not None:
-                signal.signal(signal.SIGINT, prev_sigint)
-            if reader is not None:
-                reader.stop()
-            slot.state = None
-        if not cancelled and mode.mode == "plan":
-            mode.note_plan_proposed()
-        if not titled:
-            titled = True
-            _maybe_auto_title(agent, session_id, index, text)
-    # A side run completed just before exit still lands (history plus
-    # metrics); a still-running one is named and gets a graceful stop —
-    # the session is over, so D-11's never-cut rule yields to a clean
-    # exit — and the pool join below waits for the abort, never for
-    # full work.
-    _drain_idle_btw(
-        agent, btw_session, broker, current_model, session_turns, from_exit=True
+            _restore_turn_handlers(prev_sigint, reader, slot)
+        titled = _finish_turn(mode, cancelled, titled, agent, session_id, index, text)
+    _close_loop_session(
+        agent,
+        btw_session,
+        broker,
+        current_model,
+        session_turns,
+        side_pool,
+        session_pump,
+        index,
+        session_id,
     )
-    _note_dropped_side(btw_session, broker)
-    if btw_session.has_live:
-        btw_session.cancel_event.set()
-    try:
-        side_pool.shutdown(wait=True)
-    except KeyboardInterrupt:
-        side_pool.shutdown(wait=False)
-        raise
-    if session_pump is not None:
-        session_pump.__exit__(None, None, None)
-    explicit_save(agent)
-    flush_memory(agent)
-    index.ensure(session_id)
-    console.print("[dim]Session saved.[/dim]")
