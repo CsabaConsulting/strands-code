@@ -899,6 +899,87 @@ def _validate_directives(data: dict[str, Any], lines: list[str]) -> None:
         lines.append("note: no directives — the decider picks without guidance")
 
 
+def _select_strategy_source(
+    repo: Path, home: Path
+) -> ValidationReport | tuple[dict[str, Any], Path, str | None]:
+    """Pick the winning strategy file (repo wins whole-file, else global).
+
+    Returns a ``ValidationReport`` directly for the symlink and
+    neither-file cases, else ``(data, source, fallback-note)``.
+    """
+    for path in (repo, home):
+        if path.is_symlink():
+            return ValidationReport(
+                valid=False,
+                source=None,
+                lines=[
+                    f"strategy path is a symlink: {path}",
+                    "fix: replace the symlink with a real file",
+                ],
+            )
+    repo_data, repo_reason = _read_strategy_data(repo)
+    home_data, home_reason = _read_strategy_data(home)
+    if repo_data is not None:
+        return repo_data, repo, None
+    if home_data is not None:
+        fallback = (
+            f"note: repo strategy {repo} is {repo_reason} "
+            "(using the global file instead) — fix the repo file or delete it"
+            if repo_reason is not None
+            else None
+        )
+        return home_data, home, fallback
+    lines = []
+    if repo_reason is not None:
+        lines.append(f"repo strategy {repo} is {repo_reason}")
+        lines.append("fix: repair the YAML or delete the file and re-run /route setup")
+    if home_reason is not None:
+        lines.append(f"global strategy {home} is {home_reason}")
+        lines.append("fix: repair the YAML or delete the file and re-run /route setup")
+    if not lines:
+        lines.append("no strategy file found")
+        lines.append("fix: run /route setup to create one")
+    return ValidationReport(valid=False, source=None, lines=lines)
+
+
+def _validate_engine_head(
+    raw_engine: object,
+    raw_primary: object,
+    explicit_order: bool,
+    lines: list[str],
+) -> bool:
+    """Judge the raw primary value plus the local base URL (strict)."""
+    ok = True
+    if (
+        isinstance(raw_primary, str)
+        and raw_primary
+        not in (
+            "openrouter",
+            "local",
+            "off",
+        )
+        and not explicit_order
+    ):
+        ok = False
+        lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
+        lines.append("fix: set engine.primary to openrouter|local|off")
+    raw_base_url = (
+        raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None
+    )
+    if (
+        isinstance(raw_base_url, str)
+        and raw_base_url.strip()
+        and not _valid_base_url(raw_base_url)
+    ):
+        ok = False
+        lines.append(
+            f"engine: INVALID — local_base_url {raw_base_url!r} "
+            "is not an http/https URL"
+        )
+        lines.append("fix: set engine.local_base_url to an http(s) URL or remove it")
+    return ok
+
+
 def validate_strategy(
     global_path: str | Path | None = None,
     repo_path: str | Path | None = None,
@@ -918,45 +999,10 @@ def validate_strategy(
     home = (
         Path(global_path) if global_path is not None else default_global_strategy_path()
     )
-    for path in (repo, home):
-        if path.is_symlink():
-            return ValidationReport(
-                valid=False,
-                source=None,
-                lines=[
-                    f"strategy path is a symlink: {path}",
-                    "fix: replace the symlink with a real file",
-                ],
-            )
-    repo_data, repo_reason = _read_strategy_data(repo)
-    home_data, home_reason = _read_strategy_data(home)
-    if repo_data is not None:
-        data, source = repo_data, repo
-        fallback: str | None = None
-    elif home_data is not None:
-        data, source = home_data, home
-        fallback = (
-            f"note: repo strategy {repo} is {repo_reason} "
-            "(using the global file instead) — fix the repo file or delete it"
-            if repo_reason is not None
-            else None
-        )
-    else:
-        lines = []
-        if repo_reason is not None:
-            lines.append(f"repo strategy {repo} is {repo_reason}")
-            lines.append(
-                "fix: repair the YAML or delete the file and re-run /route setup"
-            )
-        if home_reason is not None:
-            lines.append(f"global strategy {home} is {home_reason}")
-            lines.append(
-                "fix: repair the YAML or delete the file and re-run /route setup"
-            )
-        if not lines:
-            lines.append("no strategy file found")
-            lines.append("fix: run /route setup to create one")
-        return ValidationReport(valid=False, source=None, lines=lines)
+    selected = _select_strategy_source(repo, home)
+    if isinstance(selected, ValidationReport):
+        return selected
+    data, source, fallback = selected
     lines = [fallback] if fallback is not None else []
     valid = True
     unknown_top = set(data) - _TOP_LEVEL_KEYS
@@ -974,33 +1020,8 @@ def validate_strategy(
     raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None
     raw_order = raw_engine.get("order") if isinstance(raw_engine, dict) else None
     explicit_order = isinstance(raw_engine, dict) and "order" in raw_engine
-    if (
-        isinstance(raw_primary, str)
-        and raw_primary
-        not in (
-            "openrouter",
-            "local",
-            "off",
-        )
-        and not explicit_order
-    ):
+    if not _validate_engine_head(raw_engine, raw_primary, explicit_order, lines):
         valid = False
-        lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
-        lines.append("fix: set engine.primary to openrouter|local|off")
-    raw_base_url = (
-        raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None
-    )
-    if (
-        isinstance(raw_base_url, str)
-        and raw_base_url.strip()
-        and not _valid_base_url(raw_base_url)
-    ):
-        valid = False
-        lines.append(
-            f"engine: INVALID — local_base_url {raw_base_url!r} "
-            "is not an http/https URL"
-        )
-        lines.append("fix: set engine.local_base_url to an http(s) URL or remove it")
     if explicit_order:
         engine_ok = _validate_engine_order_chain(raw_engine, raw_order, engine, lines)
     else:
