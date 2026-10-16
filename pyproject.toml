@@ -87,8 +87,15 @@ known-first-party = ["strands_code_cli", "strands_code_agent"]
 [tool.importlinter]
 root_package = "strands_code_cli"
 
+# Initial contract: main.py is the composition root; feature modules must not
+# depend on it. (A D-15 "never reintroduce knowledge" contract is inexpressible:
+# import-linter rejects subpackages of external packages, and the module no
+# longer exists. CLEANUP-01 stays guarded by the absence + anchored-grep CI
+# step instead. Layer contracts for the new feature packages land with the
+# breakup in 12-02/12-03.)
 [[tool.importlinter.contracts]]
-name = "CLI never reintroduces the removed knowledge subsystem (D-15)"
+name = "Feature modules never import the entry module (composition root)"
 type = "forbidden"
 source_modules = ["strands_code_cli"]
-forbidden_modules = ["strands_code_agent.knowledge"]
+forbidden_modules = ["strands_code_cli.main"]
+ignore_imports = ["strands_code_cli -> strands_code_cli.main"]
