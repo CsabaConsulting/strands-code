@@ -306,7 +306,28 @@ Plans:
   2. Oversized modules (loop, routing, router) are broken into coherent packages; the uattest driver is split into helpers plus per-area scenario files
   3. examples/pdf_to_okf_bundle is removed and the README references only shipped surfaces; full suite and rig stay green throughout
 
-**Plans**: TBD (not yet planned)
+**Plans**: 5 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 12-01-PLAN.md — Tracer: tooling plus cleanup plus format plus measurement report
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 12-02-PLAN.md — Repackage door checkpoint plus loop-area breakup
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 12-03-PLAN.md — Remaining moves plus test mirror plus tree-wide gates green
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 12-04-PLAN.md — Rig split: shared lib plus per-area scenarios plus mirrored contract tests
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 12-05-PLAN.md — README plus instruction refresh plus blocking gates plus final green proof
 
 ## Progress
 
