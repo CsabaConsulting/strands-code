@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -4461,7 +4461,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.0" },
     { name = "smolagents", specifier = ">=1.0.0" },
     { name = "strands-agents", specifier = ">=0.1.0" },
-    { name = "strands-harness", specifier = ">=0.1" },
+    { name = "strands-harness", specifier = ">=0.3.0" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
 provides-extras = ["agentcore", "litellm"]
@@ -4482,16 +4482,16 @@ dev = [
 
 [[package]]
 name = "strands-harness"
-version = "0.1.2"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-monty" },
     { name = "strands-agents", extra = ["otel"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/06/62d89d648d82281bdaad090325aedc9c244698296011273ea28ca1e673fa/strands_harness-0.1.2.tar.gz", hash = "sha256:eb0aaccb8708c64f53eaa101b6efd442a693ffb04f02b448440f0aa4cbc12ae5", size = 154151, upload-time = "2026-09-22T21:29:58.705Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/d6/ef9b16f56765b602733079107ec342e6f49d2336679cef6751e4c0efe874/strands_harness-0.3.0.tar.gz", hash = "sha256:31993731c22a55f029daffe6885f66168ae32f42d4934688dfe4ab3b38051640", size = 156376, upload-time = "2026-10-14T20:10:09.19Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/18/e82414cc6c5743cdefd93e29ba1c7cad58f02877c399388d95629acc6b10/strands_harness-0.1.2-py3-none-any.whl", hash = "sha256:0d9ab3d81edaf340962f2fc4e22f11d645c44793245d051d1894c2b8678f9192", size = 89089, upload-time = "2026-09-22T21:29:56.66Z" },
+    { url = "https://files.pythonhosted.org/packages/77/75/3bf97befca6435953712c2ebf034721754674ed2ce88bdadbbaf32d2345a/strands_harness-0.3.0-py3-none-any.whl", hash = "sha256:7f90464bf1251c589459896d5b659c0829e03fd7b964146b28477d322895b080", size = 89628, upload-time = "2026-10-14T20:10:07.727Z" },
 ]
 
 [[package]]
