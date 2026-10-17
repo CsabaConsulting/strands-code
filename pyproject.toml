@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-agentcore = ["boto3>=1.35.0"]
+agentcore = ["boto3>=1.43.114"]
 litellm = ["litellm>=1.104"]
 
 [project.scripts]
