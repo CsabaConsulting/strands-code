@@ -88,7 +88,7 @@ agent = CodeAgent(
 
 ## CLI status
 
-Working today (Phase 11 complete): resumable multi-ask REPL, resume
+Working today (Phase 12 complete — roadmap v1 fully gated): resumable multi-ask REPL, resume
 picker with session deletion, `--session-id`, `/resume` `/rename`
 `/forget` `/exit`, `/model` switching with history conversion, `/cost`
 `/context` display, `/compact` `/clear`, Plan/Act modes (`/mode`,
@@ -100,9 +100,11 @@ side questions under the same deny-first gate), decision-model
 routing (`/route`: per-ask model + effort selection via OpenRouter,
 Ollama, and native TypeSafe engines, with calibration), native
 TypeSafe decision engine, provider-reported spend (marked `/cost`
-actuals plus estimated split), and the opt-in CodeAct action
-interface (`--codeact`, `/codeact`: code mode alongside the default
-tool-calling mode). Coming next: `/review`, fuzzy file picker.
+actuals plus estimated split), the opt-in CodeAct action
+interface (`--codeact`, `/codeact`), and modular 10-package architecture
+with gating under xenon, radon, and import-linter. Coming next: `/review`, fuzzy file picker.
+
+For a detailed analysis of how the v1 milestone was built by Muse Code using Muse Spark 1.3 under GSD Spec-Driven Development ($25.39 API spend across 2.27B tokens), see the [Initial Build Retrospective](docs/initial_build/RETROSPECTIVE.md).
 
 ## Upstream sync
 
