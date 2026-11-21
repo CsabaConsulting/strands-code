@@ -10,7 +10,9 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 
 ## Current State
 
-**Shipped `v1.0` (2026-10-16, archived 2026-11-21):** All 12 planned phases (41 plans, 129 tasks) shipped end-to-end under GSD Spec-Driven Development. `strands-code` is organized into a gated 10-package CLI architecture (`loop`, `routing`, `dispatch`, `ui`, `entry`, `memory`, `policy`, `cost`, `model`, `session`) layered over `strands-harness` + `strands-code-agent`, with CI gates (`ruff`, `xenon --max-absolute C`, `import-linter`) and 1,549 tests documented in [RETROSPECTIVE.md](../docs/initial_build/RETROSPECTIVE.md). See `.planning/MILESTONES.md` and `.planning/milestones/v1.0-ROADMAP.md`.
+**Shipped `v1.0` (2026-10-16, archived 2026-11-21):** All 12 planned phases (41 plans, 129 tasks) shipped end-to-end under GSD Spec-Driven Development (`strands-harness 0.1.2` + `strands-agents 1.58.1`, gated 10-package CLI architecture, 1,549 tests in [RETROSPECTIVE.md](../docs/initial_build/RETROSPECTIVE.md)).
+
+**Active `v2.0` (initialized 2026-11-21 — Phases 13–19):** Aligning with `strands-py >=1.65`, `harness-py >=0.4.0`, Google AI Gemini (including Google AI Ultra credits), `DecisionModel` routing, deny-first remote skills marketplaces (`SKILL-03`), `strands-agents/box` Linux OS sandboxing, interactive UX (`/help`, `@file`, `/review`), and `strands-agents-evals`. See `.planning/ROADMAP.md` and `.planning/research/SUMMARY.md`.
 
 ## Requirements
 
@@ -39,18 +41,22 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Structural review + 10-package CLI breakup + OKF dead-example removal — Phase 12
 - ✓ GitHub flows via general tool competence (`gh` + shell covers issues/PRs/CI; small `/review` slash deferred to v2) — covered v1.0
 
-### Active
+### Active (`v2.0` — Phases 13–19, see `.planning/REQUIREMENTS.md`)
 
-*(None — `v1.0` shipped and archived; run `/gsd-new-milestone` to define `v2` requirements from the candidates below.)*
+- [ ] **UPSTREAM-01** (Phase 13): Resync onto `strands-agents >=1.65` & `strands-harness >=0.4`, adapt `InjectedBlock` + `Model.model_info`, retire `#5166`/`#5158` shims, enable `streaming=False` for `_NO_STREAMING_TOOLS`
+- [ ] **MODEL-06** (Phase 14): First-class `google/` Gemini (`gemini` extra), Box-compatible provider-aware startup preflight, `reasoningSignature` / `_vendor_family` / `litellm_entry` fixes, AI Studio + Google AI Ultra (\$40–\$100/mo credit) setup docs
+- [ ] **UPSTREAM-02** (Phase 15): Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
+- [ ] **SKILL-03** (Phase 16): Remote skills marketplaces + `./.agent/skills-lock.json` SHA/hash installer into `./.agent/skills-marketplaces/` under deny-first safeguards
+- [ ] **SANDBOX-01** (Phase 17): Strands Box (`v0.2.3+`) Linux wrapper workflow (`box.toml` + Dogwood `policy.dw`, 5-provider egress profiles, temporal rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment)
+- [ ] **LOOP-06 / TOOL-05 / REVIEW-01** (Phase 18): Isolated UX modules (`/help`, gitignore-confined `@file` / `/file` attachment picker + `"document"` switch conversion, Python-collected read-only `/review`)
+- [ ] **EVAL-01** (Phase 19): `strands-agents-evals >=1.10` regression & Crescendo/GOAT/PAIR red-team suite under `scripts/evals/` + `tests/evals/`
 
-## Next Milestone Goals (v2 Candidates — see `.planning/research/V2-ALIGNMENT.md`)
+### Future (`v2.1+`)
 
-- **UPSTREAM-01**: Resync onto `strands-agents >=1.65` and `strands-harness >=0.4`, retiring upstream-fixed shims (`#5166` cross-family reasoning strip on restore, `#5158` `ContextInjector` adjacency) and migrating `strands_code_cli/routing/` transports onto `strands.decisions.DecisionModel` while preserving calibrated `0.62`/`0.04` gating and `/route` UX.
-- **MODEL-06**: First-class `google/` Gemini provider support (`gemini` extra, provider-aware startup preflight replacing `Bedrock-or-stop`, `google/` reasoning/effort via `_harness_supports_thinking`, `/model` discovery, `/cost` coverage, and AI Studio + Google AI Ultra monthly credit setup docs).
-- **SANDBOX-01**: Run `strands-code` inside Strands Box on Linux (`box.toml` + deterministic Dogwood `policy.dw` + out-of-band credential egress proxy) as an OS-enforced floor beneath HITL approvals (Linux support landed 2026-11).
-- **EVAL-01**: Automated trajectory and prompt-injection red-team evaluation suite built on `strands-agents-evals` (`TrajectoryEvaluator`, `ActorSimulator`) complementing `scripts/uattest/`.
-- **LOOP-06 / TOOL-05 / REVIEW-01**: Explicit `/help`, `@file` / `/file` fuzzy picker, and `/review` command.
-- **Carry-over backlog candidates**: Skills marketplaces (`SKILL-03`), MCP server config (`SKILL-04`), non-interactive JSON output (`LOOP-05`), and GSD workflow execution compatibility.
+- **SKILL-04**: MCP server config via `create_harness(mcp_servers=...)`
+- **LOOP-05**: Non-interactive headless / JSON output mode for scripts and CI
+- **TOOL-06**: Export trimmed session content via `/copy`
+- **MODE-03 / REVIEW-02**: Fast/thorough effort presets and headless/CI review modes
 
 ### Out of Scope
 
@@ -118,4 +124,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-21 after v1.0 milestone archive*
+*Last updated: 2026-11-21 — Milestone v2.0 initialized*

@@ -1,6 +1,6 @@
 # Sandbox Future: MXC / Strands Box / Dogwood evaluation
 
-Evaluated 2026-10-10; updated 2026-11-20. **Update:** Strands Box (`strands-agents/box`) now supports Linux (Landlock + namespaces + Bubblewrap `bwrap` + Dogwood `policy.dw` + credential egress proxy) — Linux blocker cleared; promoted into active v2 scope (see `.planning/research/V2-ALIGNMENT.md`).
+Evaluated 2026-10-10; updated 2026-11-21. **Update:** Strands Box (`strands-agents/box`, `v0.2.3+`) now supports Linux via 3 co-located Rust binaries using unprivileged namespaces (`CLONE_NEWUSER`, `CLONE_NEWNET`, mount/PID/IPC/UTS) and `seccomp-bpf` (no `bwrap` or Landlock required), plus Dogwood `policy.dw` + credential egress proxy — Linux blocker cleared; promoted into `v2.0` Phase 17 (`SANDBOX-01`, see `.planning/research/V2-ALIGNMENT.md`).
 
 ## Current posture (no containment)
 
@@ -26,14 +26,14 @@ later; not a boundary we can rely on today.
 
 ### Strands Box (github.com/strands-agents/box)
 
-Supports both macOS Apple Silicon (Seatbelt) and Linux (Landlock + Linux namespaces + Bubblewrap `bwrap`).
+Supports both macOS Apple Silicon (Seatbelt) and Linux (`v0.2.3+`, 3 co-located Rust binaries `box`, `strands-box-contain-trampoline`, and `strands-box-sock-alias` using unprivileged `CLONE_NEWUSER` / `CLONE_NEWNET` / mount / PID / IPC / UTS namespaces and `seccomp-bpf`; no `bwrap` or Landlock required; `EXPERIMENTAL_X86_SUPPORT=TRUE` on Linux `x86_64`).
 Kernel-enforced sandbox funneling everything to an embedded Dogwood Local Engine;
 Strands Shell, Monty-for-Python, egress gateway, and MCP broker share one policy
-engine + event history; default-deny; credential injection keeps secrets out of the
-agent. Harness-agnostic (runs any binary), so our CLI sits inside it unchanged.
+engine + event history; default-deny; out-of-band credential injection keeps secrets
+outside the agent process. Harness-agnostic (wraps `box run --config ...` around `strands-code` unchanged).
 Verdict: the endgame — Linux support has now landed (2026-11), clearing the blocker
 to adopt Box (`box.toml` + `policy.dw`) as a non-overridable floor under our HITL
-dialogs. Promoted to active v2 scope in `.planning/research/V2-ALIGNMENT.md`.
+dialogs. Promoted into active `v2.0` Phase 17 (`SANDBOX-01`, see `.planning/research/V2-ALIGNMENT.md`).
 
 ### Dogwood (github.com/dogwood-policy/dogwood)
 

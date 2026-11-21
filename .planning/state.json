@@ -1,73 +1,48 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v1",
+  "milestone": "v2.0",
   "phases": [
     {
-      "number": "1",
-      "name": "Session Wiring + REPL Skeleton",
-      "status": "complete"
+      "number": "13",
+      "name": "Upstream SDK & Harness Resync",
+      "status": "pending"
     },
     {
-      "number": "2",
-      "name": "File/Edit/Shell Surface + /diff",
-      "status": "complete"
+      "number": "14",
+      "name": "First-Class Google Gemini & Provider-Aware Startup",
+      "status": "pending"
     },
     {
-      "number": "3",
-      "name": "Permissions Gate",
-      "status": "complete"
+      "number": "15",
+      "name": "Decision Routing Convergence (DecisionModel)",
+      "status": "pending"
     },
     {
-      "number": "4",
-      "name": "Plan/Act Modes + Steering",
-      "status": "complete"
+      "number": "16",
+      "name": "Skills Marketplaces & Lockfile Installer",
+      "status": "pending"
     },
     {
-      "number": "5",
-      "name": "Model + Cost + Context Commands",
-      "status": "complete"
+      "number": "17",
+      "name": "Strands Box Linux Sandbox Floor & Dogwood Policy",
+      "status": "pending"
     },
     {
-      "number": "6",
-      "name": "Skills + Memory File",
-      "status": "complete"
+      "number": "18",
+      "name": "CLI Ergonomics (/help, @file / /file, /review)",
+      "status": "pending"
     },
     {
-      "number": "7",
-      "name": "Subagents + /btw Side Channel",
-      "status": "complete"
-    },
-    {
-      "number": "8",
-      "name": "Model Routing with Decision Models",
-      "status": "complete"
-    },
-    {
-      "number": "9",
-      "name": "Native TypeSafe Decision Engine",
-      "status": "complete"
-    },
-    {
-      "number": "10",
-      "name": "Provider-Reported Turn Spend",
-      "status": "complete"
-    },
-    {
-      "number": "11",
-      "name": "CodeAct Action Interface",
-      "status": "complete"
-    },
-    {
-      "number": "12",
-      "name": "Structural Review + Hygiene",
-      "status": "complete"
+      "number": "19",
+      "name": "Strands Evals & Red-Team Suite",
+      "status": "pending"
     }
   ],
   "next": {
-    "command": "/gsd-new-milestone",
-    "label": "Start v2 milestone",
-    "reason": "Milestone v1.0 archived 2026-11-21; v2 candidates captured in .planning/research/V2-ALIGNMENT.md"
+    "command": "/gsd-discuss-phase 13",
+    "label": "Discuss or plan Phase 13",
+    "reason": "Milestone v2.0 initialized 2026-11-21"
   },
-  "updated_at": "2026-11-21T00:06:48.000Z"
+  "updated_at": "2026-11-21T11:18:58.000Z"
 }

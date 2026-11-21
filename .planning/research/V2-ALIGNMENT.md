@@ -66,34 +66,36 @@ Since v1 Phase 12 wrapped on 2026-10-16, the upstream Strands ecosystem has evol
 
 ## 4. Pillar 3 — Strands Box on Linux (`strands-agents/box`)
 
-- **Blocker cleared:** As of Nov 2026, `strands-agents/box` supports **Linux** (Landlock + Linux namespaces + Bubblewrap `bwrap`) alongside macOS Apple Silicon Seatbelt.
+- **Blocker cleared:** As of Nov 2026, `strands-agents/box` (`v0.2.3+`) supports **Linux** via 3 co-located Rust binaries (`box`, `strands-box-contain-trampoline`, `strands-box-sock-alias`) using unprivileged `CLONE_NEWUSER` / `CLONE_NEWNET` / mount / PID namespaces and `seccomp-bpf` (no `bwrap` or Landlock required; `EXPERIMENTAL_X86_SUPPORT=TRUE` on Linux `x86_64`) alongside macOS Apple Silicon Seatbelt.
 - **Defense-in-depth architecture:** Keep our interactive HITL approval UX (`/diff`, deny-first allowlists, Plan/Act) on top, and run `strands-code` inside **Strands Box** as a non-overridable kernel + policy floor beneath both `shell` and `python_repl`.
 - **Capabilities gained:**
   - `box.toml` workspace/filesystem/network confinement (mitigating misclicked `"Always"` approvals).
-  - Embedded **Dogwood Local Engine** (`policy.dw`) for stateful, temporal rules (e.g., gate git push on recent passing tests) — triggers a formal v2 revisit of v1 decision D-05 ("never Cedar") scoped specifically to deterministic Dogwood.
-  - **Out-of-band credential egress proxy:** keeps AWS/Google/OpenRouter/TypeSafe API keys outside the agent process and prompt-injected subprocesses.
+  - Embedded **Dogwood Local Engine** (`policy.dw`) for stateful, temporal rules (e.g., gate git push on recent passing tests) — triggers a formal `v2.0` revisit of v1 decision D-05 ("never Cedar") scoped specifically to deterministic Dogwood.
+  - **Out-of-band credential egress proxy:** keeps AWS/Google/Anthropic/OpenRouter/TypeSafe keys outside the agent process and prompt-injected subprocesses (using `strands_box_...` phantom tokens and provider-specific headers like `x-goog-api-key`).
 
 ---
 
-## 5. Pillar 4 — Strands Evals (`strands-agents-evals`) & Selective CLI Ergonomics
+## 5. Pillar 4 — Strands Evals (`strands-agents-evals`), Skills Marketplaces & CLI Ergonomics
 
-- **Automated agent quality & security evals (`strands-agents-evals`):** Complement the existing `scripts/uattest/` PTY UI suite with a `strands-agents-evals` suite covering:
-  - `TrajectoryEvaluator` + `ActorSimulator` checks on Plan -> `/approve` -> Act discipline, CodeAct tool gating, and `/route` selection quality.
-  - Adversarial red-teaming (Crescendo/GOAT/PAIR) for prompt-injection resilience across `./.agent/skills`, `STRANDS.md`, and `./.agent/MEMORY.md` (`Phase 6 UAT` concern).
-  - OpenTelemetry trace diagnostics for regression triage.
-- **Selective CLI ergonomics (`strands-cli`-inspired + v2 backlog):**
+- **Skills marketplaces (`SKILL-03`):** Support catalog `.agent-plugin/marketplace.json` / `.claude-plugin/marketplace.json` and direct GitHub `owner/repo[@ref]` installs into `./.agent/skills-marketplaces/<ns>/<skill>/` with `./.agent/skills-lock.json` SHA/hash pinning and deny-first symlink/zip-slip/protected-path guards.
+- **Selective CLI ergonomics (`strands-cli`-inspired + `v2.0` backlog):**
   - Explicit `/help` listing built-in slash commands and loaded local skills (`LOOP-06`).
-  - `@file` / `/file` fuzzy file and image attachment picker (`TOOL-05`).
-  - `/review` command for pending git/worktree diffs (`REVIEW-01`).
+  - `@file` / `/file` fuzzy file and image/document attachment picker (`TOOL-05`).
+  - `/review` read-only diff review command (`REVIEW-01`).
+- **Automated agent quality & security evals (`strands-agents-evals >=1.10`):** Complement `scripts/uattest/` under `scripts/evals/` + `tests/evals/` covering:
+  - Offline deterministic/mocked `TrajectoryEvaluator` + OTel span invariants on Plan -> `/approve` -> Act discipline, CodeAct tool gating, and `/route` selection quality.
+  - Live `ActorSimulator` + `RedTeamExperiment` (Crescendo/GOAT/PAIR) for prompt-injection resilience across `./.agent/skills`, marketplace skills, `STRANDS.md`, and `./.agent/MEMORY.md`.
 
 ---
 
-## 6. Candidate v2 Phase Roadmap (Seed for `/gsd-new-milestone`)
+## 6. Locked `v2.0` Phase Roadmap
 
-| Candidate Phase | Focus | Primary Requirements / Anchors |
+| Phase | Focus | Primary Requirements / Anchors |
 | :--- | :--- | :--- |
-| **Phase 13** | SDK & Harness Resync (`strands-agents >=1.65`, `strands-harness >=0.4`) + Shim Retirement (`#5166`, `#5158`, `#4853`, `#5159`, `todos` audit, `Agent.cancel()` evaluation) | `UPSTREAM-01`, closes `STATE.md` Phase 4 restore blocker |
-| **Phase 14** | First-Class Google Gemini (`google/`) + Provider-Aware Startup Preflight + AI Studio Ultra Credit Docs | `MODEL-06` |
-| **Phase 15** | Decision Routing Convergence onto `strands.decisions.DecisionModel` + `ClassifierStrategy` (retaining calibrated `0.62`/`0.04` gate & `/route` UX) | `UPSTREAM-01`, `MODEL-03`, `MODEL-04` |
-| **Phase 16** | Strands Box Linux Sandbox Floor + Deterministic Dogwood Policy (`box.toml` + `policy.dw` + credential egress proxy, formal D-05 revisit) | `SANDBOX-01` |
-| **Phase 17** | Strands Evals Suite (`TrajectoryEvaluator` + red-team prompt-injection suite) + Selective CLI Ergonomics (`/help`, `@file`, `/review`) | `EVAL-01`, `LOOP-06`, `TOOL-05`, `REVIEW-01` |
+| **Phase 13** | Upstream SDK & Harness Resync (`strands-agents >=1.65`, `strands-harness >=0.4`) + Shim Retirement (`#5166`, `#5158`, `InjectedBlock`, `Model.model_info`, `streaming=False` for `_NO_STREAMING_TOOLS`, `todos` audit, keep `steering.py`) | `UPSTREAM-01`, closes `STATE.md` Phase 4 restore blocker |
+| **Phase 14** | First-Class Google Gemini (`google/`) + Box-Compatible Provider-Aware Startup Preflight + `reasoningSignature` / `_vendor_family` / `litellm_entry` Fixes + AI Studio Ultra Credit Docs | `MODEL-06` |
+| **Phase 15** | Decision Routing Convergence onto `strands.decisions.DecisionModel` (`TypeSafeDecisionModel`, `OpenRouterDecisionModel`, `OllamaDecisionModel`, optional `LLMDecisionModel`; keeping `apply_model_action`, `0.62`/`0.04` gate & `/cost`) | `UPSTREAM-02`, `MODEL-03`, `MODEL-04` |
+| **Phase 16** | Skills Marketplaces & Lockfile Installer (`/skills marketplace\|browse\|install\|update\|sync`, `./.agent/skills-marketplaces/`, `./.agent/skills-lock.json`, deny-first guards) | `SKILL-03` |
+| **Phase 17** | Strands Box Linux Sandbox Floor + Deterministic Dogwood Policy (`box.toml` + `policy.dw` generator & 5-provider egress profiles, `codeact_shell` `sh -c` alignment, Linux `x86_64` + Ubuntu 24.04 AppArmor setup, formal D-05 revisit) | `SANDBOX-01` |
+| **Phase 18** | CLI Ergonomics (`/help`, `@file` / `/file` attachment picker + `"document"` conversion, Python-collected read-only `/review`) | `LOOP-06`, `TOOL-05`, `REVIEW-01` |
+| **Phase 19** | Strands Evals & Red-Team Suite (`strands-agents-evals >=1.10`, `scripts/evals/` + `tests/evals/`, offline invariants + live `ActorSimulator` + Crescendo/GOAT/PAIR red-team) | `EVAL-01` |
