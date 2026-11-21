@@ -16,9 +16,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from strands.interventions.actions import Confirm, Proceed
+from strands.interventions.actions import Deny as HitlDeny
+from strands.interventions.actions import Proceed
 from strands.types.exceptions import EventLoopException
-from strands.vended_interventions.hitl import HumanInTheLoop
 
 import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.loop.core import _invoke_agent, _poll_live
@@ -26,6 +26,7 @@ from strands_code_cli.policy.core import PolicyConfig
 from strands_code_cli.policy.policy_gate import (
     ApprovalBroker,
     PolicyClassifier,
+    PolicyHumanInTheLoop,
     TurnCancelled,
     worker_cancelled,
 )
@@ -206,7 +207,7 @@ class TestDenyFailClosed:
         it = iter(answers)
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
         classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         return handler
@@ -218,15 +219,13 @@ class TestDenyFailClosed:
                 _event("shell", {"command": "make test"}, uid="u1")
             )
         )
-        assert isinstance(first, Confirm)
-        assert first.evaluate("n") is False
+        assert isinstance(first, HitlDeny)
         second = asyncio.run(
             handler.before_tool_call(
                 _event("shell", {"command": "make test"}, uid="u2")
             )
         )
-        assert isinstance(second, Confirm)  # not Proceed: denials never cover
-        assert second.evaluate("n") is False
+        assert isinstance(second, HitlDeny)  # not Proceed: denials never cover
 
     def test_approve_retry_stays_silent(self, monkeypatch):
         handler = self._handler(monkeypatch, ["y"])
@@ -235,7 +234,7 @@ class TestDenyFailClosed:
                 _event("shell", {"command": "make test"}, uid="u1")
             )
         )
-        assert isinstance(first, Confirm)
+        assert isinstance(first, Proceed)
         second = asyncio.run(
             handler.before_tool_call(
                 _event("shell", {"command": "make test"}, uid="u2")

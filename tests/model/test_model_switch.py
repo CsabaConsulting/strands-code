@@ -1237,7 +1237,10 @@ class TestTurnGuard:
         )
         out = capsys.readouterr().out
         # Rich wraps the console line; the reply-string test pins the full text.
-        assert out.count("rejects tool use in streaming") == 1
+        normalized = " ".join(out.split())
+        assert normalized.count("streaming disabled for") == 1
+        assert "(Bedrock unary tool mode)" in normalized
+        assert "rejects tool use in streaming" not in normalized
 
 
 # ----------------------------------------------------------------------
@@ -2117,7 +2120,11 @@ class TestIdleOnlySwap:
                 current_model="bedrock/global.anthropic.claude-opus-5",
             )
         assert resolved is not None
-        assert "rejects tool use in streaming mode" in reply
+        assert (
+            "Note: streaming disabled for us.meta.llama4-scout-17b-instruct-v1:0 "
+            "(Bedrock unary tool mode)."
+        ) in reply
+        assert agent.model.config.get("streaming") is False
 
         agent2 = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
         agent2("first ask")
@@ -2129,7 +2136,8 @@ class TestIdleOnlySwap:
                 turn_running=False,
                 current_model="bedrock/global.anthropic.claude-opus-5",
             )
-        assert "rejects tool use in streaming mode" not in reply2
+        assert "streaming disabled for" not in reply2
+        assert agent2.model.config.get("streaming") is not False
 
     def test_bad_selection_leaves_session_untouched(self, tmp_path):
         import copy
@@ -2273,3 +2281,396 @@ class TestReportedWrapScope:
         assert model is other
         assert agent.model is other
         assert not hasattr(model, "take_reported_costs")
+
+
+class TestConfigureStreamingForModel:
+    def test_disables_streaming_only_for_bedrock_no_streaming_tools(self):
+        from strands_code_cli.model.model_switch import configure_streaming_for_model
+
+        class _FakeModel:
+            def __init__(self):
+                self.calls = []
+
+            def update_config(self, **kwargs):
+                self.calls.append(kwargs)
+
+        llama4 = _FakeModel()
+        assert (
+            configure_streaming_for_model(
+                "us.meta.llama4-scout-17b-instruct-v1:0", llama4
+            )
+            is llama4
+        )
+        assert llama4.calls == [{"streaming": False}]
+
+        llama3 = _FakeModel()
+        configure_streaming_for_model("us.meta.llama3-3-70b-instruct-v1:0", llama3)
+        assert llama3.calls == [{"streaming": False}]
+
+        claude = _FakeModel()
+        configure_streaming_for_model(
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0", claude
+        )
+        assert claude.calls == []
+
+        openai_model = _FakeModel()
+        configure_streaming_for_model("openai/gpt-4o", openai_model)
+        assert openai_model.calls == []
+
+    def test_honors_capability_overrides_and_fails_soft(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.model.model_capabilities import CapabilityOverride
+        from strands_code_cli.model.model_switch import configure_streaming_for_model
+
+        class _FakeModel:
+            def __init__(self):
+                self.calls = []
+
+            def update_config(self, **kwargs):
+                self.calls.append(kwargs)
+
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [CapabilityOverride(vendor="meta", streaming_tools=True)],
+        )
+        meta_override = _FakeModel()
+        configure_streaming_for_model(
+            "us.meta.llama4-scout-17b-instruct-v1:0", meta_override
+        )
+        assert meta_override.calls == []
+
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [CapabilityOverride(vendor="qwen", streaming_tools=False)],
+        )
+        qwen_override = _FakeModel()
+        configure_streaming_for_model("qwen.qwen3-32b-v1:0", qwen_override)
+        assert qwen_override.calls == [{"streaming": False}]
+
+        # Fail-soft when resolved is None, lacks update_config, or raises.
+        assert configure_streaming_for_model("us.meta.llama4-scout-17b", None) is None
+        no_method = SimpleNamespace()
+        assert (
+            configure_streaming_for_model("us.meta.llama4-scout-17b", no_method)
+            is no_method
+        )
+
+        def _boom(**_kwargs):
+            raise RuntimeError("bad config")
+
+        broken = SimpleNamespace(update_config=_boom)
+        assert (
+            configure_streaming_for_model("us.meta.llama4-scout-17b", broken) is broken
+        )
+
+    def test_build_agent_configures_streaming_false_on_llama(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        import strands_code_cli.entry.main as entry_main
+
+        update_calls = []
+
+        class _ResolvedModel:
+            def get_config(self):
+                return {"model_id": "us.meta.llama4-scout-17b-instruct-v1:0"}
+
+            def update_config(self, **kwargs):
+                update_calls.append(kwargs)
+
+        fake_agent = SimpleNamespace(model=_ResolvedModel(), hooks=[])
+        monkeypatch.setattr(entry_main, "create_harness", lambda **kwargs: fake_agent)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda a: None)
+        monkeypatch.setattr(
+            entry_main, "register_steering_hook", lambda a: SimpleNamespace()
+        )
+        monkeypatch.setattr(entry_main, "bind_steering", lambda *_a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda *_a: None)
+        monkeypatch.setattr(entry_main, "set_mode", lambda *_a: None)
+        monkeypatch.setattr(entry_main, "bind_session", lambda *_a: None)
+
+        built = entry_main.build_agent(
+            model="us.meta.llama4-scout-17b-instruct-v1:0",
+            session_id="test-session",
+            session_dir=tmp_path,
+        )
+        assert built is fake_agent
+        assert update_calls == [{"streaming": False}]
+
+    def test_route_side_spawn_and_routed_pick_unary_behavior(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        import strands_code_cli.loop.core as loop_mod
+        import strands_code_cli.routing.core as routing_mod
+        from strands_code_cli.session.session_index import SessionIndex
+
+        update_calls = []
+
+        class _RoutedModel:
+            def get_config(self):
+                return {"model_id": "us.meta.llama4-scout-17b-instruct-v1:0"}
+
+            def update_config(self, **kwargs):
+                update_calls.append(kwargs)
+
+        monkeypatch.setattr(
+            routing_mod,
+            "load_strategy",
+            lambda: SimpleNamespace(
+                candidates=["us.meta.llama4-scout-17b-instruct-v1:0"], quiet=True
+            ),
+        )
+        monkeypatch.setattr(
+            routing_mod,
+            "decide",
+            lambda *args, **kwargs: (
+                SimpleNamespace(
+                    model="us.meta.llama4-scout-17b-instruct-v1:0",
+                    effort="",
+                    model_confidence=0.9,
+                    effort_confidence=None,
+                    tie_break=False,
+                ),
+                "heuristic",
+                (0, 0, None),
+                "",
+            ),
+        )
+        monkeypatch.setattr(
+            routing_mod, "validate_routed_effort", lambda *args, **kwargs: True
+        )
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda *args, **kwargs: _RoutedModel(),
+        )
+
+        kwargs = {"model": object()}
+        events: list = []
+        loop_mod._route_side_spawn(
+            "why?",
+            kwargs,
+            live_model=object(),
+            current_model="bedrock/global.anthropic.claude-sonnet-4-6",
+            routing=None,
+            routing_events=events,
+        )
+        assert update_calls == [{"streaming": False}]
+
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions", "before")
+        agent("first ask")
+        index = SessionIndex(tmp_path / "index")
+        pick = SimpleNamespace(
+            model="us.meta.llama4-scout-17b-instruct-v1:0",
+            effort="",
+            model_confidence=0.9,
+            effort_confidence=None,
+            tie_break=False,
+        )
+        loop_mod._apply_routed_pick(
+            agent,
+            pick=pick,
+            strategy=SimpleNamespace(candidates=[pick.model], quiet=True),
+            current_model="bedrock/global.anthropic.claude-sonnet-4-6",
+            rich=None,
+            index=index,
+            session_id="s-route",
+            stash_path=None,
+            engine="heuristic",
+            usage=(0, 0, None),
+            routing_events=[],
+        )
+        out = capsys.readouterr().out
+        assert "streaming disabled for" not in out
+        assert "rejects tool use in streaming" not in out
+
+
+class TestPrepareResumedHistory:
+    def test_media_capable_bedrock_leaves_messages_untouched(self):
+        import copy
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import prepare_resumed_history
+
+        for target in (
+            "bedrock/amazon.nova-2-lite-v1:0",
+            "us.anthropic.claude-sonnet-4-6",
+        ):
+            original = _fixture_history()
+            agent = SimpleNamespace(messages=copy.deepcopy(original))
+            rich = RichHistory()
+            changed = prepare_resumed_history(agent, target, rich)
+            assert changed is False
+            assert agent.messages == original
+            assert rich.messages is None
+
+    def test_non_bedrock_converts_reasoning_and_stashes_rich_history(self, tmp_path):
+        import copy
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import (
+            canonical_prefix_hash,
+            prepare_resumed_history,
+        )
+
+        for target in (
+            "openai/gpt-4o",
+            "litellm/openrouter/qwen/qwen3-32b",
+        ):
+            original = _fixture_history()
+            agent = SimpleNamespace(messages=copy.deepcopy(original))
+            rich = RichHistory()
+            stash_path = tmp_path / f"{target.replace('/', '_')}.json"
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                changed = prepare_resumed_history(agent, target, rich, stash_path)
+            assert changed is True
+            assistant_blocks = agent.messages[1]["content"]
+            assert "reasoningContent" not in assistant_blocks[0]
+            assert assistant_blocks[0]["text"].startswith(TRACE_LABEL)
+            # toolUse and image remain preserved on media-capable non-Bedrock targets
+            assert assistant_blocks[1] == original[1]["content"][1]
+            assert agent.messages[3]["content"][0] == original[3]["content"][0]
+            assert rich.messages == original
+            assert rich.model_id == "__resumed__"
+            assert rich.length == len(original)
+            assert rich.prefix_hash == canonical_prefix_hash(original)
+            reloaded = RichHistory.load(stash_path)
+            assert reloaded.messages == original
+
+    def test_media_less_bedrock_converts_reasoning_and_media_placeholders(self):
+        import copy
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import prepare_resumed_history
+
+        original = _fixture_history()
+        agent = SimpleNamespace(messages=copy.deepcopy(original))
+        rich = RichHistory()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            changed = prepare_resumed_history(
+                agent, "us.meta.llama4-scout-17b-instruct-v1:0", rich
+            )
+        assert changed is True
+        assert agent.messages[1]["content"][0]["text"].startswith(TRACE_LABEL)
+        assert agent.messages[3]["content"][0] == {"text": "[image: png, 10 bytes]"}
+        assert rich.messages == original
+
+    def test_empty_or_unchanged_history_returns_false(self):
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import prepare_resumed_history
+
+        empty_agent = SimpleNamespace(messages=[])
+        assert (
+            prepare_resumed_history(empty_agent, "openai/gpt-4o", RichHistory())
+            is False
+        )
+
+        plain = [{"role": "user", "content": [{"text": "hello"}]}]
+        plain_agent = SimpleNamespace(messages=list(plain))
+        rich = RichHistory()
+        assert prepare_resumed_history(plain_agent, "openai/gpt-4o", rich) is False
+        assert plain_agent.messages == plain
+        assert rich.messages is None
+
+    def test_run_loop_resumes_non_bedrock_with_converted_history(
+        self, tmp_path, monkeypatch
+    ):
+        import copy
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.session.session_index import SessionIndex
+
+        monkeypatch.setattr(loop_mod, "output_context", nullcontext)
+
+        class _Session:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                raise EOFError
+
+        monkeypatch.setattr(loop_mod, "PromptSession", _Session)
+        monkeypatch.setattr(
+            loop_mod, "_steering_slot_for", lambda agent: SimpleNamespace(state=None)
+        )
+        original = _fixture_history()
+        agent = SimpleNamespace(
+            messages=copy.deepcopy(original),
+            _session_manager=None,
+            model=None,
+        )
+        index = SessionIndex(tmp_path / "index")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            loop_mod.run_loop(
+                agent,
+                session_id=index.mint(),
+                index=index,
+                model_id="openai/gpt-4o",
+            )
+        assert "reasoningContent" not in agent.messages[1]["content"][0]
+        assert agent.messages[1]["content"][0]["text"].startswith(TRACE_LABEL)
+
+
+class TestUpstreamReasoningWireStrip:
+    def test_bedrock_format_messages_strips_foreign_signed_reasoning_on_nova_and_qwen(
+        self,
+    ):
+        import copy
+        from types import SimpleNamespace
+
+        from strands.models.bedrock import BedrockModel
+
+        from strands_code_cli.model.model_switch import prepare_resumed_history
+
+        resumed_messages = [
+            {"role": "user", "content": [{"text": "explain"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {
+                                "text": "claude internal thought",
+                                "signature": "anthropic-sig-123",
+                            }
+                        }
+                    },
+                    {"text": "final answer"},
+                ],
+            },
+        ]
+        for model_id in ("amazon.nova-2-lite-v1:0", "qwen.qwen3-32b-v1:0"):
+            agent = SimpleNamespace(messages=copy.deepcopy(resumed_messages))
+            assert prepare_resumed_history(agent, model_id) is False
+            bedrock = BedrockModel(model_id=model_id, region_name="us-west-2")
+            wire = bedrock._format_bedrock_messages(agent.messages)
+            assistant_wire = wire[1]["content"]
+            assert all("reasoningContent" not in block for block in assistant_wire)
+            assert assistant_wire == [{"text": "final answer"}]
+            # Snapshot history keeps the original reasoningContent untouched for later switch-back.
+            assert "reasoningContent" in agent.messages[1]["content"][0]
+
+        # Pin #5166 direct wire strip on Nova 1 Lite as well (even though
+        # Nova 1 Lite is media-less in _MEDIA_LESS and converts on resume).
+        nova1 = BedrockModel(model_id="amazon.nova-lite-v1:0", region_name="us-west-2")
+        nova1_wire = nova1._format_bedrock_messages(copy.deepcopy(resumed_messages))
+        assert nova1_wire[1]["content"] == [{"text": "final answer"}]

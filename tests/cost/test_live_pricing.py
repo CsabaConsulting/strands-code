@@ -478,6 +478,8 @@ class TestResolutionOrder:
             cost_context.price_provenance("openai.gpt-5.4", region="us-west-2")
             == "LiteLLM bundled"
         )
+        # Bypass SDK model_info so this test exercises the LiteLLM window tier.
+        monkeypatch.setattr(cost_context, "_sdk_window", lambda *_a, **_k: None)
         assert cost_context.window_for("openai.gpt-5.4") == 1050000
 
     def test_kill_switch_restores_static_only(self, monkeypatch):

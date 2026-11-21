@@ -119,11 +119,95 @@ def price_for(model_id: str, region: str | None = None) -> tuple[float, float] |
     return (hit[0], hit[1]) if hit is not None else None
 
 
-def window_for(model_id: str) -> int | None:
-    """Context window: live layers first, static table, else None."""
-    live = _live_window(model_id)
-    if live is not None:
-        return live[0]
+def _sdk_window_candidates(model_id: str) -> list[str]:
+    """Candidate model IDs ordered from exact ref to bare provider tail."""
+    candidates = [model_id]
+    if model_id.startswith("arn:") and ":inference-profile/" in model_id:
+        candidates.append(model_id.rsplit("/", 1)[-1])
+    elif "/" in model_id:
+        tail = model_id.split("/", 1)[1]
+        candidates.append(tail)
+        if tail.lower().startswith("openrouter/"):
+            inner = tail.split("/", 1)[1]
+            candidates.append(inner)
+            if "/" in inner:
+                candidates.append(inner.split("/", 1)[1])
+    return list(dict.fromkeys(c for c in candidates if c))
+
+
+def _instance_context_window(model: Any) -> int | None:
+    """Positive int context_window from a live Model.model_info, or None."""
+    info = getattr(model, "model_info", None)
+    limits = getattr(info, "limits", None)
+    window = getattr(limits, "context_window", None)
+    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+        return window
+    return None
+
+
+def _sdk_window(model_id: str, model: Any = None) -> int | None:
+    """Offline SDK Model.model_info context_window lookup, or None (fail soft)."""
+    live_window = _instance_context_window(model)
+    if live_window is not None:
+        return live_window
+    try:
+        from strands.models._model_info import get_context_window_limit
+    except ImportError:
+        return None
+    for candidate in _sdk_window_candidates(model_id):
+        try:
+            hit = get_context_window_limit(candidate)
+        except Exception:
+            continue
+        if isinstance(hit, int) and not isinstance(hit, bool) and hit > 0:
+            return hit
+    return None
+
+
+def _openrouter_window(model_id: str) -> int | None:
+    """OpenRouter live context window when live layers are enabled, else None."""
+    if live_pricing.live_disabled():
+        return None
+    entry = live_pricing.openrouter_entry(model_id)
+    if entry is not None and "window" in entry:
+        return int(entry["window"])
+    return None
+
+
+def _litellm_window(model_id: str) -> int | None:
+    """LiteLLM bundled context window when live layers are enabled, else None."""
+    if live_pricing.live_disabled():
+        return None
+    entry = live_pricing.litellm_entry(model_id)
+    if entry is not None and "window" in entry:
+        return int(entry["window"])
+    return None
+
+
+def window_for(model_id: str, *, model: Any = None) -> int | None:
+    """Context window per D-02 route-aware precedence, else None.
+
+    OpenRouter routes prefer OpenRouter's live endpoint cap first before
+    SDK ``model_info``; direct providers consult SDK ``model_info`` first,
+    then LiteLLM bundled and static ``MODEL_LIMITS``.
+    """
+    if live_pricing.is_openrouter_id(model_id):
+        endpoint_win = _openrouter_window(model_id)
+        if endpoint_win is not None:
+            return endpoint_win
+        sdk_win = _sdk_window(model_id, model=model)
+        if sdk_win is not None:
+            return sdk_win
+        litellm_win = _litellm_window(model_id)
+        if litellm_win is not None:
+            return litellm_win
+    else:
+        sdk_win = _sdk_window(model_id, model=model)
+        if sdk_win is not None:
+            return sdk_win
+        live = _live_window(model_id)
+        if live is not None:
+            return live[0]
     hit = _best_hit(MODEL_LIMITS, model_id)
     return int(hit) if hit is not None else None
 
@@ -482,7 +566,7 @@ def context_report(
     """Read-only context report: tokens, %, counts, provider/name (item 3)."""
     messages = list(getattr(agent, "messages", []) or [])
     tokens = estimate_messages_tokens(messages)
-    window = window_for(model_id)
+    window = window_for(model_id, model=getattr(agent, "model", None))
     pct = f"{tokens / window * 100:.0f}%" if window else "n/a"
     window_cell = format_tokens(window) if window else "n/a"
     task_tokens = sum(

@@ -516,9 +516,9 @@ class TestGateSubsumption:
             )
         finally:
             builtins.input = real_input
-        from strands.interventions.actions import Confirm
+        from strands.interventions.actions import Proceed
 
-        assert isinstance(action, Confirm)
+        assert isinstance(action, Proceed)
 
         def fail_ask(prompt):
             raise AssertionError("wrapper must not re-prompt under gate_active")

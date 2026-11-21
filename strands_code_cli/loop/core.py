@@ -76,13 +76,16 @@ from strands_code_cli.memory.memory_modes import (
 )
 from strands_code_cli.model.model_switch import (
     MODEL_REFUSAL,
+    UNARY_TOOL_MODE_NOTE,
     apply_switch,
     canonical_prefix_hash,
+    configure_streaming_for_model,
     convert_history,
     estimate_fit,
     from_stash_json,
     model_id_of,
     normalize_model_ref,
+    prepare_resumed_history,
     same_vendor,
     supports_reasoning,
     supports_streaming_tools,
@@ -505,6 +508,7 @@ def _route_side_spawn(
             from strands_code_cli.cost.reported_cost import wrap_for_openrouter
 
             routed = wrap_for_openrouter(pick.model, routed)
+            routed = configure_streaming_for_model(pick.model, routed)
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
             _record_routing_event(
                 routing_events,
@@ -1124,8 +1128,7 @@ def apply_model_action(
     count = len(agent.messages)
     suffix = ", thinking restored" if restored else ""
     tools_note = (
-        " Warning: this model rejects tool use in streaming mode — turns "
-        "will fail until a non-streaming fallback lands upstream (/model to switch back)."
+        f" {UNARY_TOOL_MODE_NOTE.format(model_id=new_id)}"
         if not supports_streaming_tools(new_id)
         else ""
     )
@@ -1359,13 +1362,6 @@ def _apply_routed_pick(
         index.ensure(session_id)
         if rich is not None and stash_path is not None:
             rich.save(stash_path)
-        if not supports_streaming_tools(pick.model):
-            print_plain(
-                console,
-                f"Warning: {pick.model} rejects tool use in streaming "
-                "mode — turns will fail; /model to switch.",
-                style="yellow",
-            )
     return current_model
 
 
@@ -2251,13 +2247,12 @@ def _load_initial_memory_mode() -> MemoryModeState:
 
 
 def _warn_if_no_streaming_tools(current_model: str) -> None:
-    """Warn when the opening model rejects tool use in streaming mode."""
+    """Print a concise note when the opening model uses Bedrock unary tool mode."""
     if not supports_streaming_tools(current_model):
         print_plain(
             console,
-            f"Warning: {current_model} rejects tool use in streaming "
-            "mode — turns will fail; /model to switch.",
-            style="yellow",
+            UNARY_TOOL_MODE_NOTE.format(model_id=current_model),
+            style="dim",
         )
 
 
@@ -2511,6 +2506,7 @@ def run_loop(
     routing_events: list = []
     stash_path = rich_stash_path(index.root, session_id)
     rich = RichHistory.load(stash_path)
+    prepare_resumed_history(agent, current_model, rich, stash_path)
     slot = _steering_slot_for(agent)
     set_gate_mode(mode.mode)
     cancel_armed_at: float | None = None

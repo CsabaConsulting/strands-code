@@ -37,6 +37,7 @@ from typing import Any, Awaitable, Callable, Iterator
 
 from rich.console import Console
 from rich.syntax import Syntax
+from strands.interventions.actions import Deny as InterventionDeny
 from strands.types.exceptions import EventLoopException
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands.vended_interventions.hitl.classifier import ClassifierResult
@@ -693,6 +694,23 @@ class PolicyClassifier:
         self._batch.record(f"[{tag}] denied {tool_name}: {verdict.reason}")
         return "n"
 
+    def last_deny_reason(self, event: Any) -> str | None:
+        """Model-facing deny reason for a classifier-issued Deny, else None."""
+        tag = self._tag_for_event(event)
+        ctx = self._last_by_tag.get(tag)
+        if not ctx or not isinstance(ctx.get("verdict"), Deny):
+            return None
+        verdict = ctx["verdict"]
+        rule_text = (
+            verdict.rule.describe() if verdict.rule is not None else verdict.reason
+        )
+        if rule_text.startswith("Plan mode is read-only"):
+            return rule_text
+        reason = f"DENY:{rule_text}"
+        if ctx.get("tool_name") == "python_repl":
+            reason += f" {REVISE_HINT}"
+        return reason
+
 
 def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:
     """Exact command/code/path shown in the prompt (D-01 full detail)."""
@@ -729,6 +747,21 @@ def _dialog_title(tag: str, tool_name: str, tool_input: dict[str, Any]) -> str:
 _ACTIVE: dict[str, Any] = {}
 
 
+class PolicyHumanInTheLoop(HumanInTheLoop):
+    """Single-HITL handler preserving policy/Plan deny reasons in Deny actions."""
+
+    async def before_tool_call(self, event: Any, **kwargs: Any) -> Any:
+        """Delegate to HumanInTheLoop and restore classifier Deny reasons."""
+        action = await super().before_tool_call(event, **kwargs)
+        if isinstance(action, InterventionDeny) and isinstance(
+            self._classifier, PolicyClassifier
+        ):
+            reason = self._classifier.last_deny_reason(event)
+            if reason is not None:
+                return InterventionDeny(reason=reason)
+        return action
+
+
 def build_interventions(
     policy_loader: Callable[[], PolicyConfig] | None = None,
 ) -> list[HumanInTheLoop]:
@@ -738,7 +771,7 @@ def build_interventions(
     allowlist, the TOML classifier, and the rendering ask.
     """
     classifier = PolicyClassifier(policy_loader=policy_loader)
-    gate = HumanInTheLoop(
+    gate = PolicyHumanInTheLoop(
         allowed_tools=["read", "search"],
         classifier=classifier,
         ask=classifier.ask,

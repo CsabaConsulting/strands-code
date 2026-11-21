@@ -697,6 +697,35 @@ class TestBuildBtwAgent:
         )
         assert created["memory"] is False
 
+    def test_build_btw_agent_disables_streaming_on_llama(self, monkeypatch):
+        import strands_code_cli.loop.btw as btw_mod
+
+        update_calls = []
+
+        class _LlamaModel:
+            def get_config(self):
+                return {"model_id": "us.meta.llama4-scout-17b-instruct-v1:0"}
+
+            def update_config(self, **kwargs):
+                update_calls.append(kwargs)
+
+        def fake_create_harness(**kwargs):
+            return SimpleNamespace(model=_LlamaModel())
+
+        monkeypatch.setattr(btw_mod, "create_harness", fake_create_harness)
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+        build_btw_agent(
+            {
+                "model": "us.meta.llama4-scout-17b-instruct-v1:0",
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+            },
+            [],
+            "why slow?",
+        )
+        assert update_calls == [{"streaming": False}]
+
 
 def _idle_btw(**overrides):
     """BtwContext double with a real BtwQueue (submit/echo tests)."""

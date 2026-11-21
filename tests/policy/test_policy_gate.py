@@ -48,7 +48,8 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from strands.interventions.actions import Confirm, Proceed
+from strands.interventions.actions import Deny as HitlDeny
+from strands.interventions.actions import Proceed
 from strands.vended_interventions.hitl import HumanInTheLoop
 from strands_harness.interventions import resolve_interventions
 
@@ -56,6 +57,7 @@ from strands_code_cli.policy.core import PolicyConfig, PolicyOptions, Rule
 from strands_code_cli.policy.policy_gate import (
     BatchState,
     PolicyClassifier,
+    PolicyHumanInTheLoop,
     bind_main_agent,
     bind_turn,
     build_interventions,
@@ -84,7 +86,7 @@ def _event(name: str, tool_input: dict[str, Any], agent: Any = None, uid: str = 
 
 def _gate(loader=None, answers: list[str] | None = None, monkeypatch=None, **kwargs):
     classifier = PolicyClassifier(policy_loader=loader or PolicyConfig.load, **kwargs)
-    handler = HumanInTheLoop(
+    handler = PolicyHumanInTheLoop(
         allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
     )
     if answers is not None and monkeypatch is not None:
@@ -153,20 +155,27 @@ class TestGateLayer:
     def test_prompt_once_per_rule_per_turn(self, monkeypatch):
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         first = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
-        assert isinstance(first, Confirm)
-        assert first.evaluate("y") is True
+        assert isinstance(first, Proceed)
+        # No second prompt happens because the identical call is batch-covered
+        # (a second input() call would raise StopIteration on the single answer).
         second = _run(handler, _event("shell", {"command": "make test"}, uid="u2"))
         assert isinstance(second, Proceed)
 
     def test_batch_resets_next_turn(self, monkeypatch):
-        classifier, handler = _gate(monkeypatch=monkeypatch, answers=["y", "y"])
+        prompts: list[str] = []
+        classifier, handler = _gate()
+        it = iter(["y", "y"])
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), next(it))[1]
+        )
         assert isinstance(
-            _run(handler, _event("shell", {"command": "make test"}, uid="u1")), Confirm
+            _run(handler, _event("shell", {"command": "make test"}, uid="u1")), Proceed
         )
         classifier.batch.bind_turn("turn-2")
         assert isinstance(
-            _run(handler, _event("shell", {"command": "make test"}, uid="u3")), Confirm
+            _run(handler, _event("shell", {"command": "make test"}, uid="u3")), Proceed
         )
+        assert len(prompts) == 2
 
     def test_deny_short_circuits_naming_rule(self, monkeypatch):
         def loader():
@@ -182,10 +191,9 @@ class TestGateLayer:
             lambda _: (_ for _ in ()).throw(AssertionError("deny must not prompt")),
         )
         result = _run(handler, _event("shell", {"command": "curl http://x"}, uid="u9"))
-        assert isinstance(result, Confirm)
-        assert result.evaluate("n") is False
-        # Deny reason reaches the model-side prompt AND the user-visible refusal.
-        assert "curl" in result.prompt
+        assert isinstance(result, HitlDeny)
+        # Deny reason reaches the model-side Deny action AND the user-visible refusal.
+        assert "curl" in result.reason
         assert any("Denied by policy rule" in line and "curl" in line for line in shown)
 
     def test_always_appends_narrow_rule(self, tmp_path, monkeypatch):
@@ -196,12 +204,12 @@ class TestGateLayer:
             return PolicyConfig.load(home_path=missing, repo_path=repo)
 
         classifier = PolicyClassifier(policy_loader=loader, append_path=repo)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         monkeypatch.setattr("builtins.input", lambda *args: "always")
         result = _run(handler, _event("shell", {"command": "git status"}, uid="u1"))
-        assert isinstance(result, Confirm)
+        assert isinstance(result, Proceed)
         reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
         assert len(reloaded.allow) == 1
         assert reloaded.allow[0].tool == "shell"
@@ -223,42 +231,47 @@ class TestGateLayer:
             policy_loader=lambda: PolicyConfig.load(home_path=missing, repo_path=repo),
             append_path=repo,
         )
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         monkeypatch.setattr("builtins.input", lambda *args: "never")
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
-        assert isinstance(result, Confirm)
-        assert result.evaluate("n") is False
+        assert isinstance(result, HitlDeny)
         reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
         assert len(reloaded.deny) == 1
 
-    def test_trust_delegated_skips_only_non_main_agent(self):
+    def test_trust_delegated_skips_only_non_main_agent(self, monkeypatch):
         main_agent, child_agent = _FakeAgent(), _FakeAgent()
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
+        )
         classifier = PolicyClassifier(
             policy_loader=lambda: PolicyConfig(
                 options=PolicyOptions(trust_delegated=True)
             )
         )
         classifier.bind_main_agent(main_agent)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, child_agent, "u1")),
             Proceed,
         )
+        assert len(prompts) == 0
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, main_agent, "u2")),
-            Confirm,
+            HitlDeny,
         )
+        assert len(prompts) == 1
 
     def test_delegate_prompts_by_default(self, monkeypatch):
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         result = _run(
             handler, _event("shell", {"command": "make test"}, _FakeAgent(), "u1")
         )
-        assert isinstance(result, Confirm)
+        assert isinstance(result, Proceed)
 
     def test_unbound_agent_prompts_fail_closed(self, monkeypatch):
         classifier = PolicyClassifier(
@@ -266,14 +279,14 @@ class TestGateLayer:
                 options=PolicyOptions(trust_delegated=True)
             )
         )
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         monkeypatch.setattr("builtins.input", lambda *args: "n")
         result = _run(
             handler, _event("shell", {"command": "make test"}, _FakeAgent(), "u1")
         )
-        assert isinstance(result, Confirm)
+        assert isinstance(result, HitlDeny)
 
     def test_ask_error_returns_deny(self, monkeypatch):
         classifier, _ = _gate(monkeypatch=monkeypatch, answers=[])
@@ -298,13 +311,12 @@ class TestReplAndDelegation:
             handler,
             _event("python_repl", {"code": "import socket\nprint(1)"}, uid="r1"),
         )
-        assert isinstance(result, Confirm)
-        assert result.evaluate("n") is False
+        assert isinstance(result, HitlDeny)
 
     def test_subagent_call_prompts(self, monkeypatch):
         _, handler = _gate(monkeypatch=monkeypatch, answers=["n"])
         result = _run(handler, _event("subagent", {"task": "do it"}, uid="s1"))
-        assert isinstance(result, Confirm)
+        assert isinstance(result, HitlDeny)
 
     def test_deny_reason_propagates(self, monkeypatch):
         def loader():
@@ -315,8 +327,18 @@ class TestReplAndDelegation:
             "builtins.input", lambda *args: (_ for _ in ()).throw(AssertionError())
         )
         result = _run(handler, _event("shell", {"command": "curl http://x"}, uid="d1"))
-        assert isinstance(result, Confirm)
-        assert "DENY" in result.prompt and "curl" in result.prompt
+        assert isinstance(result, HitlDeny)
+        assert "DENY" in result.reason and "curl" in result.reason
+
+    def test_plan_mode_deny_reason_propagates(self, monkeypatch):
+        classifier, handler = _gate(monkeypatch=monkeypatch, answers=[])
+        classifier.set_mode("plan")
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (_ for _ in ()).throw(AssertionError())
+        )
+        result = _run(handler, _event("write", {"path": "x.txt"}, uid="p1"))
+        assert isinstance(result, HitlDeny)
+        assert "Plan mode is read-only" in result.reason
 
 
 # ---------------------------------------------------------------------------
@@ -432,19 +454,20 @@ class TestAgentTaggedGate:
         main_agent, btw_agent = _FakeAgent(), _FakeAgent()
         classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
         classifier.bind_main_agent(main_agent)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         it = iter(["y", "y"])
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, main_agent, "m1")),
-            Confirm,
+            Proceed,
         )
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b1")),
-            Confirm,
+            Proceed,
         )
+        assert list(it) == []
         assert classifier.batch.covered() == [
             "[main] approved shell: Shell command: make test",
             "[btw] approved shell: Shell command: make test",
@@ -455,19 +478,20 @@ class TestAgentTaggedGate:
         main_agent, btw_agent = _FakeAgent(), _FakeAgent()
         classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
         classifier.bind_main_agent(main_agent)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         it = iter(["n", "n"])
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b1")),
-            Confirm,
+            HitlDeny,
         )
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b2")),
-            Confirm,
+            HitlDeny,
         )
+        assert list(it) == []
 
     def test_trust_delegated_btw_prints_transcript_note(self, monkeypatch, capsys):
         # btw auto-trust is announced via print_plain (never builtins.print).
@@ -589,8 +613,7 @@ class TestCodeactApprovalPreview:
         monkeypatch.setattr(gate_module, "console", Console(file=buf, width=200))
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         result = _run(handler, _event("python_repl", {"code": block}, uid="c1"))
-        assert isinstance(result, Confirm)
-        assert result.evaluate("y") is True
+        assert isinstance(result, Proceed)
         # Syntax pads each line to the console width: strip the padding,
         # then the render must equal the block exactly (no truncation).
         rendered = "\n".join(
@@ -614,7 +637,7 @@ class TestCodeactApprovalPreview:
         )
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         result = _run(handler, _event("python_repl", {"code": "print('hi')"}, uid="c2"))
-        assert isinstance(result, Confirm)
+        assert isinstance(result, Proceed)
         assert shown.count("Approval needed: [main] python_repl") == 1
         # The truncated Detail preview is replaced by the Syntax render.
         assert not any(line.startswith("  Detail:") for line in shown)
@@ -639,8 +662,8 @@ class TestCodeactApprovalPreview:
             handler,
             _event("python_repl", {"code": "import socket\nprint(1)"}, uid="d1"),
         )
-        assert isinstance(result, Confirm)
-        assert result.evaluate("n") is False
+        assert isinstance(result, HitlDeny)
+        assert "Revise the code or try a different approach." in result.reason
         assert any(
             "Revise the code or try a different approach." in line
             and "skipped, continuing" in line
@@ -664,7 +687,7 @@ class TestCodeactRuleCoherence:
             return PolicyConfig.load(home_path=missing, repo_path=repo)
 
         classifier = PolicyClassifier(policy_loader=loader, append_path=repo)
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         # Single-line block: multi-line code exposes the pre-existing
@@ -675,7 +698,7 @@ class TestCodeactRuleCoherence:
         assert len(code) > 500
         monkeypatch.setattr("builtins.input", lambda *args: "always")
         result = _run(handler, _event("python_repl", {"code": code}, uid="r1"))
-        assert isinstance(result, Confirm)
+        assert isinstance(result, Proceed)
         reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
         assert len(reloaded.allow) == 1
         assert reloaded.allow[0].tool == "python_repl"
@@ -684,7 +707,7 @@ class TestCodeactRuleCoherence:
         # A longer block sharing the prefix proceeds silently through a
         # fresh batch: the persisted rule matches by prefix (D-07).
         fresh = PolicyClassifier(policy_loader=loader)
-        fresh_handler = HumanInTheLoop(
+        fresh_handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=fresh, ask=fresh.ask
         )
         monkeypatch.setattr(
@@ -706,14 +729,13 @@ class TestCodeactRuleCoherence:
             policy_loader=lambda: PolicyConfig.load(home_path=missing, repo_path=repo),
             append_path=repo,
         )
-        handler = HumanInTheLoop(
+        handler = PolicyHumanInTheLoop(
             allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         code = "import socket; print(socket.gethostname())"
         monkeypatch.setattr("builtins.input", lambda *args: "never")
         result = _run(handler, _event("python_repl", {"code": code}, uid="r3"))
-        assert isinstance(result, Confirm)
-        assert result.evaluate("n") is False
+        assert isinstance(result, HitlDeny)
         reloaded = PolicyConfig.load(home_path=missing, repo_path=repo)
         assert len(reloaded.deny) == 1
         assert reloaded.deny[0].tool == "python_repl"

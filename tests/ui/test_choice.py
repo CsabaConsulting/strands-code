@@ -13,6 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from strands.interventions.actions import Deny as HitlDeny
+from strands.interventions.actions import Proceed
 from strands.vended_interventions.hitl import HumanInTheLoop
 
 import strands_code_cli.ui.choice as choice_module
@@ -59,13 +61,13 @@ class TestApprovalDialog:
     def test_dialog_yes_approves(self, monkeypatch):
         classifier, handler = _tty_gate(monkeypatch, "y")
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
-        assert result.evaluate("y") is True
+        assert isinstance(result, Proceed)
         assert any("approved shell" in line for line in classifier.batch.covered())
 
     def test_dialog_escape_denies_fail_closed(self, monkeypatch):
         _, handler = _tty_gate(monkeypatch, None)
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u2"))
-        assert result.evaluate("n") is False
+        assert isinstance(result, HitlDeny)
 
     def test_dialog_ctrl_c_reraises_for_cancel(self, monkeypatch):
         _, handler = _tty_gate(monkeypatch, KeyboardInterrupt())

@@ -31,6 +31,10 @@ from strands_code_cli.loop.btw import LockedHandler
 from strands_code_cli.loop.core import run_loop
 from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
+from strands_code_cli.model.model_switch import (
+    configure_streaming_for_model,
+    model_id_of,
+)
 from strands_code_cli.policy.diff_gate import (
     PendingStore,
     bind_session,
@@ -176,6 +180,9 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     # the loop replays this dict through create_harness with the
     # delegate overrides, so the child is built the way the parent was.
     agent._harness_kwargs = kwargs
+    resolved_model = getattr(agent, "model", None)
+    target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
+    configure_streaming_for_model(target_id, resolved_model)
     if isinstance(model, str):
         # Initial-build wrap (D-07): a session starting on an OpenRouter
         # id captures from turn one. In-place promotion preserves the

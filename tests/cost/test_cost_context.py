@@ -29,6 +29,7 @@ from strands.models.model import Model
 from strands_harness import create_harness
 
 import strands_code_cli.cost.cost_context as cost_context
+import strands_code_cli.cost.live_pricing as live_pricing
 import strands_code_cli.model.model_capabilities as model_capabilities
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_agent.python_environments.local_sandboxed import (
@@ -968,3 +969,65 @@ class TestLoopUsageWiring:
         ):
             text = _Path(f"strands_code_cli/{mod}.py").read_text(encoding="utf-8")
             assert "os.getenv" not in text and "os.environ" not in text, mod
+
+
+class TestSdkModelInfoWindow:
+    def test_direct_provider_prefers_sdk_model_info_over_litellm_and_static(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(
+            live_pricing,
+            "litellm_entry",
+            lambda _id: {"in": 1.0, "out": 2.0, "window": 111_111},
+        )
+        assert window_for("bedrock/global.anthropic.claude-sonnet-4-6") == 1_000_000
+        assert window_for("openai/gpt-5.4") == 1_050_000
+
+    def test_openrouter_prefers_endpoint_window_before_sdk_model_info(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setattr(
+            live_pricing,
+            "openrouter_entry",
+            lambda _id: {"in": 1.0, "out": 2.0, "window": 65_536},
+        )
+        monkeypatch.setattr(
+            live_pricing,
+            "litellm_entry",
+            lambda _id: {"in": 1.0, "out": 2.0, "window": 111_111},
+        )
+        assert window_for("litellm/openrouter/openai/gpt-5.4") == 65_536
+
+    def test_openrouter_falls_back_to_sdk_when_endpoint_window_absent(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(live_pricing, "litellm_entry", lambda _id: None)
+        assert window_for("litellm/openrouter/openai/gpt-5.4") == 1_050_000
+
+    def test_explicit_model_instance_window_honored_fail_soft(self, monkeypatch):
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(live_pricing, "litellm_entry", lambda _id: None)
+        fake_model = SimpleNamespace(
+            model_info=SimpleNamespace(limits=SimpleNamespace(context_window=333_333))
+        )
+        assert window_for("mystery/custom-1", model=fake_model) == 333_333
+        bad_model = SimpleNamespace(
+            model_info=SimpleNamespace(limits=SimpleNamespace(context_window=True))
+        )
+        assert window_for("mystery/custom-1", model=bad_model) is None
+
+    def test_sdk_lookup_exception_fails_soft_to_fallback(self, monkeypatch):
+        import strands.models._model_info as sdk_model_info
+
+        def _boom(_candidate: str):
+            raise RuntimeError("corrupt sdk table")
+
+        monkeypatch.setattr(sdk_model_info, "get_context_window_limit", _boom)
+        assert window_for("bedrock/global.anthropic.claude-sonnet-4-6") == 1_000_000
+        assert window_for("mystery/acme-1") is None

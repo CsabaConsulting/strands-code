@@ -47,7 +47,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from strands.interventions.actions import Confirm
+from strands.interventions.actions import Deny as HitlDeny
 from strands.vended_interventions.hitl import HumanInTheLoop
 
 from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
@@ -151,11 +151,15 @@ class TestTracerPlanDeny:
                 ask=classifier.ask,
             ),
         )
-        monkeypatch.setattr("builtins.input", lambda *args: "n")
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
+        )
         result = asyncio.run(
             handler.before_tool_call(_event("shell", {"command": "x"}))
         )
-        assert isinstance(result, Confirm)
+        assert isinstance(result, HitlDeny)
+        assert len(prompts) == 1
 
     def test_plan_ask_refusal_uses_mode_vocabulary(self, monkeypatch):
         classifier = _plan_classifier()
