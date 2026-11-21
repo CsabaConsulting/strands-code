@@ -40,9 +40,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-discuss-phase 13",
-    "label": "Discuss or plan Phase 13",
-    "reason": "Milestone v2.0 initialized 2026-11-21"
+    "command": "/gsd-plan-phase 13",
+    "label": "Plan Phase 13",
+    "reason": "13-CONTEXT.md locked 2026-11-21"
   },
-  "updated_at": "2026-11-21T11:18:58.000Z"
+  "updated_at": "2026-11-21T12:46:03.000Z"
 }
