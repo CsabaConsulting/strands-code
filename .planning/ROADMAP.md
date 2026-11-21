@@ -13,7 +13,7 @@
 
 ## Phases
 
-- [ ] **Phase 13: Upstream SDK & Harness Resync** — Lock `strands-agents >=1.65` & `strands-harness >=0.4`, retire `#5166`/`#5158` workarounds, adapt `InjectedBlock` & `Model.model_info`, enable non-streaming Bedrock Llama tools
+- [x] **Phase 13: Upstream SDK & Harness Resync** — Lock `strands-agents >=1.65` & `strands-harness >=0.4`, retire `#5166`/`#5158` workarounds, adapt `InjectedBlock` & `Model.model_info`, enable non-streaming Bedrock Llama tools (completed 2026-11-21)
 - [ ] **Phase 14: First-Class Google Gemini & Provider-Aware Startup** — `gemini` extra, Box-compatible provider-aware preflight, cross-provider `reasoningSignature` & `_vendor_family` fixes, `/model` Gemini discovery, `/cost` tables, AI Studio Ultra credit docs
 - [ ] **Phase 15: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [ ] **Phase 16: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards
@@ -40,11 +40,11 @@
 Plans:
 **Wave 1**
 
-- [ ] `13-01-PLAN.md` — Tracer: lockfile & floor bump (`strands-agents>=1.65.0`, `strands-harness>=0.4.0`) plus `InjectedBlock` accounting
+- [x] `13-01-PLAN.md` — Tracer: lockfile & floor bump (`strands-agents>=1.65.0`, `strands-harness>=0.4.0`) plus `InjectedBlock` accounting (`31ecc3e`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `13-02-PLAN.md` — SDK `model_info` windows, Bedrock unary tool mode (`streaming=False`), and hybrid session restore + gates
+- [x] `13-02-PLAN.md` — SDK `model_info` windows, Bedrock unary tool mode (`streaming=False`), and hybrid session restore + gates (`8c8b70f`)
 
 ### Phase 14: First-Class Google Gemini & Provider-Aware Startup
 
@@ -125,7 +125,7 @@ Plans:
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
-| 13. Upstream SDK & Harness Resync | `v2.0` | 0/2 | Planned | - |
+| 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 0/0 | Not started | - |
 | 15. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 16. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |

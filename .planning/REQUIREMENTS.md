@@ -10,7 +10,7 @@
 
 ### Upstream & Routing
 
-- [ ] **UPSTREAM-01**: Resync `uv.lock` onto `strands-agents >=1.65` and `strands-harness >=0.4`, adapt `estimate_messages_tokens` and `canonical_prefix_hash` for `ContextInjector` `InjectedBlock`, consume `Model.model_info.limits.context_window`, close the Phase 4 restore-reasoning blocker (`#5166` / `drop_block`), preemptively configure `streaming=False` for `_NO_STREAMING_TOOLS` (Bedrock Llama 3/4), and audit `todos` plugin removal while preserving `steering.py` boundary steering
+- [x] **UPSTREAM-01**: Resync `uv.lock` onto `strands-agents >=1.65` and `strands-harness >=0.4`, adapt `estimate_messages_tokens` and `canonical_prefix_hash` for `ContextInjector` `InjectedBlock`, consume `Model.model_info.limits.context_window`, close the Phase 4 restore-reasoning blocker (`#5166` / `drop_block`), preemptively configure `streaming=False` for `_NO_STREAMING_TOOLS` (Bedrock Llama 3/4), and audit `todos` plugin removal while preserving `steering.py` boundary steering
 - [ ] **UPSTREAM-02**: Migrate `strands_code_cli/routing/` engine transports onto `strands.decisions.DecisionModel` (`TypeSafeDecisionModel`, `OpenRouterDecisionModel` keeping 64 KiB body caps & inline USD `cost`, `OllamaDecisionModel`, and optional `LLMDecisionModel`), keeping `uncertainty=False` raw probability reading, `0.62`/`0.04` gate, two-call model + effort routing, `apply_model_action`, `/route` UX, and `/cost` actuals
 
 ### Models & Auth
@@ -66,7 +66,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPSTREAM-01 | Phase 13 | Pending |
+| UPSTREAM-01 | Phase 13 | Complete |
 | MODEL-06 | Phase 14 | Pending |
 | UPSTREAM-02 | Phase 15 | Pending |
 | SKILL-03 | Phase 16 | Pending |
