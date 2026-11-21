@@ -35,7 +35,16 @@
   2. Resuming a persisted Opus/reasoning session onto a non-reasoning Bedrock model succeeds via `#5166` / `drop_block` without `ValidationException`, while explicit `/model` switches continue preserving `[Thinking trace]` text
   3. `estimate_messages_tokens` and `canonical_prefix_hash` account for `InjectedBlock` (`{"injected": {"text": ...}}`), `window_for()` consults `model.model_info.limits.context_window` before `MODEL_LIMITS`, Bedrock `_NO_STREAMING_TOOLS` models instantiate with `streaming=False`, and `todos` plugin removal leaves zero prompt surprises
 
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+**Wave 1**
+
+- [ ] `13-01-PLAN.md` — Tracer: lockfile & floor bump (`strands-agents>=1.65.0`, `strands-harness>=0.4.0`) plus `InjectedBlock` accounting
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `13-02-PLAN.md` — SDK `model_info` windows, Bedrock unary tool mode (`streaming=False`), and hybrid session restore + gates
 
 ### Phase 14: First-Class Google Gemini & Provider-Aware Startup
 
@@ -116,7 +125,7 @@
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
-| 13. Upstream SDK & Harness Resync | `v2.0` | 0/0 | Not started | - |
+| 13. Upstream SDK & Harness Resync | `v2.0` | 0/2 | Planned | - |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 0/0 | Not started | - |
 | 15. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 16. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
