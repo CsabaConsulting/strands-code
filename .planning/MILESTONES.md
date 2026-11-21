@@ -10,6 +10,7 @@
 - **Archives:**
   - [v1.0 Roadmap](milestones/v1.0-ROADMAP.md)
   - [v1.0 Requirements](milestones/v1.0-REQUIREMENTS.md)
+  - [v1.0 Phases (01–12)](milestones/v1.0-phases/)
 
 ### Key Accomplishments
 
