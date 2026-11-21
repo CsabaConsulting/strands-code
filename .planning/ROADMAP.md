@@ -101,7 +101,7 @@ Plans:
 **Requirements**: `LOOP-06`, `TOOL-05`, `REVIEW-01`
 **Success Criteria** (what must be TRUE):
   1. `/help` and `/help <cmd>` (`dispatch/help.py`) render grouped built-in commands + live loaded skills and shadow warnings via `print_plain`, sharing a single command table with `USAGE_HINT`, while `run_loop` and `_setup_decision_entries` remain within `xenon --max-absolute C` (`CC <= 20`)
-  2. `@file` and `/file` (`ui/attachments.py`) provide gitignore-filtered fuzzy selection confined to `effective_roots`, leave non-file `@tokens` (`@dataclass`, `@pytest.mark`) untouched, attach `ImageContent`/`DocumentContent` when `supports_media(current_model)` holds after `/route`, and `model_switch.py` converts `"document"` blocks safely across model switches
+  2. `@file` and `/file` (`ui/attachments.py`) provide gitignore-filtered fuzzy selection confined to `effective_roots`, leave non-file `@tokens` (`@dataclass`, `@pytest.mark`) untouched, attach `ImageContent`/`DocumentContent` when `supports_media(current_model)` holds after `/route`, construct `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` shapes (never caller-supplied `"toolUse"` blocks; CVE-2026-18830 / CoreBreak boundary), and `model_switch.py` converts `"document"` blocks safely across model switches
   3. `/review` (`dispatch/review.py`) pre-collects uncommitted, `--staged`, or validated `<base-ref>` git diffs in Python inside an untrusted-diff frame and runs under a turn-scoped read-only Plan gate with `turn_interface = "tool"` without mutating sticky `ModeState`
 
 **Plans**: TBD

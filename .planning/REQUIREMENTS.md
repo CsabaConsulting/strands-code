@@ -28,7 +28,7 @@
 ### Interaction & Review
 
 - [ ] **LOOP-06**: Explicit `/help` command (`dispatch/help.py`) registered in `BUILTIN_SLASH_HEADS` sharing a single declarative command table with `USAGE_HINT` and listing loaded skills + shadow warnings via `print_plain`
-- [ ] **TOOL-05**: `@file` inline fuzzy attachment picker and `/file` TTY picker (`ui/attachments.py`) confined to gitignore-aware `effective_roots`, only resolving real existing files (never `@dataclass` / `@pytest.mark` code tokens), attaching images and binary docs (`ImageContent`/`DocumentContent`) when `supports_media(current_model)` holds post-routing, and extending `model_switch.py` to convert `"document"` blocks across switches
+- [ ] **TOOL-05**: `@file` inline fuzzy attachment picker and `/file` TTY picker (`ui/attachments.py`) confined to gitignore-aware `effective_roots`, only resolving real existing files (never `@dataclass` / `@pytest.mark` code tokens), attaching images and binary docs (`ImageContent`/`DocumentContent`) when `supports_media(current_model)` holds post-routing via strictly allowlisted content-block construction (`text`/`image`/`document` only, never caller-supplied `"toolUse"` blocks; CVE-2026-18830 guard), and extending `model_switch.py` to convert `"document"` blocks across switches
 - [ ] **REVIEW-01**: Read-only `/review` command (`dispatch/review.py`) pre-collecting uncommitted (`git diff HEAD`), `--staged`, or `<base-ref>` diffs in Python inside an untrusted-diff boundary and running under a turn-scoped read-only Plan gate (`turn_interface = "tool"`) without mutating sticky `ModeState`
 
 ### Evaluation & Red-Teaming
@@ -40,7 +40,7 @@
 ## Future Requirements (`v2.1+`)
 
 - **SKILL-04**: CLI consumes MCP servers as tools via user config (`create_harness(mcp_servers=...)`)
-- **LOOP-05**: Non-interactive headless / JSON output mode for scripts and CI
+- **LOOP-05**: Non-interactive headless / JSON output mode for scripts and CI (any JSON/headless input loader must explicitly strip or reject caller-supplied `"toolUse"` blocks; CVE-2026-18830 / CoreBreak boundary)
 - **TOOL-06**: Export trimmed session content to text file via `/copy`
 - **MODE-03**: Fast/thorough effort presets layered over Plan/Act
 - **REVIEW-02**: Headless / CI review runner modes
