@@ -700,6 +700,28 @@ class TestContextOps:
         big = [{"role": "user", "content": [{"text": "x" * 4000}]}]
         assert estimate_messages_tokens(big) > estimate_messages_tokens(small) > 0
 
+    def test_estimate_messages_tokens_counts_injected_blocks(self):
+        injected = [
+            {
+                "role": "user",
+                "content": [
+                    {"injected": {"text": "a" * 400, "source": "strands-code:memory"}}
+                ],
+            }
+        ]
+        assert estimate_messages_tokens(injected) == 100
+        malformed = [
+            {
+                "role": "user",
+                "content": [
+                    {"injected": "not-a-dict"},
+                    {"injected": {"source": "no-text"}},
+                    {"injected": {"text": None}},
+                ],
+            }
+        ]
+        assert estimate_messages_tokens(malformed) == 0
+
 
 # ----------------------------------------------------------------------
 # P1: router branches + loop usage/auto-compact wiring

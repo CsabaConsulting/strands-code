@@ -170,6 +170,32 @@ class TestForkBtwHistory:
         assert forked[0]["role"] == "user"
         assert forked[0]["content"][0]["text"].endswith("why slow?")
 
+    def test_drops_injected_blocks_and_empty_injected_messages(self):
+        parent = [
+            {"role": "user", "content": [{"injected": {"text": "only-ctx"}}]},
+            {"role": "assistant", "content": [{"text": "ack"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"text": "implement retry"},
+                    {
+                        "injected": {
+                            "text": "<ctx>memory</ctx>",
+                            "source": "strands-code:memory",
+                        }
+                    },
+                ],
+            },
+            {"role": "assistant", "content": [{"text": "done"}]},
+        ]
+        forked = fork_btw_history(parent, "why slow?")
+        assert all(
+            "injected" not in block
+            for message in forked
+            for block in message["content"]
+        )
+        assert [m["role"] for m in forked] == ["assistant", "user", "assistant", "user"]
+
 
 class TestForkScope:
     """G-7-1b A+B: the forked side prompt bounds scope structurally (D-04/D-09)."""

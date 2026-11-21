@@ -181,13 +181,14 @@ def fork_btw_history(messages: list | None, question: str) -> list:
     Replicates the ``strands-harness`` 0.1.2 ``_fork_messages`` "all"
     algorithm (never import harness privates across the package
     boundary): deep-copy, drop ``toolUse`` blocks with no matching
-    ``toolResult``, strip all ``reasoningContent`` blocks, drop
-    messages left empty. The framed btw question becomes the trailing
-    user turn — absorbed into the trailing message when it is already
-    user-role, so emitted roles strictly alternate (per the harness
-    ``_with_history`` rule). A trailing user turn with raw text (the
-    mid-turn in-flight main directive) is labeled context-only in
-    place; trailing toolResult and assistant turns stay unmarked.
+    ``toolResult``, strip all ``reasoningContent`` and ``injected`` blocks
+    (the side agent runs its own memory injector), drop messages left
+    empty. The framed btw question becomes the trailing user turn —
+    absorbed into the trailing message when it is already user-role, so
+    emitted roles strictly alternate (per the harness ``_with_history``
+    rule). A trailing user turn with raw text (the mid-turn in-flight main
+    directive) is labeled context-only in place; trailing toolResult and
+    assistant turns stay unmarked.
     """
     forked: list = []
     answered = {
@@ -201,6 +202,7 @@ def fork_btw_history(messages: list | None, question: str) -> list:
             block
             for block in message.get("content", [])
             if "reasoningContent" not in block
+            and "injected" not in block
             and (
                 "toolUse" not in block or block["toolUse"].get("toolUseId") in answered
             )

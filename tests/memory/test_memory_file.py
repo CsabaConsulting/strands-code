@@ -166,11 +166,7 @@ class TestMemoryFileContract:
 
     def test_register_twice_registers_exactly_once(self):
         calls: list = []
-        stub = SimpleNamespace(
-            _middleware_registry=SimpleNamespace(
-                add_middleware=lambda *args: calls.append(args)
-            )
-        )
+        stub = SimpleNamespace(add_middleware=lambda *args: calls.append(args))
         loader_calls: list = []
 
         def loader():

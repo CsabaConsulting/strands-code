@@ -346,6 +346,48 @@ class TestCanonicalPrefixHash:
         )
         assert canonical_prefix_hash(legacy) == canonical_prefix_hash(fixture)
 
+    def test_injected_blocks_ignored_in_prefix_hash(self):
+        import copy
+
+        from strands_code_cli.model.model_switch import canonical_prefix_hash
+
+        fixture = _fixture_history()
+        with_injected = copy.deepcopy(fixture)
+        with_injected[0]["content"].append(
+            {"injected": {"text": "<ctx>memory</ctx>", "source": "strands-code:memory"}}
+        )
+        edited_injected = copy.deepcopy(fixture)
+        edited_injected[0]["content"].append(
+            {"injected": {"text": "<ctx>edited</ctx>", "source": "strands-code:memory"}}
+        )
+        assert canonical_prefix_hash(with_injected) == canonical_prefix_hash(fixture)
+        assert canonical_prefix_hash(edited_injected) == canonical_prefix_hash(fixture)
+
+    def test_callback_handler_does_not_echo_injected_blocks(self):
+        import io
+
+        from rich.console import Console
+
+        from strands_code_agent.callback_handler import CodeAgentCallbackHandler
+
+        buf = io.StringIO()
+        handler = CodeAgentCallbackHandler()
+        handler.console = Console(file=buf, force_terminal=False, no_color=True)
+        handler(
+            message={
+                "role": "user",
+                "content": [
+                    {
+                        "injected": {
+                            "text": "secret ctx",
+                            "source": "strands-code:memory",
+                        }
+                    }
+                ],
+            }
+        )
+        assert buf.getvalue() == ""
+
 
 # ----------------------------------------------------------------------
 # Swap-seam spike: in-place assignment wins, rebuild path deleted

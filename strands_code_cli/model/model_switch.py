@@ -249,12 +249,12 @@ def from_stash_json(raw: str) -> Any:
 def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
     """Stable fingerprint of a history prefix across thinking conversions.
 
-    Canonical form drops reasoningContent blocks, labeled trace texts,
-    and media blocks/placeholders (every direction of the block
-    conversions), so a stash taken before a switch still matches after
-    text-ification round-trips — while a compaction summary, /clear, or
-    any real edit breaks the match. The restore path uses this instead
-    of trusting message count alone.
+    Canonical form drops reasoningContent blocks, InjectedBlocks, labeled
+    trace texts, and media blocks/placeholders (every direction of the
+    block conversions), so a stash taken before a switch still matches
+    after text-ification round-trips or memory reloads — while a
+    compaction summary, /clear, or any real edit breaks the match. The
+    restore path uses this instead of trusting message count alone.
     """
     canonical = []
     for message in messages:
@@ -262,7 +262,12 @@ def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
         for block in message.get("content", []):
             if not isinstance(block, dict):
                 continue
-            if "reasoningContent" in block or "image" in block or "video" in block:
+            if (
+                "reasoningContent" in block
+                or "injected" in block
+                or "image" in block
+                or "video" in block
+            ):
                 continue
             text = block.get("text")
             if isinstance(text, str) and (

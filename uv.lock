@@ -2673,6 +2673,20 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-processor-baggage"
+version = "0.66b2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cc/52/bbff8c2a7ddaef2865e198082f0b39f8d2124eaafb6ea4bb165c28e4d9f2/opentelemetry_processor_baggage-0.66b2.tar.gz", hash = "sha256:1c5acb98a804d62314e0743a567e959bb44a95224c0442fca422536967370bf6", size = 8794, upload-time = "2026-10-29T17:38:53.374Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/91/f4b8d8ce76de96faf706da93684ef7d1f5df1d85753bbb0c2af0f8dd4492/opentelemetry_processor_baggage-0.66b2-py3-none-any.whl", hash = "sha256:1d36888f686562f5f31576c4c1156d6e461c41a75162b7196b317a26194e0b8b", size = 9468, upload-time = "2026-10-29T17:38:04.379Z" },
+]
+
+[[package]]
 name = "opentelemetry-proto"
 version = "1.44.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4379,7 +4393,7 @@ wheels = [
 
 [[package]]
 name = "strands-agents"
-version = "1.58.1"
+version = "1.65.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -4396,14 +4410,15 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/19/15/b87850332d13d77ababa1d50f7a2bb8797d422d834cc93e623b6be9459c1/strands_agents-1.58.1.tar.gz", hash = "sha256:02174515242fd31d847e6f4a5b019adbeec15e706070329068cc31a2e04cc921", size = 1738858, upload-time = "2026-10-06T21:02:36.326Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/31/ccfa8d64b4df059f3c6c82c726c3f2c5630f412daa8409a681da76919db8/strands_agents-1.65.0.tar.gz", hash = "sha256:cf0c348b98798723a0bf8bc001dc065e3d7a960ac09e6dfce98c2d7338fc5514", size = 2005369, upload-time = "2026-11-13T18:46:16.969Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ee/63/d58939faaa6d4a6dc9082e812efa31b429eb5f105ae54c08da9a04e13342/strands_agents-1.58.1-py3-none-any.whl", hash = "sha256:5946a3e542a351678ed45b86fa9fd070efbc1f63f469cdc5b094a44966425ce3", size = 871746, upload-time = "2026-10-06T21:02:34.56Z" },
+    { url = "https://files.pythonhosted.org/packages/37/fb/375afbd6b85410fc5f572639804e690dbad7b4f02a9625092c531e07acb5/strands_agents-1.65.0-py3-none-any.whl", hash = "sha256:5e8dd8538fea593763f9da9aecf72f5b71f421413ba8fafbeef1b2ccd3093658", size = 1012483, upload-time = "2026-11-13T18:46:14.9Z" },
 ]
 
 [package.optional-dependencies]
 otel = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-processor-baggage" },
 ]
 
 [[package]]
@@ -4460,8 +4475,8 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "smolagents", specifier = ">=1.0.0" },
-    { name = "strands-agents", specifier = ">=0.1.0" },
-    { name = "strands-harness", specifier = ">=0.1" },
+    { name = "strands-agents", specifier = ">=1.65.0" },
+    { name = "strands-harness", specifier = ">=0.4.0" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
 provides-extras = ["agentcore", "litellm"]
@@ -4482,16 +4497,16 @@ dev = [
 
 [[package]]
 name = "strands-harness"
-version = "0.1.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-monty" },
     { name = "strands-agents", extra = ["otel"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/06/62d89d648d82281bdaad090325aedc9c244698296011273ea28ca1e673fa/strands_harness-0.1.2.tar.gz", hash = "sha256:eb0aaccb8708c64f53eaa101b6efd442a693ffb04f02b448440f0aa4cbc12ae5", size = 154151, upload-time = "2026-09-22T21:29:58.705Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/9e/8e03c20df09a978a06fd15d89643422803ff61e5332281c97edb8ddff3ed/strands_harness-0.4.0.tar.gz", hash = "sha256:90677dae8fd6f93a1b99871eb489b2cee54736456ddcc34e5631f926b4cc3825", size = 169088, upload-time = "2026-11-12T22:34:54.438Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/18/e82414cc6c5743cdefd93e29ba1c7cad58f02877c399388d95629acc6b10/strands_harness-0.1.2-py3-none-any.whl", hash = "sha256:0d9ab3d81edaf340962f2fc4e22f11d645c44793245d051d1894c2b8678f9192", size = 89089, upload-time = "2026-09-22T21:29:56.66Z" },
+    { url = "https://files.pythonhosted.org/packages/a6/6b/686f2cd9ff5bd82f4cc8f6a2ce74dbcf4904464ddaf7792f1074fad8ada9/strands_harness-0.4.0-py3-none-any.whl", hash = "sha256:33be4f4741753b39b2c4606b926c81d84dc84b6c40b1be0b3f0e981d760b00a0", size = 93455, upload-time = "2026-11-12T22:34:52.882Z" },
 ]
 
 [[package]]

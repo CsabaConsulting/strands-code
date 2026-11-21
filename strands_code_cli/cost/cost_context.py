@@ -461,6 +461,11 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
             reasoning = block.get("reasoningContent")
             if isinstance(reasoning, dict):
                 chars += len(str(reasoning.get("reasoningText", {}).get("text", "")))
+            injected = block.get("injected")
+            if isinstance(injected, dict):
+                text_val = injected.get("text")
+                if text_val is not None:
+                    chars += len(str(text_val))
     return max(1, chars // 4) if chars else 0
 
 
