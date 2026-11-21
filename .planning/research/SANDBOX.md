@@ -1,6 +1,6 @@
 # Sandbox Future: MXC / Strands Box / Dogwood evaluation
 
-Evaluated 2026-10-10. Decision: wait for Strands Box Linux; watch MXC; no code changes until then.
+Evaluated 2026-10-10; updated 2026-11-20. **Update:** Strands Box (`strands-agents/box`) now supports Linux (Landlock + namespaces + Bubblewrap `bwrap` + Dogwood `policy.dw` + credential egress proxy) — Linux blocker cleared; promoted into active v2 scope (see `.planning/research/V2-ALIGNMENT.md`).
 
 ## Current posture (no containment)
 
@@ -26,13 +26,14 @@ later; not a boundary we can rely on today.
 
 ### Strands Box (github.com/strands-agents/box)
 
-Dev preview, macOS Apple-silicon only, Linux planned and actively developed.
+Supports both macOS Apple Silicon (Seatbelt) and Linux (Landlock + Linux namespaces + Bubblewrap `bwrap`).
 Kernel-enforced sandbox funneling everything to an embedded Dogwood Local Engine;
 Strands Shell, Monty-for-Python, egress gateway, and MCP broker share one policy
 engine + event history; default-deny; credential injection keeps secrets out of the
-agent. Harness-agnostic (runs any binary), so our CLI could sit inside it unchanged.
-Verdict: the endgame — adopt as a non-overridable floor under our HITL dialogs
-when Linux lands. Tracking via repo watch (same as harness-sdk).
+agent. Harness-agnostic (runs any binary), so our CLI sits inside it unchanged.
+Verdict: the endgame — Linux support has now landed (2026-11), clearing the blocker
+to adopt Box (`box.toml` + `policy.dw`) as a non-overridable floor under our HITL
+dialogs. Promoted to active v2 scope in `.planning/research/V2-ALIGNMENT.md`.
 
 ### Dogwood (github.com/dogwood-policy/dogwood)
 

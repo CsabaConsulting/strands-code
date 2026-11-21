@@ -65,9 +65,9 @@
     }
   ],
   "next": {
-    "command": "none",
-    "label": "All 12 phases complete",
-    "reason": "Roadmap v1 finished 2026-10-16"
+    "command": "/gsd-new-milestone",
+    "label": "Start v2 milestone",
+    "reason": "Milestone v1.0 archived 2026-11-21; v2 candidates captured in .planning/research/V2-ALIGNMENT.md"
   },
-  "updated_at": "2026-10-16T00:00:00.000Z"
+  "updated_at": "2026-11-21T00:06:48.000Z"
 }

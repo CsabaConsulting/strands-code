@@ -8,6 +8,10 @@ Strands Code is a conversational coding CLI in the spirit of Claude Code and Cod
 
 A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
 
+## Current State
+
+**Shipped `v1.0` (2026-10-16, archived 2026-11-21):** All 12 planned phases (41 plans, 129 tasks) shipped end-to-end under GSD Spec-Driven Development. `strands-code` is organized into a gated 10-package CLI architecture (`loop`, `routing`, `dispatch`, `ui`, `entry`, `memory`, `policy`, `cost`, `model`, `session`) layered over `strands-harness` + `strands-code-agent`, with CI gates (`ruff`, `xenon --max-absolute C`, `import-linter`) and 1,549 tests documented in [RETROSPECTIVE.md](../docs/initial_build/RETROSPECTIVE.md). See `.planning/MILESTONES.md` and `.planning/milestones/v1.0-ROADMAP.md`.
+
 ## Requirements
 
 ### Validated
@@ -15,9 +19,12 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Code-generation-first agent (`CodeAgent` + `python_repl`) — existing
 - ✓ Declarative domain bundles (`Toolkit`: libraries, preamble, usage guidance, domain symbols) — existing
 - ✓ Swappable execution backends (sandboxed default, unrestricted local, remote AgentCore) — existing
-- ✓ OKF knowledge navigation for large documents (`find`/`read`/`children`/`toc`) — existing
 - ✓ Rich terminal rendering + Bedrock token/cost metrics — existing
-- ✓ Reproducible `uv` toolchain, 935-test suite green (6 deselected) — existing
+- ✓ Reproducible `uv` toolchain + CI quality gates (`ruff`, `xenon`, `import-linter`) + 1,549-test suite — Phase 12
+- ✓ Conversational task loop + file-local session resume by UUID (`--session-id`, `/resume`, `/rename`, `/forget`) — Phase 1
+- ✓ File/Edit/Shell surface + grep-first code understanding (`/search`) + `/diff` gated edits — Phase 2
+- ✓ Deny-first approval gate (`ApprovalBroker`) + standing TOML `/policy` rules — Phase 3
+- ✓ Plan / Act modes with `/approve` handoff + `/mode` cycling + anytime steering + Ctrl-C cancel — Phase 4
 - ✓ Manual `/model` switching across providers (Bedrock, Anthropic, OpenAI, local) — Phase 5 (idle-only swap, switch-first convert, mid-turn refusal, verbatim ARNs)
 - ✓ Cost/token display per session and task — Phase 5 (usage line, `/cost`, live price/window almanac; display-only, no enforcement)
 - ✓ Context controls `/compact`, `/clear`, `/context` + 80% auto-compact — Phase 5 (pair-atomic, tool pairs never split)
@@ -27,20 +34,23 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Side questions via a `/btw`-style escape answered by a spawned subagent, main task untouched — Phase 7 (parallel side agent, shared tagged deny-first gate, fenced blocks, FIFO queue, Ctrl-C chooser, multiplexed idle delivery)
 - ✓ Decision-model routing with manual override kept — Phase 8 (per-ask model + effort selection via OpenRouter/Ollama engines, calibration, chain/preflight/retry)
 - ✓ Native TypeSafe Jev decision engine alongside OpenRouter and Ollama — Phase 9 (user-ordered engines, live-ping validate, computed $0.042/1M spend, 20-probe calibration)
+- ✓ Provider-reported turn spend for main turns (OpenRouter actuals + Bedrock/offline estimated split) — Phase 10
+- ✓ Opt-in CodeAct action interface (`--codeact`, `/codeact`: `tool|code|both`) with whole-block approval — Phase 11
+- ✓ Structural review + 10-package CLI breakup + OKF dead-example removal — Phase 12
+- ✓ GitHub flows via general tool competence (`gh` + shell covers issues/PRs/CI; small `/review` slash deferred to v2) — covered v1.0
 
 ### Active
 
-- [ ] Conversational task loop: series of user asks planned and executed with subagent + tool orchestration
-- ✓ Plan / Act modes with approval between them — Phase 4 (classifier-deny, /approve handoff, session-sticky /mode)
-- ✓ Anytime steering: freeform input injected at the next tool-call boundary without disturbing the task — Phase 4 (cancel_tool hook, finish-then-redirect)
-- [ ] Strip reasoningContent from restored history for non-reasoning Bedrock models (emerged Phase 4: opus history fails validation on model switch; fresh session is the workaround)
-- [ ] Grep-first code understanding (agentic grep/READ); persistent semantic index deferred
-- [x] GitHub flows via general tool competence (no dedicated loop — Claude Code has none either): shell tool + `gh` covers read issues/PRs, branch, implement, test, open PRs, issue creation, review comments, CI checks; small `/review` slash stays a future item
-- [ ] Skills marketplace commands: add marketplace, install skills (local load/invoke validated Phase 6)
-- [ ] Session resume by UUID across runs
-- [ ] Provider-reported turn spend for main turns (OpenRouter actuals; Phase 10)
-- [ ] Harness can run GSD workflows (skills + gsd-tools + shell) — emerged Phase 7 (user goal; placement TBD: roadmap phase vs future)
-- [ ] v1 acceptance bar: phases 1–9 complete. Aim is best Bedrock-first terminal coding CLI, not feature parity with Claude Code (unwinnable surface: IDE, CI app, web, marketplaces)
+*(None — `v1.0` shipped and archived; run `/gsd-new-milestone` to define `v2` requirements from the candidates below.)*
+
+## Next Milestone Goals (v2 Candidates — see `.planning/research/V2-ALIGNMENT.md`)
+
+- **UPSTREAM-01**: Resync onto `strands-agents >=1.65` and `strands-harness >=0.4`, retiring upstream-fixed shims (`#5166` cross-family reasoning strip on restore, `#5158` `ContextInjector` adjacency) and migrating `strands_code_cli/routing/` transports onto `strands.decisions.DecisionModel` while preserving calibrated `0.62`/`0.04` gating and `/route` UX.
+- **MODEL-06**: First-class `google/` Gemini provider support (`gemini` extra, provider-aware startup preflight replacing `Bedrock-or-stop`, `google/` reasoning/effort via `_harness_supports_thinking`, `/model` discovery, `/cost` coverage, and AI Studio + Google AI Ultra monthly credit setup docs).
+- **SANDBOX-01**: Run `strands-code` inside Strands Box on Linux (`box.toml` + deterministic Dogwood `policy.dw` + out-of-band credential egress proxy) as an OS-enforced floor beneath HITL approvals (Linux support landed 2026-11).
+- **EVAL-01**: Automated trajectory and prompt-injection red-team evaluation suite built on `strands-agents-evals` (`TrajectoryEvaluator`, `ActorSimulator`) complementing `scripts/uattest/`.
+- **LOOP-06 / TOOL-05 / REVIEW-01**: Explicit `/help`, `@file` / `/file` fuzzy picker, and `/review` command.
+- **Carry-over backlog candidates**: Skills marketplaces (`SKILL-03`), MCP server config (`SKILL-04`), non-interactive JSON output (`LOOP-05`), and GSD workflow execution compatibility.
 
 ### Out of Scope
 
@@ -48,18 +58,19 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Enforced token budgets — display only; halting on cost is deferred
 - Fully automatic model routing with no override — Phase 8 routing proposes, manual switching + explicit override always win
 - AgentCore as a required path — stays an opt-in backend; defaults are local
+- Consumer OAuth piggybacking on Gemini CLI / Code Assist — violates Google ToS; personal Google AI Pro/Ultra plans already include monthly Google Developer Program credits ($10–$100/mo) usable via a standard AI Studio API key
 
 ## Context
 
-- Forked from `aws-samples/sample-strands-code-agent` (library); the CLI is new construction on top. Upstream remote configured for refreshes.
-- Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Codebase map: `.planning/codebase/`.
-- Strands harness (`strands-harness>=0.1`, locked 0.1.2) adopted for tools, sessions, skills, memory, context management, effort presets. `strands-agents` locked at 1.58.1; both move fast and are flagged Experimental upstream — keep wrappers thin.
+- Forked from `aws-samples/sample-strands-code-agent` (library); the CLI is new construction on top. Upstream remote configured for refreshes (byproduct-only PRs when mutually useful).
+- Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Ecosystem v2 brief: `.planning/research/V2-ALIGNMENT.md`. Codebase map: `.planning/codebase/`.
+- `v1.0` shipped on `strands-harness 0.1.2` and `strands-agents 1.58.1` (`strands-agents>=0.1.0`, `strands-harness>=0.1`); both are flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers, with local markdown the only backend (Hindsight and OpenViking evaluated and rejected in Phase 12).
-- Full test suite green (`uv run pytest tests/`, 935 passed, 6 deselected); dev group carries the data-science packages the toolkit tests execute.
+- `pyproject.toml` stays at package version `0.4.0` during `v1.0` archive (pre-v2 SDK convergence).
 
 ## Constraints
 
-- **Tech stack**: Python >=3.10, `uv` toolchain, Strands SDK + harness — pad the CLI, don't fork the platform
+- **Tech stack**: Python >=3.10, `uv` toolchain, Strands SDK + harness — pad the CLI, don't fork the platform (no TypeScript dependency)
 - **AWS posture**: AWS-optional, never AWS-required; `agentcore` stays an optional extra with lazy imports
 - **Compatibility**: no upper pins during the experimental phase; resync upstream deliberately, not continuously
 
@@ -67,11 +78,11 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 
 | Decision | Rationale | Outcome |
 |---|---|---|
-| Harness-first, gaps-only | Rebuilding sessions/memory/skills/context would duplicate tested upstream defaults | — Pending |
+| Harness-first, gaps-only | Rebuilding sessions/memory/skills/context would duplicate tested upstream defaults | ✓ Good (v1.0) |
 | Keep this fork, depend on the monorepo | Fork is the product differentiator; monorepo is the platform | ✓ Good |
-| Grep-first code understanding | Persistent index is a project of its own; agentic grep ships sooner | — Pending |
-| Plan/Act as the v1 mode | Closest to proven competitor behavior; effort presets can layer on later | — Pending |
-| Anytime-steering + subagent side questions | Matches Codex/Muse Code UX the user prefers over command-gated steering | — Pending |
+| Grep-first code understanding | Persistent index is a project of its own; agentic grep ships sooner | ✓ Good (v1.0) |
+| Plan/Act as the v1 mode | Closest to proven competitor behavior; effort presets can layer on later | ✓ Good (v1.0) |
+| Anytime-steering + subagent side questions | Matches Codex/Muse Code UX the user prefers over command-gated steering | ✓ Good (v1.0) |
 | Token display without budgets | Visibility first; enforcement is a policy decision for later | ✓ Good (Phase 5: display-only + static kill-switch) |
 | /memory curates, never edits (NL revise rounds) | Hand-editing inside the CLI rejected; harness proposes, user approves/revises in words (Phase 4 grammar reuse) | ✓ Good |
 | D-13 as accept-echo, not inline highlight | Same decision value without prompt_toolkit lexer surgery | ✓ Good |
@@ -107,4 +118,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-12 after Phase 9*
+*Last updated: 2026-11-21 after v1.0 milestone archive*

@@ -5,15 +5,15 @@ current_phase: 12
 current_phase_name: Structural Review + Hygiene
 current_plan: 6
 status: complete
-stopped_at: Roadmap v1 finished — all 12 phases gated (executed, UAT, secured, validated)
-last_updated: "2026-10-16T00:00:00Z"
-last_activity: 2026-10-16
-last_activity_desc: Phase 12 fully gated (UAT 16/16, secure 0 open, validate Nyquist); roadmap v1 complete
+stopped_at: v1.0 milestone archived; ready for /gsd-new-milestone
+last_updated: "2026-11-21T00:06:48Z"
+last_activity: 2026-11-21
+last_activity_desc: v1.0 milestone archived (MILESTONES.md, milestones/v1.0-ROADMAP.md, milestones/v1.0-REQUIREMENTS.md)
 state_head: 3dd16c6b8325de06e2b8d948bef63b8c95f1eea7
 progress:
   total_phases: 12
   completed_phases: 12
-  total_plans: 40
+  total_plans: 41
   completed_plans: 41
 ---
 
@@ -202,11 +202,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- [v2 Alignment] Run `/gsd-new-milestone` to kick off v2 from `.planning/research/V2-ALIGNMENT.md` (Phases 13–17: SDK/Harness `1.65+`/`0.4+` resync, Google Gemini + provider-aware preflight, `DecisionModel` routing convergence, Strands Box Linux floor, Strands Evals + `/help`/`@file`).
 
 ### Blockers/Concerns
 
-- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–7; Phase 7 fork path strips, restore path untouched).
+- ⚠️ [Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models; workaround is a fresh session — durable strip-on-restore still open (survived Phases 5–7; Phase 7 fork path strips, restore path untouched). (Resolved upstream in `strands-agents >=1.61.1` PR `#5166` + `v1.62.0` `drop_block` retry; closes on Phase 13 lockfile bump.)
 - ⚠️ [Phase 6 UAT] Silent memory mode can memorialize the model's own rationalizations as user preferences (observed: refusal principles stored as durable preferences) — curate default is the backstop; silent users should review MEMORY.md periodically.
 - ⚠️ [Phase 7] PendingStore lock-guarded but not proven race-safe under dual-stream load; residual dialog-safety risk under concurrent main+side streaming remains.
 
@@ -230,6 +230,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-10-16T19:26:03.000Z
-Stopped at: Completed 12-06-PLAN.md
+Last session: 2026-11-21T00:06:48.000Z
+Stopped at: Archived v1.0 milestone (ready for /gsd-new-milestone)
 Resume file: None
