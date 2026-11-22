@@ -74,7 +74,11 @@ _FORGET_USAGE = "Usage: /forget <session-id-or-prefix>"
 _SESSION_DELETE = "delete-a-session"
 _SESSION_DELETE_CONFIRM = "delete-session-confirmed"
 
-_SDK_EXTRA_HINTS = {"litellm": "litellm", "bedrock": "agentcore"}
+_SDK_EXTRA_HINTS = {
+    "litellm": "litellm",
+    "bedrock": "agentcore",
+    "google": "gemini",
+}
 """Optional-extra install hints keyed by provider prefix."""
 
 
@@ -82,8 +86,8 @@ def _sdk_hint(selection: str) -> str:
     """Install hint for a missing provider SDK (ImportError path).
 
     Bare ids and ARNs resolve through Bedrock (boto3, ``agentcore``
-    extra); ``litellm/`` ids need the ``litellm`` extra. Anything else
-    keeps the generic pointer.
+    extra); ``litellm/`` ids need the ``litellm`` extra; ``google/`` ids
+    need the ``gemini`` extra. Anything else keeps the generic pointer.
     """
     if selection.startswith("arn:") or "/" not in selection:
         provider = "bedrock"

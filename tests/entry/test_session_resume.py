@@ -206,6 +206,50 @@ class TestEntryRouting:
         assert agent.session_id == session_id
         assert agent.agent_id == "default"
 
+    def test_provider_config_loads_before_preflight_and_model_flag_overrides(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+        from unittest.mock import patch
+
+        from strands_code_cli.entry.provider_config import ProviderConfig
+
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        monkeypatch.chdir(tmp_path)
+        events: list[tuple[str, str | None]] = []
+
+        def _fake_load():
+            events.append(("load", None))
+            return ProviderConfig(model="anthropic/claude-sonnet-4-6")
+
+        def _fake_preflight(*, model=None, base_url=None):
+            events.append(("preflight", model))
+            return None
+
+        with (
+            patch.object(main_module.ProviderConfig, "load", side_effect=_fake_load),
+            patch.object(
+                main_module, "_preflight_credentials", side_effect=_fake_preflight
+            ),
+            patch.object(main_module, "build_agent", return_value=object()) as built,
+            patch.object(main_module, "run_loop"),
+        ):
+            from typer.testing import CliRunner
+
+            result = CliRunner().invoke(main_module.app, [])
+            assert result.exit_code == 0, result.output
+            assert events == [
+                ("load", None),
+                ("preflight", "anthropic/claude-sonnet-4-6"),
+            ]
+            assert built.call_args[1]["model"] == "anthropic/claude-sonnet-4-6"
+
+            events.clear()
+            result2 = CliRunner().invoke(main_module.app, ["--model", "openai/gpt-5.4"])
+            assert result2.exit_code == 0, result2.output
+            assert events == [("load", None), ("preflight", "openai/gpt-5.4")]
+            assert built.call_args[1]["model"] == "openai/gpt-5.4"
+
 
 # ----------------------------------------------------------------------
 # CLI construction contract (no bare Agent / CodeAgent in CLI code)

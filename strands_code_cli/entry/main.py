@@ -70,9 +70,11 @@ def _validate_session_id(value: str) -> str:
     return checked
 
 
-def _preflight_credentials() -> None:
-    """Stop with a Bedrock setup pointer when credentials are absent (D-05)."""
-    preflight_credentials()
+def _preflight_credentials(
+    *, model: str | None = None, base_url: str | None = None
+) -> str | None:
+    """Validate credentials for the target provider or infer an opening model."""
+    return preflight_credentials(model=model, base_url=base_url)
 
 
 def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
@@ -227,6 +229,11 @@ def _root(
         "--codeact",
         help="Start the session on this action interface (tool|code|both); the bare form implies code.",
     ),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Model reference for this session only (for example: google/gemini-2.5-flash).",
+    ),
 ) -> None:
     """Open the REPL immediately (D-01); --session-id resumes directly (D-02)."""
     if session_id is not None:
@@ -236,10 +243,17 @@ def _root(
             raise typer.BadParameter(f"invalid --session-id: {exc}") from exc
     if codeact is not None and codeact not in ("tool", "code", "both"):
         raise typer.BadParameter("invalid --codeact: expected tool|code|both")
-    # Gate runs before construction and before any session or config side
-    # effect (D-05; reversing this to offline-first reworks launch).
-    _preflight_credentials()
+    if model is not None and not model.strip():
+        raise typer.BadParameter("invalid --model: must be non-empty")
     config = ProviderConfig.load()
+    effective_model = model.strip() if model is not None else config.model
+    # Gate runs before construction and before any session or index side
+    # effect (D-05; reversing this to offline-first reworks launch).
+    detected_model = _preflight_credentials(
+        model=effective_model, base_url=config.base_url
+    )
+    if effective_model is None:
+        effective_model = detected_model
     # Index construction creates directories, so it runs only after the
     # side-effect-free validation and the credential gate above.
     index = SessionIndex(Path(DEFAULT_SESSION_DIR).parent / "session_index")
@@ -251,7 +265,7 @@ def _root(
     agent = build_agent(
         resolved,
         DEFAULT_SESSION_DIR,
-        model=model_for_config(config.model, config.base_url),
+        model=model_for_config(effective_model, config.base_url),
     )
     run_loop(agent, session_id=resolved, index=index, codeact=codeact)
 

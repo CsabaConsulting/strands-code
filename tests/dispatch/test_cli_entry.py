@@ -451,3 +451,31 @@ class TestPolicyDispatch:
         )
         assert action == "reply"
         assert "Usage: /policy" in message
+
+
+# ---------------------------------------------------------------------------
+# Provider SDK extra hints (Phase 14: google -> gemini extra)
+# ---------------------------------------------------------------------------
+
+
+class TestSdkHints:
+    def test_google_sdk_hint_mentions_gemini_extra(self):
+        from strands_code_cli.dispatch.core import _sdk_hint
+
+        hint = _sdk_hint("google/gemini-2.5-flash")
+        assert "gemini" in hint
+        assert "strands-code-agent[gemini]" in hint
+
+    def test_model_dispatch_google_import_error_shows_gemini_hint(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        with patch(
+            "strands_harness.models.resolve_model",
+            side_effect=ImportError("google-genai not installed"),
+        ):
+            action, message = dispatch(
+                "/model google/gemini-2.5-flash",
+                session_id=index.mint(),
+                index=index,
+            )
+        assert action == "reply"
+        assert "strands-code-agent[gemini]" in message

@@ -52,15 +52,134 @@ class TestPreflightGate:
     def test_creds_ok_passes_silently(self, capsys):
         assert preflight_credentials(probe=_creds_ok) is None
 
-    def test_never_reads_credentials_directly(self):
-        import inspect
+    def test_canary_secrets_never_leak_to_output_logs_or_disk(
+        self, monkeypatch, capsys, caplog
+    ):
+        canary = "AIzaSyCanarySecretDoNotLeak98765"
+        monkeypatch.setenv("GOOGLE_API_KEY", canary)
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        with caplog.at_level("WARNING"), pytest.raises(typer.Exit):
+            preflight_credentials()
+        captured = capsys.readouterr()
+        assert "mutually exclusive" in captured.err.lower()
+        assert canary not in captured.out
+        assert canary not in captured.err
+        assert canary not in caplog.text
 
-        source = inspect.getsource(preflight_credentials) + inspect.getsource(
-            importlib.import_module("strands_code_cli.entry.first_run")
+    def test_google_api_key_auto_picks_gemini_flash_without_sts(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "any-nonempty-token")
+        assert (
+            preflight_credentials(
+                probe=lambda: pytest.fail("STS must not run when Google key is set")
+            )
+            == "google/gemini-2.5-flash"
         )
-        assert "os.environ" not in source
-        assert "os.getenv" not in source
-        assert "getenv" not in source
+
+    def test_gemini_api_key_auto_picks_gemini_flash_without_sts(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "any-gemini-token")
+        assert (
+            preflight_credentials(
+                probe=lambda: pytest.fail("STS must not run when GEMINI_API_KEY is set")
+            )
+            == "google/gemini-2.5-flash"
+        )
+
+    def test_vertex_adc_auto_picks_gemini_flash(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
+        assert (
+            preflight_credentials(
+                probe=lambda: pytest.fail("STS must not run for Vertex ADC")
+            )
+            == "google/gemini-2.5-flash"
+        )
+
+    def test_vertex_false_with_api_key_uses_api_key(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "0")
+        monkeypatch.setenv("GOOGLE_API_KEY", "nonempty-api-key")
+        assert preflight_credentials(probe=_no_creds) == "google/gemini-2.5-flash"
+
+    def test_vertex_and_api_key_mutually_exclusive_fails_fast(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        monkeypatch.setenv("GEMINI_API_KEY", "secret-key")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "GOOGLE_GENAI_USE_VERTEXAI" in err
+        assert "mutually exclusive" in err.lower()
+        assert "secret-key" not in err
+
+    def test_vertex_missing_project_fails_fast_noting_global(self, monkeypatch, capsys):
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "GOOGLE_CLOUD_PROJECT" in err
+        assert "global" in err
+
+    def test_explicit_google_model_without_google_creds_fails(self, capsys):
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(model="google/gemini-2.5-pro", probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "GOOGLE_API_KEY" in err
+
+    def test_strands_box_bypasses_sts_and_accepts_phantom_keys(self, monkeypatch):
+        monkeypatch.setenv("STRANDS_BOX", "1")
+        assert (
+            preflight_credentials(
+                probe=lambda: pytest.fail("STRANDS_BOX=1 must skip STS probe")
+            )
+            is None
+        )
+        monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_phantom_token")
+        assert preflight_credentials() == "google/gemini-2.5-flash"
+
+    def test_anthropic_and_openai_ambient_auto_pick(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        assert preflight_credentials(probe=_no_creds) == "anthropic/claude-sonnet-4-6"
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        assert preflight_credentials(probe=_no_creds) == "openai/gpt-5.4"
+
+    def test_openrouter_ambient_requires_explicit_model_then_passes(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        err = capsys.readouterr().err
+        assert "--model" in err
+        assert "litellm/openrouter/" in err
+        assert (
+            preflight_credentials(
+                model="litellm/openrouter/google/gemini-2.5-flash", probe=_no_creds
+            )
+            is None
+        )
+
+    def test_ollama_passes_without_keys_or_sts(self):
+        sts_fail = lambda: pytest.fail("Ollama must not probe STS")  # noqa: E731
+        assert preflight_credentials(model="ollama/llama3.2", probe=sts_fail) is None
+        assert (
+            preflight_credentials(model="litellm/ollama_chat/llama3.2", probe=sts_fail)
+            is None
+        )
+
+    def test_bedrock_bearer_token_skips_sts(self, monkeypatch):
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-tok")
+        assert (
+            preflight_credentials(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                probe=lambda: pytest.fail("Bearer token must skip STS"),
+            )
+            is None
+        )
 
 
 # ----------------------------------------------------------------------
@@ -102,6 +221,25 @@ class TestFirstRunCli:
         ):
             CliRunner().invoke(main_module.app, [])
         assert not Path(".agent").exists()
+
+    def test_cli_model_flag_is_session_scoped_and_never_writes_config(
+        self, tmp_path, monkeypatch
+    ):
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_test_key")
+        with (
+            patch.object(main_module, "build_agent", return_value=object()) as built,
+            patch.object(main_module, "run_loop"),
+        ):
+            result = CliRunner().invoke(
+                main_module.app, ["--model", "google/gemini-2.5-flash"]
+            )
+        assert result.exit_code == 0, result.output
+        assert built.call_args[1]["model"] == "google/gemini-2.5-flash"
+        assert not (tmp_path / "xdg").exists()
 
 
 # ----------------------------------------------------------------------
