@@ -27,11 +27,27 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
 - **r4** — Phase 8 live `/btw` side ask: mid-turn spawn routes through
   the shared strategy, expects a `Routed (btw)` line and a side-flagged
   `/cost` Routing entry.
+- **u1** — Phase 13 Bedrock unary tool mode: boots Llama 4 Scout with the
+  `streaming=False` note and verifies the `/model` unary switch note,
+  then runs an end-to-end unary `Converse` `read` tool turn on active
+  Haiku 4.5 via isolated `model-capabilities.yaml` (Bedrock Meta Llama
+  3/4 models are currently `LEGACY`).
+- **u2** — Phase 13 cross-family resume + SDK `model_info`: boots on
+  Sonnet 4.6 (with `MEMORY.md` `InjectedBlock`), verifies `1M` `/context`
+  window, computes `17 * 23`, flushes session, resumes via `--session-id`
+  on Nova 2 Lite (confirming `#5166` wire compatibility + recall + `1M`
+  `/context`).
+- **u3** — Phase 13 live `1.65.0` `PolicyHumanInTheLoop`: approves one
+  `shell` command interactively via `Approve? [main] shell` (`Up` +
+  `Enter`), triggers a `[deny]` rule refusal without prompting, and runs
+  `/mode plan` confirming no file mutation or prompt.
 
 ## Usage
 
 Requires `tmux`, `uv`, and model credentials in the environment (`r2`
-also needs an Ollama daemon ≥0.35 with a decision-capable pull):
+also needs an Ollama daemon ≥0.35 with a decision-capable pull; `u1`/`u2`/`u3`
+use Bedrock credentials and isolate their config under `XDG_CONFIG_HOME`
+in `/tmp/uatr8/`):
 
 ```sh
 cd /tmp && python3 /path/to/scripts/uattest/driver.py s1 --runs 2
@@ -40,6 +56,9 @@ cd /tmp && python3 /path/to/scripts/uattest/driver.py r1
 cd /tmp && python3 /path/to/scripts/uattest/driver.py r2
 cd /tmp && python3 /path/to/scripts/uattest/driver.py r3
 cd /tmp && python3 /path/to/scripts/uattest/driver.py r4
+cd /tmp && python3 /path/to/scripts/uattest/driver.py u1
+cd /tmp && python3 /path/to/scripts/uattest/driver.py u2
+cd /tmp && python3 /path/to/scripts/uattest/driver.py u3
 ```
 
 Output lands in `/tmp/uatr4/`. Timing knobs (start wait, key spacing) are
