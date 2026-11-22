@@ -77,8 +77,10 @@ from strands_code_cli.memory.memory_modes import (
 from strands_code_cli.model.model_switch import (
     MODEL_REFUSAL,
     UNARY_TOOL_MODE_NOTE,
+    _has_reasoning,
     apply_switch,
     canonical_prefix_hash,
+    configure_gemini_for_model,
     configure_streaming_for_model,
     convert_history,
     estimate_fit,
@@ -509,6 +511,7 @@ def _route_side_spawn(
 
             routed = wrap_for_openrouter(pick.model, routed)
             routed = configure_streaming_for_model(pick.model, routed)
+            routed = configure_gemini_for_model(pick.model, routed)
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
             _record_routing_event(
                 routing_events,
@@ -1024,12 +1027,8 @@ class RichHistory:
 
 
 def _has_thinking(messages: list) -> bool:
-    """True when any content block carries reasoningContent."""
-    return any(
-        "reasoningContent" in block
-        for message in messages
-        for block in message.get("content", [])
-    )
+    """True when any content block carries reasoningContent or toolUse thought sig."""
+    return _has_reasoning(messages)
 
 
 def _turn_appended_empty(before: int, messages: list) -> bool:

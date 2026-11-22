@@ -46,6 +46,7 @@ _REASONING_SUPPORT: tuple[
     # but our harness-invoked turns run thinking-off, so no row: the
     # as-invoked verdict stays fail-closed until a thinking knob exists.
     (None, "anthropic", None, None),
+    (None, "google", "gemini", None),
 )
 """Fallback thinking allowlist when harness verdicts are unavailable."""
 
@@ -162,17 +163,17 @@ def _override_verdict(model_id: str, field: str) -> bool | None:
 def supports_reasoning(model_id: str) -> bool:
     """True when the harness verifies thinking support (fail-closed).
 
-    User overrides win first; then bedrock and anthropic-direct ids defer
-    to the harness ``supports_thinking`` (family-level thinking tables).
-    Every other provider strips, since adapter translation of thinking
-    blocks is unverified there. Without harness support, the static
-    allowlist is the fallback — still fail-closed.
+    User overrides win first; then bedrock, anthropic-direct, and google
+    ids defer to the harness ``supports_thinking`` (family-level thinking
+    tables). Every other provider strips, since adapter translation of
+    thinking blocks is unverified there. Without harness support, the
+    static allowlist is the fallback — still fail-closed.
     """
     hit = _override_verdict(model_id, "reasoning")
     if hit is not None:
         return hit
     provider = _provider_of(model_id)
-    if provider not in ("bedrock", "anthropic"):
+    if provider not in ("bedrock", "anthropic", "google"):
         return False
     if _harness_supports_thinking is not None:
         query = (
@@ -261,38 +262,62 @@ def from_stash_json(raw: str) -> Any:
         raise ValueError(f"Invalid stash JSON: {exc}") from exc
 
 
+def _canonical_block(block: Any) -> dict[str, Any] | None:
+    """Normalize one ContentBlock for prefix hashing, or None to drop."""
+    if not isinstance(block, dict):
+        return None
+    if (
+        "reasoningContent" in block
+        or "injected" in block
+        or "image" in block
+        or "video" in block
+    ):
+        return None
+    text = block.get("text")
+    if isinstance(text, str) and (
+        text.startswith((TRACE_LABEL,) + _LEGACY_TRACE_LABELS)
+        or _MEDIA_PLACEHOLDER_RE.fullmatch(text) is not None
+    ):
+        return None
+    if "toolUse" in block and isinstance(block["toolUse"], dict):
+        if "reasoningSignature" in block["toolUse"]:
+            tool_use = {
+                k: v for k, v in block["toolUse"].items() if k != "reasoningSignature"
+            }
+            return {**block, "toolUse": tool_use}
+    return block
+
+
 def canonical_prefix_hash(messages: list[dict[str, Any]]) -> str:
     """Stable fingerprint of a history prefix across thinking conversions.
 
     Canonical form drops reasoningContent blocks, InjectedBlocks, labeled
-    trace texts, and media blocks/placeholders (every direction of the
-    block conversions), so a stash taken before a switch still matches
-    after text-ification round-trips or memory reloads — while a
-    compaction summary, /clear, or any real edit breaks the match. The
-    restore path uses this instead of trusting message count alone.
+    trace texts, media blocks/placeholders, and toolUse thought signatures
+    (every direction of the block conversions), so a stash taken before a
+    switch still matches after text-ification round-trips or memory reloads
+    — while a compaction summary, /clear, or any real edit breaks the
+    match. The restore path uses this instead of trusting message count
+    alone.
     """
     canonical = []
     for message in messages:
         blocks = []
         for block in message.get("content", []):
-            if not isinstance(block, dict):
-                continue
-            if (
-                "reasoningContent" in block
-                or "injected" in block
-                or "image" in block
-                or "video" in block
-            ):
-                continue
-            text = block.get("text")
-            if isinstance(text, str) and (
-                text.startswith((TRACE_LABEL,) + _LEGACY_TRACE_LABELS)
-                or _MEDIA_PLACEHOLDER_RE.fullmatch(text) is not None
-            ):
-                continue
-            blocks.append(block)
+            normalized = _canonical_block(block)
+            if normalized is not None:
+                blocks.append(normalized)
         canonical.append({"role": message.get("role"), "content": blocks})
     return hashlib.sha256(to_stash_json(canonical).encode("utf-8")).hexdigest()
+
+
+def _convert_tool_use_block(
+    block: dict[str, Any], reasoning_ok: bool
+) -> dict[str, Any]:
+    """Deep-copy one toolUse block, stripping foreign thought signatures."""
+    copied = copy.deepcopy(block)
+    if not reasoning_ok and isinstance(copied.get("toolUse"), dict):
+        copied["toolUse"].pop("reasoningSignature", None)
+    return copied
 
 
 def _convert_reasoning_block(
@@ -388,6 +413,10 @@ def convert_history(
             ):
                 new_message["content"].append(_migrate_trace_block(block))
                 continue
+            elif "toolUse" in block:
+                new_message["content"].append(
+                    _convert_tool_use_block(block, reasoning_ok)
+                )
             elif ("image" in block or "video" in block) and not media_ok:
                 new_message["content"].append(_media_placeholder_block(block))
             else:
@@ -443,30 +472,35 @@ def _profile_model_ids(entry: dict[str, Any]) -> list[str]:
     return ids
 
 
-def discover_models(
-    region: str | None = None, configured: list[str] | None = None
-) -> tuple[list[str], bool]:
-    """List Bedrock model ids/ARNs verbatim, fail-soft offline.
+CURATED_GEMINI_MODELS: tuple[str, ...] = (
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "google/gemini-2.5-flash-lite",
+    "google/gemini-3-flash-preview",
+)
+"""Static fallback Gemini choices offered only when Google creds exist."""
 
-    Lazy boto3 import (AWS-optional posture). Reads ``list_foundation_models``
-    (ON_DEMAND filter) plus ``list_inference_profiles``; ids/ARNs display
-    verbatim with prefixes intact. Only chat-capable models are listed
-    (TEXT in/out modalities, rerank/embed names dropped); inference profiles
-    are dropped only when their referenced model is positively identified as
-    non-chat, otherwise kept. Profile-only models still inform the
-    non-chat denylist (classified but never listed as bare ids).
-    Any failure (no creds, denied, no boto3)
-    falls back to the configured + custom entries — never escalates, never
-    prompts for keys, never raises.
 
-    Args:
-        region: Bedrock region (None → boto3 default chain).
-        configured: Model strings to offer when discovery is unavailable.
+def _append_bedrock_profiles(
+    client: Any, options: list[str], non_chat_ids: set[str]
+) -> None:
+    """Append chat-capable Bedrock inference profile ARNs fail-soft."""
+    try:
+        profiles = client.list_inference_profiles().get("inferenceProfileSummaries", [])
+    except Exception:
+        return  # profiles are additive; foundation models still count as online
+    for entry in profiles:
+        arn = entry.get("inferenceProfileArn")
+        if not isinstance(arn, str):
+            continue
+        refs = _profile_model_ids(entry)
+        if refs and all(ref in non_chat_ids or _looks_non_chat(ref) for ref in refs):
+            continue  # every referenced model is known non-chat
+        options.append(arn)
 
-    Returns:
-        ``(options, offline)`` where offline is True on the fallback path.
-    """
-    fallback = list(configured) if configured else []
+
+def _discover_bedrock_models(region: str | None) -> tuple[list[str], bool]:
+    """List live Bedrock ON_DEMAND chat models + inference profiles fail-soft."""
     try:
         import boto3  # lazy: AWS-optional, never a hard dependency
 
@@ -485,34 +519,80 @@ def discover_models(
                 if "ON_DEMAND" in entry.get("inferenceTypesSupported", []):
                     options.append(model_id)
             else:
-                # Denylist learns every non-chat model, including
-                # profile-only ones (e.g. stability image tools), so
-                # their inference profiles drop below instead of
-                # slipping through fail-open.
+                # Denylist learns every non-chat model, including profile-only
+                # ones, so their inference profiles drop instead of leaking.
                 non_chat_ids.add(model_id)
-        try:
-            profiles = client.list_inference_profiles().get(
-                "inferenceProfileSummaries", []
-            )
-            for entry in profiles:
-                arn = entry.get("inferenceProfileArn")
-                if not isinstance(arn, str):
-                    continue
-                refs = _profile_model_ids(entry)
-                if refs and all(
-                    ref in non_chat_ids or _looks_non_chat(ref) for ref in refs
-                ):
-                    continue  # every referenced model is known non-chat
-                options.append(arn)
-        except Exception:
-            pass  # profiles are additive; models alone still count as online
-        seen: list[str] = []
-        for option in options:
-            if option not in seen:
-                seen.append(option)
-        return (seen, False)
+        _append_bedrock_profiles(client, options, non_chat_ids)
+        return (list(dict.fromkeys(options)), True)
     except Exception:
-        return (fallback, True)
+        return ([], False)
+
+
+def _is_google_chat_model(entry: Any) -> str | None:
+    """Return short Gemini model id when usable for chat turns, else None."""
+    raw = getattr(entry, "name", None)
+    if not isinstance(raw, str):
+        return None
+    short = raw.removeprefix("models/")
+    if not short.lower().startswith("gemini-") or _looks_non_chat(short):
+        return None
+    actions = getattr(entry, "supported_actions", None)
+    if actions is None:
+        actions = getattr(entry, "supported_generation_methods", None)
+    if actions is not None:
+        action_list = list(actions)
+        if action_list and "generateContent" not in action_list:
+            return None
+    return short
+
+
+def _discover_google_models() -> tuple[list[str], bool]:
+    """List live Gemini chat models when Google credentials exist."""
+    from strands_code_cli.entry.first_run import has_google_credentials
+
+    if not has_google_credentials():
+        return ([], False)
+    try:
+        from google import genai  # lazy: optional [gemini] extra
+
+        client = genai.Client()
+        found = [
+            f"google/{short}"
+            for entry in client.models.list()
+            if (short := _is_google_chat_model(entry)) is not None
+        ]
+        deduped = list(dict.fromkeys(found))
+        if deduped:
+            return (deduped, True)
+    except Exception:
+        pass
+    return (list(CURATED_GEMINI_MODELS), False)
+
+
+def discover_models(
+    region: str | None = None, configured: list[str] | None = None
+) -> tuple[list[str], bool]:
+    """List available chat model ids across configured/credentialed providers.
+
+    Lazy imports keep AWS and Google SDKs optional. When Google credentials
+    exist (API key or Vertex ADC), live ``generateContent`` Gemini models
+    (or curated fallbacks offline) merge cleanly with Bedrock models;
+    AWS-only users never see uncredentialed Gemini entries.
+
+    Args:
+        region: Bedrock region (None -> boto3 default chain).
+        configured: Model strings to offer when discovery is offline.
+
+    Returns:
+        ``(options, offline)`` where offline is True when no live catalog
+        call succeeded.
+    """
+    bedrock_opts, bedrock_online = _discover_bedrock_models(region)
+    google_opts, google_online = _discover_google_models()
+    if bedrock_online or google_online:
+        return (list(dict.fromkeys(bedrock_opts + google_opts)), False)
+    fallback = list(configured) if configured else []
+    return (list(dict.fromkeys(fallback + google_opts)), True)
 
 
 _ROUTE_PREFIXES = ("global.", "us.", "eu.", "apac.", "au.", "jp.")
@@ -578,22 +658,27 @@ def route_label(route: str) -> str:
 
 
 _COMPOUND_FAMILIES = (("gpt", "oss"),)
+_PURE_VENDOR_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 
 def _vendor_family(base: str) -> tuple[str, str]:
     """Split a base model key into ``(vendor, family)``.
 
-    Vendor is the first dot segment (``anthropic``); family is the first
-    dash token of the remainder (``claude``, ``nova``, ``gemma``), except
-    known compound families (``gpt-oss`` vs ``gpt``) which keep two tokens.
-    Dot-less ids group under themselves so custom entries still cascade.
-    Aggregator true paths (``qwen/qwen3-32b``) split on the slash.
+    Vendor is the first dot segment (``anthropic``) when pure alphanumeric;
+    family is the first dash token of the remainder (``claude``, ``nova``,
+    ``gemma``), except known compound families (``gpt-oss`` vs ``gpt``)
+    which keep two tokens. Decimal dots inside model versions (e.g.
+    ``gemini-2.5-pro``, ``gpt-5.4``) never trigger a vendor split.
     """
     if "/" in base:
         vendor, _, rest = base.partition("/")
     else:
-        vendor, dot, rest = base.partition(".")
-        if not dot:
+        prefix, dot, rest = base.partition(".")
+        if dot and _PURE_VENDOR_RE.fullmatch(prefix):
+            vendor = prefix
+        elif base.lower() == "gemini" or base.lower().startswith("gemini-"):
+            vendor, rest = "google", base
+        else:
             return (base, base)
     tokens = rest.split("-")
     if len(tokens) >= 2 and (tokens[0], tokens[1]) in _COMPOUND_FAMILIES:
@@ -697,10 +782,75 @@ def configure_streaming_for_model(model_id: str, resolved: Any) -> Any:
     return resolved
 
 
+def _read_model_params(resolved: Any) -> dict[str, Any] | None:
+    """Best-effort read of ``params`` dict from get_config() or .config."""
+    get_config = getattr(resolved, "get_config", None)
+    config: Any = None
+    if callable(get_config):
+        try:
+            config = get_config()
+        except Exception:
+            config = None
+    if not isinstance(config, dict):
+        config = getattr(resolved, "config", None)
+    params = (
+        config.get("params")
+        if isinstance(config, dict)
+        else getattr(config, "params", None)
+    )
+    return params if isinstance(params, dict) else None
+
+
+# Google GenAI 2.5 reasoning param (model-API key; never a spend cap).
+_THINKING_LIMIT_KEY = "thinking_budget"
+
+
+def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
+    """Translate Gemini-3 thinking_level to Gemini 2.5 token-allowance param.
+
+    ``strands_harness.models._gemini()`` emits ``thinking_level`` inside
+    ``params["thinking_config"]``, which Gemini 2.5 models reject (they
+    require an integer token-allowance key instead). Leaves Gemini 3+
+    untouched.
+    """
+    if not model_id or resolved is None:
+        return resolved
+    normalized = normalize_model_ref(model_id)
+    is_google = _provider_of(normalized) == "google" or (
+        "/" not in normalized and not normalized.startswith("arn:")
+    )
+    if not is_google or not _base_key(normalized).lower().startswith("gemini-2.5"):
+        return resolved
+    params = _read_model_params(resolved)
+    if params is None:
+        return resolved
+    thinking = params.get("thinking_config")
+    if not isinstance(thinking, dict) or "thinking_level" not in thinking:
+        return resolved
+    updated_thinking = dict(thinking)
+    level = updated_thinking.pop("thinking_level")
+    if _THINKING_LIMIT_KEY not in updated_thinking:
+        low = str(level).strip().lower() if level is not None else ""
+        updated_thinking[_THINKING_LIMIT_KEY] = 0 if low in ("off", "none") else -1
+    updated_params = dict(params)
+    updated_params["thinking_config"] = updated_thinking
+    update = getattr(resolved, "update_config", None)
+    if callable(update):
+        try:
+            update(params=updated_params)
+        except Exception:
+            pass
+    return resolved
+
+
 def _has_reasoning(messages: list[dict[str, Any]]) -> bool:
-    """True when any block in ``messages`` carries a reasoningContent payload."""
+    """True when any block carries reasoningContent or a toolUse thought signature."""
     return any(
         "reasoningContent" in block
+        or (
+            isinstance(block.get("toolUse"), dict)
+            and "reasoningSignature" in block["toolUse"]
+        )
         for msg in messages
         for block in msg.get("content", [])
     )
@@ -787,5 +937,6 @@ def apply_switch(
         model = resolve_model(new_string, default or new_string, effort=effort)
     model = reported_cost.wrap_for_openrouter(new_string, model)
     model = configure_streaming_for_model(new_string, model)
+    model = configure_gemini_for_model(new_string, model)
     agent.model = model
     return (model, model_id_of(model, new_string))

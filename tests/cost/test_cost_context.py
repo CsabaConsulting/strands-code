@@ -245,6 +245,29 @@ class TestUsageFormat:
         line = usage_line(451270, 1000, "mystery/acme-1")
         assert line == "451.27K (n/a)"
 
+    def test_gemini_static_pricing_limits_and_skip_bedrock_live(self, monkeypatch):
+        assert cost_context.price_for("google/gemini-2.5-pro") == (1.25, 10.00)
+        assert cost_context.price_for("google/gemini-2.5-flash") == (0.30, 2.50)
+        assert cost_context.price_for("google/gemini-2.5-flash-lite") == (0.10, 0.40)
+        assert window_for("google/gemini-2.5-flash") == 1_048_576
+        assert window_for("google/gemini-2.5-pro") == 1_048_576
+
+        line = usage_line(451270, 1000, "google/gemini-2.5-flash")
+        assert "451.27K (43%)" in line
+        assert "$" in line
+
+        # Direct non-Bedrock providers skip AWS Price List lookups when live is enabled
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setattr(
+            live_pricing,
+            "bedrock_live_price",
+            lambda *a, **k: pytest.fail(
+                "non-Bedrock model must skip bedrock_live_price"
+            ),
+        )
+        assert cost_context.price_for("google/gemini-2.5-flash") is not None
+        assert cost_context.price_for("anthropic/claude-sonnet-4-6") is not None
+
     def test_get_response_metrics_cost_math(self):
         from strands_code_agent.utils import get_response_metrics
 

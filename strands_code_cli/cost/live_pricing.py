@@ -494,10 +494,15 @@ def litellm_entry(model_id: str) -> dict[str, float] | None:
     # models (31 keys across 7 vendors: openai, qwen, google, deepseek,
     # anthropic, moonshotai, xai) — the only layer pricing GPT-on-Bedrock.
     tail = model_id.rsplit("/", 1)[-1]
-    keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
+    if model_id.lower().startswith("google/"):
+        keys = [f"gemini/{tail}", tail, model_id]
+    else:
+        keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
     target = _openrouter_id(model_id)
     if target is not None:
         keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])
+    if not model_id.lower().startswith("google/") and "gemini" in tail.lower():
+        keys.extend([f"gemini/{tail}", tail])
     for key in keys:
         raw = table.get(key)
         if not isinstance(raw, dict):

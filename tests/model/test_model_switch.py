@@ -1536,6 +1536,128 @@ class TestDiscoverModels:
         assert offline is False
         assert options == []
 
+    def test_aws_only_omits_gemini_clutter(self, monkeypatch):
+        import sys
+
+        from strands_code_cli.model.model_switch import discover_models
+
+        monkeypatch.setitem(sys.modules, "boto3", None)
+        options, offline = discover_models(configured=["bedrock/x"])
+        assert offline is True
+        assert options == ["bedrock/x"]
+
+    def test_google_keyed_discovers_live_generate_content_gemini_models(
+        self, monkeypatch
+    ):
+        import sys
+        import types
+
+        from strands_code_cli.model.model_switch import discover_models
+
+        monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_test")
+        monkeypatch.setitem(sys.modules, "boto3", None)
+
+        entries = [
+            types.SimpleNamespace(
+                name="models/gemini-2.5-pro",
+                supported_actions=["generateContent", "countTokens"],
+            ),
+            types.SimpleNamespace(
+                name="models/gemini-2.5-flash",
+                supported_actions=["generateContent"],
+            ),
+            types.SimpleNamespace(
+                name="models/gemini-embedding-001",
+                supported_actions=["embedContent"],
+            ),
+            types.SimpleNamespace(
+                name="models/imagen-3.0-generate-002",
+                supported_actions=["predict"],
+            ),
+        ]
+        fake_client_inst = types.SimpleNamespace(
+            models=types.SimpleNamespace(list=lambda: iter(entries))
+        )
+        fake_genai = types.ModuleType("google.genai")
+        fake_genai.Client = lambda **kwargs: fake_client_inst
+        fake_google = types.ModuleType("google")
+        fake_google.genai = fake_genai
+        monkeypatch.setitem(sys.modules, "google", fake_google)
+        monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+
+        options, offline = discover_models()
+        assert offline is False
+        assert options == ["google/gemini-2.5-pro", "google/gemini-2.5-flash"]
+
+    def test_google_keyed_offline_falls_back_to_curated_gemini_models(
+        self, monkeypatch
+    ):
+        import sys
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_GEMINI_MODELS,
+            discover_models,
+        )
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setitem(sys.modules, "boto3", None)
+        monkeypatch.setitem(sys.modules, "google.genai", None)
+
+        options, offline = discover_models()
+        assert offline is True
+        assert options == list(CURATED_GEMINI_MODELS)
+
+    def test_bedrock_and_google_online_merge_without_duplicates(self, monkeypatch):
+        import sys
+        import types
+
+        from strands_code_cli.model.model_switch import discover_models
+
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+        fake_boto = types.ModuleType("boto3")
+
+        class _BedrockClient:
+            def list_foundation_models(self, **kwargs):
+                return {
+                    "modelSummaries": [
+                        {
+                            "modelId": "anthropic.claude-sonnet-4-6",
+                            "inferenceTypesSupported": ["ON_DEMAND"],
+                            "inputModalities": ["TEXT"],
+                            "outputModalities": ["TEXT"],
+                        }
+                    ]
+                }
+
+            def list_inference_profiles(self, **kwargs):
+                return {"inferenceProfileSummaries": []}
+
+        fake_boto.client = lambda *a, **k: _BedrockClient()
+        monkeypatch.setitem(sys.modules, "boto3", fake_boto)
+
+        entries = [
+            types.SimpleNamespace(
+                name="models/gemini-2.5-flash",
+                supported_actions=["generateContent"],
+            ),
+            types.SimpleNamespace(
+                name="models/gemini-2.5-flash",
+                supported_actions=["generateContent"],
+            ),
+        ]
+        fake_genai = types.ModuleType("google.genai")
+        fake_genai.Client = lambda **kwargs: types.SimpleNamespace(
+            models=types.SimpleNamespace(list=lambda: iter(entries))
+        )
+        fake_google = types.ModuleType("google")
+        fake_google.genai = fake_genai
+        monkeypatch.setitem(sys.modules, "google", fake_google)
+        monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+
+        options, offline = discover_models()
+        assert offline is False
+        assert options == ["anthropic.claude-sonnet-4-6", "google/gemini-2.5-flash"]
+
 
 # ----------------------------------------------------------------------
 # Grouped picker: one model, several routes
@@ -2712,3 +2834,317 @@ class TestUpstreamReasoningWireStrip:
         nova1 = BedrockModel(model_id="amazon.nova-lite-v1:0", region_name="us-west-2")
         nova1_wire = nova1._format_bedrock_messages(copy.deepcopy(resumed_messages))
         assert nova1_wire[1]["content"] == [{"text": "final answer"}]
+
+
+# ----------------------------------------------------------------------
+# Phase 14: Google Gemini cross-provider switching, grouping & 2.5 thinking guard
+# ----------------------------------------------------------------------
+
+
+class TestGeminiCrossProviderSafety:
+    def test_supports_reasoning_google_gemini_vs_gemma(self):
+        from strands_code_cli.model.model_switch import supports_reasoning
+
+        assert supports_reasoning("google/gemini-2.5-pro") is True
+        assert supports_reasoning("google/gemini-2.5-flash") is True
+        assert supports_reasoning("google.gemma-3-27b-it") is False
+
+    def test_convert_history_strips_tool_use_reasoning_signature_cross_vendor(self):
+        from strands.models.litellm import LiteLLMModel
+
+        from strands_code_cli.model.model_switch import (
+            canonical_prefix_hash,
+            convert_history,
+        )
+
+        gemini_history = [
+            {"role": "user", "content": [{"text": "read foo.py"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "c1",
+                            "name": "read",
+                            "input": {"path": "foo.py"},
+                            "reasoningSignature": "SIG_B64==",
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "c1",
+                            "status": "success",
+                            "content": [{"text": "ok"}],
+                        }
+                    }
+                ],
+            },
+        ]
+
+        # Same-vendor Gemini -> Gemini preserves reasoningSignature.
+        same_vendor_out = convert_history(
+            gemini_history, "google/gemini-2.5-pro", "google/gemini-2.5-flash"
+        )
+        assert (
+            same_vendor_out[1]["content"][0]["toolUse"]["reasoningSignature"]
+            == "SIG_B64=="
+        )
+
+        # Cross-vendor strips reasoningSignature so LiteLLM does not mangle tool_calls[].id.
+        for target in (
+            "litellm/openrouter/anthropic/claude-sonnet-4",
+            "anthropic/claude-sonnet-4-6",
+        ):
+            converted = convert_history(gemini_history, "google/gemini-2.5-pro", target)
+            tool_use = converted[1]["content"][0]["toolUse"]
+            assert "reasoningSignature" not in tool_use
+            formatted = LiteLLMModel.format_request_message_tool_call(tool_use)
+            assert formatted["id"] == "c1"
+            assert "__thought__" not in formatted["id"]
+
+        # Canonical prefix hash ignores toolUse["reasoningSignature"].
+        stripped = convert_history(
+            gemini_history, "google/gemini-2.5-pro", "openai/gpt-5.4"
+        )
+        assert canonical_prefix_hash(gemini_history) == canonical_prefix_hash(stripped)
+
+    def test_rich_history_restores_tool_use_reasoning_signature_on_switch_back(self):
+        import copy
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
+        from strands_code_cli.model.model_switch import prepare_resumed_history
+
+        gemini_history = [
+            {"role": "user", "content": [{"text": "read foo.py"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "c1",
+                            "name": "read",
+                            "input": {"path": "foo.py"},
+                            "reasoningSignature": "SIG_B64==",
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "c1",
+                            "status": "success",
+                            "content": [{"text": "ok"}],
+                        }
+                    }
+                ],
+            },
+        ]
+
+        # 1. apply_model_action round-trip: google/ -> openai/ -> google/
+        agent = SimpleNamespace(messages=copy.deepcopy(gemini_history), model=object())
+        rich = RichHistory()
+        with patch(
+            "strands_code_cli.loop.core.apply_switch",
+            side_effect=lambda ag, target, **kw: (object(), target),
+        ):
+            _new_id, reply = apply_model_action(
+                agent,
+                "openai/gpt-5.4",
+                turn_running=False,
+                current_model="google/gemini-2.5-pro",
+                rich=rich,
+            )
+            assert (
+                "reasoningSignature" not in agent.messages[1]["content"][0]["toolUse"]
+            )
+            assert rich.messages is not None
+
+            _back_id, back_reply = apply_model_action(
+                agent,
+                "google/gemini-2.5-pro",
+                turn_running=False,
+                current_model="openai/gpt-5.4",
+                rich=rich,
+            )
+        assert "thinking restored" in back_reply
+        assert (
+            agent.messages[1]["content"][0]["toolUse"]["reasoningSignature"]
+            == "SIG_B64=="
+        )
+
+        # 2. prepare_resumed_history stashes toolUse["reasoningSignature"] too.
+        resumed = SimpleNamespace(messages=copy.deepcopy(gemini_history))
+        resumed_rich = RichHistory()
+        assert prepare_resumed_history(resumed, "openai/gpt-5.4", resumed_rich) is True
+        assert resumed_rich.messages is not None
+        assert (
+            resumed_rich.messages[1]["content"][0]["toolUse"]["reasoningSignature"]
+            == "SIG_B64=="
+        )
+
+    def test_vendor_family_gemini_and_tree_grouping(self):
+        from strands_code_cli.model.model_switch import (
+            _rule_matches,
+            _vendor_family,
+            build_model_tree,
+        )
+
+        assert _vendor_family("gemini-2.5-pro") == ("google", "gemini")
+        assert _vendor_family("gpt-5.4") == ("gpt-5.4", "gpt-5.4")
+        tree = build_model_tree(
+            ["google/gemini-2.5-pro", "google/gemini-3-flash-preview"]
+        )
+        assert [vendor for vendor, _ in tree] == ["google"]
+        families = dict(tree[0][1])
+        assert list(families) == ["gemini"]
+        assert len(families["gemini"]) == 2
+
+        assert _rule_matches((None, "google", "gemini", None), "google/gemini-2.5-pro")
+        assert not _rule_matches(
+            (None, "google", "gemini", None), "bedrock/google.gemma-3-27b-it"
+        )
+
+    def test_capability_override_matches_google_gemini_without_gemma(self, monkeypatch):
+        import strands_code_cli.model.model_capabilities as caps
+        from strands_code_cli.model.model_capabilities import CapabilityOverride
+        from strands_code_cli.model.model_switch import supports_reasoning
+
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [
+                CapabilityOverride(vendor="google", family="gemini", reasoning=False)
+            ],
+        )
+        assert supports_reasoning("google/gemini-2.5-pro") is False
+
+        monkeypatch.setattr(
+            caps,
+            "active_overrides",
+            lambda: [
+                CapabilityOverride(vendor="google", family="gemini", reasoning=True)
+            ],
+        )
+        assert supports_reasoning("google.gemma-3-27b-it") is False
+
+    def test_configure_gemini_for_model_translates_25_thinking_and_wires_all_sites(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from strands_code_cli.model.model_switch import (
+            apply_switch,
+            configure_gemini_for_model,
+        )
+
+        class _FakeGemini:
+            def __init__(self, params):
+                self.config = {"params": params}
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kwargs):
+                self.config.update(kwargs)
+
+        # Rewrites thinking_level -> thinking_budget on gemini-2.5-*
+        g25 = _FakeGemini(
+            {"thinking_config": {"thinking_level": "high"}, "temperature": 0.2}
+        )
+        configure_gemini_for_model("google/gemini-2.5-pro", g25)
+        assert g25.config["params"]["thinking_config"] == {"thinking_budget": -1}
+        assert g25.config["params"]["temperature"] == 0.2
+
+        g25_off = _FakeGemini({"thinking_config": {"thinking_level": "off"}})
+        configure_gemini_for_model("google/gemini-2.5-flash", g25_off)
+        assert g25_off.config["params"]["thinking_config"] == {"thinking_budget": 0}
+
+        # Leaves gemini-3* and non-google models untouched
+        g3 = _FakeGemini({"thinking_config": {"thinking_level": "high"}})
+        configure_gemini_for_model("google/gemini-3-flash-preview", g3)
+        assert g3.config["params"]["thinking_config"] == {"thinking_level": "high"}
+
+        # Fails soft on broken/missing config objects
+        assert configure_gemini_for_model("google/gemini-2.5-pro", object()) is not None
+
+        # 1. Wired in apply_switch
+        switched = _FakeGemini({"thinking_config": {"thinking_level": "high"}})
+        switched.config["model_id"] = "gemini-2.5-pro"
+        fake_agent = SimpleNamespace(model=None)
+        with patch("strands_harness.models.resolve_model", return_value=switched):
+            apply_switch(fake_agent, "google/gemini-2.5-pro", effort="high")
+        assert switched.config["params"]["thinking_config"] == {"thinking_budget": -1}
+
+        # 2. Wired in entry/main.py build_agent
+        import strands_code_cli.entry.main as main_mod
+
+        monkeypatch.chdir(tmp_path)
+        built_gem = _FakeGemini({"thinking_config": {"thinking_level": "medium"}})
+        built_gem.config["model_id"] = "gemini-2.5-flash"
+        with (
+            patch.object(
+                main_mod,
+                "create_harness",
+                return_value=SimpleNamespace(
+                    model=built_gem, add_hook=lambda *a, **k: None
+                ),
+            ),
+            patch.object(main_mod, "register_memory_plugin"),
+        ):
+            main_mod.build_agent(
+                "s1", tmp_path / "sess", model="google/gemini-2.5-flash"
+            )
+        assert built_gem.config["params"]["thinking_config"] == {"thinking_budget": -1}
+
+        # 3. Wired in loop/core.py _route_side_spawn
+        import strands_code_cli.loop.core as loop_mod
+        import strands_code_cli.routing.core as routing_mod
+
+        routed_gem = _FakeGemini({"thinking_config": {"thinking_level": "low"}})
+        routed_gem.config["model_id"] = "gemini-2.5-pro"
+        monkeypatch.setattr(
+            routing_mod,
+            "load_strategy",
+            lambda: SimpleNamespace(candidates=["google/gemini-2.5-pro"], quiet=True),
+        )
+        monkeypatch.setattr(
+            routing_mod,
+            "decide",
+            lambda *args, **kwargs: (
+                SimpleNamespace(
+                    model="google/gemini-2.5-pro",
+                    effort="low",
+                    model_confidence=0.9,
+                    effort_confidence=0.9,
+                    tie_break=False,
+                ),
+                "heuristic",
+                (0, 0, None),
+                "",
+            ),
+        )
+        monkeypatch.setattr(
+            routing_mod, "validate_routed_effort", lambda *args, **kwargs: True
+        )
+        with patch("strands_harness.models.resolve_model", return_value=routed_gem):
+            side_kwargs = {"model": object()}
+            loop_mod._route_side_spawn(
+                "why?",
+                side_kwargs,
+                live_model=object(),
+                current_model="openai/gpt-5.4",
+                routing=None,
+                routing_events=[],
+            )
+        assert routed_gem.config["params"]["thinking_config"] == {"thinking_budget": -1}

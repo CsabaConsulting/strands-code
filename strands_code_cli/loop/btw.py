@@ -32,6 +32,7 @@ from strands_harness.memory import resolve_memory
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
+    configure_gemini_for_model,
     configure_streaming_for_model,
     model_id_of,
 )
@@ -461,5 +462,6 @@ def build_btw_agent(
         raw_model if isinstance(raw_model, str) else model_id_of(resolved_model, "")
     )
     configure_streaming_for_model(target_id, resolved_model)
+    configure_gemini_for_model(target_id, resolved_model)
     register_memory_plugin(agent, load_memory)
     return agent, prompt

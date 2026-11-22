@@ -383,6 +383,44 @@ class TestLiteLLMEntry:
         assert entry["out"] == pytest.approx(16.50)
         assert entry["window"] == 1050000
 
+    def test_google_gemini_variants_and_real_bundled_lookup(self, monkeypatch):
+        _fake_litellm(
+            monkeypatch,
+            {
+                "gemini/gemini-2.5-flash": {
+                    "input_cost_per_token": 3.0e-7,
+                    "output_cost_per_token": 2.5e-6,
+                    "max_input_tokens": 1048576,
+                }
+            },
+        )
+        prefixed = live_pricing.litellm_entry("google/gemini-2.5-flash")
+        assert prefixed is not None
+        assert prefixed["in"] == pytest.approx(0.30)
+        assert prefixed["out"] == pytest.approx(2.50)
+        assert prefixed["window"] == 1_048_576
+
+        _fake_litellm(
+            monkeypatch,
+            {
+                "gemini-2.5-flash": {
+                    "input_cost_per_token": 3.0e-7,
+                    "output_cost_per_token": 2.5e-6,
+                    "max_input_tokens": 1048576,
+                }
+            },
+        )
+        bare = live_pricing.litellm_entry("google/gemini-2.5-flash")
+        assert bare is not None
+        assert bare["in"] == pytest.approx(0.30)
+
+        # Undo fake and verify real bundled litellm resolves google/gemini-2.5-pro
+        monkeypatch.undo()
+        real = live_pricing.litellm_entry("google/gemini-2.5-pro")
+        assert real is not None
+        assert real["in"] > 0 and real["out"] > 0
+        assert real["window"] >= 1_000_000
+
 
 # ----------------------------------------------------------------------
 # Resolution order through cost_context

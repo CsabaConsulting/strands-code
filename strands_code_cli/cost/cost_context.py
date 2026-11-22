@@ -40,6 +40,11 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "nova-micro": (0.035, 0.14),
     "nova-lite": (0.06, 0.24),
     "nova-pro": (0.80, 3.20),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-3-flash-preview": (0.50, 3.00),
+    "gemini-3.5-flash": (0.50, 3.00),
     "claude-opus-": (5.00, 25.00),
     "claude-sonnet-": (3.00, 15.00),
     "claude-haiku-": (1.00, 5.00),
@@ -57,6 +62,11 @@ MODEL_LIMITS: dict[str, int] = {
     "haiku-4-5": 200_000,
     "claude-3-haiku": 200_000,
     "gpt-4o": 128_000,
+    "gemini-2.5-flash-lite": 1_048_576,
+    "gemini-2.5-flash": 1_048_576,
+    "gemini-2.5-pro": 1_048_576,
+    "gemini-3-flash-preview": 1_048_576,
+    "gemini-3.5-flash": 1_048_576,
     "claude-opus-": 128_000,
     "claude-sonnet-": 128_000,
     "claude-haiku-": 64_000,
@@ -77,6 +87,11 @@ def _best_hit(table: dict, model_id: str):
     return None
 
 
+def _is_bedrock_model(model_id: str) -> bool:
+    """True when ``model_id`` routes through Amazon Bedrock directly."""
+    return model_id.startswith(("arn:", "bedrock/")) or "/" not in model_id
+
+
 def _live_price(model_id: str, region: str | None) -> tuple[float, float, str] | None:
     """Live-layer price hit with provenance, or None (fail soft)."""
     if live_pricing.live_disabled():
@@ -85,7 +100,7 @@ def _live_price(model_id: str, region: str | None) -> tuple[float, float, str] |
         entry = live_pricing.openrouter_entry(model_id)
         if entry is not None and "in" in entry and "out" in entry:
             return (entry["in"], entry["out"], "OpenRouter live")
-    else:
+    elif _is_bedrock_model(model_id):
         live = live_pricing.bedrock_live_price(
             model_id, region if region is not None else live_pricing.resolve_region()
         )

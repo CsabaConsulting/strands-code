@@ -726,6 +726,43 @@ class TestBuildBtwAgent:
         )
         assert update_calls == [{"streaming": False}]
 
+    def test_build_btw_agent_normalizes_gemini_25_thinking(self, monkeypatch):
+        import strands_code_cli.loop.btw as btw_mod
+
+        class _GeminiModel:
+            def __init__(self):
+                self.config = {
+                    "model_id": "gemini-2.5-pro",
+                    "params": {"thinking_config": {"thinking_level": "high"}},
+                }
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kwargs):
+                self.config.update(kwargs)
+
+        gemini_model = _GeminiModel()
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kwargs: SimpleNamespace(model=gemini_model),
+        )
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+        build_btw_agent(
+            {
+                "model": "google/gemini-2.5-pro",
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+            },
+            [],
+            "why slow?",
+        )
+        assert gemini_model.config["params"]["thinking_config"] == {
+            "thinking_budget": -1
+        }
+
 
 def _idle_btw(**overrides):
     """BtwContext double with a real BtwQueue (submit/echo tests)."""
