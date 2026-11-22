@@ -234,7 +234,7 @@ def _root(
     model: str | None = typer.Option(
         None,
         "--model",
-        help="Model reference for this session only (for example: google/gemini-2.5-flash).",
+        help="Model reference for this session only (for example: google/gemini-3.8-flash).",
     ),
 ) -> None:
     """Open the REPL immediately (D-01); --session-id resumes directly (D-02)."""

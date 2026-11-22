@@ -72,7 +72,7 @@ class TestPreflightGate:
             preflight_credentials(
                 probe=lambda: pytest.fail("STS must not run when Google key is set")
             )
-            == "google/gemini-2.5-flash"
+            == "google/gemini-3.8-flash"
         )
 
     def test_gemini_api_key_auto_picks_gemini_flash_without_sts(self, monkeypatch):
@@ -81,7 +81,7 @@ class TestPreflightGate:
             preflight_credentials(
                 probe=lambda: pytest.fail("STS must not run when GEMINI_API_KEY is set")
             )
-            == "google/gemini-2.5-flash"
+            == "google/gemini-3.8-flash"
         )
 
     def test_vertex_adc_auto_picks_gemini_flash(self, monkeypatch):
@@ -91,13 +91,13 @@ class TestPreflightGate:
             preflight_credentials(
                 probe=lambda: pytest.fail("STS must not run for Vertex ADC")
             )
-            == "google/gemini-2.5-flash"
+            == "google/gemini-3.8-flash"
         )
 
     def test_vertex_false_with_api_key_uses_api_key(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "0")
         monkeypatch.setenv("GOOGLE_API_KEY", "nonempty-api-key")
-        assert preflight_credentials(probe=_no_creds) == "google/gemini-2.5-flash"
+        assert preflight_credentials(probe=_no_creds) == "google/gemini-3.8-flash"
 
     def test_vertex_and_api_key_mutually_exclusive_fails_fast(
         self, monkeypatch, capsys
@@ -137,7 +137,7 @@ class TestPreflightGate:
             is None
         )
         monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_phantom_token")
-        assert preflight_credentials() == "google/gemini-2.5-flash"
+        assert preflight_credentials() == "google/gemini-3.8-flash"
 
     def test_anthropic_and_openai_ambient_auto_pick(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
@@ -256,8 +256,8 @@ class TestFirstRunCli:
         ):
             result = CliRunner().invoke(main_module.app, [])
         assert result.exit_code == 0, result.output
-        assert built.call_args[1]["model"] == "google/gemini-2.5-flash"
-        assert loop.call_args[1]["model_id"] == "google/gemini-2.5-flash"
+        assert built.call_args[1]["model"] == "google/gemini-3.8-flash"
+        assert loop.call_args[1]["model_id"] == "google/gemini-3.8-flash"
         assert not (tmp_path / "xdg").exists()
 
 

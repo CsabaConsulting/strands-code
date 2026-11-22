@@ -31,8 +31,8 @@ class TestGeminiRig:
 
     def test_scenario_g1_contract_constants_zero_aws_and_xdg_isolation(self):
         gemini = _load("scenarios_gemini", GEMINI)
-        assert gemini.RIG_GEMINI_FLASH == "google/gemini-2.5-flash"
-        assert gemini.RIG_GEMINI_PRO == "google/gemini-2.5-pro"
+        assert gemini.RIG_GEMINI_FLASH == "google/gemini-3.8-flash"
+        assert gemini.RIG_GEMINI_PRO == "google/gemini-4-hydrogen"
 
         src = inspect.getsource(gemini.scenario_g1)
         for aws_var in (

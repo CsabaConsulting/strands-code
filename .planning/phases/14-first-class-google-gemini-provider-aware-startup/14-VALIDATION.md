@@ -60,7 +60,7 @@ Existing test infrastructure covers Plans `14-01` and `14-02`; `tests/rig/test_u
 
 | Behavior | Requirement | Why Live Creds Required | Test Instructions | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| Live Google AI Studio `google/gemini-2.5-flash` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model google/gemini-2.5-pro` switch (`driver.py g1`) | `MODEL-06` | Requires `GOOGLE_API_KEY` or `GEMINI_API_KEY` (plus `--extra gemini`) | `python3 scripts/uattest/driver.py g1` | ✅ `G1 PASS` (`/tmp/uatr8/g1.log`) |
+| Live Google AI Studio `google/gemini-3.8-flash` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model google/gemini-4-hydrogen` switch (`driver.py g1`) | `MODEL-06` | Requires `GOOGLE_API_KEY` or `GEMINI_API_KEY` (plus `--extra gemini`) | `python3 scripts/uattest/driver.py g1` | ✅ `G1 PASS` (`/tmp/uatr8/g1.log`) |
 
 ---
 

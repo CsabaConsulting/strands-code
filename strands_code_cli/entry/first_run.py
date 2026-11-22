@@ -182,7 +182,7 @@ def preflight_credentials(
         _check_explicit_provider(_provider_of(model), base_url, probe)
         return None
     if has_google_credentials():
-        return "google/gemini-2.5-flash"
+        return "google/gemini-3.8-flash"
     for candidate, keys in _AMBIENT_DEFAULT_MODELS:
         if any(_nonempty(name) for name in keys):
             return candidate

@@ -45,12 +45,12 @@ or directly:
 
 Startup preflight is provider-aware:
 
-- If you pass `--model <provider/model>` (for example `strands-code --model google/gemini-2.5-flash`)
+- If you pass `--model <provider/model>` (for example `strands-code --model google/gemini-3.8-flash`)
   or already saved a model via `/model`, preflight checks only that provider's
   credentials and skips AWS STS. `--model` is strictly session-scoped and never
   writes `config.yaml`.
 - Without `--model` or a saved model, preflight auto-picks from your environment
-  (`GOOGLE_API_KEY` / `GEMINI_API_KEY` or Vertex ADC -> `google/gemini-2.5-flash`,
+  (`GOOGLE_API_KEY` / `GEMINI_API_KEY` or Vertex ADC -> `google/gemini-3.8-flash`,
   `ANTHROPIC_API_KEY` -> `anthropic/claude-sonnet-4-6`,
   `OPENAI_API_KEY` -> `openai/gpt-5.4`, or exits 2 with a `--model litellm/openrouter/...`
   pointer when `OPENROUTER_API_KEY` is set alone), before falling back to Amazon Bedrock
@@ -77,7 +77,7 @@ AWS credentials are needed:
 
 ```bash
 export GOOGLE_API_KEY="<your-aistudio-key>"   # or GEMINI_API_KEY
-strands-code --model google/gemini-2.5-flash  # or omit --model to auto-pick from env
+strands-code --model google/gemini-3.8-flash  # or omit --model to auto-pick from env
 ```
 
 - **Google AI Pro & Google AI Ultra credits:** Personal subscriptions include
@@ -85,7 +85,11 @@ strands-code --model google/gemini-2.5-flash  # or omit --model to auto-pick fro
   \$10/month; `Google AI Ultra 5x`: \$40/month; `Google AI Ultra 20x`:
   \$100/month). Claim your credits and generate an API key in
   `aistudio.google.com` (a one-time \$5 Cloud Billing activation may be needed to
-  move keys out of Free Tier rate limits).
+  move keys out of Free Tier rate limits). This funds current Gemini 3.8 and
+  Gemini 4 models (`google/gemini-3.8-flash`, `google/gemini-4-hydrogen`,
+  `google/gemini-4-neon`, `google/gemini-4-argon`, `google/gemini-4-carbon`);
+  deprecated Gemini 2.5 ids remain supported for explicit `--model` / saved
+  configs until AI Studio automatic rerouting on Dec 1, 2026.
 - **Consumer OAuth unsupported:** Piggybacking on consumer Gemini CLI / Code
   Assist OAuth tokens (`cloudcode-pa.googleapis.com`) is intentionally unsupported
   (Google ToS violation); use AI Studio API keys or Vertex ADC.
@@ -95,8 +99,8 @@ strands-code --model google/gemini-2.5-flash  # or omit --model to auto-pick fro
   gcloud auth application-default login
   export GOOGLE_GENAI_USE_VERTEXAI=true
   export GOOGLE_CLOUD_PROJECT="<your-gcp-project>"
-  export GOOGLE_CLOUD_LOCATION="global"   # recommended for Gemini 2.5 / 3.x models
-  strands-code --model google/gemini-2.5-flash
+  export GOOGLE_CLOUD_LOCATION="global"   # recommended for Gemini 3.x / 4.x models
+  strands-code --model google/gemini-3.8-flash
   ```
 
   **Mutual exclusion:** Do **not** set `GOOGLE_API_KEY` or `GEMINI_API_KEY` at the

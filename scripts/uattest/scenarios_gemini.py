@@ -1,9 +1,9 @@
 """Phase 14 Google Gemini zero-AWS scenario for the live-tmux UAT rig.
 
 Owns scenario_g1: launches strands-code with AWS credentials stripped and
-isolated XDG_CONFIG_HOME, boots --model google/gemini-2.5-flash, checks
-/context (1M), runs a read tool turn, checks /cost pricing, switches to
-google/gemini-2.5-pro, and verifies session-scoped startup wrote no config.yaml.
+isolated XDG_CONFIG_HOME, boots --model google/gemini-3.8-flash, verifies
+--model writes no config.yaml, checks /context (1M), runs a read tool turn,
+checks /cost pricing, and switches to google/gemini-4-hydrogen.
 """
 
 from __future__ import annotations
@@ -29,12 +29,12 @@ from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path inse
     wait_for_new,
 )
 
-RIG_GEMINI_FLASH = "google/gemini-2.5-flash"
-RIG_GEMINI_PRO = "google/gemini-2.5-pro"
+RIG_GEMINI_FLASH = "google/gemini-3.8-flash"
+RIG_GEMINI_PRO = "google/gemini-4-hydrogen"
 
 
 def scenario_g1() -> None:
-    """G1: Zero-AWS Gemini 2.5 Flash launch, tool turn, /context, /cost, and /model."""
+    """G1: Zero-AWS Gemini 3.8 Flash launch, tool turn, /context, /cost, and /model."""
     workdir, xdg = _fresh_upstream_workdir("g1")
     sentinel_path = os.path.join(workdir, "sentinel.txt")
     with open(sentinel_path, "w", encoding="utf-8") as handle:

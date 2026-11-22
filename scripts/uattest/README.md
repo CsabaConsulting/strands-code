@@ -43,11 +43,11 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   `Enter`), triggers a `[deny]` rule refusal without prompting, and runs
   `/mode plan` confirming no file mutation or prompt.
 - **g1** — Phase 14 zero-AWS Google Gemini launch: strips AWS env vars,
-  launches `--model google/gemini-2.5-flash` under isolated
-  `XDG_CONFIG_HOME`, verifies `1M` `/context`, runs a `read` tool turn
-  (`GEMINI_SENTINEL_14`), checks `/cost` (`$` + `Display only`), switches
-  to `/model google/gemini-2.5-pro`, and asserts session-scoped startup
-  wrote no `config.yaml`.
+  launches `--model google/gemini-3.8-flash` under isolated
+  `XDG_CONFIG_HOME`, verifies `config.yaml` is absent prior to `/model`,
+  checks `1M` `/context`, runs a `read` tool turn (`GEMINI_SENTINEL_14`),
+  checks `/cost` (`$` + `Display only`), and switches to
+  `/model google/gemini-4-hydrogen`.
 
 ## Usage
 

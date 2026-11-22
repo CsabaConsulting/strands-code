@@ -35,10 +35,11 @@ commits:
 - **Live tool-call probes:** Verified real `read` tool execution on `google/gemini-2.5-flash`, `google/gemini-2.5-pro`, `google/gemini-3.8-flash`, and `google/gemini-4-hydrogen`.
 - **Live `python3 scripts/uattest/driver.py g1` (`G1 PASS`):**
   - Zero-AWS boot (`env -u AWS_*`, isolated `XDG_CONFIG_HOME`, no `config.yaml` written before `/model`).
-  - `/context`: rendered `Context — google/gemini-2.5-flash` (`0% of 1.05M`).
+  - `/context`: rendered `Context — google/gemini-3.8-flash` (`0% of 1.05M`).
   - Live `read` tool turn: returned `GEMINI_SENTINEL_14`.
-  - `/cost`: rendered `Cost — google/gemini-2.5-flash`, `$0.0020`, `Prices: LiteLLM bundled.`, `Display only — no budgets or enforcement.`.
-  - `/model google/gemini-2.5-pro`: switched cleanly with `Model: google/gemini-2.5-pro — conversation continued (4 messages kept).` and zero `Dropping reasoningContent` warnings.
+  - `/cost`: rendered `Cost — google/gemini-3.8-flash`, `$0.0054`, `Prices: LiteLLM bundled.`, `Display only — no budgets or enforcement.`.
+  - `/model google/gemini-4-hydrogen`: switched cleanly with `Model: google/gemini-4-hydrogen — conversation continued (4 messages kept).` and zero `Dropping reasoningContent` warnings.
+  - Prior live `driver.py g1` run on `google/gemini-2.5-flash` -> `google/gemini-2.5-pro` also passed (`G1 PASS`, `$0.0020`, `1.05M`), and `first_run.py` now defaults ambient Google sessions to `google/gemini-3.8-flash` ahead of Gemini 2.5's Dec 1, 2026 AI Studio auto-reroute.
 
 ## CI Gate Verification (After Final Code/Test Edit, `uv sync --locked --extra litellm`)
 
