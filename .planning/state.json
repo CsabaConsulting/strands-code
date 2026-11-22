@@ -40,9 +40,9 @@
     }
   ],
   "next": {
-    "command": "/gsd-plan-phase 14",
-    "label": "Plan Phase 14",
-    "reason": "Phase 14 context locked in 14-CONTEXT.md (D-01..D-08); ready for research and planning"
+    "command": "/gsd-execute-phase 14",
+    "label": "Execute Phase 14",
+    "reason": "Phase 14 planned (14-01..14-03 across 2 waves, plan-checker PASS); ready for execution"
   },
-  "updated_at": "2026-11-22T07:15:00.000Z"
+  "updated_at": "2026-11-22T07:25:00.000Z"
 }

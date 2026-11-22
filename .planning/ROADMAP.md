@@ -56,7 +56,17 @@ Plans:
   2. Switching between `google/gemini-*` and Anthropic/OpenRouter (`LiteLLMModel`) strips `toolUse["reasoningSignature"]` on cross-vendor switches while preserving it in `RichHistory`, `_vendor_family("gemini-2.5-pro")` groups under `("google", "gemini")`, and `supports_reasoning("google/...")` delegates to `_harness_supports_thinking`
   3. `/model` discovers `google/` models when keyed (`gemini` extra), `live_pricing.litellm_entry` resolves `gemini/<tail>`/`<tail>` pricing & context windows, and `docs/QUICKSTART.md` documents the Google AI Studio + Google AI Ultra (\$40–\$100/mo Developer Program credit) setup
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] `14-01-PLAN.md` — Tracer: `gemini` optional extra, Box-compatible provider-aware preflight, Vertex conflict gate, ambient auto-pick & `--model` CLI flag
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `14-02-PLAN.md` — `GeminiModel` `reasoningSignature` stripping, `_vendor_family` fix, Gemini 2.5 thinking guard, credential-gated `/model` discovery & `/cost` tables
+- [ ] `14-03-PLAN.md` — Repeatable `driver.py g1` UAT rig, `docs/QUICKSTART.md` Ultra credit guide, upstream Gemini 2.5 issue draft & full CI gates
 
 ### Phase 15: Decision Routing Convergence (`DecisionModel`)
 
@@ -126,7 +136,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
-| 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 0/0 | Not started | - |
+| 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 0/3 | Planned | - |
 | 15. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 16. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 17. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
