@@ -3,7 +3,7 @@ status: complete
 phase: 13-upstream-sdk-harness-resync
 source: [13-01-SUMMARY.md, 13-02-SUMMARY.md, 13-SECURITY.md]
 started: 2026-11-21T20:42:00Z
-updated: 2026-11-22T05:49:00Z
+updated: 2026-11-22T05:55:00Z
 driver: scripts/uattest/driver.py
 scenarios: [u1, u2, u3]
 region: us-west-2
@@ -62,7 +62,22 @@ expected:
 - Contract tests in `tests/rig/test_uattest_upstream.py` and existing suites + CI gates stay green with `strands_code_agent/` untouched (`D-24`).
 result: pass
 evidence:
-- `.venv/bin/pytest tests/rig/ -q`: `37 passed in 0.07s`
+- `.venv/bin/pytest tests/ -q` on `073c9e1`: **1568 passed, 11 deselected** (`1567 passed` inside sandbox + `1 passed` loopback `test_stub_server_systemone_decision_routes`)
+- `.venv/bin/pytest tests/model/test_model_switch.py tests/rig/ -q`: `157 passed` (`37 passed` in `tests/rig/`)
 - `.venv/bin/ruff check strands_code_cli tests scripts` & `ruff format --check`: `All checks passed!`, `112 files already formatted`
 - `.venv/bin/xenon --max-absolute C strands_code_cli tests scripts`: exit `0`
 - `.venv/bin/lint-imports`: `Contracts: 1 kept, 0 broken.` (`39 files, 81 dependencies`)
+- `git diff --stat strands_code_agent/`: empty (`D-24`)
+
+## Summary
+
+total: 4
+passed: 4
+issues: 0
+pending: 0
+skipped: 0
+signed_off: 2026-11-22T05:55:00Z (`/gsd-verify-work 13`, commit `073c9e1`)
+
+## Gaps
+
+[none]
