@@ -466,6 +466,11 @@ class PolicyClassifier:
         if not isinstance(tool_input, dict):
             tool_input = {}
         tool_use_id = tool_use.get("toolUseId", "")
+        tag = self._tag_for_event(event)
+        # Drop any stale stashed context before classifying (T-13-02): a
+        # mid-classify error or SDK duplicate-toolUseId short-circuit must
+        # never see an earlier call's preview or deny reason.
+        self._last_by_tag.pop(tag, None)
         # Steering-armed boundary: the hook already redirected this call
         # via cancel_tool, so skip the approval prompt (Proceed) while the
         # executor still cancels with the redirect message. One-shot and
@@ -485,10 +490,10 @@ class PolicyClassifier:
             reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
             verdict = Deny(reason=reason)
             signature = _signature(tool_name, verdict)
-            tag = self._tag_for_event(event)
             self._last_by_tag[tag] = {
                 "tool_name": tool_name,
                 "tool_input": tool_input,
+                "tool_use_id": tool_use_id,
                 "verdict": verdict,
                 "signature": signature,
             }
@@ -518,7 +523,6 @@ class PolicyClassifier:
         if isinstance(verdict, Allow):
             return ClassifierResult(requires_human_in_the_loop=False)
         signature = _signature(tool_name, verdict)
-        tag = self._tag_for_event(event)
         if self._batch.is_covered(signature, tag=tag):
             return ClassifierResult(
                 requires_human_in_the_loop=False, reason="batch-covered"
@@ -526,6 +530,7 @@ class PolicyClassifier:
         self._last_by_tag[tag] = {
             "tool_name": tool_name,
             "tool_input": tool_input,
+            "tool_use_id": tool_use_id,
             "verdict": verdict,
             "signature": signature,
         }
@@ -694,11 +699,20 @@ class PolicyClassifier:
         self._batch.record(f"[{tag}] denied {tool_name}: {verdict.reason}")
         return "n"
 
+    def clear_last(self, event: Any) -> None:
+        """Drop stashed ask/deny context for ``event``'s agent tag."""
+        self._last_by_tag.pop(self._tag_for_event(event), None)
+
     def last_deny_reason(self, event: Any) -> str | None:
         """Model-facing deny reason for a classifier-issued Deny, else None."""
         tag = self._tag_for_event(event)
         ctx = self._last_by_tag.get(tag)
-        if not ctx or not isinstance(ctx.get("verdict"), Deny):
+        event_uid = (getattr(event, "tool_use", None) or {}).get("toolUseId", "")
+        if (
+            not ctx
+            or not isinstance(ctx.get("verdict"), Deny)
+            or ctx.get("tool_use_id", "") != event_uid
+        ):
             return None
         verdict = ctx["verdict"]
         rule_text = (
@@ -752,14 +766,18 @@ class PolicyHumanInTheLoop(HumanInTheLoop):
 
     async def before_tool_call(self, event: Any, **kwargs: Any) -> Any:
         """Delegate to HumanInTheLoop and restore classifier Deny reasons."""
-        action = await super().before_tool_call(event, **kwargs)
-        if isinstance(action, InterventionDeny) and isinstance(
-            self._classifier, PolicyClassifier
-        ):
-            reason = self._classifier.last_deny_reason(event)
-            if reason is not None:
-                return InterventionDeny(reason=reason)
-        return action
+        try:
+            action = await super().before_tool_call(event, **kwargs)
+            if isinstance(action, InterventionDeny) and isinstance(
+                self._classifier, PolicyClassifier
+            ):
+                reason = self._classifier.last_deny_reason(event)
+                if reason is not None:
+                    return InterventionDeny(reason=reason)
+            return action
+        finally:
+            if isinstance(self._classifier, PolicyClassifier):
+                self._classifier.clear_last(event)
 
 
 def build_interventions(

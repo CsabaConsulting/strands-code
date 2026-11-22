@@ -794,3 +794,72 @@ class TestCodeactRuleCoherence:
         # Mode-vocabulary lock: plan-deny stays byte-identical — the D-06
         # revise hint rides the policy-rule denial only, never plan mode.
         assert "Revise the code" not in text
+
+
+class TestHitlFailClosedStaleContext:
+    def test_duplicate_tool_use_id_denies_fail_closed_without_stale_preview(
+        self, monkeypatch
+    ):
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+        first = _run(handler, _event("shell", {"command": "make test"}, uid="dup-1"))
+        assert isinstance(first, Proceed)
+
+        # Duplicate toolUseId skips PolicyClassifier via upstream hitl.py:340;
+        # stale context must already be cleared so ask() fails closed without prompting.
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("must not prompt with stale context")
+            ),
+        )
+        second = _run(handler, _event("shell", {"command": "rm -rf /"}, uid="dup-1"))
+        assert isinstance(second, HitlDeny)
+        assert any(
+            "Approval context missing — denying (fail-closed)." in line
+            for line in shown
+        )
+
+    def test_duplicate_tool_use_id_after_plan_deny_does_not_leak_stale_deny_reason(
+        self, monkeypatch
+    ):
+        classifier, handler = _gate(monkeypatch=monkeypatch, answers=[])
+        classifier.set_mode("plan")
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("plan deny must not prompt")
+            ),
+        )
+        first = _run(handler, _event("write", {"path": "a.txt"}, uid="dup-2"))
+        assert isinstance(first, HitlDeny)
+        assert "Plan mode is read-only" in first.reason
+
+        classifier.set_mode("act")
+        second = _run(handler, _event("shell", {"command": "echo hi"}, uid="dup-2"))
+        assert isinstance(second, HitlDeny)
+        assert "Plan mode is read-only" not in second.reason
+
+    def test_classifier_error_clears_prior_context_and_denies_fail_closed(
+        self, monkeypatch
+    ):
+        classifier, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+        first = _run(handler, _event("shell", {"command": "make test"}, uid="ok-1"))
+        assert isinstance(first, Proceed)
+
+        monkeypatch.setattr(
+            classifier,
+            "_current_policy",
+            lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("must not prompt with stale context")
+            ),
+        )
+        second = _run(handler, _event("shell", {"command": "rm -rf /"}, uid="err-2"))
+        assert isinstance(second, HitlDeny)
