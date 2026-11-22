@@ -14,7 +14,7 @@
 ## Phases
 
 - [x] **Phase 13: Upstream SDK & Harness Resync** — Lock `strands-agents >=1.65` & `strands-harness >=0.4`, retire `#5166`/`#5158` workarounds, adapt `InjectedBlock` & `Model.model_info`, enable non-streaming Bedrock Llama tools (completed 2026-11-21)
-- [ ] **Phase 14: First-Class Google Gemini & Provider-Aware Startup** — `gemini` extra, Box-compatible provider-aware preflight, cross-provider `reasoningSignature` & `_vendor_family` fixes, `/model` Gemini discovery, `/cost` tables, AI Studio Ultra credit docs
+- [x] **Phase 14: First-Class Google Gemini & Provider-Aware Startup** — `gemini` extra, Box-compatible provider-aware preflight, cross-provider `reasoningSignature` & `_vendor_family` fixes, `/model` Gemini discovery, `/cost` tables, AI Studio Ultra credit docs (completed 2026-11-22)
 - [ ] **Phase 15: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [ ] **Phase 16: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards
 - [ ] **Phase 17: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 5-provider egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs
@@ -61,12 +61,12 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `14-01-PLAN.md` — Tracer: `gemini` optional extra, Box-compatible provider-aware preflight, Vertex conflict gate, ambient auto-pick & `--model` CLI flag
+- [x] `14-01-PLAN.md` — Tracer: `gemini` optional extra, Box-compatible provider-aware preflight, Vertex conflict gate, ambient auto-pick & `--model` CLI flag (`947c5a7`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `14-02-PLAN.md` — `GeminiModel` `reasoningSignature` stripping, `_vendor_family` fix, Gemini 2.5 thinking guard, credential-gated `/model` discovery & `/cost` tables
-- [ ] `14-03-PLAN.md` — Repeatable `driver.py g1` UAT rig, `docs/QUICKSTART.md` Ultra credit guide, upstream Gemini 2.5 issue draft & full CI gates
+- [x] `14-02-PLAN.md` — `GeminiModel` `reasoningSignature` stripping, `_vendor_family` fix, Gemini 2.5 thinking guard, credential-gated `/model` discovery & `/cost` tables (`52b0963`)
+- [x] `14-03-PLAN.md` — Repeatable `driver.py g1` UAT rig, `docs/QUICKSTART.md` Ultra credit guide, upstream Gemini 2.5 issue draft & full CI gates (`a2395d4`)
 
 ### Phase 15: Decision Routing Convergence (`DecisionModel`)
 
@@ -136,7 +136,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
-| 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 0/3 | Planned | - |
+| 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 16. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 17. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |

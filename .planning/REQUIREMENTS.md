@@ -15,7 +15,7 @@
 
 ### Models & Auth
 
-- [ ] **MODEL-06**: First-class `google/` Gemini provider support (`gemini` optional extra + `_SDK_EXTRA_HINTS`), Box-compatible provider-aware startup preflight replacing the unconditional `Bedrock-or-stop` STS gate, `google/` reasoning support via `_harness_supports_thinking`, cross-vendor `toolUse["reasoningSignature"]` stripping in `convert_history()`, `_vendor_family()` dot-split fix, `litellm_entry` `gemini/` lookup + Gemini discovery/cost tables, and Google AI Studio + Google AI Ultra (\$40–\$100/mo Developer Program credit) setup docs
+- [x] **MODEL-06**: First-class `google/` Gemini provider support (`gemini` optional extra + `_SDK_EXTRA_HINTS`), Box-compatible provider-aware startup preflight replacing the unconditional `Bedrock-or-stop` STS gate, `google/` reasoning support via `_harness_supports_thinking`, cross-vendor `toolUse["reasoningSignature"]` stripping in `convert_history()`, `_vendor_family()` dot-split fix, `litellm_entry` `gemini/` lookup + Gemini discovery/cost tables, and Google AI Studio + Google AI Ultra (\$40–\$100/mo Developer Program credit) setup docs
 
 ### Skills & Extensibility
 
@@ -67,7 +67,7 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | UPSTREAM-01 | Phase 13 | Complete |
-| MODEL-06 | Phase 14 | Pending |
+| MODEL-06 | Phase 14 | Complete |
 | UPSTREAM-02 | Phase 15 | Pending |
 | SKILL-03 | Phase 16 | Pending |
 | SANDBOX-01 | Phase 17 | Pending |
