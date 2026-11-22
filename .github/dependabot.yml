@@ -11,6 +11,11 @@ updates:
     # Keep pyproject.toml lower bounds aligned with upstream sample-strands-code-agent;
     # update uv.lock only unless a floor bump is required for a CVE.
     versioning-strategy: lockfile-only
+    # Wait for newly published PyPI wheels to age past supply-chain detection windows;
+    # verified CVE security updates still bypass cooldown.
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     commit-message:
       prefix: "chore(deps)"
     labels:
