@@ -8,6 +8,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Keep pyproject.toml lower bounds aligned with upstream sample-strands-code-agent;
+    # update uv.lock only unless a floor bump is required for a CVE.
+    versioning-strategy: lockfile-only
     commit-message:
       prefix: "chore(deps)"
     labels:
