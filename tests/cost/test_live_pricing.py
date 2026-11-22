@@ -421,6 +421,12 @@ class TestLiteLLMEntry:
         assert real["in"] > 0 and real["out"] > 0
         assert real["window"] >= 1_000_000
 
+        real38 = live_pricing.litellm_entry("google/gemini-3.8-flash")
+        assert real38 is not None
+        assert real38["in"] == pytest.approx(0.75)
+        assert real38["out"] == pytest.approx(3.75)
+        assert real38["window"] == 1_048_576
+
 
 # ----------------------------------------------------------------------
 # Resolution order through cost_context

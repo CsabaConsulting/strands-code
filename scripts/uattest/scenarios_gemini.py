@@ -36,7 +36,8 @@ RIG_GEMINI_PRO = "google/gemini-2.5-pro"
 def scenario_g1() -> None:
     """G1: Zero-AWS Gemini 2.5 Flash launch, tool turn, /context, /cost, and /model."""
     workdir, xdg = _fresh_upstream_workdir("g1")
-    with open(os.path.join(workdir, "sentinel.txt"), "w", encoding="utf-8") as handle:
+    sentinel_path = os.path.join(workdir, "sentinel.txt")
+    with open(sentinel_path, "w", encoding="utf-8") as handle:
         handle.write("GEMINI_SENTINEL_14\n")
 
     cfg_path = os.path.join(xdg, "strands-code", "config.yaml")
@@ -58,15 +59,20 @@ def scenario_g1() -> None:
         ctx_text = wait_for_new(
             sess, r"Context — ", 30, "context", poll=1, before=ctx_n
         )
-        assert "gemini-2.5-flash" in ctx_text, "/context missing active Gemini model"
+        assert f"Context — {RIG_GEMINI_FLASH}" in ctx_text, (
+            "/context missing active Gemini model"
+        )
         assert "of 1.05M" in ctx_text or "of 1.00M" in ctx_text, (
             "/context missing 1M Gemini window"
+        )
+        assert not os.path.exists(cfg_path), (
+            "--model must stay session-scoped without writing config.yaml"
         )
 
         after = len(USAGE_END_RE.findall(pane_text(sess)))
         send(
             sess,
-            "Use the read tool to read sentinel.txt in the current directory and reply with the exact token inside it.",
+            f"Use the read tool to read {sentinel_path} and reply with the exact token inside it.",
             "Enter",
         )
         turn_text = _wait_turn_end(sess, after=after, timeout=180)
@@ -78,6 +84,9 @@ def scenario_g1() -> None:
         send(sess, "/cost", "Enter")
         cost_text = wait_for_new(
             sess, r"Display only", 20, "cost", poll=1, before=cost_n
+        )
+        assert f"Cost — {RIG_GEMINI_FLASH}" in cost_text, (
+            "/cost missing active Gemini model"
         )
         assert "$" in cost_text and "Display only" in cost_text, (
             "/cost missing USD spend display"
@@ -94,11 +103,10 @@ def scenario_g1() -> None:
             before=sw_n,
         )
         assert f"Model: {RIG_GEMINI_PRO}" in sw_text
-
-        save(sess, "g1", LOGDIR8)
+        assert "Dropping reasoningContent" not in sw_text, (
+            "Same-vendor Gemini switch unexpectedly dropped reasoningContent"
+        )
     finally:
+        save(sess, "g1", LOGDIR8)
         _stop_and_flush(sess)
-    assert not os.path.exists(cfg_path), (
-        "--model must stay session-scoped without writing config.yaml"
-    )
     print("G1 PASS", flush=True)

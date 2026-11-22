@@ -63,8 +63,8 @@ if effort is not None:
 
 Because `supports_thinking("google/gemini-2.5-pro")` returns `True`, routed/effort-aware callers pass `effort="high"` / `"medium"` / `"low"` on Gemini 2.5 and emit `"thinking_level"` for a model family that expects `"thinking_budget"`.
 
-(Related observation in `strands_harness/models.py`: `_WEB_FETCH_MODELS["google"]` is currently hardcoded to `"gemini-3.5-flash"`, which is not yet a standard public GA Gemini API model id when `google/gemini-2.5-flash` is intended.)
+(Additionally, when `web_search=True` is enabled on Gemini 2.5, `_gemini()` injects `gemini_tools=[Tool(google_search=GoogleSearch())]`; paired with custom function declarations on `models/gemini-2.5-flash`, the Gemini Developer API returns `400 INVALID_ARGUMENT: Tool call context circulation is not enabled for models/gemini-2.5-flash`. Gemini 3.8+ and Gemini 4 accept both together.)
 
 ## Possible Solution
 
-Guard `_gemini()` by model family: emit `"thinking_budget"` for `gemini-2.5*` model ids (e.g. `0` when effort is `"off"`/`"none"`, `-1` dynamic thinking when enabled) and reserve `"thinking_level"` for `gemini-3*`+ models. Downstream in `CsabaConsulting/strands-code`, `configure_gemini_for_model()` rewrites `params["thinking_config"]` as a defensive workaround until fixed upstream.
+Guard `_gemini()` by model family: emit `"thinking_budget"` for `gemini-2.5*` model ids (e.g. `0` when effort is `"off"`/`"none"`, `-1` dynamic thinking when enabled), reserve `"thinking_level"` for `gemini-3*`+ models, and omit built-in `GoogleSearch()` `gemini_tools` on `gemini-2.5*` when custom function declarations are attached. Downstream in `CsabaConsulting/strands-code`, `configure_gemini_for_model()` rewrites `params["thinking_config"]` and clears `gemini_tools=[]` on `gemini-2.5*` as a defensive workaround until fixed upstream.

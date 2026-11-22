@@ -232,7 +232,7 @@ class TestEntryRouting:
                 main_module, "_preflight_credentials", side_effect=_fake_preflight
             ),
             patch.object(main_module, "build_agent", return_value=object()) as built,
-            patch.object(main_module, "run_loop"),
+            patch.object(main_module, "run_loop") as loop,
         ):
             from typer.testing import CliRunner
 
@@ -243,12 +243,14 @@ class TestEntryRouting:
                 ("preflight", "anthropic/claude-sonnet-4-6"),
             ]
             assert built.call_args[1]["model"] == "anthropic/claude-sonnet-4-6"
+            assert loop.call_args[1]["model_id"] == "anthropic/claude-sonnet-4-6"
 
             events.clear()
             result2 = CliRunner().invoke(main_module.app, ["--model", "openai/gpt-5.4"])
             assert result2.exit_code == 0, result2.output
             assert events == [("load", None), ("preflight", "openai/gpt-5.4")]
             assert built.call_args[1]["model"] == "openai/gpt-5.4"
+            assert loop.call_args[1]["model_id"] == "openai/gpt-5.4"
 
 
 # ----------------------------------------------------------------------

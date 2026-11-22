@@ -48,9 +48,11 @@ class TestGeminiRig:
         assert "config.yaml" in src
         assert "GEMINI_SENTINEL_14" in src
         assert "/context" in src
-        assert "gemini-2.5-flash" in src
+        assert "Context — {RIG_GEMINI_FLASH}" in src
         assert "1.05M" in src and "1.00M" in src
         assert "/cost" in src
+        assert "Cost — {RIG_GEMINI_FLASH}" in src
         assert "Display only" in src
         assert "RIG_GEMINI_PRO" in src
+        assert "Dropping reasoningContent" in src
         assert "G1 PASS" in src

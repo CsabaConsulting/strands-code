@@ -58,9 +58,9 @@ Existing test infrastructure covers Plans `14-01` and `14-02`; `tests/rig/test_u
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Live Creds Required | Test Instructions |
-| :--- | :--- | :--- | :--- |
-| Live Google AI Studio / Vertex `google/gemini-2.5-flash` tool turn, `/context`, `/cost`, and cross-provider switch (`driver.py g1`) | `MODEL-06` | Requires `GOOGLE_API_KEY` or `GEMINI_API_KEY` (plus `--extra gemini`) | If Google key is available, run `python3 scripts/uattest/driver.py g1` and confirm `G1 PASS` with zero AWS env vars (`14-03-T1`) |
+| Behavior | Requirement | Why Live Creds Required | Test Instructions | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| Live Google AI Studio `google/gemini-2.5-flash` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model google/gemini-2.5-pro` switch (`driver.py g1`) | `MODEL-06` | Requires `GOOGLE_API_KEY` or `GEMINI_API_KEY` (plus `--extra gemini`) | `python3 scripts/uattest/driver.py g1` | ✅ `G1 PASS` (`/tmp/uatr8/g1.log`) |
 
 ---
 
@@ -73,4 +73,4 @@ Existing test infrastructure covers Plans `14-01` and `14-02`; `tests/rig/test_u
 - [x] Fast feedback latency (< 15s per task; full suite ~65s per wave)
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Status:** Verified `2026-11-22` — all 7 automated Nyquist rows green (`1642 passed, 0 failed`, all 6 CI gates pass); live `driver.py g1` awaits a valid `GOOGLE_API_KEY` / `GEMINI_API_KEY`.
+**Status:** Verified `2026-11-22` — all 7 automated Nyquist rows green (`1645 passed, 0 failed`, all 6 CI gates pass) and live `driver.py g1` passed (`G1 PASS`).

@@ -3148,3 +3148,55 @@ class TestGeminiCrossProviderSafety:
                 routing_events=[],
             )
         assert routed_gem.config["params"]["thinking_config"] == {"thinking_budget": -1}
+
+    def test_gemini_25_clears_gemini_tools_and_38_4_support(self):
+        from strands_code_cli.model.model_switch import (
+            CURATED_GEMINI_MODELS,
+            _vendor_family,
+            configure_gemini_for_model,
+            supports_reasoning,
+        )
+
+        class _FakeGeminiFull:
+            def __init__(self, params, gemini_tools):
+                self.config = {"params": params, "gemini_tools": gemini_tools}
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kwargs):
+                self.config.update(kwargs)
+
+        sentinel_tool = object()
+        g25 = _FakeGeminiFull(
+            {"thinking_config": {"thinking_level": "high"}}, [sentinel_tool]
+        )
+        configure_gemini_for_model("google/gemini-2.5-flash", g25)
+        assert g25.config["params"]["thinking_config"] == {"thinking_budget": -1}
+        assert g25.config["gemini_tools"] == []
+
+        # Even without params/thinking_level, gemini-2.5* clears gemini_tools
+        g25_tools_only = _FakeGeminiFull({}, [sentinel_tool])
+        configure_gemini_for_model("google/gemini-2.5-pro", g25_tools_only)
+        assert g25_tools_only.config["gemini_tools"] == []
+
+        # Gemini 3.8 and Gemini 4 keep both thinking_level and gemini_tools untouched
+        for modern in ("google/gemini-3.8-flash", "google/gemini-4-neon"):
+            mod = _FakeGeminiFull(
+                {"thinking_config": {"thinking_level": "high"}}, [sentinel_tool]
+            )
+            configure_gemini_for_model(modern, mod)
+            assert mod.config["params"]["thinking_config"] == {"thinking_level": "high"}
+            assert mod.config["gemini_tools"] == [sentinel_tool]
+
+        assert _vendor_family("gemini-3.8-flash") == ("google", "gemini")
+        assert _vendor_family("gemini-4-neon") == ("google", "gemini")
+        for mid in (
+            "google/gemini-3.8-flash",
+            "google/gemini-4-hydrogen",
+            "google/gemini-4-neon",
+            "google/gemini-4-argon",
+            "google/gemini-4-carbon",
+        ):
+            assert supports_reasoning(mid) is True
+            assert mid in CURATED_GEMINI_MODELS

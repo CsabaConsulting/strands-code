@@ -476,7 +476,11 @@ CURATED_GEMINI_MODELS: tuple[str, ...] = (
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
     "google/gemini-2.5-flash-lite",
-    "google/gemini-3-flash-preview",
+    "google/gemini-3.8-flash",
+    "google/gemini-4-hydrogen",
+    "google/gemini-4-neon",
+    "google/gemini-4-argon",
+    "google/gemini-4-carbon",
 )
 """Static fallback Gemini choices offered only when Google creds exist."""
 
@@ -782,8 +786,8 @@ def configure_streaming_for_model(model_id: str, resolved: Any) -> Any:
     return resolved
 
 
-def _read_model_params(resolved: Any) -> dict[str, Any] | None:
-    """Best-effort read of ``params`` dict from get_config() or .config."""
+def _read_model_config(resolved: Any) -> dict[str, Any] | None:
+    """Best-effort read of the config mapping from get_config() or .config."""
     get_config = getattr(resolved, "get_config", None)
     config: Any = None
     if callable(get_config):
@@ -793,24 +797,42 @@ def _read_model_params(resolved: Any) -> dict[str, Any] | None:
             config = None
     if not isinstance(config, dict):
         config = getattr(resolved, "config", None)
-    params = (
-        config.get("params")
-        if isinstance(config, dict)
-        else getattr(config, "params", None)
-    )
-    return params if isinstance(params, dict) else None
+    return config if isinstance(config, dict) else None
 
 
 # Google GenAI 2.5 reasoning param (model-API key; never a spend cap).
 _THINKING_LIMIT_KEY = "thinking_budget"
 
 
-def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
-    """Translate Gemini-3 thinking_level to Gemini 2.5 token-allowance param.
+def _gemini_25_updates(config: dict[str, Any]) -> dict[str, Any]:
+    """Build Gemini 2.5 compatibility config updates from current config."""
+    updates: dict[str, Any] = {}
+    params = config.get("params")
+    if isinstance(params, dict):
+        thinking = params.get("thinking_config")
+        if isinstance(thinking, dict) and "thinking_level" in thinking:
+            updated_thinking = dict(thinking)
+            level = updated_thinking.pop("thinking_level")
+            if _THINKING_LIMIT_KEY not in updated_thinking:
+                low = str(level).strip().lower() if level is not None else ""
+                updated_thinking[_THINKING_LIMIT_KEY] = (
+                    0 if low in ("off", "none") else -1
+                )
+            updated_params = dict(params)
+            updated_params["thinking_config"] = updated_thinking
+            updates["params"] = updated_params
+    if config.get("gemini_tools"):
+        # Gemini 2.5 rejects combining built-in GoogleSearch with function_declarations.
+        updates["gemini_tools"] = []
+    return updates
 
-    ``strands_harness.models._gemini()`` emits ``thinking_level`` inside
-    ``params["thinking_config"]``, which Gemini 2.5 models reject (they
-    require an integer token-allowance key instead). Leaves Gemini 3+
+
+def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
+    """Apply Gemini 2.5 compatibility adjustments (thinking_config & gemini_tools).
+
+    ``strands_harness.models._gemini()`` emits Gemini-3 ``thinking_level`` and
+    built-in ``gemini_tools=[GoogleSearch()]`` unconditionally; Gemini 2.5
+    rejects both when paired with tool declarations. Leaves Gemini 3+ and 4+
     untouched.
     """
     if not model_id or resolved is None:
@@ -821,23 +843,16 @@ def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
     )
     if not is_google or not _base_key(normalized).lower().startswith("gemini-2.5"):
         return resolved
-    params = _read_model_params(resolved)
-    if params is None:
+    config = _read_model_config(resolved)
+    if config is None:
         return resolved
-    thinking = params.get("thinking_config")
-    if not isinstance(thinking, dict) or "thinking_level" not in thinking:
+    updates = _gemini_25_updates(config)
+    if not updates:
         return resolved
-    updated_thinking = dict(thinking)
-    level = updated_thinking.pop("thinking_level")
-    if _THINKING_LIMIT_KEY not in updated_thinking:
-        low = str(level).strip().lower() if level is not None else ""
-        updated_thinking[_THINKING_LIMIT_KEY] = 0 if low in ("off", "none") else -1
-    updated_params = dict(params)
-    updated_params["thinking_config"] = updated_thinking
     update = getattr(resolved, "update_config", None)
     if callable(update):
         try:
-            update(params=updated_params)
+            update(**updates)
         except Exception:
             pass
     return resolved

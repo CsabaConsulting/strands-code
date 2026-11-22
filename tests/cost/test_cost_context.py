@@ -268,6 +268,21 @@ class TestUsageFormat:
         assert cost_context.price_for("google/gemini-2.5-flash") is not None
         assert cost_context.price_for("anthropic/claude-sonnet-4-6") is not None
 
+    def test_gemini_3_and_4_static_pricing_and_limits(self):
+        expected = {
+            "google/gemini-3.5-flash-lite": (0.30, 2.50),
+            "google/gemini-3.5-flash": (1.50, 9.00),
+            "google/gemini-3.8-flash-cyber": (1.50, 7.50),
+            "google/gemini-3.8-flash": (0.75, 3.75),
+            "google/gemini-4-hydrogen": (1.50, 7.50),
+            "google/gemini-4-neon": (3.00, 15.00),
+            "google/gemini-4-argon": (2.00, 10.00),
+            "google/gemini-4-carbon": (2.00, 10.00),
+        }
+        for model_id, rates in expected.items():
+            assert cost_context.price_for(model_id) == rates, model_id
+            assert window_for(model_id) == 1_048_576, model_id
+
     def test_get_response_metrics_cost_math(self):
         from strands_code_agent.utils import get_response_metrics
 

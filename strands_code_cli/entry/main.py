@@ -269,7 +269,13 @@ def _root(
         DEFAULT_SESSION_DIR,
         model=model_for_config(effective_model, config.base_url),
     )
-    run_loop(agent, session_id=resolved, index=index, codeact=codeact)
+    run_loop(
+        agent,
+        session_id=resolved,
+        index=index,
+        codeact=codeact,
+        model_id=effective_model,
+    )
 
 
 def _expand_bare_codeact(argv: list[str]) -> list[str]:

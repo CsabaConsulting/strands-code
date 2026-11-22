@@ -232,13 +232,32 @@ class TestFirstRunCli:
         monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_test_key")
         with (
             patch.object(main_module, "build_agent", return_value=object()) as built,
-            patch.object(main_module, "run_loop"),
+            patch.object(main_module, "run_loop") as loop,
         ):
             result = CliRunner().invoke(
                 main_module.app, ["--model", "google/gemini-2.5-flash"]
             )
         assert result.exit_code == 0, result.output
         assert built.call_args[1]["model"] == "google/gemini-2.5-flash"
+        assert loop.call_args[1]["model_id"] == "google/gemini-2.5-flash"
+        assert not (tmp_path / "xdg").exists()
+
+    def test_cli_ambient_auto_pick_passes_model_id_to_run_loop(
+        self, tmp_path, monkeypatch
+    ):
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        monkeypatch.setenv("GOOGLE_API_KEY", "strands_box_test_key")
+        with (
+            patch.object(main_module, "build_agent", return_value=object()) as built,
+            patch.object(main_module, "run_loop") as loop,
+        ):
+            result = CliRunner().invoke(main_module.app, [])
+        assert result.exit_code == 0, result.output
+        assert built.call_args[1]["model"] == "google/gemini-2.5-flash"
+        assert loop.call_args[1]["model_id"] == "google/gemini-2.5-flash"
         assert not (tmp_path / "xdg").exists()
 
 
