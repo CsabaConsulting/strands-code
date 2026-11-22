@@ -274,7 +274,13 @@ def scenario_u3() -> None:
         # Part A: interactive HITL approval -> Proceed -> shell executes
         after = len(USAGE_END_RE.findall(pane_text(sess)))
         send(sess, "Run the shell command: echo HITL_OK_13", "Enter")
-        wait_for(sess, r"Approve\? \[main\] shell", 90, "hitl-dialog", poll=1)
+        wait_for(
+            sess,
+            r"Approve\? \[main\] shell — echo HITL_OK_13",
+            90,
+            "hitl-dialog",
+            poll=1,
+        )
         send(sess, "Up")
         time.sleep(0.5)
         send(sess, "Enter")

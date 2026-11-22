@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -76,7 +77,10 @@ class TestUpstreamRig:
         assert "U2 PASS" in u2
 
         u3 = inspect.getsource(upstream.scenario_u3)
-        assert r"Approve\? \[main\] shell" in u3
+        hitl_pat = r"Approve\? \[main\] shell — echo HITL_OK_13"
+        assert hitl_pat in u3
+        assert re.search(hitl_pat, "| Approve? [main] shell — echo HITL_OK_13 |")
+        assert not re.search(hitl_pat, "| Approve? [main] shell — uname -a |")
         assert "Denied by policy rule" in u3
         assert "/mode plan" in u3
         assert "U3 PASS" in u3
