@@ -43,6 +43,9 @@ validated: "2026-11-21"
 | `13-02-T1` | 02 | 2 | `UPSTREAM-01` | `D-02` | Route-aware `window_for()` precedence (OpenRouter live on `litellm/openrouter/*`, SDK `model_info` first elsewhere, then LiteLLM & `MODEL_LIMITS`) | unit (TDD RED→GREEN) | `.venv/bin/pytest tests/cost/test_cost_context.py tests/cost/test_live_pricing.py -q` | ✅ | ✅ green |
 | `13-02-T2` | 02 | 2 | `UPSTREAM-01` | `D-03` | `BedrockModel` `_NO_STREAMING_TOOLS` configured `streaming=False` at build/`/model`/`/route`/`/btw`; concise unary note on launch & `/model` (quiet on `/route`) | unit (TDD RED→GREEN) | `.venv/bin/pytest tests/model/test_model_switch.py tests/loop/test_btw.py -q` | ✅ | ✅ green |
 | `13-02-T3` | 02 | 2 | `UPSTREAM-01` | `D-04` + Gates | Hybrid session restore (`prepare_resumed_history`) + `#5166` cross-family Bedrock strip pin + `PolicyHumanInTheLoop` 1.65 HITL reconciliation + all 6 CI gates green | unit + full suite + CI gates | `.venv/bin/pytest tests/ -q` | ✅ | ✅ green |
+| `13-SEC-T1` | sec | 3 | `UPSTREAM-01` | `T-13-02` | `PolicyClassifier` / `PolicyHumanInTheLoop` fails closed on duplicate `toolUseId` or classifier error without leaking stale `ask` preview or `Deny.reason` | security unit | `.venv/bin/pytest tests/policy/test_policy_gate.py -k TestHitlFailClosedStaleContext -q` | ✅ | ✅ green |
+| `13-UAT-T1` | uat | 3 | `UPSTREAM-01` | `D-03`, `T-13-08`, `T-13-11` | Bedrock-scoped Mistral/Writer/Meta `_NO_STREAMING_TOOLS` rows stay fail-open for streaming/non-Bedrock routes; repeatable `driver.py u1/u2/u3` rig + command-bound `u3` HITL regex | unit + rig contract | `.venv/bin/pytest tests/model/test_model_switch.py tests/rig/ -q` | ✅ | ✅ green |
+| `13-VAL-T1` | val | 3 | `UPSTREAM-01` | `D-02` | Nyquist branch coverage for `_sdk_window_candidates()` ARN inference-profile tail extraction and `window_for()` OpenRouter→LiteLLM 3rd-tier fallback | unit (Nyquist) | `.venv/bin/pytest tests/cost/test_cost_context.py -k TestSdkModelInfoWindow -q` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -56,9 +59,9 @@ Existing test infrastructure covers all Phase 13 requirements; no new top-level 
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
+| Behavior | Requirement | Why Live Creds Required | Test Instructions |
 | :--- | :--- | :--- | :--- |
-| Live Bedrock Opus -> Nova/Llama session resume (`#5166`) & live Llama 4 streaming=False tool call (`D-03`) *(optional smoke if AWS creds present)* | `UPSTREAM-01` | Requires live AWS Bedrock runtime access | If AWS creds are available, run a tool-using turn on Opus, exit, relaunch with `--session-id` on Llama 4 or Nova, and confirm tool call succeeds with unary note cleanly displayed |
+| Live Bedrock unary Converse tool turn (`u1` Mistral Large 24.02 + Pixtral 25.02 toggle), cross-family resume (`u2` Sonnet 4.6 → Nova 2 Lite), & live 1.65.0 HITL/Plan (`u3`) | `UPSTREAM-01` | Requires live AWS Bedrock runtime access (`us-west-2`); automated via `scripts/uattest/driver.py` (`u1`/`u2`/`u3`) and recorded passing in `13-UAT.md` | With AWS creds set, run `python3 scripts/uattest/driver.py u1`, `driver.py u2`, `driver.py u3` and confirm `U1 PASS`, `U2 PASS`, `U3 PASS` |
 
 ---
 
@@ -68,7 +71,7 @@ Existing test infrastructure covers all Phase 13 requirements; no new top-level 
 - [x] Sampling continuity: every task commits with automated test execution
 - [x] Wave 0 covers all dependencies
 - [x] No watch-mode flags
-- [x] Fast feedback latency (< 10s unit checks per task; full suite ~45s per wave)
+- [x] Fast feedback latency (< 10s unit checks per task; full suite ~65s per wave)
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** validated 2026-11-21 (1559 passed, 11 deselected; all 6 `.github/workflows/gates.yml` checks green)
+**Approval:** validated 2026-11-21 (`1569 passed, 11 deselected`; `u1`/`u2`/`u3` live tmux UATs recorded in `13-UAT.md`; all 6 `.github/workflows/gates.yml` checks green)

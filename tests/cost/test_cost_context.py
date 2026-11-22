@@ -1031,3 +1031,19 @@ class TestSdkModelInfoWindow:
         monkeypatch.setattr(sdk_model_info, "get_context_window_limit", _boom)
         assert window_for("bedrock/global.anthropic.claude-sonnet-4-6") == 1_000_000
         assert window_for("mystery/acme-1") is None
+
+    def test_arn_inference_profile_and_openrouter_litellm_fallback(self, monkeypatch):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(
+            live_pricing,
+            "litellm_entry",
+            lambda _id: {"in": 1.0, "out": 2.0, "window": 77_777},
+        )
+        assert (
+            window_for(
+                "arn:aws:bedrock:us-west-2:123456789012:inference-profile/global.anthropic.claude-sonnet-4-6"
+            )
+            == 1_000_000
+        )
+        assert window_for("litellm/openrouter/mystery/custom-model") == 77_777
