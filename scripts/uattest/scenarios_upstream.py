@@ -1,11 +1,12 @@
 """Phase 13 upstream resync scenarios for the live-tmux UAT rig.
 
-Owns scenario_u1 (Mistral Large 24.02 live built-in unary tool mode + Llama 4
-/model note), scenario_u2 (cross-family Sonnet -> Nova 2 Lite --session-id resume
-+ SDK model_info /context + InjectedBlock), and scenario_u3 (1.65.0
-PolicyHumanInTheLoop approval, policy [deny], and Plan-mode deny). Uses
-XDG_CONFIG_HOME inside per-run /tmp workdirs so ~/.config/strands-code/config.yaml
-stays untouched while HOME keeps ~/.aws credentials accessible.
+Owns scenario_u1 (Bedrock unary tool mode on Mistral Large 24.02 + Pixtral
+Large 25.02 /model toggle), scenario_u2 (cross-family Sonnet -> Nova 2 Lite
+--session-id resume + SDK model_info /context + InjectedBlock), and
+scenario_u3 (1.65.0 PolicyHumanInTheLoop approval, policy [deny], and Plan-mode
+deny). Uses XDG_CONFIG_HOME inside per-run /tmp workdirs so
+~/.config/strands-code/config.yaml stays untouched while HOME keeps ~/.aws
+credentials accessible.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path inse
 )
 
 RIG_MISTRAL_2402 = "mistral.mistral-large-2402-v1:0"
-RIG_LLAMA4_SCOUT = "us.meta.llama4-scout-17b-instruct-v1:0"
+RIG_PIXTRAL_2502 = "us.mistral.pixtral-large-2502-v1:0"
 RIG_SONNET_46 = "bedrock/us.anthropic.claude-sonnet-4-6"
 RIG_NOVA_2_LITE = "bedrock/us.amazon.nova-2-lite-v1:0"
 RIG_HAIKU_45 = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -175,14 +176,14 @@ def scenario_u1() -> None:
             f"Nova 2 Lite switch unexpectedly printed unary note: {nova_tail}"
         )
 
-        before_llama = len(re.findall(r"Model: ", pane_text(sess)))
-        send(sess, f"/model {RIG_LLAMA4_SCOUT}", "Enter")
-        switched_llama = wait_for_new(
-            sess, r"Model: ", 30, "switch-llama", poll=1, before=before_llama
+        before_pixtral = len(re.findall(r"Model: ", pane_text(sess)))
+        send(sess, f"/model {RIG_PIXTRAL_2502}", "Enter")
+        switched_pixtral = wait_for_new(
+            sess, r"Model: ", 30, "switch-pixtral", poll=1, before=before_pixtral
         )
-        llama_tail = " ".join(switched_llama.split("Model:")[-1].split())
-        assert f"Note: streaming disabled for {RIG_LLAMA4_SCOUT}" in llama_tail
-        assert "(Bedrock unary tool mode)." in llama_tail
+        pixtral_tail = " ".join(switched_pixtral.split("Model:")[-1].split())
+        assert f"Note: streaming disabled for {RIG_PIXTRAL_2502}" in pixtral_tail
+        assert "(Bedrock unary tool mode)." in pixtral_tail
         print("U1 PASS", flush=True)
     finally:
         save(sess, "u1", LOGDIR8)

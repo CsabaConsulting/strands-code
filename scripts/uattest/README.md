@@ -31,7 +31,7 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   model `mistral.mistral-large-2402-v1:0` with no capability override, asserts
   the `streaming=False` unary launch note, executes a live unary `Converse`
   `read` tool turn end-to-end (`UNARY_TOOL_SENTINEL_13`), and verifies
-  `/model` toggles between Nova 2 Lite (silent) and Llama 4 Scout (unary
+  `/model` toggles between Nova 2 Lite (silent) and Pixtral Large 25.02 (unary
   note).
 - **u2** — Phase 13 cross-family resume + SDK `model_info`: boots on
   Sonnet 4.6 (with `MEMORY.md` `InjectedBlock`), verifies `1M` `/context`

@@ -722,6 +722,10 @@ class TestStreamingTools:
             "mistral.magistral-small-2509",
             "writer.palmyra-vision-7b",
             "litellm/openrouter/mistralai/mistral-large-2407",
+            "litellm/openrouter/meta/llama4-scout",
+            "litellm/openrouter/meta-llama/llama-4-scout",
+            "ollama/llama4",
+            "ollama/llama3.3",
         ):
             assert supports_streaming_tools(streaming_id) is True
 

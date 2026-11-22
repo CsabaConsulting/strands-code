@@ -11,7 +11,7 @@ c1/c2 cover the Phase 10 reported-spend rows (marked actual on an
 OpenRouter main turn, blended total + split on a mixed session);
 a1/a2 cover the Phase 11 CodeAct rows (bare --codeact boots code
 mode, code turn labels codeact plus switch-back tool turn unshaped);
-u1/u2/u3 cover Phase 13 upstream resync (Llama 4 unary tool mode,
+u1/u2/u3 cover Phase 13 upstream resync (Bedrock unary tool mode on Mistral 24.02,
 Sonnet -> Nova 2 Lite --session-id resume + /context, 1.65 HITL/Plan).
 Transcripts land in /tmp/uatr4/<scenario>.log (s*) or /tmp/uatr8/<scenario>.log
 (r*/n*/c*/a*/u*). Exit 0 = all asserts passed.

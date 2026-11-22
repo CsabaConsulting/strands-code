@@ -71,13 +71,13 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
 _NO_STREAMING_TOOLS: tuple[
     tuple[str | None, str | None, str | None, str | None], ...
 ] = (
-    # FAIL-OPEN: only verified rows warn. Bedrock rejects toolConfig on
-    # streaming Converse for Llama (ValidationException "doesn't support
-    # tool use in streaming mode"; non-streaming accepts — live probe on
-    # us.meta.llama4-scout-17b and us.meta.llama3-3-70b, us-west-2,
-    # 2026-09-27). Family-wide: the restriction is Bedrock-side config.
-    (None, "meta", "llama3", None),
-    (None, "meta", "llama4", None),
+    # FAIL-OPEN: Bedrock-scoped verified rows only. Non-Bedrock routes
+    # (OpenRouter, Ollama) do not share Bedrock's ConverseStream tool
+    # restriction and stay streaming-capable.
+    # Meta Llama 3/4 (us.meta.llama4-scout-17b, us.meta.llama3-3-70b,
+    # us-west-2, 2026-09-27): Bedrock rejects ConverseStream + toolConfig.
+    ("bedrock", "meta", "llama3", None),
+    ("bedrock", "meta", "llama4", None),
     # Live probe (us-west-2, 2026-11-21): Bedrock rejects ConverseStream with
     # toolConfig on older Mistral and Writer Palmyra models while unary
     # Converse accepts toolConfig. Model-scoped (not vendor-wide) so newer
@@ -89,7 +89,7 @@ _NO_STREAMING_TOOLS: tuple[
     ("bedrock", "writer", "palmyra", "palmyra-x4"),
     ("bedrock", "writer", "palmyra", "palmyra-x5"),
 )
-"""Model ids that reject tool use in streaming mode (warn, don't convert)."""
+"""Bedrock model ids that reject tool use in streaming mode (disable streaming)."""
 
 _CONVERT_FITS_PCT = 70.0
 """Convert-when-fits threshold: convert below this % of the new window."""
