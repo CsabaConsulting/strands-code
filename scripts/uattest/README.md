@@ -42,13 +42,20 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   `shell` command interactively via `Approve? [main] shell` (`Up` +
   `Enter`), triggers a `[deny]` rule refusal without prompting, and runs
   `/mode plan` confirming no file mutation or prompt.
+- **g1** — Phase 14 zero-AWS Google Gemini launch: strips AWS env vars,
+  launches `--model google/gemini-2.5-flash` under isolated
+  `XDG_CONFIG_HOME`, verifies `1M` `/context`, runs a `read` tool turn
+  (`GEMINI_SENTINEL_14`), checks `/cost` (`$` + `Display only`), switches
+  to `/model google/gemini-2.5-pro`, and asserts session-scoped startup
+  wrote no `config.yaml`.
 
 ## Usage
 
 Requires `tmux`, `uv`, and model credentials in the environment (`r2`
 also needs an Ollama daemon ≥0.35 with a decision-capable pull; `u1`/`u2`/`u3`
 use Bedrock credentials and isolate their config under `XDG_CONFIG_HOME`
-in `/tmp/uatr8/`):
+in `/tmp/uatr8/`; `g1` needs `uv sync --extra gemini` plus `GOOGLE_API_KEY`
+or `GEMINI_API_KEY` with zero AWS credentials):
 
 ```sh
 cd /tmp && python3 /path/to/scripts/uattest/driver.py s1 --runs 2
@@ -60,6 +67,7 @@ cd /tmp && python3 /path/to/scripts/uattest/driver.py r4
 cd /tmp && python3 /path/to/scripts/uattest/driver.py u1
 cd /tmp && python3 /path/to/scripts/uattest/driver.py u2
 cd /tmp && python3 /path/to/scripts/uattest/driver.py u3
+cd /tmp && python3 /path/to/scripts/uattest/driver.py g1
 ```
 
 Output lands in `/tmp/uatr4/`. Timing knobs (start wait, key spacing) are

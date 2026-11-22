@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scripted live-tmux UAT driver for strands-code Phase 7-13 confirmation.
 
-Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2|u1|u2|u3}   (one scenario
+Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2|u1|u2|u3|g1}   (one scenario
 per process; tmux session per scenario). s1/s2 cover Phase 7 (/btw);
 r1/r2/r3/r4 cover the Phase 8 rows (guided setup, local engine, e2e
 routed turn, side ask) against the Decision-API flow; n1/n2/n3/n4
@@ -12,9 +12,11 @@ OpenRouter main turn, blended total + split on a mixed session);
 a1/a2 cover the Phase 11 CodeAct rows (bare --codeact boots code
 mode, code turn labels codeact plus switch-back tool turn unshaped);
 u1/u2/u3 cover Phase 13 upstream resync (Bedrock unary tool mode on Mistral 24.02,
-Sonnet -> Nova 2 Lite --session-id resume + /context, 1.65 HITL/Plan).
+Sonnet -> Nova 2 Lite --session-id resume + /context, 1.65 HITL/Plan);
+g1 covers Phase 14 zero-AWS Google Gemini launch, tool turn, /context, /cost,
+and /model switch under isolated XDG_CONFIG_HOME.
 Transcripts land in /tmp/uatr4/<scenario>.log (s*) or /tmp/uatr8/<scenario>.log
-(r*/n*/c*/a*/u*). Exit 0 = all asserts passed.
+(r*/n*/c*/a*/u*/g*). Exit 0 = all asserts passed.
 
 Key insight: a mid-turn Approve? dialog blocks the pump thread, so the driver
 must answer dialogs to make progress (like a human would). S1 retries until the
@@ -33,6 +35,9 @@ from scenarios_codeact import (  # noqa: E402 - sibling import needs the sys.pat
 from scenarios_cost import (  # noqa: E402 - sibling import needs the sys.path insert above (CF-07a)
     scenario_c1,
     scenario_c2,
+)
+from scenarios_gemini import (  # noqa: E402 - sibling import needs the sys.path insert above (CF-07a)
+    scenario_g1,
 )
 from scenarios_native import (  # noqa: E402, F401 - BOGUS_TYPESAFE_KEY + _native_strategy re-exported for the loader-based calibration contract
     BOGUS_TYPESAFE_KEY,
@@ -80,6 +85,7 @@ SCENARIOS = {
     "u1": scenario_u1,
     "u2": scenario_u2,
     "u3": scenario_u3,
+    "g1": scenario_g1,
 }
 
 if __name__ == "__main__":

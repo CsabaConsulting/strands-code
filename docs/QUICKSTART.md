@@ -43,27 +43,84 @@ or directly:
 
 ## First run
 
-Without AWS credentials the CLI stops with a Bedrock setup pointer (exit 2).
-With credentials it uses Bedrock; the provider choice persists to a config
-file for later `/model` switching (Phase 5).
+Startup preflight is provider-aware:
+
+- If you pass `--model <provider/model>` (for example `strands-code --model google/gemini-2.5-flash`)
+  or already saved a model via `/model`, preflight checks only that provider's
+  credentials and skips AWS STS. `--model` is strictly session-scoped and never
+  writes `config.yaml`.
+- Without `--model` or a saved model, preflight auto-picks from your environment
+  (`GOOGLE_API_KEY` / `GEMINI_API_KEY` or Vertex ADC -> `google/gemini-2.5-flash`,
+  `ANTHROPIC_API_KEY` -> `anthropic/claude-sonnet-4-6`,
+  `OPENAI_API_KEY` -> `openai/gpt-5.4`, or exits 2 with a `--model litellm/openrouter/...`
+  pointer when `OPENROUTER_API_KEY` is set alone), before falling back to Amazon Bedrock
+  (`AWS_BEARER_TOKEN_BEDROCK` or the ambient boto3 chain via `sts:GetCallerIdentity`).
+- `STRANDS_BOX=1` skips AWS STS and checks non-empty env presence only so Strands
+  Box sessions pass without static prefix checks. Without credentials for the
+  target provider, the CLI stops with a setup pointer (exit 2) before touching
+  session directories.
 
 ## Optional providers
 
-Base install covers Bedrock and direct-provider ids. Two opt-in extras:
+Base install covers Bedrock and direct-provider ids. Three opt-in extras:
 
 ```bash
 uv sync --extra agentcore   # Bedrock model discovery + AgentCore sandbox (boto3)
 uv sync --extra litellm     # OpenRouter / exotic providers via litellm/ ids
+uv sync --extra gemini      # Google Gemini (strands-agents[gemini] / google-genai)
 ```
 
-OpenRouter-style endpoints need two env vars (never stored in the repo):
+### Google Gemini (zero AWS required)
+
+Install the `gemini` extra once, then export an API key (or set up Vertex ADC). No
+AWS credentials are needed:
+
+```bash
+export GOOGLE_API_KEY="<your-aistudio-key>"   # or GEMINI_API_KEY
+strands-code --model google/gemini-2.5-flash  # or omit --model to auto-pick from env
+```
+
+- **Google AI Pro & Google AI Ultra credits:** Personal subscriptions include
+  monthly **Google Developer Program** GenAI API credits (`Google AI Pro`:
+  \$10/month; `Google AI Ultra 5x`: \$40/month; `Google AI Ultra 20x`:
+  \$100/month). Claim your credits and generate an API key in
+  `aistudio.google.com` (a one-time \$5 Cloud Billing activation may be needed to
+  move keys out of Free Tier rate limits).
+- **Consumer OAuth unsupported:** Piggybacking on consumer Gemini CLI / Code
+  Assist OAuth tokens (`cloudcode-pa.googleapis.com`) is intentionally unsupported
+  (Google ToS violation); use AI Studio API keys or Vertex ADC.
+- **Vertex AI ADC:** Set Vertex env vars without any API key:
+
+  ```bash
+  gcloud auth application-default login
+  export GOOGLE_GENAI_USE_VERTEXAI=true
+  export GOOGLE_CLOUD_PROJECT="<your-gcp-project>"
+  export GOOGLE_CLOUD_LOCATION="global"   # recommended for Gemini 2.5 / 3.x models
+  strands-code --model google/gemini-2.5-flash
+  ```
+
+  **Mutual exclusion:** Do **not** set `GOOGLE_API_KEY` or `GEMINI_API_KEY` at the
+  same time as `GOOGLE_GENAI_USE_VERTEXAI=true`; startup fails fast (exit 2) when
+  both are set or when `GOOGLE_CLOUD_PROJECT` is missing.
+
+### OpenRouter, custom OpenAI-compatible hosts & Ollama
+
+OpenRouter accepts `OPENROUTER_API_KEY` with an explicit model flag:
+
+```bash
+export OPENROUTER_API_KEY="<key>"
+strands-code --model litellm/openrouter/anthropic/claude-sonnet-4.6
+```
+
+Custom OpenAI-compatible endpoints read two env vars (never stored in the repo):
 
 ```bash
 export LITELLM_BASE_URL="https://openrouter.ai/api/v1"
 export LITELLM_API_KEY="<key>"
 ```
 
-then `/model litellm/openrouter/<vendor>/<model>`.
+then `/model litellm/openrouter/<vendor>/<model>`. Local Ollama runs without API
+keys via `--model ollama/<model>` (or `--model litellm/ollama_chat/<model>`).
 
 ## Model capabilities (advanced)
 
