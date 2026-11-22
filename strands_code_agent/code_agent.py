@@ -1,7 +1,10 @@
 import tempfile
+from typing import Any
 
 from strands import Agent
 from jinja2 import Template
+
+from strands.hooks import BeforeInvocationEvent, HookProvider, HookRegistry
 
 from strands_code_agent.document_code import get_documentation
 from strands_code_agent.python_environments.local_sandboxed import SandboxedPythonInterpreter
@@ -48,6 +51,43 @@ You can use the following Domain Specific Code:
 DEFAULT_CODE_AGENT_CALLBACK_HANDLER = CodeAgentCallbackHandler()
 
 
+class RejectCallerToolUseHook(HookProvider):
+    """Reject caller-supplied ``toolUse`` blocks before event-loop execution.
+
+    In Strands SDK, passing a trailing ``toolUse`` block as agent input causes
+    the event loop to dispatch the tool directly without invoking the model
+    (the CoreBreak / CVE-2026-18830 pattern when exposed via unvalidated
+    callers). Attaching this hook on ``BeforeInvocationEvent`` blocks any
+    invocation whose ``"user"`` messages or trailing incoming message carry a
+    ``toolUse`` content block.
+    """
+
+    def register_hooks(self, registry: "HookRegistry", **kwargs: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._validate_messages)
+
+    def _validate_messages(self, event: Any) -> None:
+        messages = getattr(event, "messages", None)
+        if not isinstance(messages, list) or not messages:
+            return
+        has_user_tool_use = any(
+            isinstance(block, dict) and "toolUse" in block
+            for msg in messages
+            if isinstance(msg, dict) and msg.get("role") == "user"
+            for block in (msg.get("content") or [])
+        )
+        last = messages[-1]
+        has_trailing_tool_use = isinstance(last, dict) and any(
+            isinstance(block, dict) and "toolUse" in block
+            for block in (last.get("content") or [])
+        )
+        if has_user_tool_use or has_trailing_tool_use:
+            raise ValueError(
+                "Caller-supplied toolUse blocks are rejected by CodeAgent to "
+                "prevent unmediated tool execution. Pass only str prompts or text/image/"
+                "document content blocks."
+            )
+
+
 class CodeAgent(Agent):
     """A coding agent that extends Strands Agent with a sandboxed Python REPL and domain-specific symbol documentation.
 
@@ -83,6 +123,12 @@ class CodeAgent(Agent):
             unrestricted ``exec()``-based). Use :class:`SandboxedPythonInterpreter`
             for import restrictions and sandboxed execution.
 
+        reject_caller_tool_use: If ``True`` (default), attaches
+            :class:`RejectCallerToolUseHook` on ``BeforeInvocationEvent`` so
+            caller-supplied ``toolUse`` blocks cannot bypass model mediation.
+            Set to ``False`` only when intentionally resuming trusted pre-loop
+            ``toolUse`` message payloads.
+
         **kwargs: Additional arguments forwarded to the Strands :class:`Agent` base class
             (e.g. ``model``, ``callback_handler``).
     """
@@ -95,6 +141,7 @@ class CodeAgent(Agent):
                  python_interpreter_class=SandboxedPythonInterpreter,
                  python_interpreter_kwargs:dict|None=None,
                  callback_handler=DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
+                 reject_caller_tool_use:bool=True,
                  **kwargs):
         authorized_imports = set()
         initialization_code = []
@@ -114,6 +161,16 @@ class CodeAgent(Agent):
         additional_functions = {}
         domain_specific_doc = ""
         if domain_specific_code:
+            # MCP-backed functions close over a live client on the host and cannot be
+            # serialized for remote execution. Fail fast rather than silently dropping them.
+            if python_interpreter_class.__name__ == "AgentCorePythonInterpreter" and any(
+                getattr(sym, "__mcp_tool__", False) for sym in domain_specific_code
+            ):
+                raise ValueError(
+                    "MCPToolkit functions cannot run on AgentCorePythonInterpreter "
+                    "(they call a live MCP client on the host). Use the default "
+                    "SandboxedPythonInterpreter or ExecPythonInterpreter instead."
+                )
             authorized_imports.update(sym.__module__ for sym in domain_specific_code if sym.__module__ != "__main__")
             initialization_code.append(get_import_string(domain_specific_code))
             sym_doc =  "\n".join([get_documentation(sym) for sym in domain_specific_code])
@@ -152,6 +209,11 @@ class CodeAgent(Agent):
             tools = list(tools) + [python_repl_tool]
         else:
             tools = [python_repl_tool]
+
+        if reject_caller_tool_use:
+            hooks = list(kwargs.get("hooks") or [])
+            hooks.append(RejectCallerToolUseHook())
+            kwargs["hooks"] = hooks
 
         kwargs.update({
             "system_prompt": system_prompt,

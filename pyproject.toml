@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "strands-code-agent"
-version = "0.4.0"
+version = "0.6.0"
 description = "Deny-first coding agent on the Strands Harness SDK with session-sticky Plan/Act, skills, memory, and a /btw side channel"
 readme = "README.md"
 license = "MIT-0"
@@ -27,7 +27,8 @@ classifiers = [
 dependencies = [
     "strands-agents>=1.65.0",
     "strands-harness>=0.4.0",
-    "smolagents>=1.0.0",
+    "mcp>=1.30.0",
+    "smolagents>=1.24.0",
     "jinja2>=3.0",
     "rich>=13.0",
     "pyyaml>=6.0",
