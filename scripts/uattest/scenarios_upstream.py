@@ -1,11 +1,11 @@
 """Phase 13 upstream resync scenarios for the live-tmux UAT rig.
 
-Owns scenario_u1 (Llama 4 unary tool mode), scenario_u2 (cross-family
-Sonnet -> Nova 2 Lite --session-id resume + SDK model_info /context +
-InjectedBlock), and scenario_u3 (1.65.0 PolicyHumanInTheLoop approval,
-policy [deny], and Plan-mode deny). Uses XDG_CONFIG_HOME inside per-run
-/tmp workdirs so ~/.config/strands-code/config.yaml stays untouched while
-HOME keeps ~/.aws credentials accessible.
+Owns scenario_u1 (Mistral Large 24.02 live built-in unary tool mode + Llama 4
+/model note), scenario_u2 (cross-family Sonnet -> Nova 2 Lite --session-id resume
++ SDK model_info /context + InjectedBlock), and scenario_u3 (1.65.0
+PolicyHumanInTheLoop approval, policy [deny], and Plan-mode deny). Uses
+XDG_CONFIG_HOME inside per-run /tmp workdirs so ~/.config/strands-code/config.yaml
+stays untouched while HOME keeps ~/.aws credentials accessible.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path inse
     wait_for_new,
 )
 
+RIG_MISTRAL_2402 = "mistral.mistral-large-2402-v1:0"
 RIG_LLAMA4_SCOUT = "us.meta.llama4-scout-17b-instruct-v1:0"
 RIG_SONNET_46 = "bedrock/us.anthropic.claude-sonnet-4-6"
 RIG_NOVA_2_LITE = "bedrock/us.amazon.nova-2-lite-v1:0"
@@ -69,13 +70,6 @@ def _write_xdg_model(xdg: str, model_id: str) -> None:
     cfg = os.path.join(xdg, "strands-code", "config.yaml")
     with open(cfg, "w", encoding="utf-8") as handle:
         handle.write(f"model: {model_id}\n")
-
-
-def _write_xdg_capabilities(xdg: str, content: str) -> None:
-    """Write isolated XDG model-capabilities.yaml for capability overrides."""
-    cfg = os.path.join(xdg, "strands-code", "model-capabilities.yaml")
-    with open(cfg, "w", encoding="utf-8") as handle:
-        handle.write(content)
 
 
 def _wait_idle_prompt(sess: str, timeout: int = 30) -> str:
@@ -143,66 +137,56 @@ def _stop_and_flush(sess: str) -> None:
 
 
 def scenario_u1() -> None:
-    """U1: Bedrock unary tool mode on Llama 4 launch/switch + live Converse tool turn."""
+    """U1: Built-in Bedrock unary Converse tool mode on Mistral 24.02 + /model toggle."""
     workdir, xdg = _fresh_upstream_workdir("u1")
     with open(os.path.join(workdir, "sentinel.txt"), "w", encoding="utf-8") as handle:
-        handle.write("LLAMA_UNARY_SENTINEL_13\n")
+        handle.write("UNARY_TOOL_SENTINEL_13\n")
 
-    # Part 1: built-in _NO_STREAMING_TOOLS Llama 4 Scout launch & /model note.
-    _write_xdg_model(xdg, RIG_LLAMA4_SCOUT)
-    sess1 = "uatr8u1a"
-    start_cli(sess1, workdir, env_prefix=f"XDG_CONFIG_HOME={xdg} ")
+    _write_xdg_model(xdg, RIG_MISTRAL_2402)
+    sess = "uatr8u1"
+    start_cli(sess, workdir, env_prefix=f"XDG_CONFIG_HOME={xdg} ")
     try:
-        boot = " ".join(pane_text(sess1).split())
-        assert "streaming disabled for" in boot, "launch missing unary note"
-        assert "(Bedrock unary tool mode)" in boot, "launch note missing mode tag"
+        boot = " ".join(pane_text(sess).split())
+        assert f"Note: streaming disabled for {RIG_MISTRAL_2402}" in boot, (
+            "launch missing unary note"
+        )
+        assert "(Bedrock unary tool mode)." in boot, "launch note missing mode tag"
         assert "rejects tool use in streaming" not in boot, "obsolete warning printed"
 
-        before_nova = len(re.findall(r"Model: ", pane_text(sess1)))
-        send(sess1, f"/model {RIG_NOVA_2_LITE}", "Enter")
-        wait_for_new(sess1, r"Model: ", 30, "switch-nova", poll=1, before=before_nova)
-
-        before_llama = len(re.findall(r"Model: ", pane_text(sess1)))
-        send(sess1, f"/model {RIG_LLAMA4_SCOUT}", "Enter")
-        switched = wait_for_new(
-            sess1, r"Model: ", 30, "switch-llama", poll=1, before=before_llama
-        )
-        normalized_tail = " ".join(switched.split("Model:")[-1].split())
-        assert f"Note: streaming disabled for {RIG_LLAMA4_SCOUT}" in normalized_tail
-        assert "(Bedrock unary tool mode)." in normalized_tail
-        save(sess1, "u1-llama", LOGDIR8)
-    finally:
-        _stop_and_flush(sess1)
-
-    # Part 2: live Bedrock non-streaming Converse tool turn on ACTIVE Haiku 4.5
-    # (AWS Bedrock marked Meta Llama 3/4 LEGACY, so isolated model-capabilities.yaml
-    # selects unary mode on an active Bedrock model for end-to-end tool execution).
-    _write_xdg_model(xdg, RIG_HAIKU_45)
-    _write_xdg_capabilities(
-        xdg,
-        "overrides:\n  - match: {provider: bedrock, vendor: anthropic, name_contains: haiku}\n    streaming_tools: false\n",
-    )
-    sess2 = "uatr8u1b"
-    start_cli(sess2, workdir, env_prefix=f"XDG_CONFIG_HOME={xdg} ")
-    try:
-        boot2 = " ".join(pane_text(sess2).split())
-        assert "streaming disabled for" in boot2, "Part 2 launch missing unary note"
-        assert "(Bedrock unary tool mode)" in boot2
-
-        after = len(USAGE_END_RE.findall(pane_text(sess2)))
+        after = len(USAGE_END_RE.findall(pane_text(sess)))
         send(
-            sess2,
+            sess,
             "Use the read tool to read sentinel.txt in the current directory and reply with the exact token inside it.",
             "Enter",
         )
-        text = _wait_turn_end(sess2, after=after, timeout=180, forbid_dialog_after=0)
-        assert "LLAMA_UNARY_SENTINEL_13" in text, (
+        text = _wait_turn_end(sess, after=after, timeout=180, forbid_dialog_after=0)
+        assert "UNARY_TOOL_SENTINEL_13" in text, (
             f"Bedrock unary Converse tool turn missing sentinel: {text[-400:]}"
         )
+
+        _wait_idle_prompt(sess)
+        before_nova = len(re.findall(r"Model: ", pane_text(sess)))
+        send(sess, f"/model {RIG_NOVA_2_LITE}", "Enter")
+        switched_nova = wait_for_new(
+            sess, r"Model: ", 30, "switch-nova", poll=1, before=before_nova
+        )
+        nova_tail = " ".join(switched_nova.split("Model:")[-1].split())
+        assert "streaming disabled for" not in nova_tail, (
+            f"Nova 2 Lite switch unexpectedly printed unary note: {nova_tail}"
+        )
+
+        before_llama = len(re.findall(r"Model: ", pane_text(sess)))
+        send(sess, f"/model {RIG_LLAMA4_SCOUT}", "Enter")
+        switched_llama = wait_for_new(
+            sess, r"Model: ", 30, "switch-llama", poll=1, before=before_llama
+        )
+        llama_tail = " ".join(switched_llama.split("Model:")[-1].split())
+        assert f"Note: streaming disabled for {RIG_LLAMA4_SCOUT}" in llama_tail
+        assert "(Bedrock unary tool mode)." in llama_tail
         print("U1 PASS", flush=True)
     finally:
-        save(sess2, "u1", LOGDIR8)
-        _stop_and_flush(sess2)
+        save(sess, "u1", LOGDIR8)
+        _stop_and_flush(sess)
 
 
 def scenario_u2() -> None:

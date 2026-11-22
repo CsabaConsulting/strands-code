@@ -36,6 +36,7 @@ class TestUpstreamRig:
         assert '"u1"' in src and '"u2"' in src and '"u3"' in src
 
     def test_scenarios_use_shared_constants_and_xdg_isolation(self):
+        assert upstream.RIG_MISTRAL_2402 == "mistral.mistral-large-2402-v1:0"
         assert upstream.RIG_LLAMA4_SCOUT == "us.meta.llama4-scout-17b-instruct-v1:0"
         assert upstream.RIG_SONNET_46 == "bedrock/us.anthropic.claude-sonnet-4-6"
         assert upstream.RIG_NOVA_2_LITE == "bedrock/us.amazon.nova-2-lite-v1:0"
@@ -46,7 +47,7 @@ class TestUpstreamRig:
         src_u1 = inspect.getsource(upstream.scenario_u1)
         src_u2 = inspect.getsource(upstream.scenario_u2)
         src_u3 = inspect.getsource(upstream.scenario_u3)
-        assert "RIG_LLAMA4_SCOUT" in src_u1 and "RIG_HAIKU_45" in src_u1
+        assert "RIG_MISTRAL_2402" in src_u1 and "RIG_LLAMA4_SCOUT" in src_u1
         assert "RIG_SONNET_46" in src_u2 and "RIG_NOVA_2_LITE" in src_u2
         assert "RIG_HAIKU_45" in src_u3
         for src in (src_u1, src_u2, src_u3):
@@ -62,8 +63,9 @@ class TestUpstreamRig:
     def test_scenario_contracts(self):
         u1 = inspect.getsource(upstream.scenario_u1)
         assert "streaming disabled for" in u1
-        assert "model-capabilities.yaml" in u1 or "_write_xdg_capabilities" in u1
-        assert "LLAMA_UNARY_SENTINEL_13" in u1
+        assert "UNARY_TOOL_SENTINEL_13" in u1
+        assert "model-capabilities.yaml" not in u1
+        assert "_write_xdg_capabilities" not in u1
         assert "U1 PASS" in u1
 
         u2 = inspect.getsource(upstream.scenario_u2)

@@ -701,6 +701,30 @@ class TestStreamingTools:
         )
         assert supports_streaming_tools("qwen.qwen3-32b-v1:0") is False
 
+    def test_mistral_and_writer_bedrock_unary_rows_stay_scoped(self):
+        from strands_code_cli.model.model_switch import supports_streaming_tools
+
+        for unary_id in (
+            "mistral.mistral-large-2402-v1:0",
+            "bedrock/mistral.mistral-large-2402-v1:0",
+            "mistral.mistral-large-2407-v1:0",
+            "us.mistral.pixtral-large-2502-v1:0",
+            "bedrock/us.mistral.pixtral-large-2502-v1:0",
+            "us.writer.palmyra-x4-v1:0",
+            "us.writer.palmyra-x5-v1:0",
+        ):
+            assert supports_streaming_tools(unary_id) is False
+
+        for streaming_id in (
+            "mistral.mistral-large-3-675b-instruct",
+            "mistral.devstral-2-123b",
+            "mistral.ministral-3-8b-instruct",
+            "mistral.magistral-small-2509",
+            "writer.palmyra-vision-7b",
+            "litellm/openrouter/mistralai/mistral-large-2407",
+        ):
+            assert supports_streaming_tools(streaming_id) is True
+
 
 class TestRichHistory:
     def _agent_with_thinking(self, tmp_path):
@@ -2316,6 +2340,16 @@ class TestConfigureStreamingForModel:
         openai_model = _FakeModel()
         configure_streaming_for_model("openai/gpt-4o", openai_model)
         assert openai_model.calls == []
+
+        mistral_unary = _FakeModel()
+        configure_streaming_for_model("mistral.mistral-large-2402-v1:0", mistral_unary)
+        assert mistral_unary.calls == [{"streaming": False}]
+
+        mistral_stream = _FakeModel()
+        configure_streaming_for_model(
+            "mistral.mistral-large-3-675b-instruct", mistral_stream
+        )
+        assert mistral_stream.calls == []
 
     def test_honors_capability_overrides_and_fails_soft(self, monkeypatch):
         from types import SimpleNamespace

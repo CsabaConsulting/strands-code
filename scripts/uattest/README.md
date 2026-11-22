@@ -27,11 +27,12 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
 - **r4** — Phase 8 live `/btw` side ask: mid-turn spawn routes through
   the shared strategy, expects a `Routed (btw)` line and a side-flagged
   `/cost` Routing entry.
-- **u1** — Phase 13 Bedrock unary tool mode: boots Llama 4 Scout with the
-  `streaming=False` note and verifies the `/model` unary switch note,
-  then runs an end-to-end unary `Converse` `read` tool turn on active
-  Haiku 4.5 via isolated `model-capabilities.yaml` (Bedrock Meta Llama
-  3/4 models are currently `LEGACY`).
+- **u1** — Phase 13 Bedrock unary tool mode: boots built-in `_NO_STREAMING_TOOLS`
+  model `mistral.mistral-large-2402-v1:0` with no capability override, asserts
+  the `streaming=False` unary launch note, executes a live unary `Converse`
+  `read` tool turn end-to-end (`UNARY_TOOL_SENTINEL_13`), and verifies
+  `/model` toggles between Nova 2 Lite (silent) and Llama 4 Scout (unary
+  note).
 - **u2** — Phase 13 cross-family resume + SDK `model_info`: boots on
   Sonnet 4.6 (with `MEMORY.md` `InjectedBlock`), verifies `1M` `/context`
   window, computes `17 * 23`, flushes session, resumes via `--session-id`

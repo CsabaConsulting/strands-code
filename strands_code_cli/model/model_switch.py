@@ -78,6 +78,16 @@ _NO_STREAMING_TOOLS: tuple[
     # 2026-09-27). Family-wide: the restriction is Bedrock-side config.
     (None, "meta", "llama3", None),
     (None, "meta", "llama4", None),
+    # Live probe (us-west-2, 2026-11-21): Bedrock rejects ConverseStream with
+    # toolConfig on older Mistral and Writer Palmyra models while unary
+    # Converse accepts toolConfig. Model-scoped (not vendor-wide) so newer
+    # streaming-capable Mistral models (Large 3, Devstral 2, Ministral 3,
+    # Magistral) and Palmyra Vision stay fail-open.
+    ("bedrock", "mistral", "mistral", "mistral-large-2402"),
+    ("bedrock", "mistral", "mistral", "mistral-large-2407"),
+    ("bedrock", "mistral", "pixtral", "pixtral-large-2502"),
+    ("bedrock", "writer", "palmyra", "palmyra-x4"),
+    ("bedrock", "writer", "palmyra", "palmyra-x5"),
 )
 """Model ids that reject tool use in streaming mode (warn, don't convert)."""
 

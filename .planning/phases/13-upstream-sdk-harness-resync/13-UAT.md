@@ -19,16 +19,21 @@ All three Phase 13 verification smokes are automated in [scenarios_upstream.py](
 
 ## Tests
 
-### 1. Live Bedrock Unary Tool Mode & Llama 4 Notes (`D-03` — `driver.py u1`)
+### 1. Live Bedrock Unary Tool Mode on Built-In `_NO_STREAMING_TOOLS` Models (`D-03` — `driver.py u1`)
 expected:
-- Opening and switching to `_NO_STREAMING_TOOLS` (`us.meta.llama4-scout-17b-instruct-v1:0`) configure `streaming=False`, emit `"Note: streaming disabled for <model> (Bedrock unary tool mode)."` without obsolete warnings, and omit the note when switching to `bedrock/us.amazon.nova-2-lite-v1:0`.
-- Live Bedrock non-streaming `Converse` tool execution runs `read` end-to-end and returns `LLAMA_UNARY_SENTINEL_13` with zero streaming failures.
+- Opening a built-in `_NO_STREAMING_TOOLS` model (`mistral.mistral-large-2402-v1:0`) configures `streaming=False` out of the box (no `model-capabilities.yaml` override) and emits `"Note: streaming disabled for <model> (Bedrock unary tool mode)."` without obsolete warnings.
+- Live Bedrock non-streaming `Converse` tool execution runs `read` end-to-end and returns `UNARY_TOOL_SENTINEL_13` with zero streaming failures.
+- Switching `/model` to `bedrock/us.amazon.nova-2-lite-v1:0` omits the note, and switching `/model` to `us.meta.llama4-scout-17b-instruct-v1:0` restores the unary note.
 result: pass
 evidence:
-- Initial run with `us.meta.llama4-scout-17b-instruct-v1:0` printed the unary launch note and dispatched Bedrock's unary `Converse` operation (`calling the Converse operation`), where AWS Bedrock returned `ResourceNotFoundException` because all `meta.llama3*`/`meta.llama4*` models in `us-west-2` have `modelLifecycle.status = LEGACY` unless invoked in the last 30 days.
-- Reproducible `driver.py u1` (`U1 PASS`, exit `0`) verified:
-  1. Launch note and clean `/model` toggle (`nova-2-lite` silent → `llama4-scout` unary note) captured in `/tmp/uatr8/u1-llama.log`.
-  2. Live unary `Converse` tool execution on `ACTIVE` `bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0` (via isolated `XDG_CONFIG_HOME` `model-capabilities.yaml` override `streaming_tools: false`): printed launch unary note, executed `[Tool] read` on `/tmp/uatr8/u1/sentinel.txt`, replied `LLAMA_UNARY_SENTINEL_13`, and printed `7.71K (4%) $0.01` / `interface: tool` (`/tmp/uatr8/u1.log`).
+- Live `us-west-2` `bedrock-runtime` probes (`toolConfig` on `converse_stream` vs. `converse`, 2026-11-21) verified exact unary-only vs. streaming-capable boundaries before adding Bedrock-scoped `_NO_STREAMING_TOOLS` rows:
+  - Unary-only + `ACTIVE` (`converse_stream` rejects with `ValidationException: This model doesn't support tool use in streaming mode.`, `converse` returns `stopReason=tool_use`): `mistral.mistral-large-2402-v1:0`, `mistral.mistral-large-2407-v1:0`, `us.mistral.pixtral-large-2502-v1:0`.
+  - Streaming-capable + `ACTIVE` (`converse_stream` returns `OK` — kept fail-open): `mistral.mistral-large-3-675b-instruct`, `mistral.devstral-2-123b`, `mistral.ministral-3-8b-instruct`, `mistral.magistral-small-2509`.
+  - Unary-only + `LEGACY` (`converse_stream` rejects streaming tool use, `converse` fails with `ResourceNotFoundException` 30-day Legacy gate): `us.writer.palmyra-x4-v1:0`, `us.writer.palmyra-x5-v1:0`.
+- Reproducible `driver.py u1` (`U1 PASS`, exit `0`, `/tmp/uatr8/u1.log`, session `d082d0e7-dbe8-44be-9580-46912c4e43d3`, zero `model-capabilities.yaml` override):
+  1. Launched `mistral.mistral-large-2402-v1:0`, printed `Note: streaming disabled for mistral.mistral-large-2402-v1:0 (Bedrock unary tool mode).`.
+  2. Executed unary `Converse` `[Tool] read` on `/tmp/uatr8/u1/sentinel.txt`, replied `UNARY_TOOL_SENTINEL_13`, and printed `6.67K (21%) $0.03` / `interface: tool`.
+  3. Switched `/model bedrock/us.amazon.nova-2-lite-v1:0` (silent, 4 messages kept) → `/model us.meta.llama4-scout-17b-instruct-v1:0` (`Note: streaming disabled for us.meta.llama4-scout-17b-instruct-v1:0 (Bedrock unary tool mode).`).
 
 ### 2. Cross-Family `--session-id` Resume (`#5166`), SDK `model_info` `/context` (`D-02`), & `InjectedBlock` (`D-05` — `driver.py u2`)
 expected:
