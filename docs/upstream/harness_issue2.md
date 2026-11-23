@@ -1,3 +1,9 @@
+# Filed URL
+
+https://github.com/strands-agents/harness-sdk/issues/4857
+
+---
+
 ## Human Overview
 
 > HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
@@ -101,7 +107,3 @@ GPT-OSS / Mistral Large 3 turns on identical tool sets stream cleanly).
   Writer Palmyra entered Bedrock's 30-day `LEGACY` gate.
 
 </details>
-
-## Related Issues
-
-https://github.com/strands-agents/harness-sdk/issues/4857

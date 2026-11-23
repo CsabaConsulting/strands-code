@@ -5,6 +5,12 @@
 - **Target repo:** `strands-agents/harness-sdk` (`main` at `d6c5fae7c`, tag `python/v1.65.0`)
 - **Prepared local branch:** `fix/reject-user-role-tool-use` (commit `dd206dfe5`, in `/home/csaba/repos/AWS/harness-sdk`, remote `origin` = `https://github.com/MrCsabaToth/harness-sdk.git`, **not pushed**)
 
+
+# Filed URLs
+
+Issue https://github.com/strands-agents/harness-sdk/issues/6480
+PR https://github.com/strands-agents/harness-sdk/pull/6483
+
 ---
 
 ## 1. Issue Title

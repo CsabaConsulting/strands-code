@@ -1,3 +1,9 @@
+# Filed URL
+
+https://github.com/strands-agents/harness-sdk/issues/4852
+
+---
+
 ## Human Overview
 
 > HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
@@ -92,7 +98,3 @@ Downstream reporter: `CsabaConsulting/strands-code` (Phase 5 model switching;
   and `https://aws.amazon.com/blogs/aws/introducing-amazon-nova-2-lite-a-fast-cost-effective-reasoning-model`.
 
 </details>
-
-## Related Issues
-
-https://github.com/strands-agents/harness-sdk/issues/4852

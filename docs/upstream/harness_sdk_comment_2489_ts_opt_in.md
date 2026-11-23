@@ -2,6 +2,10 @@
 
 > **HOLD BEFORE POSTING:** Review the comment below (and replace/adjust if desired) before running `gh issue comment 2489`. Also includes the verification record confirming why no issue or PR is needed for `aws/bedrock-agentcore-sdk-python`.
 
+# Filed URL
+
+https://github.com/strands-agents/harness-sdk/issues/2489#issuecomment-7104053907
+
 ---
 
 ## 1. Comment Draft for `strands-agents/harness-sdk#2489`

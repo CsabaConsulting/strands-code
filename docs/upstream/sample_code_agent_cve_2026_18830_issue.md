@@ -1,3 +1,9 @@
+# Filed URL
+
+https://github.com/aws-samples/sample-strands-code-agent/issues/5
+
+---
+
 ## Summary
 
 When `CodeAgent` is exposed behind an API or web service wrapper that forwards caller-provided message payloads into `agent(...)`, the underlying Strands event loop will directly dispatch a trailing `toolUse` content block without invoking the LLM turn (the publicly disclosed "CoreBreak" / CVE-2026-18830 unmediated tool-execution pattern). Adding a lightweight `BeforeInvocationEvent` guard and a short input-validation note in `README.md` gives `CodeAgent` users defense-in-depth out of the box.

@@ -3,6 +3,10 @@
 - **Target repo:** `aws-samples/sample-strands-code-agent` (`main`, based on `3832c5b` / `v0.5.0`)
 - **Prepared local branch:** `upstream-pr/reject-caller-tool-use` (commit `239395d`)
 
+# Filed URL
+
+https://github.com/aws-samples/sample-strands-code-agent/pull/6
+
 ---
 
 ## PR Title

@@ -5,6 +5,10 @@
 - **Target repo:** `strands-agents/harness-sdk` (`main` at `d6c5fae7c`, tag `python/v1.65.0`)
 - **Disclosure note:** Direct tool dispatch on trailing `toolUse` blocks is already publicly documented in #3467 ("Trusted Message History") and related CVE-2026-18830 advisories; this proposes SDK ergonomics for `strands-py` beyond the targeted `user`-role bug fix.
 
+# Filed URL
+
+https://github.com/strands-agents/harness-sdk/issues/6482
+
 ---
 
 ## 1. Issue Title
