@@ -18,13 +18,7 @@
 ```markdown
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted feature requests require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: Today #3467 asks every Python Strands application handling
-> external messages to hand-roll a trailing `toolUse` sanitizer, even though
-> `strands-py` already tracks explicit resume provenance for interrupts and
-> checkpoints. We should ship a built-in guard hook and discuss gating trailing
-> `assistant` `toolUse` dispatch on explicit opt-in or resume state.
+Today #3467 requires every Python Strands wrapper accepting external messages to hand-roll a trailing-`toolUse` guard, even though `strands-py` already tracks explicit provenance for interrupts and checkpoints. I am proposing two steps: ship a canonical built-in guard hook now, and align on gating direct trailing-`assistant` `toolUse` dispatch behind explicit resume provenance or opt-in (#2489).
 
 ## SDK Language
 

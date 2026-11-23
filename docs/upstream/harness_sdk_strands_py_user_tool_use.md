@@ -18,13 +18,7 @@
 ```markdown
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted issues require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: While hardening a downstream Strands agent wrapper following
-> the public CoreBreak / Trusted Message History guidance (#3467), we found
-> that the Python event loop never checks `role == "assistant"` before skipping
-> the model and running trailing `toolUse` blocks. Passing a `list[ContentBlock]`
-> containing `toolUse` turns it into a `user` message that runs tools directly.
+While auditing downstream input hardening against #3467, I found that `strands-py` never checks `role == "assistant"` in `_has_tool_use_in_latest_message` and lets `list[ContentBlock]` or `user`-role prompts carry `toolUse` blocks. Passing `[{"toolUse": ...}]` to `Agent`, `Graph`, or `Swarm` creates a `user` message that bypasses the model and executes tools directly.
 
 ## Checks
 
@@ -125,12 +119,7 @@ fix(event-loop): reject toolUse blocks in user-role messages
 ```markdown
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted PRs require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: Fixes the Python SDK so `user`-role messages and `list[ContentBlock]`
-> prompts cannot carry `toolUse` blocks or trigger the event loop's direct
-> tool-dispatch branch. Explicit `assistant`-role `toolUse` resume behavior
-> stays untouched for backward compatibility.
+This PR closes the invalid `user`-role `toolUse` dispatch path in `strands-py` by requiring `role == "assistant"` in `_has_tool_use_in_latest_message` and rejecting `toolUse` blocks in `user` messages and `list[ContentBlock]` prompts before mutating history (covering `Agent`, `Graph`, and `Swarm`). Existing trailing `assistant`-role `toolUse` resume behavior stays intentionally unchanged for backward compatibility.
 
 ## Description
 

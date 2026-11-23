@@ -18,14 +18,7 @@
 ```markdown
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted feature requests require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: `create_harness()` ships high-impact tools (`shell`, `write`,
-> `edit`, `programmatic_tool_caller`, `subagent`) with `interventions=None` by
-> default and no guard against caller-supplied trailing `toolUse` blocks.
-> Following #3467 and the downstream hardening we shipped in
-> aws-samples/sample-strands-code-agent#6, adding an opt-out
-> `BeforeInvocationEvent` guard gives harness users safe defaults out of the box.
+While hardening aws-samples/sample-strands-code-agent after #3467, we saw how easily caller-supplied message payloads can trigger built-in tools without a model turn. Because `create_harness()` ships `shell`, `write`, `edit`, `programmatic_tool_caller`, and `subagent` with `interventions=None`, adding a default-on `BeforeInvocationEvent` guard (with an explicit opt-out) gives harness users safe defaults out of the box.
 
 ## SDK Language
 
@@ -80,12 +73,7 @@ feat(harness): reject caller-supplied toolUse blocks by default
 ```markdown
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted PRs require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: Adds a default-on `BeforeInvocationEvent` guard
-> (`RejectCallerToolUseHook`) and `reject_caller_tool_use: bool = True` opt-out
-> to `create_harness()` so unvalidated caller `toolUse` payloads cannot bypass
-> the model to invoke `shell` or other built-in tools directly.
+This PR attaches `RejectCallerToolUseHook` by default in `create_harness()` via a factory-only `reject_caller_tool_use=True` flag (propagated to `subagent` children), blocking caller-supplied `toolUse` payloads from bypassing the model to run `shell` or other built-in tools. Interrupt/checkpoint resumes, paired transcripts, normal tool loops, and the shared cross-language config schema remain unaffected.
 
 ## Description
 
