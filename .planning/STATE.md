@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v2.0
 current_phase: 17
 current_phase_name: Decision Routing Convergence (DecisionModel)
-current_plan: 0
-status: planned
-stopped_at: Phase 17 planned (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 17`
-last_updated: "2026-11-24T22:10:00Z"
+current_plan: 3
+status: completed
+stopped_at: Phase 17 verified & complete (`17-01..03`, `17-VERIFICATION.md` 7/7 PASS, `17-VALIDATION.md` validated) — ready for `/gsd-discuss-phase 18`
+last_updated: "2026-11-24T23:05:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Planned Phase 17 (`17-01..03-PLAN.md` across 3 waves, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS)
-state_head: 897671d
+last_activity_desc: Completed & verified Phase 17 (`f6d8651`, `a8e9993`, `b474041`: DecisionModel routing convergence across all 5 engines, live probes 5 passed / 1 skipped, 1737+1 suite + 44 rig + all 6 CI gates green)
+state_head: b474041
 progress:
   total_phases: 9
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 14
-  completed_plans: 11
+  completed_plans: 14
 ---
 
 # Project State
@@ -24,21 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 17 — Decision Routing Convergence (`DecisionModel`, `UPSTREAM-02`)
+**Current focus:** Milestone `v2.0` · Phase 17 Complete (`DecisionModel`, `UPSTREAM-02`) — queued: Phase 18 (`SKILL-03`)
 
 ## Current Position
 
-Phase: 17 of 21 (Decision Routing Convergence (`DecisionModel`)) — Planned (3 plans across Waves 1–3)
-Plan: 0 of 3 complete in Phase 17 (`17-01-PLAN.md`, `17-02-PLAN.md`, `17-03-PLAN.md`)
-Status: Planned (`17-PLAN-CHECK.md` PASS; ready for `/gsd-execute-phase 17`)
-Last activity: 2026-11-24 — Planned Phase 17 (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md`)
+Phase: 17 of 21 (Decision Routing Convergence (`DecisionModel`)) — Complete (`17-VERIFICATION.md` PASS)
+Plan: 3 of 3 complete in Phase 17 (`17-01`, `17-02`, `17-03`)
+Status: Complete (`UPSTREAM-02` verified; ready for Phase 18)
+Last activity: 2026-11-24 — Completed Phase 17 (`f6d8651`, `a8e9993`, `b474041`, `17-VERIFICATION.md`, `17-VALIDATION.md`)
 
-Progress: [████░░░░░░] 44%
+Progress: [█████░░░░░] 56%
 
 ## Performance Metrics
 
 - `v1.0` shipped 2026-10-16: 12 phases, 41 plans, 129 tasks ([v1.0 Archive](.planning/MILESTONES.md))
-- `v2.0` active: 4/9 phases complete (Phases 13–16 done; Phases 17–21 queued)
+- `v2.0` active: 5/9 phases complete (Phases 13–17 done; Phases 18–21 queued)
 
 ## Accumulated Context
 
@@ -66,10 +66,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 16 Nyquist validation (`16-VALIDATION.md` `validated`, `nyquist_compliant: true`): closed 12 edge branches across `tests/model/`, `tests/entry/`, `tests/dispatch/`, `tests/cost/`, and `tests/loop/` (`1711/1711` default suite + `44/44` rig green, zero runtime edits).
 - Phase 17 discussion (`17-CONTEXT.md` `D-01`–`D-07`): converged `native` onto upstream `TypeSafeDecisionModel` (`state: str` + folded `Question["question"]`), `openrouter` & `local` onto CLI `DecisionModel` subclasses (`OpenRouterDecisionModel`, `OllamaDecisionModel`) in `routing/transports.py`, wired config-only opt-in `"decisions_api"` (`DecisionsAPIDecisionModel` / `JEV_API_KEY`) and `"llm"` (`LLMDecisionModel` / `uncertainty=True` hold on `Uncertain` / `cost_for()`), async-to-sync bridge + per-call `httpx.AsyncClient(timeout=10s)`, preserving `0.62`/`0.04` gating, two-call routing, `apply_model_action`, `/cost` actuals, and offline + opportunistic live verification.
 - Phase 17 planning (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS): mapped Waves 1–3 with `tests/routing/test_routing_transports.py` as Wave 0 file, 4-decimal grid tolerance alignment, `ConnectError` zero-retry preservation, `resolve_harness_model(..., web_search=False, caching=False)`, `cost_context` estimated lane for `llm` routing spend, `conftest.py` key scrubbing (`TYPESAFE_API_KEY`/`JEV_API_KEY` + `@pytest.mark.integration` exemption), and `TYPESAFE_API_KEY` vs `JEV_API_KEY` docs.
+- Phase 17 (`f6d8651`, `a8e9993`, `b474041`): converged `routing/transports.py` onto `strands.decisions.DecisionModel` (`OpenRouterDecisionModel`, `OllamaDecisionModel`, `TypeSafeDecisionModel` bridge, config-only `decisions_api`/`DecisionsAPIDecisionModel` + `JEV_API_KEY` defaulting to `~typesafe/jev-latest`, config-only `llm`/`LLMDecisionModel` with `uncertainty=True` hold on `Uncertain`, `effort="off"`, `web_search=False`, `caching=False`, and `cost_for()` estimated `/cost` lane); preserved `0.62`/`0.04` gating, two-call routing, `apply_model_action`/`convert_history()`/`RichHistory`, `save_strategy` (`CC 20`), `_setup_decision_entries` (`CC 20`), `price_table` (`CC 20`), and pristine `strands_code_agent/`; verified live `-m integration` (`5 passed, 1 skipped` across OpenRouter, TypeSafe x2, `decisionapi.net`, and Gemini), `44/44` rig contract tests, `1737 + 1` full suite, and all 6 CI gates (`17-VERIFICATION.md` 7/7 PASS, `17-VALIDATION.md` validated).
 
 ### Pending Todos
 
-- Run `/gsd-execute-phase 17` to execute Plans `17-01`..`17-03` (`DecisionModel` convergence across `routing/transports.py`, `routing/core.py`, `model/model_switch.py`, `cost/cost_context.py`).
+- Run `/gsd-discuss-phase 18` to start Phase 18 (`SKILL-03` Remote skills marketplace management and lockfile installer).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns

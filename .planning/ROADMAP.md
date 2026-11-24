@@ -138,15 +138,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `17-01-PLAN.md` — Tracer: `routing/transports.py` `DecisionModel` convergence (`OpenRouterDecisionModel`, `OllamaDecisionModel`, `TypeSafeDecisionModel`, `run_decision_sync`) + `routing/core.py` wiring + `conftest.py` key scrubbing + `httpx.MockTransport` migration
+- [x] `17-01-PLAN.md` — Tracer: `routing/transports.py` `DecisionModel` convergence (`OpenRouterDecisionModel`, `OllamaDecisionModel`, `TypeSafeDecisionModel`, `run_decision_sync`) + `routing/core.py` wiring + `conftest.py` key scrubbing + `httpx.MockTransport` migration (`f6d8651`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `17-02-PLAN.md` — Opt-in `"decisions_api"` (`DecisionsAPIDecisionModel`, `JEV_API_KEY`) & `"llm"` (`LLMDecisionModel`, `uncertainty=True` hold) engines + `resolve_harness_model` `web_search`/`caching` switches + `/cost` estimated lane & end-to-end loop/`/btw` tests
+- [x] `17-02-PLAN.md` — Opt-in `"decisions_api"` (`DecisionsAPIDecisionModel`, `JEV_API_KEY`) & `"llm"` (`LLMDecisionModel`, `uncertainty=True` hold) engines + `resolve_harness_model` `web_search`/`caching` switches + `/cost` estimated lane & end-to-end loop/`/btw` tests (`a8e9993`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `17-03-PLAN.md` — `@pytest.mark.integration` live probes (`decisions_api`, `llm`), `docs/ROUTING.md` + `docs/QUICKSTART.md` (`TYPESAFE_API_KEY` vs `JEV_API_KEY`), and all 6 CI gates
+- [x] `17-03-PLAN.md` — `@pytest.mark.integration` live probes (`decisions_api`, `llm`), `docs/ROUTING.md` + `docs/QUICKSTART.md` (`TYPESAFE_API_KEY` vs `JEV_API_KEY`), and all 6 CI gates (`b474041`)
 
 ### Phase 18: Skills Marketplaces & Lockfile Installer
 
@@ -207,7 +207,7 @@ Plans:
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/3 | Planned | - |
+| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
 | 20. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
