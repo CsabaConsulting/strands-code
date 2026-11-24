@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scripted live-tmux UAT driver for strands-code Phase 7-13 confirmation.
 
-Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2|u1|u2|u3|g1}   (one scenario
+Usage: driver.py {s1|s2|r1|r2|r3|r4|n1|n2|n3|n4|c1|c2|a1|a2|u1|u2|u3|g1|o1|an1}   (one scenario
 per process; tmux session per scenario). s1/s2 cover Phase 7 (/btw);
 r1/r2/r3/r4 cover the Phase 8 rows (guided setup, local engine, e2e
 routed turn, side ask) against the Decision-API flow; n1/n2/n3/n4
@@ -47,6 +47,10 @@ from scenarios_native import (  # noqa: E402, F401 - BOGUS_TYPESAFE_KEY + _nativ
     scenario_n3,
     scenario_n4,
 )
+from scenarios_openai_anthropic import (  # noqa: E402 - sibling import needs the sys.path insert above (CF-07a)
+    scenario_an1,
+    scenario_o1,
+)
 from scenarios_routing import (  # noqa: E402 - sibling import needs the sys.path insert above (CF-07a)
     scenario_r1,
     scenario_r2,
@@ -86,6 +90,8 @@ SCENARIOS = {
     "u2": scenario_u2,
     "u3": scenario_u3,
     "g1": scenario_g1,
+    "o1": scenario_o1,
+    "an1": scenario_an1,
 }
 
 if __name__ == "__main__":

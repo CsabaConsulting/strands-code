@@ -48,6 +48,17 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   checks `1M` `/context`, runs a `read` tool turn (`GEMINI_SENTINEL_14`),
   checks `/cost` (`$` + `Display only`), and switches to
   `/model google/gemini-4-hydrogen`.
+- **o1** — Phase 15 zero-AWS native OpenAI launch: strips AWS env vars,
+  launches `--model openai/gpt-6.1-sol` under isolated `XDG_CONFIG_HOME`,
+  verifies `config.yaml` stays absent prior to `/model`, checks `1.05M`
+  `/context`, runs a `read` tool turn (`OPENAI_SENTINEL_15`), checks `/cost`
+  (`$` + `Display only`), and switches to `/model openai/gpt-6.1-terra`.
+- **an1** — Phase 15 zero-AWS native Anthropic launch: strips AWS env
+  vars, launches `--model anthropic/claude-sonnet-5-5` under isolated
+  `XDG_CONFIG_HOME`, verifies `config.yaml` stays absent prior to `/model`,
+  checks `1.00M` `/context`, runs a `read` tool turn
+  (`ANTHROPIC_SENTINEL_15`), checks `/cost` (`$` + `Display only`), and
+  switches to `/model anthropic/claude-haiku-5-5`.
 
 ## Usage
 
@@ -55,7 +66,9 @@ Requires `tmux`, `uv`, and model credentials in the environment (`r2`
 also needs an Ollama daemon ≥0.35 with a decision-capable pull; `u1`/`u2`/`u3`
 use Bedrock credentials and isolate their config under `XDG_CONFIG_HOME`
 in `/tmp/uatr8/`; `g1` needs `uv sync --extra gemini` plus `GOOGLE_API_KEY`
-or `GEMINI_API_KEY` with zero AWS credentials):
+or `GEMINI_API_KEY` with zero AWS credentials; `o1` needs `uv sync --extra openai`
+plus `OPENAI_API_KEY`; `an1` needs `uv sync --extra anthropic` plus
+`ANTHROPIC_API_KEY` — both with zero AWS credentials):
 
 ```sh
 cd /tmp && python3 /path/to/scripts/uattest/driver.py s1 --runs 2
@@ -68,6 +81,8 @@ cd /tmp && python3 /path/to/scripts/uattest/driver.py u1
 cd /tmp && python3 /path/to/scripts/uattest/driver.py u2
 cd /tmp && python3 /path/to/scripts/uattest/driver.py u3
 cd /tmp && python3 /path/to/scripts/uattest/driver.py g1
+cd /tmp && python3 /path/to/scripts/uattest/driver.py o1
+cd /tmp && python3 /path/to/scripts/uattest/driver.py an1
 ```
 
 Output lands in `/tmp/uatr4/`. Timing knobs (start wait, key spacing) are

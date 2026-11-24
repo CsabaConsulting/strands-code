@@ -51,8 +51,8 @@ Startup preflight is provider-aware:
   writes `config.yaml`.
 - Without `--model` or a saved model, preflight auto-picks from your environment
   (`GOOGLE_API_KEY` / `GEMINI_API_KEY` or Vertex ADC -> `google/gemini-3.8-flash`,
-  `ANTHROPIC_API_KEY` -> `anthropic/claude-sonnet-4-6`,
-  `OPENAI_API_KEY` -> `openai/gpt-5.4`, or exits 2 with a `--model litellm/openrouter/...`
+  `ANTHROPIC_API_KEY` -> `anthropic/claude-sonnet-5-5`,
+  `OPENAI_API_KEY` -> `openai/gpt-6.1-sol`, or exits 2 with a `--model litellm/openrouter/...`
   pointer when `OPENROUTER_API_KEY` is set alone), before falling back to Amazon Bedrock
   (`AWS_BEARER_TOKEN_BEDROCK` or the ambient boto3 chain via `sts:GetCallerIdentity`).
 - `STRANDS_BOX=1` skips AWS STS and checks non-empty env presence only so Strands
@@ -62,13 +62,88 @@ Startup preflight is provider-aware:
 
 ## Optional providers
 
-Base install covers Bedrock and direct-provider ids. Three opt-in extras:
+Base install covers Bedrock and direct-provider ids. Opt-in extras:
 
 ```bash
 uv sync --extra agentcore   # Bedrock model discovery + AgentCore sandbox (boto3)
 uv sync --extra litellm     # OpenRouter / exotic providers via litellm/ ids
 uv sync --extra gemini      # Google Gemini (strands-agents[gemini] / google-genai)
+uv sync --extra openai      # Native OpenAI Responses API (strands-agents[openai], openai>=2.0.0)
+uv sync --extra anthropic   # Native Anthropic Messages API (strands-agents[anthropic], anthropic)
 ```
+
+### OpenAI (zero AWS required)
+
+Install the `openai` extra once (`openai>=2.0.0` is required by the native
+`OpenAIResponsesModel`), then export your OpenAI API key:
+
+```bash
+export OPENAI_API_KEY="<your-openai-key>"
+strands-code --model openai/gpt-6.1-sol   # or omit --model to auto-pick from env
+```
+
+- **Standard env vars honored automatically by the OpenAI SDK:**
+  `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT`
+  (keys are never written to `config.yaml`).
+- **Custom endpoints (`base_url` + optional `api_mode: chat`):**
+  Point `~/.config/strands-code/config.yaml` at an OpenAI-compatible gateway:
+
+  ```yaml
+  model: openai/gpt-6.1-sol
+  base_url: https://your-proxy.example/v1
+  # Optional: api_mode: chat   # default "responses" preserves effort, CacheConfig & web_search
+  ```
+
+  Default `responses` mode passes `openai/<model>` through `create_harness` so
+  Harness features (`effort`, prompt caching, native `web_search`, and `web_fetch`)
+  remain active and `base_url` is post-applied on `client_args`. Set
+  `api_mode: chat` only for legacy Chat-Completions-only gateways (builds
+  `OpenAIModel` with the `openai/` prefix stripped).
+- **Mannerisms & API extras:**
+  - `configure_openai_for_model()` strips `reasoning.effort` on non-reasoning
+    models (`gpt-4o`, `gpt-4.1*`, `gpt-4-turbo`, `chat-latest`, `gpt-3.5*`) and
+    clamps unsupported effort levels on `o1`/`o3`/`o4-mini`, `gpt-5`..`gpt-5.2`,
+    and `gpt-6-astra`/`gpt-6.1-sol` so mid-session switches never trigger HTTP 400
+    errors.
+  - Native extras (`service_tier`, `prompt_cache_retention`,
+    `prompt_cache_options`, `use_native_token_count`) work via `params` / SDK
+    model config; see upstream `#3389` for stateless encrypted reasoning item
+    replay across client-side `OpenAIResponsesModel` turns.
+  - `/model` discovery lists only Responses-capable chat/reasoning models
+    (filtering out embeddings, Whisper/TTS/audio/transcribe/realtime,
+    DALL-E/gpt-image, Sora, moderation, and legacy completions).
+
+### Anthropic (zero AWS required)
+
+Install the `anthropic` extra once, then export your Anthropic API key:
+
+```bash
+export ANTHROPIC_API_KEY="<your-anthropic-key>"
+strands-code --model anthropic/claude-sonnet-5-5   # or omit --model to auto-pick
+```
+
+- **Standard env vars & custom gateways:**
+  `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` are read natively by the
+  Anthropic SDK; non-secret gateway hosts can be persisted in
+  `~/.config/strands-code/config.yaml` under `base_url` while keeping full
+  Harness caching and native `web_search` intact.
+- **API mannerisms, safety & metadata caching:**
+  - **Exclusive usage counts & caching:** Anthropic's API reports uncached input
+    tokens separately from `cache_read_input_tokens` and
+    `cache_creation_input_tokens`; `strands-code` normalizes these alongside
+    OpenAI's inclusive counts so context `%` and cache-discounted `/cost` are
+    consistent.
+  - **Signed thinking & `SummaryBlock` isolation:** Switching between
+    `anthropic/claude-*` and `bedrock/anthropic.claude-*` converts raw signed
+    thinking blocks (`TRACE_LABEL`) and server-side compaction `SummaryBlock`s
+    (`SUMMARY_LABEL`) into text while stashing originals in `RichHistory` for
+    lossless restore on return.
+  - **SDK defaults & betas:** With `anthropic>=2.0`, default
+    `anthropic-version: 2026-10-21` removes sampling parameters (`temperature`,
+    `top_p`, `top_k`) on newer Claude models; `max_tokens` (e.g., 128K output),
+    PDF/plain-text document blocks, and `/v1/models` live metadata (`max_input_tokens`,
+    retirements shown in `/model` picker for 24h in `anthropic-models.json`) are
+    wired automatically.
 
 ### Google Gemini (zero AWS required)
 
@@ -151,9 +226,18 @@ warn-and-skip — they never break startup. Restart the CLI to reload.
   line naming the source: live Bedrock Price List, live OpenRouter
   (for `openrouter/...` ids), LiteLLM bundled data, or the static
   fallback. Display only — never budgets or enforcement.
-- `/cost refresh` re-fetches both live sources now (cached 24h in
-  `~/.cache/strands-code/`); `/cost table [filter]` lists the cached
-  per-1M-token prices without touching the network.
+- **Cache-aware usage & normalized tokens:** When prompt cache reads or writes
+  occur (`cacheReadInputTokens` / `cacheWriteInputTokens`), post-turn usage lines
+  append `(17%, 75% cached)` and `/cost` shows `in 165.60K (125.00K cached,
+  40.50K write)` with discounted USD totals (zero-cache turns omit cache tags).
+  Anthropic's exclusive input counts and OpenAI/Gemini's inclusive counts are
+  normalized automatically (`total_in`). Organization Admin billing APIs
+  (`/v1/organizations/...`) remain intentionally out of scope for standard
+  developer keys.
+- `/cost refresh` re-fetches live pricing tables now (cached 24h in
+  `~/.cache/strands-code/`, alongside `anthropic-models.json` populated during
+  live Anthropic discovery); `/cost table [filter]` lists cached per-1M prices
+  without touching the network.
 - Set `STRANDS_CODE_NO_LIVE_PRICING=1` to force static-only
   resolution (fully offline, unknown models show tokens without `$`).
 
