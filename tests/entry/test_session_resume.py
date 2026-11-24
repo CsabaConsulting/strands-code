@@ -252,6 +252,58 @@ class TestEntryRouting:
             assert built.call_args[1]["model"] == "openai/gpt-5.4"
             assert loop.call_args[1]["model_id"] == "openai/gpt-5.4"
 
+    def test_root_scopes_base_url_and_api_mode_across_cli_model_override(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+        from unittest.mock import patch
+
+        from strands_code_cli.entry.provider_config import ProviderConfig
+
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        monkeypatch.chdir(tmp_path)
+        preflight_calls: list[tuple[str | None, str | None]] = []
+
+        def _fake_load():
+            return ProviderConfig(
+                model="openai/gpt-6.1-sol",
+                base_url="https://oai-proxy.example/v1",
+                api_mode="chat",
+            )
+
+        def _fake_preflight(*, model=None, base_url=None):
+            preflight_calls.append((model, base_url))
+            return None
+
+        with (
+            patch.object(main_module.ProviderConfig, "load", side_effect=_fake_load),
+            patch.object(
+                main_module, "_preflight_credentials", side_effect=_fake_preflight
+            ),
+            patch.object(main_module, "build_agent", return_value=object()) as built,
+            patch.object(main_module, "run_loop"),
+        ):
+            from typer.testing import CliRunner
+
+            r1 = CliRunner().invoke(
+                main_module.app, ["--model", "anthropic/claude-sonnet-5-5"]
+            )
+            assert r1.exit_code == 0, r1.output
+            assert preflight_calls[-1] == ("anthropic/claude-sonnet-5-5", None)
+            assert built.call_args[1]["model"] == "anthropic/claude-sonnet-5-5"
+            assert built.call_args[1]["base_url"] is None
+
+            r2 = CliRunner().invoke(
+                main_module.app, ["--model", "openai/gpt-6.1-terra"]
+            )
+            assert r2.exit_code == 0, r2.output
+            assert preflight_calls[-1] == (
+                "openai/gpt-6.1-terra",
+                "https://oai-proxy.example/v1",
+            )
+            assert built.call_args[1]["base_url"] == "https://oai-proxy.example/v1"
+            assert type(built.call_args[1]["model"]).__name__ == "OpenAIModel"
+
 
 # ----------------------------------------------------------------------
 # CLI construction contract (no bare Agent / CodeAgent in CLI code)

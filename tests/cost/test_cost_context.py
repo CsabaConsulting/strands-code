@@ -1300,3 +1300,92 @@ class TestCacheAwareUsageAndCost:
         assert "sk-svcacct-" not in scrubbed
         assert "sk-ant-" not in scrubbed
         assert "AKIA" not in scrubbed
+
+    def test_nyquist_cache_rates_write_only_suffix_and_invalid_anthropic_window(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+
+        live_pricing.store_anthropic_models(
+            [
+                {"id": "claude-bool-win", "max_input_tokens": True},
+                {"id": "claude-zero-win", "max_input_tokens": 0},
+            ]
+        )
+        assert (
+            cost_context._anthropic_cached_window("anthropic/claude-bool-win") is None
+        )
+        assert (
+            cost_context._anthropic_cached_window("anthropic/claude-zero-win") is None
+        )
+
+        assert cost_context._default_cache_rates("openai/gpt-4o", 2.0) == (1.0, 2.0)
+        assert cost_context._default_cache_rates("openai/o3", 2.0) == (0.5, 2.0)
+
+        monkeypatch.setattr(
+            live_pricing,
+            "litellm_entry",
+            lambda _id: {
+                "in": 2.0,
+                "out": 10.0,
+                "cache_read": 0.15,
+                "cache_write": 2.5,
+            },
+        )
+        assert cost_context.cache_prices_for("openai/gpt-6.1-sol") == (
+            2.0,
+            0.15,
+            2.5,
+            10.0,
+        )
+
+        zero_in = usage_line(0, 10, "anthropic/claude-sonnet-5-5", cache_read_tokens=5)
+        assert "cached" not in zero_in and "write" not in zero_in
+        write_only = usage_line(
+            100_000, 100, "anthropic/claude-sonnet-5-5", cache_write_tokens=50_000
+        )
+        assert "(10%, 50% cache write)" in write_only
+
+    def test_nyquist_extract_prompt_usage_zero_total_and_malformed_fallbacks(self):
+        from strands_code_cli.loop.core import (
+            _extract_prompt_usage,
+            record_turn_metrics,
+        )
+
+        for model_id, expected_in in (
+            ("anthropic/claude-sonnet-5-5", 10_600),
+            ("claude-sonnet-5-5", 10_600),
+            ("openai/gpt-6.1-sol", 100),
+        ):
+            turns: list[dict[str, Any]] = []
+            record_turn_metrics(
+                self._usage_result(
+                    100, 50, cache_read=10_000, cache_write=500, total_tok=0
+                ),
+                model_id,
+                turns,
+            )
+            assert turns[0]["input_tokens"] == expected_in
+
+        class _BoomMetrics:
+            class metrics:
+                @staticmethod
+                def get_summary():
+                    raise RuntimeError("boom")
+
+        assert _extract_prompt_usage(_BoomMetrics(), "openai/gpt-6.1-sol", 42, 5) == (
+            42,
+            0,
+            0,
+        )
+        bad_usage = self._usage_result(42, 5)
+        bad_usage.metrics.get_summary()["accumulated_usage"]["cacheReadInputTokens"] = (
+            "not-an-int"
+        )
+        assert _extract_prompt_usage(bad_usage, "openai/gpt-6.1-sol", 42, 5) == (
+            42,
+            0,
+            0,
+        )

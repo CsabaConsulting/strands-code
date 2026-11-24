@@ -3486,6 +3486,93 @@ class TestConfigureBaseUrlAndResolveHarness:
         apply_switch(agent, "anthropic/claude-sonnet-5-5")
         assert str(anth_client.base_url) == default_anth_url
 
+    def test_route_side_spawn_scopes_base_url_by_provider(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import anthropic
+        import strands_harness.models as harness_models
+
+        import strands_code_cli.loop.core as loop_mod
+        import strands_code_cli.routing.core as routing_mod
+
+        monkeypatch.setattr(
+            routing_mod,
+            "load_strategy",
+            lambda: SimpleNamespace(
+                candidates=["openai/gpt-6.1-terra", "anthropic/claude-haiku-5-5"],
+                quiet=True,
+            ),
+        )
+        monkeypatch.setattr(routing_mod, "validate_routed_effort", lambda *a, **k: True)
+
+        oai_double = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+        monkeypatch.setattr(
+            routing_mod,
+            "decide",
+            lambda *a, **k: (
+                SimpleNamespace(
+                    model="openai/gpt-6.1-terra",
+                    effort="low",
+                    model_confidence=0.9,
+                    effort_confidence=0.9,
+                    tie_break=False,
+                ),
+                "heuristic",
+                (0, 0, None),
+                "",
+            ),
+        )
+        monkeypatch.setattr(harness_models, "resolve_model", lambda *a, **k: oai_double)
+        loop_mod._route_side_spawn(
+            "hi",
+            {
+                "model": object(),
+                "_base_url": "https://oai-proxy.example/v1",
+                "_base_url_provider": "openai",
+            },
+            live_model=object(),
+            current_model="openai/gpt-6.1-sol",
+            routing=None,
+            routing_events=[],
+        )
+        assert oai_double.client_args["base_url"] == "https://oai-proxy.example/v1"
+
+        anth_client = anthropic.AsyncAnthropic(api_key="test")
+        default_anth_url = str(anth_client.base_url)
+        anth_double = SimpleNamespace(client=anth_client)
+        monkeypatch.setattr(
+            routing_mod,
+            "decide",
+            lambda *a, **k: (
+                SimpleNamespace(
+                    model="anthropic/claude-haiku-5-5",
+                    effort="low",
+                    model_confidence=0.9,
+                    effort_confidence=0.9,
+                    tie_break=False,
+                ),
+                "heuristic",
+                (0, 0, None),
+                "",
+            ),
+        )
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *a, **k: anth_double
+        )
+        loop_mod._route_side_spawn(
+            "hi",
+            {
+                "model": object(),
+                "_base_url": "https://oai-proxy.example/v1",
+                "_base_url_provider": "openai",
+            },
+            live_model=object(),
+            current_model="openai/gpt-6.1-sol",
+            routing=None,
+            routing_events=[],
+        )
+        assert str(anth_client.base_url) == default_anth_url
+
 
 class TestSameProviderSummaryAndOpenAIGuard:
     def test_same_provider_and_cross_provider_thinking_roundtrip(
@@ -4082,3 +4169,107 @@ class TestLiveOpenAIAndAnthropicDiscovery:
                 [{"id": "claude-craft", "retires_at": bad_date}]
             )
             assert route_label("anthropic/claude-craft") == "anthropic/claude-craft"
+
+    def test_nyquist_model_switch_edge_branches(self, monkeypatch, tmp_path):
+        import sys
+        import types
+
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model.model_switch import (
+            _convert_summary_block,
+            _discover_anthropic_models,
+            _extract_anthropic_model_meta,
+            _is_openai_chat_model,
+            _openai_reasoning_params,
+            _serialize_capabilities,
+            configure_base_url_for_model,
+            resolve_harness_model,
+        )
+
+        assert _convert_summary_block({"summary": "bad"}, "openai/gpt-6.1-sol") is None
+        assert (
+            _convert_summary_block(
+                {"summary": {"provider": "anthropic", "text": "   "}},
+                "openai/gpt-6.1-sol",
+            )
+            is None
+        )
+        assert _is_openai_chat_model(None) is False  # type: ignore[arg-type]
+        assert _is_openai_chat_model("   ") is False
+
+        class _BoomCaps:
+            def model_dump(self, mode: str = "json"):
+                raise RuntimeError("dump failed")
+
+        assert _serialize_capabilities(_BoomCaps()) is None
+        assert _serialize_capabilities(123) is None
+        assert _extract_anthropic_model_meta(types.SimpleNamespace(id="  ")) is None
+        meta = _extract_anthropic_model_meta(
+            types.SimpleNamespace(
+                id="claude-sonnet-5-5", retires_at="2027-03-01T00:00Z"
+            )
+        )
+        assert meta is not None and meta["retires_at"] == "2027-03-01T00:00Z"
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-ant")
+        fake_ant = types.ModuleType("anthropic")
+        fake_ant.Anthropic = lambda **kw: types.SimpleNamespace(
+            models=types.SimpleNamespace(
+                list=lambda: iter(
+                    [
+                        types.SimpleNamespace(id="  "),
+                        types.SimpleNamespace(id="claude-sonnet-5-5"),
+                    ]
+                )
+            )
+        )
+        monkeypatch.setitem(sys.modules, "anthropic", fake_ant)
+        models, online = _discover_anthropic_models()
+        assert online is True and models == ["anthropic/claude-sonnet-5-5"]
+
+        assert _openai_reasoning_params("gpt-6.1-sol", {"temperature": 0.5}) is None
+        assert (
+            _openai_reasoning_params("gpt-6.1-sol", {"reasoning": {"effort": 123}})
+            is None
+        )
+
+        mantle = types.SimpleNamespace(client_args={}, _bedrock_mantle_config=object())
+        configure_base_url_for_model(
+            "openai/gpt-6.1-sol", mantle, base_url="https://proxy.example/v1"
+        )
+        assert "base_url" not in mantle.client_args
+
+        class _RoClient:
+            @property
+            def base_url(self):
+                return "https://api.anthropic.com"
+
+            @base_url.setter
+            def base_url(self, _value):
+                raise RuntimeError("read-only")
+
+        bad_anth = types.SimpleNamespace(client=_RoClient())
+        assert (
+            configure_base_url_for_model(
+                "anthropic/claude-sonnet-5-5",
+                bad_anth,
+                base_url="https://proxy.example/v1",
+            )
+            is bad_anth
+        )
+
+        monkeypatch.setattr(
+            harness_models,
+            "supports_web_search",
+            lambda _id: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda *_a, **kw: types.SimpleNamespace(kwargs=kw),
+        )
+        res = resolve_harness_model("openai/gpt-6.1-sol")
+        assert "web_search" not in res.kwargs

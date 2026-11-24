@@ -435,6 +435,32 @@ class TestProviderConfigPersistence:
         assert cross_provider.base_url is None
         assert cross_provider.api_mode is None
 
+    def test_provider_config_field_types_and_tmp_symlink_rejection(self, tmp_path):
+        from strands_code_cli.entry.provider_config import _provider_of_model
+
+        assert (
+            _provider_of_model("arn:aws:bedrock:us-west-2:123:inference-profile/x")
+            == "bedrock"
+        )
+        assert _provider_of_model("bare-id") == "bedrock"
+
+        path = tmp_path / "config.yaml"
+        for bad_cfg in (
+            ProviderConfig(model=123),
+            ProviderConfig(base_url=123),
+            ProviderConfig(codeact="invalid"),
+            ProviderConfig(codeact_remember="yes"),
+        ):
+            with pytest.raises(ValueError):
+                bad_cfg.save(path)
+
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep", encoding="utf-8")
+        (tmp_path / "config.yaml.tmp").symlink_to(victim)
+        with pytest.raises(ValueError, match="symlink"):
+            ProviderConfig(model="openai/gpt-6.1-sol").save(path)
+        assert victim.read_text(encoding="utf-8") == "keep"
+
 
 # ----------------------------------------------------------------------
 # Untrusted CWD .env auto-load guard (T-14-02)

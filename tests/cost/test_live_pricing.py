@@ -884,3 +884,34 @@ class TestOpenAIAnthropicLivePricing:
         live_pricing._write_cache(regular, {"fetched_at": 1, "models": {}})
         assert live_pricing._read_cache(regular) == {"fetched_at": 1, "models": {}}
         assert (regular.stat().st_mode & 0o777) == 0o600
+
+    def test_nyquist_litellm_malformed_and_anthropic_cache_edge_cases(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+
+        victim = tmp_path / "victim.json"
+        victim.write_text("safe", encoding="utf-8")
+        (tmp_path / "target.json.tmp").symlink_to(victim)
+        target = tmp_path / "target.json"
+        live_pricing._write_cache(target, {"k": 1})
+        assert victim.read_text(encoding="utf-8") == "safe"
+        assert not target.exists()
+
+        assert (
+            live_pricing._parse_litellm_entry(
+                {"input_cost_per_token": "bad", "output_cost_per_token": 0.01}
+            )
+            is None
+        )
+
+        live_pricing.store_anthropic_models([{"id": "   "}, "not-a-dict"])
+        cache_path = tmp_path / live_pricing.ANTHROPIC_MODELS_CACHE_FILE
+        assert not cache_path.exists()
+
+        cache_path.write_text(
+            json.dumps({"fetched_at": "bad-ts", "models": {"x": {"id": "x"}}}),
+            encoding="utf-8",
+        )
+        assert live_pricing.anthropic_models_cache() == {}
