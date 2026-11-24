@@ -36,7 +36,7 @@ class TestOpenAIAnthropicRig:
 
     def test_scenario_o1_and_an1_contract_constants_and_isolation(self):
         mod = _load("scenarios_openai_anthropic", OA_ANTHROPIC)
-        assert mod.RIG_OPENAI_PRIMARY == "openai/gpt-6.1-sol"
+        assert mod.RIG_OPENAI_PRIMARY == "openai/gpt-6.2-sol"
         assert mod.RIG_OPENAI_SECONDARY == "openai/gpt-6.1-terra"
         assert mod.RIG_ANTHROPIC_PRIMARY == "anthropic/claude-sonnet-5-5"
         assert mod.RIG_ANTHROPIC_SECONDARY == "anthropic/claude-haiku-5-5"

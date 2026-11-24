@@ -52,8 +52,10 @@ Startup preflight is provider-aware:
 - Without `--model` or a saved model, preflight auto-picks from your environment
   (`GOOGLE_API_KEY` / `GEMINI_API_KEY` or Vertex ADC -> `google/gemini-3.8-flash`,
   `ANTHROPIC_API_KEY` -> `anthropic/claude-sonnet-5-5`,
-  `OPENAI_API_KEY` -> `openai/gpt-6.1-sol`, or exits 2 with a `--model litellm/openrouter/...`
-  pointer when `OPENROUTER_API_KEY` is set alone), before falling back to Amazon Bedrock
+  `OPENAI_API_KEY` -> `openai/gpt-6.2-sol`,
+  `MODEL_API_KEY` / `META_API_KEY` -> `meta/muse-spark-1.3-contributor`, or exits 2
+  with a `--model litellm/openrouter/...` pointer when `OPENROUTER_API_KEY` is
+  set alone), before falling back to Amazon Bedrock
   (`AWS_BEARER_TOKEN_BEDROCK` or the ambient boto3 chain via `sts:GetCallerIdentity`).
 - `STRANDS_BOX=1` skips AWS STS and checks non-empty env presence only so Strands
   Box sessions pass without static prefix checks. Without credentials for the
@@ -70,6 +72,7 @@ uv sync --extra litellm     # OpenRouter / exotic providers via litellm/ ids
 uv sync --extra gemini      # Google Gemini (strands-agents[gemini] / google-genai)
 uv sync --extra openai      # Native OpenAI Responses API (strands-agents[openai], openai>=2.0.0)
 uv sync --extra anthropic   # Native Anthropic Messages API (strands-agents[anthropic], anthropic)
+uv sync --extra meta        # Meta Model API (api.meta.ai / Muse via OpenAIResponsesModel)
 ```
 
 ### OpenAI (zero AWS required)
@@ -79,7 +82,7 @@ Install the `openai` extra once (`openai>=2.0.0` is required by the native
 
 ```bash
 export OPENAI_API_KEY="<your-openai-key>"
-strands-code --model openai/gpt-6.1-sol   # or omit --model to auto-pick from env
+strands-code --model openai/gpt-6.2-sol   # or omit --model to auto-pick from env
 ```
 
 - **Standard env vars honored automatically by the OpenAI SDK:**
@@ -89,7 +92,7 @@ strands-code --model openai/gpt-6.1-sol   # or omit --model to auto-pick from en
   Point `~/.config/strands-code/config.yaml` at an OpenAI-compatible gateway:
 
   ```yaml
-  model: openai/gpt-6.1-sol
+  model: openai/gpt-6.2-sol
   base_url: https://your-proxy.example/v1
   # Optional: api_mode: chat   # default "responses" preserves effort, CacheConfig & web_search
   ```
@@ -103,8 +106,8 @@ strands-code --model openai/gpt-6.1-sol   # or omit --model to auto-pick from en
   - `configure_openai_for_model()` strips `reasoning.effort` on non-reasoning
     models (`gpt-4o`, `gpt-4.1*`, `gpt-4-turbo`, `chat-latest`, `gpt-3.5*`) and
     clamps unsupported effort levels on `o1`/`o3`/`o4-mini`, `gpt-5`..`gpt-5.2`,
-    and `gpt-6-astra`/`gpt-6.1-sol` so mid-session switches never trigger HTTP 400
-    errors.
+    and `gpt-6-astra`/`gpt-6.1-sol`/`gpt-6.2-*` so mid-session switches never
+    trigger HTTP 400 errors.
   - Native extras (`service_tier`, `prompt_cache_retention`,
     `prompt_cache_options`, `use_native_token_count`) work via `params` / SDK
     model config; see upstream `#3389` for stateless encrypted reasoning item
@@ -181,6 +184,44 @@ strands-code --model google/gemini-3.8-flash  # or omit --model to auto-pick fro
   **Mutual exclusion:** Do **not** set `GOOGLE_API_KEY` or `GEMINI_API_KEY` at the
   same time as `GOOGLE_GENAI_USE_VERTEXAI=true`; startup fails fast (exit 2) when
   both are set or when `GOOGLE_CLOUD_PROJECT` is missing.
+
+### Meta Model API (`api.meta.ai` / Muse, zero AWS required)
+
+Install the `meta` extra once (reuses `strands-agents[openai]` + `openai>=2.0.0`,
+no new dependencies), then export `MODEL_API_KEY` (`META_API_KEY` is also
+accepted as a fallback; `META_BASE_URL` optionally overrides
+`https://api.meta.ai/v1`):
+
+```bash
+export MODEL_API_KEY="<your-meta-model-api-key>"
+strands-code --model meta/muse-spark-1.3-contributor   # or omit --model to auto-pick
+```
+
+- **Ambient default & contributor tier:** When multiple keys are present, ambient
+  auto-pick follows `Google -> Anthropic -> OpenAI -> Meta -> OpenRouter ->
+  Bedrock`. When Meta is chosen, `strands-code` defaults to
+  `meta/muse-spark-1.3-contributor` for cost efficiency (\$0.10 in / \$0.002
+  cached / \$0.20 out per 1M tokens — a 50× cached discount across a
+  `1,048,576`-token window). Opt into non-contributor tiers via `--model` or
+  `/model`:
+  - `meta/muse-spark-1.3` (\$1.25 / \$0.15 cached / \$4.25 per 1M)
+  - `meta/muse-wonder-1.0` (\$4.00 / \$0.20 cached / \$20.00 per 1M)
+  - `meta/muse-ember-1.0` (\$0.10 / \$0.004 cached / \$0.50 `<200K`; \$0.30 /
+    \$0.012 cached / \$1.50 `>200K` per 1M)
+- **Protocol, caching & capabilities (empirically verified on `api.meta.ai/v1`):**
+  - Uses Meta's native `/v1/responses` endpoint via `OpenAIResponsesModel` with
+    automatic prefix caching (`prompt_cache_key`, inclusive `input_tokens`;
+    `prompt_cache_options` is rejected by Meta and avoided automatically).
+  - Supports native `web_search`, multimodal image inputs across Muse Wonder,
+    Muse Spark, and Muse Ember (while Bedrock/OpenRouter Llama models stay
+    text-only), and `[minimal, low, medium, high, xhigh, max]` reasoning levels
+    (`none`/`off` omits `reasoning`).
+  - `/model` discovery calls `GET /v1/models` only when keyed, filters out
+    non-chat assets (`muse-image-*`, `muse-voice-transcribe-*`, `sam-*`), and
+    groups Muse models cleanly under `meta / muse`.
+  - Cross-provider switches into `meta/` convert prior thinking blocks cleanly to
+    text while stashing raw signed blocks in `RichHistory` (see upstream `#3389`
+    for stateless encrypted reasoning replay on `OpenAIResponsesModel`).
 
 ### OpenRouter, custom OpenAI-compatible hosts & Ollama
 

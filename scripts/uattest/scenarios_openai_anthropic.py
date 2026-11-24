@@ -31,7 +31,7 @@ from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path inse
     wait_for_new,
 )
 
-RIG_OPENAI_PRIMARY = "openai/gpt-6.1-sol"
+RIG_OPENAI_PRIMARY = "openai/gpt-6.2-sol"
 RIG_OPENAI_SECONDARY = "openai/gpt-6.1-terra"
 RIG_ANTHROPIC_PRIMARY = "anthropic/claude-sonnet-5-5"
 RIG_ANTHROPIC_SECONDARY = "anthropic/claude-haiku-5-5"
@@ -120,7 +120,7 @@ def _run_provider_rig(
 
 
 def scenario_o1() -> None:
-    """O1: Zero-AWS OpenAI GPT-6.1 Sol launch, tool turn, /context, /cost, /model."""
+    """O1: Zero-AWS OpenAI GPT-6.2 Sol launch, tool turn, /context, /cost, /model."""
     _run_provider_rig(
         name="o1",
         primary=RIG_OPENAI_PRIMARY,
