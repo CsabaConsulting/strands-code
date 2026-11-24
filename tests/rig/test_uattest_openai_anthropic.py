@@ -75,3 +75,18 @@ class TestOpenAIAnthropicRig:
         assert "ANTHROPIC_SENTINEL_15" in an1_src
         assert "1.00M" in an1_src
         assert "AN1 PASS" in an1_src
+
+    def test_usage_end_regex_matches_cache_aware_usage_lines(self):
+        upstream = _load(
+            "scenarios_upstream",
+            REPO_ROOT / "scripts" / "uattest" / "scenarios_upstream.py",
+        )
+        assert upstream.USAGE_END_RE.search("turn output\n1.00K (0%) $0.00\n> ")
+        assert upstream.USAGE_END_RE.search(
+            "turn output\n13.35K (1%, 50% cached) $0.02\n> "
+        )
+        assert upstream.USAGE_END_RE.search(
+            "turn output\n40.60K (4%, 99% cache write) $0.10\n> "
+        )
+        assert upstream.USAGE_END_RE.search("165.60K (n/a, 75% cached)\n")
+        assert not upstream.USAGE_END_RE.search("turn output\n> ")

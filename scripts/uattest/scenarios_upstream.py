@@ -42,7 +42,7 @@ SESSION_ID_RE = re.compile(r"Session ([0-9a-f-]{36})")
 # Post-turn usage lines render either ``1.00K (1%) $0.00`` or unpriced
 # ``1.00K (0%)`` (Nova 2 Lite has a 1M SDK window and no price table row).
 USAGE_END_RE = re.compile(
-    r"^\s*\d+(?:\.\d+)?[KM]?\s+\((?:\d+%|n/a)\)(?:\s+\$\d+\.\d{2}(?:\s+actual)?)?\s*$",
+    r"^\s*\d+(?:\.\d+)?[KM]?\s+\((?:\d+%|n/a)(?:,\s*\d+%\s+(?:cached|cache write))?\)(?:\s+\$\d+\.\d{2}(?:\s+actual)?)?\s*$",
     re.MULTILINE,
 )
 
