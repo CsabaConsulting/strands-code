@@ -68,6 +68,19 @@ class TestPreflightGate:
         assert canary not in captured.err
         assert canary not in caplog.text
 
+        meta_canary = "LLM|9999999|MetaCanarySecretDoNotLeak1234"
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+        monkeypatch.setenv("MODEL_API_KEY", meta_canary)
+        monkeypatch.setenv("META_BASE_URL", "ftp://bad.example/v1")
+        with caplog.at_level("WARNING"), pytest.raises(typer.Exit):
+            preflight_credentials()
+        meta_captured = capsys.readouterr()
+        assert "META_BASE_URL" in meta_captured.err
+        assert meta_canary not in meta_captured.out
+        assert meta_canary not in meta_captured.err
+        assert meta_canary not in caplog.text
+
     def test_google_api_key_auto_picks_gemini_flash_without_sts(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "any-nonempty-token")
         assert (

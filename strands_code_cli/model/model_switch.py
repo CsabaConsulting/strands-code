@@ -763,11 +763,47 @@ def _discover_anthropic_models() -> tuple[list[str], bool]:
     return (list(CURATED_ANTHROPIC_MODELS), False)
 
 
+def _has_unsafe_model_chars(value: str) -> bool:
+    """True when value contains whitespace or ASCII control characters."""
+    return any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
+
+
+def _meta_openai_client_args(
+    endpoint: str,
+    api_key: str | None,
+    *,
+    has_explicit_base_url: bool = False,
+    openai_mod: Any = None,
+) -> dict[str, Any]:
+    """Build isolated OpenAI client args that block OPENAI_* env fallbacks."""
+    effective_key = (
+        api_key if api_key else ("not-required" if has_explicit_base_url else "")
+    )
+    args: dict[str, Any] = {
+        "base_url": endpoint,
+        "api_key": effective_key,
+        "admin_api_key": "",
+        "organization": "",
+        "project": "",
+        "webhook_secret": "",
+    }
+    omit = getattr(openai_mod, "omit", None)
+    if omit is not None:
+        args["default_headers"] = {
+            "OpenAI-Organization": omit,
+            "OpenAI-Project": omit,
+        }
+    return args
+
+
 def _is_meta_chat_model(model_id: str) -> bool:
     """True for Responses-capable Meta Muse chat/reasoning model ids."""
-    if not isinstance(model_id, str) or not model_id.strip():
+    if not isinstance(model_id, str):
         return False
-    lowered = model_id.strip().lower()
+    stripped = model_id.strip()
+    if not stripped or _has_unsafe_model_chars(stripped):
+        return False
+    lowered = stripped.lower()
     if any(token in lowered for token in _META_NON_CHAT_TOKENS):
         return False
     return lowered.startswith("muse-")
@@ -786,7 +822,13 @@ def _discover_meta_models() -> tuple[list[str], bool]:
     try:
         import openai  # lazy: optional [meta] / [openai] extra
 
-        client = openai.OpenAI(api_key=meta_api_key(), base_url=meta_base_url())
+        client = openai.OpenAI(
+            **_meta_openai_client_args(
+                meta_base_url(), meta_api_key(), openai_mod=openai
+            ),
+            timeout=5.0,
+            max_retries=0,
+        )
         found = [
             f"meta/{item.id.strip()}"
             for item in client.models.list()
@@ -1272,6 +1314,7 @@ def build_meta_model(
     base_url: str | None = None,
 ) -> Any:
     """Build a retireable OpenAIResponsesModel targeting Meta Model API."""
+    import openai  # lazy: optional [meta] / [openai] extra
     from strands.models import CacheConfig
     from strands.models.openai_responses import OpenAIResponsesModel
 
@@ -1283,15 +1326,19 @@ def build_meta_model(
     if provider.lower() != "meta" or not tail.strip():
         raise ValueError(f"Expected meta/<model>, got {model_ref!r}")
     tail = tail.strip()
+    if _has_unsafe_model_chars(tail):
+        raise ValueError(f"Invalid Meta model id {model_ref!r}")
     if base_url is not None:
         _validate_base_url(base_url)
         endpoint = base_url.rstrip("/")
     else:
         endpoint = meta_base_url()
-    client_args: dict[str, Any] = {"base_url": endpoint}
-    api_key = meta_api_key()
-    if api_key:
-        client_args["api_key"] = api_key
+    client_args = _meta_openai_client_args(
+        endpoint,
+        meta_api_key(),
+        has_explicit_base_url=base_url is not None,
+        openai_mod=openai,
+    )
     params: dict[str, Any] = {}
     mapped_effort = _normalize_meta_effort(effort)
     if mapped_effort is not None:
@@ -1398,6 +1445,10 @@ def configure_base_url_for_model(
     """Post-apply a persisted ProviderConfig.base_url without losing harness goodies."""
     if not base_url or not model_id or resolved is None:
         return resolved
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    _validate_base_url(base_url)
+    cleaned = base_url.rstrip("/")
     provider = _provider_of(normalize_model_ref(model_id))
     if provider in ("openai", "meta"):
         if getattr(resolved, "_bedrock_mantle_config", None) is not None:
@@ -1406,7 +1457,7 @@ def configure_base_url_for_model(
         if isinstance(client_args, dict) and (
             provider == "meta" or not client_args.get("base_url")
         ):
-            client_args["base_url"] = base_url
+            client_args["base_url"] = cleaned
     elif provider == "anthropic":
         client = getattr(resolved, "client", None)
         cls_name = type(client).__name__ if client is not None else ""
@@ -1417,7 +1468,7 @@ def configure_base_url_for_model(
             and "Vertex" not in cls_name
         ):
             try:
-                client.base_url = base_url
+                client.base_url = cleaned
             except Exception:
                 pass
     return resolved

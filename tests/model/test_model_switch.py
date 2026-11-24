@@ -4283,6 +4283,7 @@ class TestMetaModelAdapter:
     def test_build_meta_model_protocol_caching_effort_and_web_search(self, monkeypatch):
         import warnings
 
+        import openai
         from strands.models.openai_responses import OpenAIResponsesModel
 
         from strands_code_cli.model.model_switch import (
@@ -4307,6 +4308,14 @@ class TestMetaModelAdapter:
         assert model.client_args == {
             "base_url": "https://custom-meta.local/v1",
             "api_key": "test-meta-token",
+            "admin_api_key": "",
+            "organization": "",
+            "project": "",
+            "webhook_secret": "",
+            "default_headers": {
+                "OpenAI-Organization": openai.omit,
+                "OpenAI-Project": openai.omit,
+            },
         }
         assert model.model_info.capabilities.prompt_caching == "auto"
         assert model.model_info.limits.context_window == 1_048_576
@@ -4482,6 +4491,8 @@ class TestMetaModelAdapter:
                             types.SimpleNamespace(id="muse-spark-1.3"),
                             types.SimpleNamespace(id="muse-wonder-1.0"),
                             types.SimpleNamespace(id="muse-ember-1.0"),
+                            types.SimpleNamespace(id="muse-spark-1.3\x1b[31m"),
+                            types.SimpleNamespace(id="muse-ember-1.0\nfoo"),
                             types.SimpleNamespace(id="muse-image-1.0"),
                             types.SimpleNamespace(id="muse-voice-transcribe-1.0"),
                             types.SimpleNamespace(id="sam-3.1"),
@@ -4495,7 +4506,16 @@ class TestMetaModelAdapter:
         found, online = _discover_meta_models()
         assert online is True
         assert client_calls == [
-            {"api_key": "k-meta", "base_url": "https://meta-catalog.local/v1"}
+            {
+                "api_key": "k-meta",
+                "base_url": "https://meta-catalog.local/v1",
+                "admin_api_key": "",
+                "organization": "",
+                "project": "",
+                "webhook_secret": "",
+                "timeout": 5.0,
+                "max_retries": 0,
+            }
         ]
         assert found == [
             "meta/muse-spark-1.3-contributor",
@@ -4514,3 +4534,87 @@ class TestMetaModelAdapter:
         fallback, online2 = _discover_meta_models()
         assert online2 is False
         assert fallback == list(CURATED_META_MODELS)
+
+    def test_meta_security_isolates_openai_env_and_validates_inputs(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import openai
+        import pytest
+
+        from strands_code_cli.model.model_switch import (
+            build_meta_model,
+            configure_base_url_for_model,
+        )
+
+        canaries = {
+            "OPENAI_API_KEY": "sk-proj-CANARY_OAI_KEY_1234567890",
+            "OPENAI_ADMIN_KEY": "sk-admin-CANARY_ADMIN_KEY_1234",
+            "OPENAI_ORG_ID": "org-CANARY_ORG_987",
+            "OPENAI_PROJECT_ID": "proj_CANARY_PROJ_654",
+            "OPENAI_WEBHOOK_SECRET": "whsec_CANARY_HOOK_321",
+            "OPENAI_BASE_URL": "https://evil-openai.invalid/v1",
+        }
+        for name, val in canaries.items():
+            monkeypatch.setenv(name, val)
+
+        def _assert_no_leak(model_obj, expected_host: str) -> None:
+            client = openai.AsyncOpenAI(**model_obj.client_args)
+            req = client._build_request(
+                openai._models.FinalRequestOptions(method="post", url="/responses")
+            )
+            headers = {k.lower(): v for k, v in req.headers.items()}
+            assert str(req.url) == f"{expected_host}/responses"
+            assert "openai-organization" not in headers
+            assert "openai-project" not in headers
+            wire_dump = repr(
+                (
+                    headers,
+                    client.api_key,
+                    client.admin_api_key,
+                    client.organization,
+                    client.project,
+                    client.webhook_secret,
+                    str(client.base_url),
+                )
+            )
+            for val in canaries.values():
+                assert val not in wire_dump
+
+        # Case 1: unkeyed default Meta (e.g. /model dispatch without MODEL_API_KEY)
+        monkeypatch.delenv("MODEL_API_KEY", raising=False)
+        monkeypatch.delenv("META_API_KEY", raising=False)
+        unkeyed = build_meta_model("meta/muse-spark-1.3-contributor")
+        _assert_no_leak(unkeyed, "https://api.meta.ai/v1")
+
+        # Case 2: unkeyed custom proxy base_url uses non-empty placeholder, never OPENAI_API_KEY
+        proxy = build_meta_model(
+            "meta/muse-spark-1.3-contributor",
+            base_url="https://meta-proxy.local/v1/",
+        )
+        _assert_no_leak(proxy, "https://meta-proxy.local/v1")
+        assert proxy.client_args["api_key"] == "not-required"
+
+        # Case 3: keyed Meta uses MODEL_API_KEY without leaking OPENAI_ORG_ID/PROJECT_ID/etc.
+        monkeypatch.setenv("MODEL_API_KEY", "LLM|123456|MetaSecretValue1234")
+        keyed = build_meta_model("meta/muse-ember-1.0")
+        _assert_no_leak(keyed, "https://api.meta.ai/v1")
+        assert keyed.client_args["api_key"] == "LLM|123456|MetaSecretValue1234"
+
+        # Control chars / whitespace rejected in build_meta_model tail
+        for bad_ref in (
+            "meta/muse-spark-1.3\x1b[31m",
+            "meta/muse-spark-1.3 bad",
+        ):
+            with pytest.raises(ValueError):
+                build_meta_model(bad_ref)
+
+        # configure_base_url_for_model validates schemes and embedded credentials
+        stub = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+        for bad_url in (
+            "ftp://evil.local/v1",
+            "https://user:pass@proxy.local/v1",
+        ):
+            with pytest.raises(ValueError):
+                configure_base_url_for_model(
+                    "meta/muse-spark-1.3", stub, base_url=bad_url
+                )

@@ -1442,8 +1442,12 @@ class TestCacheAwareUsageAndCost:
 
         raw = (
             "LLM_1607358788850350_nx9SecretToken1234 "
-            "Authorization: Bearer LLM|1607358788850350|pipeSecret5678"
+            "Authorization: Bearer LLM|1607358788850350|pipeSecret5678 "
+            "LLM|1607358788850350|AbCd+EfGh/IjKl== "
+            "MODEL_API_KEY=LLM|99999|SecretToken123456"
         )
         scrubbed = scrub_credentials(raw)
         assert "LLM_1607" not in scrubbed
         assert "LLM|1607" not in scrubbed
+        assert "AbCd+EfGh/IjKl==" not in scrubbed
+        assert "SecretToken123456" not in scrubbed

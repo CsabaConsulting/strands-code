@@ -61,10 +61,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 15 Nyquist validation (`638bc2e`, `15-VALIDATION.md` `validated`): filled remaining branch tests across `entry/`, `cost/`, and `model/` (`1694/1694` default suite + `42/42` rig green).
 - Phase 16 discussion (`16-CONTEXT.md` `D-01`–`D-08`): locked ambient default `meta/muse-spark-1.3-contributor` ordered `Google -> Anthropic -> OpenAI -> Meta -> OpenRouter -> Bedrock`, `meta` optional extra alias + `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL`, live `api.meta.ai/v1` probe + retireable `meta/` adapter + live `driver.py m1` UAT, folded `strands-agents>=1.66.0` / `strands-harness>=0.5.0` upstream resync retiring `_gpt_62_model_info_fallback()` and bumping OpenAI ambient default to `openai/gpt-6.2-sol`, `_MEDIA_LESS` Bedrock Llama scoping, cache-aware contributor `/cost`, and held `docs/upstream/harness_comment_6521_meta_probe.md` draft for `#6521`.
 - Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`): resynced to `strands-agents==1.66.0` & `strands-harness==0.5.0` (retired `_gpt_62_model_info_fallback()`, gated native `web_search` on `_web_search_kind == "native"`, adapted Claude-on-Bedrock `AnthropicModel(AsyncAnthropicBedrock)` tests, bumped OpenAI default to `openai/gpt-6.2-sol`); added `meta` extra + `_SDK_EXTRA_HINTS["meta"]` + `first_run` helpers + auto-retiring `build_meta_model()` (`CacheConfig()`, `prompt_caching="auto"`, omitted `reasoning` on `"none"`/`"off"`, `_strands_model_ref`); narrowed `_MEDIA_LESS` for multimodal Muse + added filtered `GET /v1/models` Meta discovery (`("meta", "muse")` grouping), LiteLLM/static `muse-ember-1.0` & 50× contributor pricing + `LLM_...`/`LLM|...` scrubbing, repeatable `driver.py m1` (`M1 PASS`), `docs/QUICKSTART.md` guide, and held `docs/upstream/harness_comment_6521_meta_probe.md`.
+- Phase 16 UAT & `#6521` update (`1e07618`, `aab271f`, `2247b47`, `16-UAT.md` `6/6` passed): merged empirical probe findings into `docs/upstream/harness_issue_meta_model_api.md`, updated `strands-agents/harness-sdk#6521` title and body in place (`0` comments), and completed `16-UAT.md` (`6/6` passed).
+- Phase 16 security audit (`16-SECURITY.md` `10/10 closed`, `threats_open: 0`): closed `T-16-02` (isolated Meta `OpenAIResponsesModel` / discovery client args via `_meta_openai_client_args()` overriding `OPENAI_API_KEY`/`OPENAI_ADMIN_KEY`/`OPENAI_ORG_ID`/`OPENAI_PROJECT_ID`/`OPENAI_WEBHOOK_SECRET`/`OpenAI-*` headers), `T-16-03` (`_validate_base_url()` in `configure_base_url_for_model()`, `_has_unsafe_model_chars()` guard on Meta IDs, and `timeout=5.0, max_retries=0` on discovery), and `T-16-04` (widened `LLM_...`/`LLM|...` scrubbing regex + `MODEL_API_KEY` canary isolation test).
 
 ### Pending Todos
 
-- Run `/gsd-secure-phase 16` / `/gsd-validate-phase 16` to finish Phase 16 security & Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
+- Run `/gsd-validate-phase 16` to finish Phase 16 Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -77,6 +79,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T19:23:13Z
-Stopped at: Phase 16 UAT complete (`16-UAT.md` 6/6 passed, live `m1`/`o1`/discovery/`/btw`, `aab271f`, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-secure-phase 16` or `/gsd-validate-phase 16`
-Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-UAT.md
+Last session: 2026-11-24T19:37:43Z
+Stopped at: Phase 16 security audit complete (`16-SECURITY.md` 10/10 closed, `threats_open: 0`, `1706/1706` default suite + `44/44` rig green) — ready for `/gsd-validate-phase 16` or `/gsd-discuss-phase 17`
+Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-SECURITY.md
