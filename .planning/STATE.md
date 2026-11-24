@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: 15
 current_phase_name: First-Class Native OpenAI & Anthropic APIs
 current_plan: 0
-status: context_gathered
-stopped_at: Phase 15 context gathered (`15-CONTEXT.md`, `15-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 15`
-last_updated: "2026-11-24T01:58:00Z"
+status: planned
+stopped_at: Phase 15 planned (`15-01`, `15-02`, `15-03`; `15-PLAN-CHECK.md` `PASS`) — ready for `/gsd-execute-phase 15`
+last_updated: "2026-11-24T02:06:00Z"
 last_activity: 2026-11-23
-last_activity_desc: Gathered Phase 15 context (15-CONTEXT.md, D-01..D-08) for native OpenAI & Anthropic APIs
-state_head: 6d67bc0
+last_activity_desc: Planned Phase 15 across 3 plans / 3 waves (15-01..15-03, 15-PLAN-CHECK PASS)
+state_head: 2986804
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 5
+  total_plans: 8
   completed_plans: 5
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Context gathered (`15-CONTEXT.md`)
-Plan: 0 of TBD in Phase 15
-Status: Context gathered (`15-CONTEXT.md` `D-01`..`D-08`) — ready for `/gsd-plan-phase 15`
-Last activity: 2026-11-23 — Gathered Phase 15 context (`15-CONTEXT.md`, `15-DISCUSSION-LOG.md`)
+Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Planned (`15-01`..`15-03`)
+Plan: 0 of 3 complete in Phase 15
+Status: Planned (3 plans across 3 waves; `15-PLAN-CHECK.md` `PASS`) — ready for `/gsd-execute-phase 15`
+Last activity: 2026-11-23 — Planned Phase 15 across 3 waves (`15-RESEARCH.md`, `15-01`..`15-03`, `15-VALIDATION.md`, `15-PLAN-CHECK.md`)
 
 Progress: [██░░░░░░░░] 22%
 
@@ -58,7 +58,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 15` (and Phase 15 research) for `MODEL-07` / `MODEL-08` (OpenAI `#17` & Anthropic `#22`).
+- Run `/gsd-execute-phase 15` to execute Waves 1–3 (`15-01-PLAN.md`..`15-03-PLAN.md`, `MODEL-07`/`MODEL-08`).
 - Review and publish held upstream Meta Model API feature proposal at `docs/upstream/harness_issue_meta_model_api.md` (completing `## Human Overview` first) ahead of Phase 16 (`MODEL-09`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510` (plus `#6480`–`#6484`) before opening any Gemini 2.5 harness PR.
 
@@ -72,6 +72,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T01:58:00Z
-Stopped at: Phase 15 context gathered (`15-CONTEXT.md`, `15-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 15`
-Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-CONTEXT.md
+Last session: 2026-11-24T02:06:00Z
+Stopped at: Phase 15 planned (`15-01`, `15-02`, `15-03`; `15-PLAN-CHECK.md` `PASS`) — ready for `/gsd-execute-phase 15`
+Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-01-PLAN.md
