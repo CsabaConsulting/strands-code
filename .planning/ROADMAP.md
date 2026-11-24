@@ -86,15 +86,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `15-01-PLAN.md` — Tracer: `openai` (`openai>=2.0.0`) & `anthropic` extras, `_SDK_EXTRA_HINTS`, `first_run` helpers + bumped ambient defaults, switch `caching`/`web_search` preservation & harness-preserving `base_url` + opt-in `api_mode: chat`
+- [x] `15-01-PLAN.md` — Tracer: `openai` (`openai>=2.0.0`) & `anthropic` extras, `_SDK_EXTRA_HINTS`, `first_run` helpers + bumped ambient defaults, switch `caching`/`web_search` preservation & harness-preserving `base_url` + opt-in `api_mode: chat` (`27bedc5`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `15-02-PLAN.md` — Cache-aware inclusive/exclusive `/cost` & compact cache display, bare-tail `litellm_entry` & 24h Anthropic metadata cache, `same_provider` thinking & `SummaryBlock` safety, `_vendor_family` grouping, `configure_openai_for_model` guard & credential-gated live `/model` discovery
+- [x] `15-02-PLAN.md` — Cache-aware inclusive/exclusive `/cost` & compact cache display, bare-tail `litellm_entry` & 24h Anthropic metadata cache, `same_provider` thinking & `SummaryBlock` safety, `_vendor_family` grouping, `configure_openai_for_model` guard & credential-gated live `/model` discovery (`15d98a4`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `15-03-PLAN.md` — Repeatable `driver.py o1` / `an1` UAT rigs + offline rig contracts, `docs/QUICKSTART.md` OpenAI/Anthropic guides, held upstream OpenAI reasoning-guard draft & all 6 CI gates
+- [x] `15-03-PLAN.md` — Repeatable `driver.py o1` / `an1` UAT rigs + offline rig contracts, `docs/QUICKSTART.md` OpenAI/Anthropic guides, held upstream OpenAI reasoning-guard draft & all 6 CI gates (`eeceb59`, rig updates `b102735`, `3b8ab4f`)
 
 ### Phase 16: First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement
 
@@ -178,7 +178,7 @@ Plans:
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
-| 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 0/3 | Planned | - |
+| 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete (an1 awaiting Anthropic credits) | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 0/0 | Not started | - |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
