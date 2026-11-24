@@ -1,11 +1,12 @@
+# Filed URL
+
+https://github.com/strands-agents/harness-sdk/issues/6510
+
+---
+
 ## Human Overview
 
-> HUMAN: replace this paragraph with ~50 words in your own words (repo policy:
-> AI-drafted issues require a human overview; see team/AI_USAGE_POLICY.md).
-> Suggested gist: `strands_harness.models._gemini()` unconditionally passes
-> `thinking_config={"thinking_level": effort}` whenever `effort` is not `None`,
-> which Gemini 3 accepts but Gemini 2.5 models (`gemini-2.5-pro`,
-> `gemini-2.5-flash`) reject because they require integer `thinking_budget`.
+Earlier Gemini models' thinking semantic configuration is very different and not compatible with the current mechanisms: `strands_harness.models._gemini()` unconditionally passes `thinking_config={"thinking_level": effort}` whenever `effort` is not `None`, which Gemini 3 accepts but Gemini 2.5 models (`gemini-2.5-pro`, `gemini-2.5-flash`) reject because they require integer `thinking_budget`.
 
 ## Checks
 
@@ -19,7 +20,7 @@ Python
 
 ## Strands Version
 
-strands-harness 0.4.0 (with strands-agents 1.65.0)
+strands-harness 0.4.0 (with strands-agents 1.65.0; verified on main at d6c5fae7c / ac334146a)
 
 ## Language Runtime Version
 
@@ -36,7 +37,7 @@ uv (`strands-harness>=0.4.0`, `strands-agents[gemini]`)
 ## Steps to Reproduce
 
 1. Install the Gemini extra (`strands-agents[gemini]`).
-2. Call `resolve_model` on any Gemini 2.5 model with an explicit `effort`:
+2. Call `resolve_model` on any Gemini 2.5 model with default `effort="auto"` (since `_PROVIDERS["google"]` sets `recommended_thinking="high"`) or explicit `effort="high"`:
 
    ```python
    from strands_harness.models import resolve_model
@@ -67,4 +68,6 @@ Because `supports_thinking("google/gemini-2.5-pro")` returns `True`, routed/effo
 
 ## Possible Solution
 
-Guard `_gemini()` by model family: emit `"thinking_budget"` for `gemini-2.5*` model ids (e.g. `0` when effort is `"off"`/`"none"`, `-1` dynamic thinking when enabled), reserve `"thinking_level"` for `gemini-3*`+ models, and omit built-in `GoogleSearch()` `gemini_tools` on `gemini-2.5*` when custom function declarations are attached. Downstream in `CsabaConsulting/strands-code`, `configure_gemini_for_model()` rewrites `params["thinking_config"]` and clears `gemini_tools=[]` on `gemini-2.5*` as a defensive workaround until fixed upstream.
+Guard `_gemini()` by model family (matching the pattern used by `_claude_thinking_mode` / `_EXTENDED_THINKING_BUDGETS` and `_has_web_search` in `harness-py/src/strands_harness/models.py`): emit `"thinking_budget"` for `gemini-2.5*` model ids (e.g. `0` when effort is `"off"`/`"none"`, `-1` dynamic thinking or mapped token budgets when enabled), reserve `"thinking_level"` for `gemini-3*`+ models, and omit built-in `GoogleSearch()` `gemini_tools` on `gemini-2.5*` when custom function declarations are attached. Downstream in `CsabaConsulting/strands-code`, `configure_gemini_for_model()` rewrites `params["thinking_config"]` and clears `gemini_tools=[]` on `gemini-2.5*` as a defensive workaround until fixed upstream.
+
+Happy to open a targeted PR if maintainers want Gemini 2.5 guarded alongside Gemini 3+/4 (while AI Studio automatically reroutes deprecated Gemini 2.5 IDs after Dec 1, 2026, Vertex AI and pinned Gemini 2.5 deployments remain affected).
