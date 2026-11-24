@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import platformdirs
 import yaml
@@ -27,6 +28,28 @@ def default_config_path() -> Path:
     return Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _CONFIG_FILE_NAME
 
 
+def _provider_of_model(model: str) -> str:
+    """Normalized provider owning ``model`` (empty/ARN/bare -> bedrock)."""
+    if model.startswith("arn:") or "/" not in model:
+        return "bedrock"
+    return model.partition("/")[0].lower()
+
+
+def _validate_base_url(base_url: str) -> None:
+    """Validate persisted custom endpoint host: http(s) URL without embedded creds."""
+    if not base_url or any(ch.isspace() or ord(ch) < 32 for ch in base_url):
+        raise ValueError(
+            "Provider config 'base_url' must be a non-empty URL without whitespace"
+        )
+    parsed = urlsplit(base_url)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
+        raise ValueError(
+            "Provider config 'base_url' must be an http:// or https:// URL with a host"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Provider config 'base_url' must not embed credentials")
+
+
 def _validate_provider_fields(
     *,
     model: Any,
@@ -38,8 +61,10 @@ def _validate_provider_fields(
     """Validate persisted provider configuration field types and enums."""
     if model is not None and not isinstance(model, str):
         raise ValueError("Provider config 'model' must be a string")
-    if base_url is not None and not isinstance(base_url, str):
-        raise ValueError("Provider config 'base_url' must be a string")
+    if base_url is not None:
+        if not isinstance(base_url, str):
+            raise ValueError("Provider config 'base_url' must be a string")
+        _validate_base_url(base_url)
     if api_mode is not None and (
         not isinstance(api_mode, str) or api_mode not in VALID_API_MODES
     ):
@@ -119,9 +144,18 @@ class ProviderConfig:
         )
 
     def save_model_choice(self, model: str, path: str | Path | None = None) -> Path:
-        """Persist a /model switch keeping other keys (never credentials)."""
+        """Persist a /model switch keeping other keys (never credentials).
+
+        Clears ``base_url`` and ``api_mode`` when switching across providers so
+        one vendor's API key never routes to another vendor's custom proxy host.
+        """
         if not isinstance(model, str):
             raise ValueError("Provider config 'model' must be a string")
+        if self.model is not None and _provider_of_model(
+            self.model
+        ) != _provider_of_model(model):
+            self.base_url = None
+            self.api_mode = None
         self.model = model
         return self.save(path)
 
@@ -165,6 +199,9 @@ class ProviderConfig:
         resolved.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(resolved.parent, 0o700)
         tmp = resolved.with_suffix(".yaml.tmp")
+        if tmp.is_symlink():
+            raise ValueError(f"Provider config temp file must not be a symlink: {tmp}")
         tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
+        os.chmod(tmp, 0o600)
         os.replace(tmp, resolved)
         return resolved

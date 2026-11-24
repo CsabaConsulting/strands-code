@@ -807,12 +807,34 @@ class TestBuildBtwAgent:
                 "session": {"id": "s"},
                 "callback_handler": object(),
                 "_base_url": "https://proxy.local/v1",
+                "_base_url_provider": "openai",
             },
             [],
             "why slow?",
         )
         assert "_base_url" not in created
+        assert "_base_url_provider" not in created
         assert oai_model.client_args["base_url"] == "https://proxy.local/v1"
+
+        cross_model = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kwargs: SimpleNamespace(model=cross_model),
+        )
+        build_btw_agent(
+            {
+                "model": "openai/gpt-6.1-sol",
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+                "_base_url": "https://anthropic-proxy.local/v1",
+                "_base_url_provider": "anthropic",
+            },
+            [],
+            "cross check",
+        )
+        assert "base_url" not in cross_model.client_args
 
     def test_build_btw_agent_calls_configure_openai_for_model(self, monkeypatch):
         import strands_code_cli.loop.btw as btw_mod

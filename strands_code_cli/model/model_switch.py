@@ -825,6 +825,9 @@ def group_models(options: list[str]) -> list[tuple[str, list[str]]]:
     return result
 
 
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
 def route_label(route: str) -> str:
     """Short picker label for a route; the value stays the verbatim string.
 
@@ -842,8 +845,10 @@ def route_label(route: str) -> str:
 
         entry = live_pricing.anthropic_model_entry(route)
         retires = entry.get("retires_at") if entry else None
-        if isinstance(retires, str) and len(retires.strip()) >= 10:
-            return f"{route} (retires {retires.strip()[:10]})"
+        if isinstance(retires, str):
+            match = _ISO_DATE_RE.match(retires.strip())
+            if match is not None:
+                return f"{route} (retires {match.group(0)})"
     except Exception:
         pass
     return route
@@ -1252,6 +1257,23 @@ def prepare_resumed_history(
     return True
 
 
+def scoped_base_url(
+    base_url: str | None,
+    owner_provider: str | None,
+    target_model: str | None,
+) -> str | None:
+    """Return ``base_url`` only when ``target_model`` matches ``owner_provider``."""
+    if not base_url:
+        return None
+    if not owner_provider or not target_model:
+        return base_url
+    return (
+        base_url
+        if _provider_of(normalize_model_ref(target_model)) == owner_provider
+        else None
+    )
+
+
 def configure_base_url_for_model(
     model_id: str,
     resolved: Any,
@@ -1343,7 +1365,13 @@ def apply_switch(
     """
     normalized = normalize_model_ref(new_string)
     effective_base_url = (
-        base_url if base_url is not None else getattr(agent, "_base_url", None)
+        base_url
+        if base_url is not None
+        else scoped_base_url(
+            getattr(agent, "_base_url", None),
+            getattr(agent, "_base_url_provider", None),
+            normalized,
+        )
     )
     model = resolve_harness_model(
         normalized,

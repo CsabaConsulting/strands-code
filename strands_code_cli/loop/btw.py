@@ -38,6 +38,7 @@ from strands_code_cli.model.model_switch import (
     configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
+    scoped_base_url,
 )
 from strands_code_cli.ui.output import print_plain
 
@@ -448,6 +449,7 @@ def build_btw_agent(
     prompt = fork_btw_history(history, question)
     kwargs = dict(parent_kwargs)
     base_url = kwargs.pop("_base_url", None)
+    base_url_provider = kwargs.pop("_base_url_provider", None)
     if "model" in kwargs:
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
@@ -481,6 +483,10 @@ def build_btw_agent(
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
     configure_openai_for_model(target_id, resolved_model)
-    configure_base_url_for_model(target_id, resolved_model, base_url=base_url)
+    configure_base_url_for_model(
+        target_id,
+        resolved_model,
+        base_url=scoped_base_url(base_url, base_url_provider, target_id),
+    )
     register_memory_plugin(agent, load_memory)
     return agent, prompt

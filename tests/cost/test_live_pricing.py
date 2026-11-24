@@ -869,3 +869,18 @@ class TestOpenAIAnthropicLivePricing:
         )
         assert live_pricing.anthropic_models_cache() == {}
         assert live_pricing.anthropic_model_entry("anthropic/claude-blocked") is None
+
+    def test_cache_helpers_refuse_symlinks_and_set_0600_mode(self, tmp_path):
+        victim = tmp_path / "victim.txt"
+        victim.write_text('{"models": {"evil": {}}}', encoding="utf-8")
+        link = tmp_path / "cache-link.json"
+        link.symlink_to(victim)
+
+        assert live_pricing._read_cache(link) is None
+        live_pricing._write_cache(link, {"fetched_at": 1, "models": {}})
+        assert victim.read_text(encoding="utf-8") == '{"models": {"evil": {}}}'
+
+        regular = tmp_path / "sub" / "regular.json"
+        live_pricing._write_cache(regular, {"fetched_at": 1, "models": {}})
+        assert live_pricing._read_cache(regular) == {"fetched_at": 1, "models": {}}
+        assert (regular.stat().st_mode & 0o777) == 0o600

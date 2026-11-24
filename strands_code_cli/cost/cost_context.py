@@ -815,6 +815,7 @@ _CRED_PATTERNS = (
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"(?i)(aws_secret_access_key|api_key|bearer)\s*[:=]\s*\S+"),
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{8,}"),
+    re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*"),
 )
 

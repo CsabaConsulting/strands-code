@@ -90,6 +90,7 @@ from strands_code_cli.model.model_switch import (
     resolve_harness_model,
     same_provider,
     same_vendor,
+    scoped_base_url,
     supports_reasoning,
     supports_streaming_tools,
     to_stash_json,
@@ -567,7 +568,11 @@ def _route_side_spawn(
                 pick.model,
                 pick.model,
                 effort=pick.effort,
-                base_url=kwargs.get("_base_url"),
+                base_url=scoped_base_url(
+                    kwargs.get("_base_url"),
+                    kwargs.get("_base_url_provider"),
+                    pick.model,
+                ),
             )
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
             _record_routing_event(

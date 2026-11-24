@@ -3451,7 +3451,40 @@ class TestConfigureBaseUrlAndResolveHarness:
         assert captured["builtin_tools"]["web_fetch"] == {"model": "openai/gpt-6.1-sol"}
         assert fake_model.client_args["base_url"] == "https://oai-proxy.example/v1"
         assert agent._base_url == "https://oai-proxy.example/v1"
+        assert agent._base_url_provider == "openai"
         assert agent._harness_kwargs["_base_url"] == "https://oai-proxy.example/v1"
+        assert agent._harness_kwargs["_base_url_provider"] == "openai"
+
+    def test_apply_switch_isolates_base_url_across_providers(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import anthropic
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model.model_switch import apply_switch
+
+        anth_client = anthropic.AsyncAnthropic(api_key="test")
+        default_anth_url = str(anth_client.base_url)
+        anth_double = SimpleNamespace(client=anth_client)
+        oai_double = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+
+        agent = SimpleNamespace(
+            model=None,
+            messages=[],
+            _base_url="https://oai-proxy.example/v1",
+            _base_url_provider="openai",
+        )
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *a, **kw: oai_double
+        )
+        apply_switch(agent, "openai/gpt-6.1-terra")
+        assert oai_double.client_args["base_url"] == "https://oai-proxy.example/v1"
+
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *a, **kw: anth_double
+        )
+        apply_switch(agent, "anthropic/claude-sonnet-5-5")
+        assert str(anth_client.base_url) == default_anth_url
 
 
 class TestSameProviderSummaryAndOpenAIGuard:
@@ -4042,3 +4075,10 @@ class TestLiveOpenAIAndAnthropicDiscovery:
 
         monkeypatch.setenv("STRANDS_CODE_NO_LIVE_PRICING", "1")
         assert route_label("anthropic/claude-opus-4-1") == "anthropic/claude-opus-4-1"
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        for bad_date in ("\x1b[31m2027-01-01", "not-a-date-here"):
+            live_pricing.store_anthropic_models(
+                [{"id": "claude-craft", "retires_at": bad_date}]
+            )
+            assert route_label("anthropic/claude-craft") == "anthropic/claude-craft"

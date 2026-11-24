@@ -1285,3 +1285,18 @@ class TestCacheAwareUsageAndCost:
         assert cost_for(
             1_000_000, 100_000, "openai/gpt-6.2-sol", cache_read_tokens=500_000
         ) == pytest.approx(2.05)
+
+    def test_scrub_credentials_redacts_openai_and_anthropic_keys(self):
+        from strands_code_cli.cost.cost_context import scrub_credentials
+
+        raw = (
+            "keys sk-proj-abcdefghijklmnopqrstuvwxyz123456 "
+            "sk-svcacct-abcdefghijklmnopqrstuvwxyz123456 "
+            "sk-ant-api03-abcdefghijklmnop "
+            "AKIAIOSFODNN7EXAMPLE"
+        )
+        scrubbed = scrub_credentials(raw)
+        assert "sk-proj-" not in scrubbed
+        assert "sk-svcacct-" not in scrubbed
+        assert "sk-ant-" not in scrubbed
+        assert "AKIA" not in scrubbed

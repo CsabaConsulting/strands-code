@@ -94,8 +94,10 @@ def _reset_cooldowns() -> None:
 
 
 def _read_cache(path: Path) -> dict[str, Any] | None:
-    """Parsed cache payload, or None when missing/corrupt/wrong-shaped."""
+    """Parsed cache payload, or None when missing/symlink/corrupt/wrong-shaped."""
     try:
+        if path.is_symlink():
+            return None
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
@@ -105,10 +107,18 @@ def _read_cache(path: Path) -> dict[str, Any] | None:
 
 
 def _write_cache(path: Path, payload: dict[str, Any]) -> None:
-    """Best-effort cache store (never raises)."""
+    """Best-effort atomic, symlink-refusing cache store (never raises)."""
     try:
+        if path.is_symlink():
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(path.parent, 0o700)
+        tmp = path.with_suffix(f"{path.suffix}.tmp")
+        if tmp.is_symlink():
+            return
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
     except OSError:
         pass
 

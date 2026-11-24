@@ -407,6 +407,34 @@ class TestProviderConfigPersistence:
         with pytest.raises(ValueError, match="api_mode"):
             ProviderConfig(model="openai/gpt-4o", api_mode="legacy").save(path)
 
+    def test_base_url_validation_and_cross_provider_switch_clearing(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        for bad in (
+            "https://user:secret@proxy.example/v1",
+            "file:///etc/passwd",
+            "ftp://proxy.example/v1",
+            "https://",
+            "https://proxy.example/v1\r\nX: 1",
+        ):
+            with pytest.raises(ValueError, match="base_url"):
+                ProviderConfig(model="openai/gpt-6.1-sol", base_url=bad).save(path)
+
+        cfg = ProviderConfig(
+            model="openai/gpt-6.1-sol",
+            base_url="http://127.0.0.1:8000/v1",
+            api_mode="chat",
+        )
+        cfg.save_model_choice("openai/gpt-6.1-terra", path)
+        same_provider = ProviderConfig.load(path)
+        assert same_provider.base_url == "http://127.0.0.1:8000/v1"
+        assert same_provider.api_mode == "chat"
+
+        same_provider.save_model_choice("anthropic/claude-sonnet-5-5", path)
+        cross_provider = ProviderConfig.load(path)
+        assert cross_provider.model == "anthropic/claude-sonnet-5-5"
+        assert cross_provider.base_url is None
+        assert cross_provider.api_mode is None
+
 
 # ----------------------------------------------------------------------
 # Untrusted CWD .env auto-load guard (T-14-02)

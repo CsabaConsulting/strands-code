@@ -32,11 +32,14 @@ from strands_code_cli.loop.core import run_loop
 from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
+    _provider_of,
     configure_base_url_for_model,
     configure_gemini_for_model,
     configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
+    normalize_model_ref,
+    scoped_base_url,
 )
 from strands_code_cli.policy.diff_gate import (
     PendingStore,
@@ -203,15 +206,18 @@ def build_agent(
     if model is not None:
         kwargs["model"] = model
     agent = create_harness(**kwargs)
+    resolved_model = getattr(agent, "model", None)
+    target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     if base_url:
+        owner = _provider_of(normalize_model_ref(target_id)) if target_id else None
         kwargs["_base_url"] = base_url
+        kwargs["_base_url_provider"] = owner
         agent._base_url = base_url
+        agent._base_url_provider = owner
     # Stash the factory kwargs for /btw side-agent rebuilds (LOOP-03):
     # the loop replays this dict through create_harness with the
     # delegate overrides, so the child is built the way the parent was.
     agent._harness_kwargs = kwargs
-    resolved_model = getattr(agent, "model", None)
-    target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
     configure_openai_for_model(target_id, resolved_model)
@@ -278,10 +284,19 @@ def _root(
         raise typer.BadParameter("invalid --model: must be non-empty")
     config = ProviderConfig.load()
     effective_model = model.strip() if model is not None else config.model
+    owner_provider = (
+        _provider_of(normalize_model_ref(config.model))
+        if config.model is not None
+        else None
+    )
+    effective_base_url = scoped_base_url(
+        config.base_url, owner_provider, effective_model
+    )
+    effective_api_mode = config.api_mode if effective_base_url is not None else None
     # Gate runs before construction and before any session or index side
     # effect (D-05; reversing this to offline-first reworks launch).
     detected_model = _preflight_credentials(
-        model=effective_model, base_url=config.base_url
+        model=effective_model, base_url=effective_base_url
     )
     if effective_model is None:
         effective_model = detected_model
@@ -296,8 +311,8 @@ def _root(
     agent = build_agent(
         resolved,
         DEFAULT_SESSION_DIR,
-        model=model_for_config(effective_model, config.base_url, config.api_mode),
-        base_url=config.base_url,
+        model=model_for_config(effective_model, effective_base_url, effective_api_mode),
+        base_url=effective_base_url,
     )
     run_loop(
         agent,
