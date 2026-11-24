@@ -1,19 +1,19 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: 16
-current_phase_name: First-Class Meta Model API (api.meta.ai / Muse) & Upstream Enablement
-current_plan: 3
-status: passed
-stopped_at: Phase 16 complete + verified (`16-VERIFICATION.md` 7/7, `44b9aa4`, live `m1` M1 PASS, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-verify-work 16` or `/gsd-discuss-phase 17`
-last_updated: "2026-11-24T09:40:00Z"
+current_phase: 17
+current_phase_name: Decision Routing Convergence (DecisionModel)
+current_plan: 0
+status: planned
+stopped_at: Phase 17 planned (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 17`
+last_updated: "2026-11-24T22:10:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Executed & verified Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`, `1705/1705` suite + live `driver.py m1` PASS)
-state_head: 44b9aa4
+last_activity_desc: Planned Phase 17 (`17-01..03-PLAN.md` across 3 waves, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS)
+state_head: 897671d
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 11
+  total_plans: 14
   completed_plans: 11
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 16 — First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement (`MODEL-09`)
+**Current focus:** Milestone `v2.0` · Phase 17 — Decision Routing Convergence (`DecisionModel`, `UPSTREAM-02`)
 
 ## Current Position
 
-Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Complete (`16-VERIFICATION.md` `7/7`, live `m1` `M1 PASS`)
-Plan: 3 of 3 complete in Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`)
-Status: Passed (`1705/1705` default suite + `44/44` rig + live `m1` `M1 PASS` + live Meta discovery 7 models)
-Last activity: 2026-11-24 — Executed & verified Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`)
+Phase: 17 of 21 (Decision Routing Convergence (`DecisionModel`)) — Planned (3 plans across Waves 1–3)
+Plan: 0 of 3 complete in Phase 17 (`17-01-PLAN.md`, `17-02-PLAN.md`, `17-03-PLAN.md`)
+Status: Planned (`17-PLAN-CHECK.md` PASS; ready for `/gsd-execute-phase 17`)
+Last activity: 2026-11-24 — Planned Phase 17 (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md`)
 
 Progress: [████░░░░░░] 44%
 
@@ -65,10 +65,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 16 security audit (`4d32cbc`, `16-SECURITY.md` `10/10 closed`, `threats_open: 0`): closed `T-16-02` (isolated Meta `OpenAIResponsesModel` / discovery client args via `_meta_openai_client_args()` overriding `OPENAI_API_KEY`/`OPENAI_ADMIN_KEY`/`OPENAI_ORG_ID`/`OPENAI_PROJECT_ID`/`OPENAI_WEBHOOK_SECRET`/`OpenAI-*` headers), `T-16-03` (`_validate_base_url()` in `configure_base_url_for_model()`, `_has_unsafe_model_chars()` guard on Meta IDs, and `timeout=5.0, max_retries=0` on discovery), and `T-16-04` (widened `LLM_...`/`LLM|...` scrubbing regex + `MODEL_API_KEY` canary isolation test).
 - Phase 16 Nyquist validation (`16-VALIDATION.md` `validated`, `nyquist_compliant: true`): closed 12 edge branches across `tests/model/`, `tests/entry/`, `tests/dispatch/`, `tests/cost/`, and `tests/loop/` (`1711/1711` default suite + `44/44` rig green, zero runtime edits).
 - Phase 17 discussion (`17-CONTEXT.md` `D-01`–`D-07`): converged `native` onto upstream `TypeSafeDecisionModel` (`state: str` + folded `Question["question"]`), `openrouter` & `local` onto CLI `DecisionModel` subclasses (`OpenRouterDecisionModel`, `OllamaDecisionModel`) in `routing/transports.py`, wired config-only opt-in `"decisions_api"` (`DecisionsAPIDecisionModel` / `JEV_API_KEY`) and `"llm"` (`LLMDecisionModel` / `uncertainty=True` hold on `Uncertain` / `cost_for()`), async-to-sync bridge + per-call `httpx.AsyncClient(timeout=10s)`, preserving `0.62`/`0.04` gating, two-call routing, `apply_model_action`, `/cost` actuals, and offline + opportunistic live verification.
+- Phase 17 planning (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS): mapped Waves 1–3 with `tests/routing/test_routing_transports.py` as Wave 0 file, 4-decimal grid tolerance alignment, `ConnectError` zero-retry preservation, `resolve_harness_model(..., web_search=False, caching=False)`, `cost_context` estimated lane for `llm` routing spend, `conftest.py` key scrubbing (`TYPESAFE_API_KEY`/`JEV_API_KEY` + `@pytest.mark.integration` exemption), and `TYPESAFE_API_KEY` vs `JEV_API_KEY` docs.
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 17` to plan `UPSTREAM-02` (`DecisionModel` convergence across `routing/transports.py` & `routing/core.py`).
+- Run `/gsd-execute-phase 17` to execute Plans `17-01`..`17-03` (`DecisionModel` convergence across `routing/transports.py`, `routing/core.py`, `model/model_switch.py`, `cost/cost_context.py`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -81,6 +82,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T21:08:10Z
-Stopped at: Phase 17 discussed (`17-CONTEXT.md` `D-01`–`D-07`, `17-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 17`
-Resume file: .planning/phases/17-decision-routing-convergence-decisionmodel/17-CONTEXT.md
+Last session: 2026-11-24T22:10:00Z
+Stopped at: Phase 17 planned (`17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 17`
+Resume file: .planning/phases/17-decision-routing-convergence-decisionmodel/17-01-PLAN.md

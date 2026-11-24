@@ -133,7 +133,20 @@ Plans:
   2. All `DecisionModel` checks guard `isinstance(val, Uncertain)` explicitly, run with `uncertainty=False` over `result.metadata.probabilities`, and reproduce `v1.0`'s `0.62` confidence threshold and `0.04` tie-margin gate without `candidates[0]` fallback regressions
   3. Pre-turn `apply_model_action` keeps `convert_history()`, `RichHistory` stashes, hold-on-failure (`D-08`), two-call model + effort routing, `/route`, and `/cost` decision spend totals intact
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] `17-01-PLAN.md` — Tracer: `routing/transports.py` `DecisionModel` convergence (`OpenRouterDecisionModel`, `OllamaDecisionModel`, `TypeSafeDecisionModel`, `run_decision_sync`) + `routing/core.py` wiring + `conftest.py` key scrubbing + `httpx.MockTransport` migration
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `17-02-PLAN.md` — Opt-in `"decisions_api"` (`DecisionsAPIDecisionModel`, `JEV_API_KEY`) & `"llm"` (`LLMDecisionModel`, `uncertainty=True` hold) engines + `resolve_harness_model` `web_search`/`caching` switches + `/cost` estimated lane & end-to-end loop/`/btw` tests
+
+**Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
+
+- [ ] `17-03-PLAN.md` — `@pytest.mark.integration` live probes (`decisions_api`, `llm`), `docs/ROUTING.md` + `docs/QUICKSTART.md` (`TYPESAFE_API_KEY` vs `JEV_API_KEY`), and all 6 CI gates
 
 ### Phase 18: Skills Marketplaces & Lockfile Installer
 
@@ -194,7 +207,7 @@ Plans:
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Discussed (`17-CONTEXT.md`) | - |
+| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/3 | Planned | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
 | 20. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
