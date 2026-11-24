@@ -1201,16 +1201,20 @@ class TestRouteValidate:
     def test_validate_dispatch_never_writes_or_fetches(self, tmp_path, monkeypatch):
         import urllib.request
 
+        import strands_code_cli.routing.transports as transports
+
         repo = _write(tmp_path / "r.yaml", _strategy_yaml())
         monkeypatch.setattr(routing_mod, "default_repo_strategy_path", lambda: repo)
         monkeypatch.setattr(
             routing_mod, "default_global_strategy_path", lambda: tmp_path / "g.yaml"
         )
 
-        def _boom(request, timeout=None):
+        def _boom(*args, **kwargs):
             raise AssertionError("validate must not touch the network")
 
         monkeypatch.setattr(urllib.request, "urlopen", _boom)
+        monkeypatch.setattr(transports, "make_async_client", _boom)
+        monkeypatch.setattr(transports, "make_sync_client", _boom)
         index = SessionIndex(tmp_path / "index")
         before = {
             path: path.read_bytes() if path.is_file() else None
@@ -1342,14 +1346,18 @@ class TestRouteValidate:
         assert "known in the cached decisions catalog" in report.format()
 
     def test_validate_makes_zero_network_calls(self, tmp_path, monkeypatch):
+        import strands_code_cli.routing.transports as transports
+
         _seed_decision_ids(tmp_path, ["cheap/decider"])
         calls = []
 
-        def _count(request, timeout=None):
-            calls.append(request)
+        def _count(*args, **kwargs):
+            calls.append((args, kwargs))
             raise AssertionError("validate must not touch the network")
 
         monkeypatch.setattr(urllib.request, "urlopen", _count)
+        monkeypatch.setattr(transports, "make_async_client", _count)
+        monkeypatch.setattr(transports, "make_sync_client", _count)
         path = _write(tmp_path / "repo.yaml", _strategy_yaml())
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True

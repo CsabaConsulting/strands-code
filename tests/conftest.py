@@ -17,6 +17,8 @@ _PROVIDER_ENV_VARS = (
     "META_BASE_URL",
     "OPENROUTER_API_KEY",
     "LITELLM_API_KEY",
+    "TYPESAFE_API_KEY",
+    "JEV_API_KEY",
     "STRANDS_BOX",
     "AWS_BEARER_TOKEN_BEDROCK",
 )
@@ -35,8 +37,11 @@ def _no_live_pricing(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_provider_env(monkeypatch):
+def _hermetic_provider_env(monkeypatch, request):
     """Strip ambient provider credentials so host env keys never leak into tests."""
+    if request.node.get_closest_marker("integration") is not None:
+        yield
+        return
     for name in _PROVIDER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     yield

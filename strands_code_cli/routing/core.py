@@ -14,8 +14,9 @@ current model with history byte-identical (D-08).
 
 from __future__ import annotations
 
-import json
+import json  # noqa: F401 — kept for test & facade callers
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,27 +31,39 @@ from strands_code_cli.cost.cost_context import (
     price_for,
 )
 from strands_code_cli.model.model_switch import supports_reasoning
+from strands_code_cli.routing import transports as _transports
+from strands_code_cli.routing.transports import (
+    ASK_TRUNCATE_CHARS,
+    DECISION_TIMEOUT_SECONDS,
+    OLLAMA_DEFAULT_HOST,
+    OLLAMA_TIMEOUT_SECONDS,
+    TRUNCATION_MARKER,
+    EngineResult,
+    ollama_base,
+    ollama_headers,
+    preflight_get,
+    run_ollama_decision,
+    run_openrouter_decision,
+    run_typesafe_decision,
+    valid_base_url,
+)
+
+DECISION_BODY_MAX_BYTES = _transports.DECISION_BODY_MAX_BYTES
+OPENROUTER_DECISIONS_URL = _transports.OPENROUTER_DECISIONS_URL
+TYPESAFE_DECISIONS_URL = _transports.TYPESAFE_DECISIONS_URL
+TYPESAFE_INPUT_USD_PER_MTOK = _transports.TYPESAFE_INPUT_USD_PER_MTOK
+OLLAMA_KEEP_ALIVE = _transports.OLLAMA_KEEP_ALIVE
+OLLAMA_PREFLIGHT_TIMEOUT_SECONDS = _transports.OLLAMA_PREFLIGHT_TIMEOUT_SECONDS
+_fit_decision_payload = _transports.fit_decision_payload
+_transport_retryable_error = _transports.is_retryable_decision_error
+_transport_failure_reason = _transports.failure_reason
+_TRANSPORT_RETRYABLE_STATUS = _transports._RETRYABLE_STATUS
 
 logger = logging.getLogger(__name__)
 
 _STRATEGY_DIR_NAME = "strands-code"
 _STRATEGY_FILE_NAME = "routing.yaml"
 _REPO_STRATEGY_REL = Path(".agent") / "routing.yaml"
-
-ASK_TRUNCATE_CHARS = 2000
-"""Decision prompts carry the current ask only, truncated to this width."""
-
-DECISION_TIMEOUT_SECONDS = 10
-"""Per-engine network ceiling; a slow decision call holds, never blocks."""
-
-OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
-"""Default decision engine transport (D-06)."""
-
-TYPESAFE_DECISIONS_URL = "https://api.typesafe.ai/v1/systemone"
-"""Native TypeSafe decision engine transport (Phase 9 D-05)."""
-
-TYPESAFE_INPUT_USD_PER_MTOK = 0.042
-"""Native input price per million tokens (flat input-only rate)."""
 
 NATIVE_JEV_PIN = "jev-1.13.0"
 """Pinned native Jev id (full semver; the minor-only form 400s)."""
@@ -83,29 +96,11 @@ Always compared against the pick's top-1 probability, never the
 vendor confidence field (Pitfall 1).
 """
 
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 524, 529})
+_RETRYABLE_STATUS = _TRANSPORT_RETRYABLE_STATUS
 """Decision-API codes worth one retry; every 4xx holds immediately."""
 
 MAX_CANDIDATES = 26
 """Hard candidate cap: the binding ``choice`` option limit is 26."""
-
-OLLAMA_DEFAULT_HOST = "http://127.0.0.1:11434"
-"""Default local daemon address (the harness ``OLLAMA_HOST`` default)."""
-
-OLLAMA_TIMEOUT_SECONDS = 30
-"""Local engine ceiling; cold model loads need room, failures still hold."""
-
-OLLAMA_KEEP_ALIVE = "5m"
-"""Keep the decision model warm between asks (one daemon round trip)."""
-
-OLLAMA_PREFLIGHT_TIMEOUT_SECONDS = 5
-"""Per-GET ceiling for daemon preflight; the chain runs two per ask."""
-
-DECISION_BODY_MAX_BYTES = 64 * 1024
-"""Serialized decision-payload ceiling (the Ollama 64 KiB frame)."""
-
-TRUNCATION_MARKER = "ask truncated to fit the decision cap"
-"""Verdict-detail flag the hooks render as the truncation marker."""
 
 _TOP_LEVEL_KEYS = {
     "candidates",
@@ -262,15 +257,7 @@ def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
     )
 
 
-def _valid_base_url(value: str) -> bool:
-    """True when the daemon address is an http(s) URL with a host (T-08-06)."""
-    from urllib.parse import urlsplit
-
-    try:
-        parts = urlsplit(value)
-    except ValueError:
-        return False
-    return parts.scheme.lower() in ("http", "https") and bool(parts.hostname)
+_valid_base_url = valid_base_url
 
 
 def _parse_engine_order(raw: dict[str, Any], engine: RoutingEngine) -> None:
@@ -1129,141 +1116,18 @@ def build_effort_question(
     }
 
 
-@dataclass(frozen=True)
-class EngineResult:
-    """One engine try: typed answers plus usage triple plus snapshot.
-
-    ``answers`` is None on any failure (no key, network, timeout,
-    malformed payload); the token counts come from the engine
-    response usage fields and default to zeros when absent, ``cost``
-    carries the reported USD spend (None when the shape omits it, as
-    local calls do), and ``model`` names the dated snapshot that
-    served the request for drift tracing. ``error`` names the short
-    failure class (``unready`` for a skipped local link, HTTP and
-    transport classes otherwise); None means no information, which
-    the verdict renders as the legacy ``<engine> failed`` detail.
-    ``truncated`` reports that the transport shrank the ask to fit
-    the body cap; the verdict carries the marker on its detail.
-    """
-
-    answers: dict[str, Any] | None
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cost: float | None = None
-    model: str | None = None
-    error: str | None = None
-    truncated: bool = False
-
-
-def _count(value: object) -> int:
-    """Best-effort non-negative int for a usage field (bool-safe)."""
-    if isinstance(value, bool):
-        return 0
-    try:
-        return max(0, int(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0
-
-
-def _cost(value: object) -> float | None:
-    """Reported USD spend verbatim (None when absent or non-numeric)."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
 def _retryable_error(exc: BaseException) -> bool:
-    """True for the one-retry class: retryable codes plus timeouts.
-
-    4xx, refused connections, and malformed bodies hold immediately —
-    retrying the same call cannot help (T-08-24).
-    """
-    import urllib.error
-
-    if isinstance(exc, urllib.error.HTTPError):
-        return exc.code in _RETRYABLE_STATUS
-    if isinstance(exc, TimeoutError):
-        return True
-    if isinstance(exc, urllib.error.URLError):
-        return isinstance(exc.reason, TimeoutError)
-    return False
+    """True for the one-retry class: retryable codes plus timeouts."""
+    return _transport_retryable_error(exc)
 
 
 _CONNECTION_ERRORS = frozenset({"refused", "unreachable"})
 """Failure classes that pause routing when they take every link (D-09)."""
 
 
-def _refused_reason(reason: object) -> bool:
-    """True when a transport reason is a refused connection (errno 111)."""
-    import errno
-
-    if isinstance(reason, TimeoutError):
-        return False
-    if isinstance(reason, ConnectionRefusedError):
-        return True
-    return isinstance(reason, OSError) and reason.errno == errno.ECONNREFUSED
-
-
 def _failure_reason(exc: BaseException) -> str:
-    """Short failure class for one transport exception (never secrets).
-
-    ``HTTP <code>`` for HTTP errors, ``timeout`` for timeouts,
-    ``refused``/``unreachable`` for connection-level failures,
-    ``invalid body`` for undecodable 200s — ``json`` and ``utf-8``
-    decode errors are both ``ValueError``.
-    """
-    import urllib.error
-
-    if isinstance(exc, urllib.error.HTTPError):
-        return f"HTTP {exc.code}"
-    if isinstance(exc, TimeoutError):
-        return "timeout"
-    if isinstance(exc, urllib.error.URLError):
-        reason = exc.reason
-        if isinstance(reason, TimeoutError):
-            return "timeout"
-        if _refused_reason(reason):
-            return "refused"
-        return "unreachable"
-    if isinstance(exc, (ConnectionError, OSError)):
-        if _refused_reason(exc):
-            return "refused"
-        return "unreachable"
-    if isinstance(exc, ValueError):
-        return "invalid body"
-    return "error"
-
-
-def _fit_decision_payload(
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
-    """Shrink state.ask until the serialized body fits the 64 KiB cap.
-
-    Returns the (possibly copied) payload plus whether the ask
-    shrank. Only the ask tightens — directives and criteria ride as
-    built; when the ask alone cannot absorb the overshoot the
-    shrunken body still ships and the server judges (an Ollama 413
-    holds with the engine-plus-code detail).
-    """
-    body = json.dumps(payload).encode("utf-8")
-    if len(body) <= DECISION_BODY_MAX_BYTES:
-        return payload, False
-    state = payload.get("state")
-    if not isinstance(state, dict):
-        return payload, False
-    ask = state.get("ask")
-    if not isinstance(ask, str) or not ask:
-        return payload, False
-    over = len(body) - DECISION_BODY_MAX_BYTES
-    ask = ask[: max(0, len(ask) - over - 16)]
-    shrunk = dict(payload)
-    shrunk["state"] = {**state, "ask": ask}
-    while ask and len(json.dumps(shrunk).encode("utf-8")) > DECISION_BODY_MAX_BYTES:
-        ask = ask[: len(ask) // 2]
-        shrunk["state"] = {**state, "ask": ask}
-    return shrunk, True
+    """Short failure class for one transport exception (never secrets)."""
+    return _transport_failure_reason(exc)
 
 
 def _with_truncation(detail: str, truncated: bool) -> str:
@@ -1273,35 +1137,6 @@ def _with_truncation(detail: str, truncated: bool) -> str:
     return f"{detail}; {TRUNCATION_MARKER}" if detail else TRUNCATION_MARKER
 
 
-def _post_decision(
-    url: str, payload: dict[str, Any], headers: dict[str, str], timeout: float
-) -> tuple[dict[str, Any] | None, str | None]:
-    """POST one Decision-API request; (parsed mapping, failure class).
-
-    Returns ``(data, None)`` on a well-shaped 200 and ``(None,
-    reason)`` otherwise. Retries at most once on retryable codes and
-    timeouts, never on 4xx or schema failures — a wrong-shaped 200 is
-    its own outcome, never a reason to re-ask. Shared by both
-    engines (T-08-24).
-    """
-    import urllib.request
-
-    body = json.dumps(payload).encode("utf-8")
-    for attempt_no in range(2):
-        request = urllib.request.Request(url, data=body, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:  # noqa: BLE001 — every failure class holds
-            if attempt_no == 0 and _retryable_error(exc):
-                continue
-            return None, _failure_reason(exc)
-        if not isinstance(data, dict):
-            return None, "invalid body"
-        return data, None
-    return None, "unreachable"  # unreachable: the loop always returns first
-
-
 def decide_via_openrouter(
     *,
     decision_model: str,
@@ -1309,48 +1144,12 @@ def decide_via_openrouter(
     questions: dict[str, Any],
     timeout: float = DECISION_TIMEOUT_SECONDS,
 ) -> EngineResult:
-    """One routing decision via the OpenRouter Decisions API (T-08-22).
-
-    The ``OPENROUTER_API_KEY`` is read at call time inside this engine
-    function only (runtime-supplied credential, never persisted, sent
-    header-only, never logged — the harness ``OLLAMA_API_KEY``
-    precedent). Any failure (no key, network, timeout, malformed
-    payload) yields an answers-None result and the chain tries the
-    next engine. Usage carries the reported input/output tokens plus
-    the reported USD cost (input-tokens-only billing, free outputs).
-    """
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key or not decision_model:
-        return EngineResult(answers=None)
-    payload, truncated = _fit_decision_payload(
-        {"model": decision_model, "state": state, "questions": questions}
-    )
-    data, error = _post_decision(
-        OPENROUTER_DECISIONS_URL,
-        payload,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "strands-code",
-        },
-        timeout,
-    )
-    if data is None:
-        return EngineResult(answers=None, error=error, truncated=truncated)
-    answers = data.get("answers")
-    if not isinstance(answers, dict):
-        return EngineResult(answers=None, error="invalid body", truncated=truncated)
-    usage = data.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
-    model = data.get("model")
-    return EngineResult(
-        answers=answers,
-        input_tokens=_count(usage.get("input_tokens")),
-        output_tokens=_count(usage.get("output_tokens")),
-        cost=_cost(usage.get("cost")),
-        model=model if isinstance(model, str) else None,
-        truncated=truncated,
+    """One routing decision via OpenRouterDecisionModel."""
+    return run_openrouter_decision(
+        decision_model=decision_model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
     )
 
 
@@ -1361,91 +1160,22 @@ def decide_via_typesafe(
     questions: dict[str, Any],
     timeout: float = DECISION_TIMEOUT_SECONDS,
 ) -> EngineResult:
-    """One routing decision via the native TypeSafe Decisions API.
-
-    The ``TYPESAFE_API_KEY`` is read at call time inside this engine
-    function only (runtime-supplied credential, never persisted, sent
-    header-only, never logged — the ``OPENROUTER_API_KEY``
-    precedent). Any failure (no key, network, timeout, malformed
-    payload) yields an answers-None result and the chain tries the
-    next engine. Usage carries the reported input/output tokens;
-    native usage never reports spend, so cost is computed code-side
-    from the reported input tokens at the published flat input-only
-    rate (output tokens are free).
-    """
-    api_key = os.environ.get("TYPESAFE_API_KEY")
-    if not api_key or not native_model:
-        return EngineResult(answers=None)
-    payload, truncated = _fit_decision_payload(
-        {"model": native_model, "state": state, "questions": questions}
-    )
-    data, error = _post_decision(
-        TYPESAFE_DECISIONS_URL,
-        payload,
-        {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "User-Agent": "strands-code",
-        },
-        timeout,
-    )
-    if data is None:
-        return EngineResult(answers=None, error=error, truncated=truncated)
-    answers = data.get("answers")
-    if not isinstance(answers, dict):
-        return EngineResult(answers=None, error="invalid body", truncated=truncated)
-    usage = data.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
-    model = data.get("model")
-    in_tok = _count(usage.get("input_tokens"))
-    return EngineResult(
-        answers=answers,
-        input_tokens=in_tok,
-        output_tokens=_count(usage.get("output_tokens")),
-        cost=in_tok * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000,
-        model=model if isinstance(model, str) else None,
-        truncated=truncated,
+    """One routing decision via upstream TypeSafeDecisionModel."""
+    return run_typesafe_decision(
+        native_model=native_model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
     )
 
 
-_OLLAMA_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
-"""Hosts that never carry key material (T-08-06)."""
-
-
-def _ollama_base(local_base_url: str | None) -> str:
-    """Daemon root: strategy URL, else the harness host, else loopback."""
-    return local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
-
-
-def _ollama_headers(base: str) -> dict[str, str]:
-    """Local daemon headers; the auth header only for proxied hosts."""
-    from urllib.parse import urlsplit
-
-    headers = {"Content-Type": "application/json", "User-Agent": "strands-code"}
-    try:
-        loopback = urlsplit(base).hostname in _OLLAMA_LOOPBACK_HOSTS
-    except ValueError:
-        loopback = False
-    api_key = os.environ.get("OLLAMA_API_KEY")
-    if api_key and not loopback:
-        headers["Authorization"] = f"Bearer {api_key}"
-    return headers
+_ollama_base = ollama_base
+_ollama_headers = ollama_headers
 
 
 def _preflight_get(url: str, headers: dict[str, str]) -> dict[str, Any] | None:
     """One daemon preflight GET: parsed mapping or None on any failure."""
-    import urllib.request
-
-    try:
-        request = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(
-            request, timeout=OLLAMA_PREFLIGHT_TIMEOUT_SECONDS
-        ) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except Exception:  # noqa: BLE001 — every preflight failure reads unready
-        return None
-    return data if isinstance(data, dict) else None
+    return preflight_get(url, headers)
 
 
 def _version_tuple(text: object) -> tuple[int, ...] | None:
@@ -1523,77 +1253,40 @@ def decide_via_ollama(
     questions: dict[str, Any],
     timeout: float = OLLAMA_TIMEOUT_SECONDS,
 ) -> EngineResult:
-    """One routing decision via Ollama System One (``/v1/systemone``).
-
-    The base URL resolves strategy-first, then the harness
-    ``OLLAMA_HOST`` default; only http/https addresses with a host are
-    called (T-08-25). Decision models must never run through
-    ``/api/chat`` (filler-token runaway). The local usage shape
-    carries no cost, so spend records as None (rendered as zero, never
-    estimated). Any failure yields an answers-None result — offline
-    with no daemon simply holds current (D-09).
-    """
-    if not local_model:
-        return EngineResult(answers=None)
-    base = _ollama_base(local_base_url)
-    if not _valid_base_url(base):
-        return EngineResult(answers=None)
-    payload, truncated = _fit_decision_payload(
-        {
-            "model": local_model,
-            "state": state,
-            "questions": questions,
-            "keep_alive": OLLAMA_KEEP_ALIVE,
-        }
-    )
-    data, error = _post_decision(
-        f"{base.rstrip('/')}/v1/systemone",
-        payload,
-        _ollama_headers(base),
-        timeout,
-    )
-    if data is None:
-        return EngineResult(answers=None, error=error, truncated=truncated)
-    answers = data.get("answers")
-    if not isinstance(answers, dict):
-        return EngineResult(answers=None, error="invalid body", truncated=truncated)
-    usage = data.get("usage", {})
-    if not isinstance(usage, dict):
-        usage = {}
-    model = data.get("model")
-    return EngineResult(
-        answers=answers,
-        input_tokens=_count(usage.get("input_tokens")),
-        output_tokens=_count(usage.get("output_tokens")),
-        cost=None,
-        model=model if isinstance(model, str) else None,
-        truncated=truncated,
+    """One routing decision via OllamaDecisionModel (``/v1/systemone``)."""
+    return run_ollama_decision(
+        local_model=local_model,
+        local_base_url=local_base_url,
+        state=state,
+        questions=questions,
+        timeout=timeout,
     )
 
 
 def _validate_choice_shape(answer: object) -> dict[str, Any] | None:
     """Typed shape check shared by both decision calls; None holds.
 
-    The answer must be a dict with ``type`` exactly ``choice``, a
-    non-empty ``probabilities`` mapping of 0..1 numbers summing to 1
-    within 1e-6, and a ``choice`` sitting in the table. Membership in
-    the live option set is judged separately per call (candidates for
-    call 1, advertised levels via ``validate_routed_effort`` for
-    call 2).
+    Checks finite probabilities in [0.0, 1.0] summing to 1 within 1e-6
+    (widened for 4-decimal System One grid rounding within 5e-5 per option),
+    plus a string choice present in the table.
     """
-    if not isinstance(answer, dict):
-        return None
-    if answer.get("type") != "choice":
+    if not isinstance(answer, dict) or answer.get("type") != "choice":
         return None
     probs = answer.get("probabilities")
     if not isinstance(probs, dict) or not probs:
         return None
     for prob in probs.values():
-        if isinstance(prob, bool) or not isinstance(prob, (int, float)):
+        if (
+            isinstance(prob, bool)
+            or not isinstance(prob, (int, float))
+            or not math.isfinite(float(prob))
+            or not 0.0 <= float(prob) <= 1.0
+        ):
             return None
-        if not 0.0 <= prob <= 1.0:
-            return None
-    if abs(sum(probs.values()) - 1.0) > 1e-6:
+    vals = probs.values()
+    rounded = all(abs(p * 1e4 - round(p * 1e4)) < 1e-6 for p in vals)
+    tol = 1e-6 + (len(probs) * 5e-5 if rounded else 0.0)
+    if abs(sum(vals) - 1.0) > tol:
         return None
     choice = answer.get("choice")
     if not isinstance(choice, str) or choice not in probs:
@@ -1872,24 +1565,30 @@ def _merge_cost(first: float | None, second: float | None) -> float | None:
     )
 
 
+def _evaluate_effort_answer(
+    result: EngineResult,
+) -> tuple[str | None, float | None, tuple[int, int, float | None] | None]:
+    """Validate one pick_effort answer; returns ``(effort, confidence, usage)``."""
+    raw_effort = (result.answers or {}).get("pick_effort")
+    table = _validate_effort_answer(raw_effort)
+    if table is None:
+        return None, None, None
+    ranked = sorted(table.items(), key=lambda item: (-item[1], item[0]))
+    top, top_prob = ranked[0]
+    return (
+        top,
+        float(top_prob),
+        (result.input_tokens, result.output_tokens, result.cost),
+    )
+
+
 def _decide_effort(
     strategy: RoutingStrategy,
     candidate: RoutingCandidate,
     state: dict[str, Any],
     chain: list[tuple[str, EngineAttempt]],
 ) -> tuple[str | None, float | None, tuple[int, int, float | None], str, str, bool]:
-    """Second sequential choice over the picked levels (D-15).
-
-    Runs the pick_effort question through the same engine chain on
-    the same state — never parallel with call 1, whose answer scopes
-    the criteria. Returns ``(effort, confidence, usage, engine,
-    detail, truncated)`` with the top choice taken ungated (a weak
-    effort read still routes, D-16); a None effort holds the ask,
-    since a failed or unparseable effort read carries no level to
-    route. The detail mirrors call 1 (engine plus cause, pause when
-    every link went down at connection level); ``truncated`` ORs
-    every attempted call so the verdict flags a shrunken payload.
-    """
+    """Second sequential choice over the picked levels (D-15)."""
     questions = {
         "pick_effort": build_effort_question(
             candidate=candidate, directives=strategy.directives
@@ -1907,36 +1606,25 @@ def _decide_effort(
         except Exception:
             result = None
         if result is None:
-            continue  # skipped link: unconfigured, never attempted
+            continue
         truncated = truncated or result.truncated
         if result.answers is None:
+            if result.uncertain:
+                return (None, None, (0, 0, None), name, f"{name} uncertain", truncated)
             failed, detail = name, _link_detail(name, result.error)
-            if result.error in _CONNECTION_ERRORS:
-                down.append(name)
-            elif result.error not in (None, "unready"):
-                # Skipped and unready links are pause-neutral: never
-                # attempted, so only attempted failures judge the pause.
+            if _note_link_error(name, result.error, down):
                 informative = True
             continue
         if result.model:
             logger.debug(
                 "Routing effort decision via %s served by %s", name, result.model
             )
-        table = _validate_effort_answer(result.answers.get("pick_effort"))
-        if table is None:
+        top, top_prob, usage_triple = _evaluate_effort_answer(result)
+        if top is None or usage_triple is None:
             failed, detail = name, _link_detail(name, "invalid table")
             informative = True
             continue
-        ranked = sorted(table.items(), key=lambda item: (-item[1], item[0]))
-        top, top_prob = ranked[0]
-        return (
-            top,
-            float(top_prob),
-            (result.input_tokens, result.output_tokens, result.cost),
-            name,
-            "",
-            truncated,
-        )
+        return top, top_prob, usage_triple, name, "", truncated
     if down and not informative:
         return (None, None, (0, 0, None), down[-1], _pause_detail(down), truncated)
     return (None, None, (0, 0, None), failed, detail, truncated)
@@ -2103,18 +1791,88 @@ def _find_candidate(strategy: RoutingStrategy, model_id: str) -> RoutingCandidat
     return next(entry for entry in strategy.candidates if entry.id == model_id)
 
 
+def _evaluate_model_answer(
+    name: str,
+    result: EngineResult,
+    strategy: RoutingStrategy,
+    state: dict[str, Any],
+    chain: list[tuple[str, EngineAttempt]],
+    current_model: str,
+    truncated_any: bool,
+) -> tuple[
+    bool, tuple[RoutingPick | None, str, tuple[int, int, float | None], str] | None
+]:
+    """Gate and resolve effort for one non-empty model decision result.
+
+    Returns ``(False, None)`` when ``pick_model`` failed schema validation
+    (continuing the chain) or ``(True, verdict)`` on route or hard hold.
+    """
+    answer = validate_choice_answer(
+        (result.answers or {}).get("pick_model"), strategy.candidates
+    )
+    if answer is None:
+        return False, None
+    model_id, tie_break, gate_detail = gate_model(answer, strategy)
+    if model_id is None:
+        return True, (
+            None,
+            name,
+            (0, 0, None),
+            _with_truncation(gate_detail, truncated_any),
+        )
+    candidate = _find_candidate(strategy, model_id)
+    if not candidate.levels:
+        return True, (
+            None,
+            name,
+            (0, 0, None),
+            f"picked candidate {model_id} advertises no levels",
+        )
+    (
+        effort,
+        effort_confidence,
+        total,
+        effort_truncated,
+        effort_engine,
+        effort_detail,
+    ) = _resolve_effort(strategy, candidate, state, chain, result)
+    if effort is None:
+        return True, (
+            None,
+            effort_engine,
+            (0, 0, None),
+            _with_truncation(effort_detail, truncated_any or effort_truncated),
+        )
+    pick = RoutingPick(
+        model=model_id,
+        effort=effort,
+        model_confidence=float(answer["probabilities"][model_id]),
+        effort_confidence=effort_confidence,
+        tie_break=tie_break,
+    )
+    shrunk = truncated_any or effort_truncated
+    if model_id != current_model and not validate_routed_effort(
+        pick, strategy.candidates
+    ):
+        return True, (
+            None,
+            name,
+            (0, 0, None),
+            _with_truncation(
+                f"effort {pick.effort!r} unsupported by {model_id}", shrunk
+            ),
+        )
+    return True, (pick, name, total, _with_truncation(gate_detail, shrunk))
+
+
 def _run_chain(
     strategy: RoutingStrategy,
     state: dict[str, Any],
-    questions: dict[str, str],
+    questions: dict[str, Any],
     chain: list[tuple[str, EngineAttempt]],
     current_model: str,
 ) -> tuple[RoutingPick | None, str, tuple[int, int, float | None], str]:
-    """Attempt each engine link in order; first valid table routes (D-08).
-
-    Skipped and unready links never attempt; connection-level failure on
-    every attempted link pauses routing for the ask (D-09).
-    """
+    """Attempt each engine link in order; first valid table routes (D-08)."""
     failed = chain[0][0]
     detail = f"{failed} failed"
     down: list[str] = []
@@ -2126,78 +1884,29 @@ def _run_chain(
         except Exception:
             result = None
         if result is None:
-            continue  # skipped link: unconfigured, never attempted
+            continue
         truncated_any = truncated_any or result.truncated
         if result.answers is None:
+            if result.uncertain:
+                return (
+                    None,
+                    name,
+                    (0, 0, None),
+                    _with_truncation(f"{name} uncertain", truncated_any),
+                )
             failed, detail = name, _link_detail(name, result.error)
             if _note_link_error(name, result.error, down):
                 informative = True
             continue
         if result.model:
             logger.debug("Routing decision via %s served by %s", name, result.model)
-        answer = validate_choice_answer(
-            result.answers.get("pick_model"), strategy.candidates
+        handled, verdict = _evaluate_model_answer(
+            name, result, strategy, state, chain, current_model, truncated_any
         )
-        if answer is None:
-            failed, detail = name, _link_detail(name, "invalid table")
-            informative = True
-            continue
-        model_id, tie_break, gate_detail = gate_model(answer, strategy)
-        if model_id is None:
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(gate_detail, truncated_any),
-            )
-        candidate = _find_candidate(strategy, model_id)
-        if not candidate.levels:
-            return (
-                None,
-                name,
-                (0, 0, None),
-                f"picked candidate {model_id} advertises no levels",
-            )
-        (
-            effort,
-            effort_confidence,
-            total,
-            effort_truncated,
-            effort_engine,
-            effort_detail,
-        ) = _resolve_effort(strategy, candidate, state, chain, result)
-        if effort is None:
-            return (
-                None,
-                effort_engine,
-                (0, 0, None),
-                _with_truncation(effort_detail, truncated_any or effort_truncated),
-            )
-        pick = RoutingPick(
-            model=model_id,
-            effort=effort,
-            model_confidence=float(answer["probabilities"][model_id]),
-            effort_confidence=effort_confidence,
-            tie_break=tie_break,
-        )
-        shrunk = truncated_any or effort_truncated
-        if model_id != current_model and not validate_routed_effort(
-            pick, strategy.candidates
-        ):
-            return (
-                None,
-                name,
-                (0, 0, None),
-                _with_truncation(
-                    f"effort {pick.effort!r} unsupported by {model_id}", shrunk
-                ),
-            )
-        return (
-            pick,
-            name,
-            total,
-            _with_truncation(gate_detail, shrunk),
-        )
+        if handled and verdict is not None:
+            return verdict
+        failed, detail = name, _link_detail(name, "invalid table")
+        informative = True
     if down and not informative:
         return (
             None,
