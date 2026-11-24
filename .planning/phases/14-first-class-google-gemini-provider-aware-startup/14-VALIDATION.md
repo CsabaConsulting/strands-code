@@ -1,11 +1,11 @@
 ---
 phase: "14"
 slug: "first-class-google-gemini-provider-aware-startup"
-status: verified
+status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: "2026-11-21"
-validated: "2026-11-22"
+validated: "2026-11-23"
 ---
 
 # Phase 14 — Validation Strategy
@@ -43,8 +43,11 @@ validated: "2026-11-22"
 | `14-02-T1` | 02 | 2 | `MODEL-06` | `D-04`, `D-07` | `supports_reasoning("google/...")`, `toolUse["reasoningSignature"]` cross-vendor strip + `RichHistory` / `canonical_prefix_hash` preserve, `_vendor_family` dot-split fix, Gemini 2.5 `thinking_budget` guard across 4 call sites | unit (TDD RED→GREEN) | `.venv/bin/pytest tests/model/test_model_switch.py tests/loop/test_btw.py -q` | ✅ | ✅ green |
 | `14-02-T2` | 02 | 2 | `MODEL-06` | `D-05` | Credential-gated `google.genai.Client().models.list()` discovery (`generateContent` `gemini-*`) merged with Bedrock, static fallback only when Google-keyed, zero AWS clutter | unit (TDD RED→GREEN) | `.venv/bin/pytest tests/model/test_model_switch.py tests/cost/test_cost_context.py -k "discover or model_tree or no_credential_persistence" -q` | ✅ | ✅ green |
 | `14-02-T3` | 02 | 2 | `MODEL-06` | `D-06` | `live_pricing.litellm_entry` `gemini/<tail>` + `<tail>`, static Gemini `MODEL_PRICING` / `MODEL_LIMITS`, skip `bedrock_live_price` for non-Bedrock direct providers | unit (TDD RED→GREEN) | `.venv/bin/pytest tests/cost/ -q` | ✅ | ✅ green |
-| `14-03-T1` | 03 | 2 | `MODEL-06` | `D-07` | Repeatable `driver.py g1` scenario in `scripts/uattest/scenarios_gemini.py` (zero-AWS `env -u AWS_*`, isolated `XDG_CONFIG_HOME`, `--model google/gemini-2.5-flash`) + rig contract tests | rig contract | `.venv/bin/pytest tests/rig/ -q` | ✅ | ✅ green |
-| `14-03-T2` | 03 | 2 | `MODEL-06` | `D-07`, `D-08` + Gates | `docs/QUICKSTART.md` AI Studio Ultra credit docs, `harness_issue_gemini25_thinking.md`, and all 6 CI gates (`pytest`, `ruff`, `xenon`, `lint-imports`, `uv lock --check`, `CLEANUP-01`) green | full suite + CI gates | `.venv/bin/ruff check strands_code_cli tests scripts && .venv/bin/ruff format --check strands_code_cli tests scripts && .venv/bin/xenon --max-absolute C strands_code_cli tests scripts && .venv/bin/lint-imports && .venv/bin/pytest tests/ -q` | ✅ | ✅ green |
+| `14-03-T1` | 03 | 2 | `MODEL-06` | `D-07` | Repeatable `driver.py g1` scenario in `scripts/uattest/scenarios_gemini.py` (zero-AWS `env -u AWS_*`, isolated `XDG_CONFIG_HOME`, `--model google/gemini-3.8-flash`) + rig contract tests | rig contract | `.venv/bin/pytest tests/rig/ -q` | ✅ | ✅ green |
+| `14-03-T2` | 03 | 2 | `MODEL-06` | `D-07`, `D-08` + Gates | `docs/QUICKSTART.md` AI Studio Ultra credit docs, `harness_issue_gemini25_thinking.md` (`harness-sdk#6510`), and all 6 CI gates (`pytest`, `ruff`, `xenon`, `lint-imports`, `uv lock --check`, `CLEANUP-01`) green | full suite + CI gates | `.venv/bin/ruff check strands_code_cli tests scripts && .venv/bin/ruff format --check strands_code_cli tests scripts && .venv/bin/xenon --max-absolute C strands_code_cli tests scripts && .venv/bin/lint-imports && .venv/bin/pytest tests/ -q` | ✅ | ✅ green |
+| `14-UAT-T1` | uat | 3 | `MODEL-06` | `D-02`..`D-08` | Full 6/6 conversational + live UAT (`14-UAT.md`): zero-AWS launch/auto-pick, Vertex conflict fail-fast, live `driver.py g1` (`G1 PASS`), live 38-model `/model` discovery/cascade, live `g4a` cross-provider switch/restore + `g4c` Gemini 2.5 Flash turn | live UAT + rig | `python3 scripts/uattest/driver.py g1` + `14-UAT.md` | ✅ | ✅ green |
+| `14-SEC-T1` | sec | 3 | `MODEL-06` | `T-14-02` | `disable_cwd_dotenv()` blocks implicit CWD `.env` auto-load in `smolagents.remote_executors` / `litellm._process_defaults` while preserving explicit `dotenv_path`/`stream` loads (`14-SECURITY.md` `10/10` closed, `threats_open: 0`) | security unit | `.venv/bin/pytest tests/entry/test_first_run.py -k TestCwdDotenvGuard -q` | ✅ | ✅ green |
+| `14-VAL-T1` | val | 3 | `MODEL-06` | `D-02`..`D-07` | Nyquist branch coverage for explicit Anthropic/OpenAI/`base_url`/LiteLLM/`STRANDS_BOX` preflight, blank `--model` CLI gate, `prepare_resumed_history` Gemini `toolUse["reasoningSignature"]` stash/strip, `configure_gemini_for_model` existing budget + fail-soft exceptions, `_is_google_chat_model` legacy `supported_generation_methods`/`name=None`, and non-`google/` `vertex_ai/gemini-*` LiteLLM tail fallback | unit (Nyquist) | `.venv/bin/pytest tests/entry/test_first_run.py tests/model/test_model_switch.py tests/cost/test_live_pricing.py -q` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -73,4 +76,4 @@ Existing test infrastructure covers Plans `14-01` and `14-02`; `tests/rig/test_u
 - [x] Fast feedback latency (< 15s per task; full suite ~65s per wave)
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Status:** Verified `2026-11-22` — all 7 automated Nyquist rows green (`1645 passed, 0 failed`, all 6 CI gates pass) and live `driver.py g1` passed (`G1 PASS`).
+**Approval:** validated 2026-11-23 (`1653 passed, 12 deselected` + loopback `1 passed` = `1654 passed, 0 failed`; `11` integration specs deselected by `pyproject.toml`; `ruff check`, `ruff format --check`, `xenon --max-absolute C`, `lint-imports`, `uv lock --check` all green; `git diff ee42ea2 -- strands_code_agent/` empty; live `driver.py g1`, `/model`, `g4a`, and `g4c` UATs recorded passing in `14-UAT.md`)

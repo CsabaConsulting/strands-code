@@ -427,6 +427,23 @@ class TestLiteLLMEntry:
         assert real38["out"] == pytest.approx(3.75)
         assert real38["window"] == 1_048_576
 
+    def test_non_google_prefix_gemini_tail_fallback(self, monkeypatch):
+        _fake_litellm(
+            monkeypatch,
+            {
+                "gemini/gemini-2.5-flash": {
+                    "input_cost_per_token": 3.0e-7,
+                    "output_cost_per_token": 2.5e-6,
+                    "max_input_tokens": 1048576,
+                }
+            },
+        )
+        entry = live_pricing.litellm_entry("vertex_ai/gemini-2.5-flash")
+        assert entry is not None
+        assert entry["in"] == pytest.approx(0.30)
+        assert entry["out"] == pytest.approx(2.50)
+        assert entry["window"] == 1_048_576
+
 
 # ----------------------------------------------------------------------
 # Resolution order through cost_context

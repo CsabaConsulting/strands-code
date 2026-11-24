@@ -181,6 +181,74 @@ class TestPreflightGate:
             is None
         )
 
+    def test_explicit_anthropic_openai_and_base_url_preflight(
+        self, monkeypatch, capsys
+    ):
+        sts_fail = lambda: pytest.fail("Non-AWS provider must not probe STS")  # noqa: E731
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(model="anthropic/claude-sonnet-4-6", probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(model="openai/gpt-5.4", probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+        assert (
+            preflight_credentials(
+                model="openai/gpt-5.4",
+                base_url="http://127.0.0.1:8000/v1",
+                probe=sts_fail,
+            )
+            is None
+        )
+
+    def test_explicit_litellm_and_openrouter_preflight_branches(
+        self, monkeypatch, capsys
+    ):
+        sts_fail = lambda: pytest.fail("litellm provider must not probe STS")  # noqa: E731
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(
+                model="litellm/openrouter/anthropic/claude-sonnet-4.6",
+                probe=_creds_ok,
+            )
+        assert exc_info.value.exit_code == 2
+        capsys.readouterr()
+
+        monkeypatch.setenv("LITELLM_API_KEY", "tok")
+        assert (
+            preflight_credentials(
+                model="litellm/openrouter/anthropic/claude-sonnet-4.6",
+                probe=sts_fail,
+            )
+            is None
+        )
+        monkeypatch.delenv("LITELLM_API_KEY")
+
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(
+                model="litellm/deepseek/deepseek-chat", probe=_creds_ok
+            )
+        assert exc_info.value.exit_code == 2
+        assert "OPENROUTER_API_KEY" in capsys.readouterr().err
+
+        assert (
+            preflight_credentials(
+                model="litellm/deepseek/deepseek-chat",
+                base_url="https://proxy.local",
+                probe=sts_fail,
+            )
+            is None
+        )
+        monkeypatch.setenv("STRANDS_BOX", "1")
+        assert (
+            preflight_credentials(
+                model="litellm/deepseek/deepseek-chat", probe=sts_fail
+            )
+            is None
+        )
+
 
 # ----------------------------------------------------------------------
 # CLI-level: no-creds run leaves the filesystem untouched
@@ -259,6 +327,15 @@ class TestFirstRunCli:
         assert built.call_args[1]["model"] == "google/gemini-3.8-flash"
         assert loop.call_args[1]["model_id"] == "google/gemini-3.8-flash"
         assert not (tmp_path / "xdg").exists()
+
+    def test_blank_model_flag_rejected_before_side_effects(self, tmp_path, monkeypatch):
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(main_module.app, ["--model", "   "])
+        assert result.exit_code != 0
+        assert "invalid --model" in result.output
+        assert not (tmp_path / ".agent").exists()
 
 
 # ----------------------------------------------------------------------

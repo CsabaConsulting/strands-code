@@ -3200,3 +3200,132 @@ class TestGeminiCrossProviderSafety:
         ):
             assert supports_reasoning(mid) is True
             assert mid in CURATED_GEMINI_MODELS
+
+    def test_prepare_resumed_history_strips_gemini_tool_use_signature_and_stashes(
+        self, tmp_path
+    ):
+        import copy
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import (
+            canonical_prefix_hash,
+            prepare_resumed_history,
+        )
+
+        original = [
+            {"role": "user", "content": [{"text": "check file"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "t1",
+                            "name": "read",
+                            "input": {"path": "a.py"},
+                            "reasoningSignature": "SIG_B64==",
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "t1",
+                            "status": "success",
+                            "content": [{"text": "ok"}],
+                        }
+                    }
+                ],
+            },
+            {"role": "assistant", "content": [{"text": "done"}]},
+        ]
+        agent = SimpleNamespace(messages=copy.deepcopy(original))
+        rich = RichHistory()
+        stash_path = tmp_path / "stash.json"
+
+        changed = prepare_resumed_history(
+            agent, "openai/gpt-5.4", rich=rich, stash_path=stash_path
+        )
+        assert changed is True
+        tool_use = agent.messages[1]["content"][0]["toolUse"]
+        assert "reasoningSignature" not in tool_use
+        assert rich.messages == original
+        assert rich.prefix_hash == canonical_prefix_hash(original)
+        assert stash_path.exists() is True
+        assert RichHistory.load(stash_path).messages == original
+
+    def test_configure_gemini_preserves_existing_budget_and_fails_soft(self):
+        from strands_code_cli.model.model_switch import configure_gemini_for_model
+
+        class _BudgetModel:
+            def __init__(self):
+                self.config = {
+                    "params": {
+                        "thinking_config": {
+                            "thinking_level": "high",
+                            "thinking_budget": 4096,
+                        }
+                    }
+                }
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kwargs):
+                self.config.update(kwargs)
+
+        preserved = _BudgetModel()
+        configure_gemini_for_model("google/gemini-2.5-pro", preserved)
+        assert preserved.config["params"]["thinking_config"] == {
+            "thinking_budget": 4096
+        }
+
+        class _BrokenGet:
+            def get_config(self):
+                raise RuntimeError("boom get")
+
+        class _BrokenUpdate:
+            def get_config(self):
+                return {"params": {"thinking_config": {"thinking_level": "high"}}}
+
+            def update_config(self, **kwargs):
+                raise RuntimeError("boom update")
+
+        broken_get = _BrokenGet()
+        broken_upd = _BrokenUpdate()
+        assert (
+            configure_gemini_for_model("google/gemini-2.5-pro", broken_get)
+            is broken_get
+        )
+        assert (
+            configure_gemini_for_model("google/gemini-2.5-pro", broken_upd)
+            is broken_upd
+        )
+
+    def test_is_google_chat_model_legacy_methods_and_invalid_name(self):
+        from types import SimpleNamespace
+
+        from strands_code_cli.model.model_switch import _is_google_chat_model
+
+        assert (
+            _is_google_chat_model(
+                SimpleNamespace(
+                    name="models/gemini-2.5-flash",
+                    supported_generation_methods=["generateContent"],
+                )
+            )
+            == "gemini-2.5-flash"
+        )
+        assert (
+            _is_google_chat_model(
+                SimpleNamespace(
+                    name="models/gemini-2.5-flash",
+                    supported_generation_methods=["embedContent"],
+                )
+            )
+            is None
+        )
+        assert _is_google_chat_model(SimpleNamespace(name=None)) is None
