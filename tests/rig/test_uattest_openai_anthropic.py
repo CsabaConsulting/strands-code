@@ -55,6 +55,7 @@ class TestOpenAIAnthropicRig:
             "config.yaml",
             "/context",
             "Context — ",
+            "_wait_idle_prompt",
             "/cost",
             "Cost — ",
             "Display only",

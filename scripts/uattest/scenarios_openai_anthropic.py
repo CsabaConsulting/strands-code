@@ -19,6 +19,7 @@ from scenarios_upstream import (  # noqa: E402 - sibling import needs the sys.pa
     USAGE_END_RE,
     _fresh_upstream_workdir,
     _stop_and_flush,
+    _wait_idle_prompt,
     _wait_turn_end,
 )
 from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path insert above (CF-07a)
@@ -88,6 +89,7 @@ def _run_provider_rig(
         turn_text = _wait_turn_end(sess, after=after, timeout=180)
         assert sentinel in turn_text, f"{name} read turn did not return {sentinel}"
 
+        _wait_idle_prompt(sess)
         cost_n = pane_text(sess).count("Display only")
         send(sess, "/cost", "Enter")
         cost_text = wait_for_new(
