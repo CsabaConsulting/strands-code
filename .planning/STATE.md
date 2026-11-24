@@ -5,11 +5,11 @@ current_phase: 15
 current_phase_name: First-Class Native OpenAI & Anthropic APIs
 current_plan: 3
 status: passed
-stopped_at: Phase 15 verified + UAT + security audit complete (`15-SECURITY.md` `10/10 closed`, `threats_open: 0`, `8368ddb`, `1687/1687` default suite + `42/42` rig green)
-last_updated: "2026-11-24T07:59:30Z"
+stopped_at: Phase 15 verified + UAT + security + Nyquist validation complete (`15-VALIDATION.md` `validated`, `638bc2e`, `1694/1694` default suite + `42/42` rig green)
+last_updated: "2026-11-24T08:12:30Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed Phase 15 ASVS L1 security audit (`15-SECURITY.md` `10/10 closed`, remediated `T-15-02`/`T-15-03`/`T-15-04` in `8368ddb`)
-state_head: 8368ddb
+last_activity_desc: Completed Phase 15 Nyquist branch validation (`15-VALIDATION.md` `validated`, `1694/1694` default suite green at `638bc2e`)
+state_head: 638bc2e
 progress:
   total_phases: 9
   completed_phases: 3
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Complete (`15-VERIFICATION.md` `8/8`, `15-UAT.md` `6/6`, `15-SECURITY.md` `10/10 closed`)
-Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`, `fa51c2d`, `8368ddb`)
-Status: Complete + Security Verified (`threats_open: 0`, `1687/1687` default suite + `42/42` rig, live `o1`/`an1`/`gpt-6.2-sol`/discovery/thinking/guard PASS, upstream `#6521` & `#6522` filed)
-Last activity: 2026-11-24 — Completed Phase 15 ASVS L1 security audit (`15-SECURITY.md` `10/10 closed`; closed `T-15-02`/`T-15-03`/`T-15-04` in `8368ddb`)
+Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Complete (`15-VERIFICATION.md` `8/8`, `15-UAT.md` `6/6`, `15-SECURITY.md` `10/10`, `15-VALIDATION.md` `validated`)
+Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`, `fa51c2d`, `8368ddb`, `638bc2e`)
+Status: Complete + Validated (`nyquist_compliant: true`, `threats_open: 0`, `1694/1694` default suite + `42/42` rig, live `o1`/`an1`/`gpt-6.2-sol`/discovery/thinking/guard PASS, upstream `#6521` & `#6522` filed)
+Last activity: 2026-11-24 — Filled Phase 15 Nyquist branch coverage (`638bc2e`) and marked `15-VALIDATION.md` `validated`
 
 Progress: [███░░░░░░░] 33%
 
@@ -58,6 +58,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`): added `openai` (`openai>=2.0.0`) & `anthropic` extras + `_SDK_EXTRA_HINTS`, bumped `_AMBIENT_DEFAULT_MODELS` (`claude-sonnet-5-5`, `gpt-6.1-sol`), added `ProviderConfig.api_mode` & harness-preserving `base_url`, shared `resolve_harness_model()` preserving `caching` + `web_search`, normalized inclusive/exclusive `/cost` & cache-discounted usage accounting, added 24h `anthropic-models.json` cache feeding `window_for()` & retiring `route_label()`, gated signed thinking & `SummaryBlock` on `same_provider() and same_vendor()`, added fail-soft `configure_openai_for_model()` guard (filed `strands-agents/harness-sdk#6522`), added `driver.py o1`/`an1` rigs (`O1 PASS`, `AN1 PASS`) + `docs/QUICKSTART.md`, and filed Meta Model API feature proposal `strands-agents/harness-sdk#6521`.
 - Phase 15 UAT & GPT-6.2 bridge (`fa51c2d`, `15-UAT.md` `6/6 PASS`): added `gpt-6.2-sol` (\$2/\$10/\$0.10) & `gpt-6.2-astra` (\$8/\$40/\$0.40) pricing, `1.05M` window, effort guard, and retireable `model_info` bridge while keeping `openai/gpt-6.1-sol` as the ambient default until an intentional upstream resync to `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (which ships `#6265` GPT-6.2 `model-info` and `#6396` Responses system-prompt caching fix).
 - Phase 15 security audit (`8368ddb`, `15-SECURITY.md` `10/10 closed`): closed `T-15-02` (scoped `base_url` by `_base_url_provider` across `build_agent`, `_root`, `apply_switch`, `_route_side_spawn`, `build_btw_agent`, and `ProviderConfig.save_model_choice()`), `T-15-03` (strict `_validate_base_url()`, `0o600` temp-symlink-safe config write, and OpenAI `sk-(?:proj-|svcacct-)?` redaction in `scrub_credentials()`), and `T-15-04` (`_ISO_DATE_RE` sanitization in `route_label()` + symlink-refusing `0o600` atomic cache helpers in `live_pricing.py`).
+- Phase 15 Nyquist validation (`638bc2e`, `15-VALIDATION.md` `validated`): filled remaining branch tests across `entry/`, `cost/`, and `model/` (`1694/1694` default suite + `42/42` rig green).
 
 ### Pending Todos
 
@@ -74,6 +75,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T07:59:30Z
-Stopped at: Phase 15 verified + UAT + security audit complete (`15-SECURITY.md` `10/10 closed`, `threats_open: 0`, `8368ddb`, `1687/1687` default suite + `42/42` rig green) — ready for `/gsd-discuss-phase 16` or `1.66.0`/`0.5.0` upstream resync
-Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-SECURITY.md
+Last session: 2026-11-24T08:12:30Z
+Stopped at: Phase 15 verified + UAT + security + Nyquist validation complete (`15-VALIDATION.md` `validated`, `638bc2e`, `1694/1694` default suite + `42/42` rig green) — ready for `/gsd-discuss-phase 16` or `1.66.0`/`0.5.0` upstream resync
+Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-VALIDATION.md
