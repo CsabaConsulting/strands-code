@@ -16,6 +16,9 @@
 ### Models & Auth
 
 - [x] **MODEL-06**: First-class `google/` Gemini provider support (`gemini` optional extra + `_SDK_EXTRA_HINTS`), Box-compatible provider-aware startup preflight replacing the unconditional `Bedrock-or-stop` STS gate, `google/` reasoning support via `_harness_supports_thinking`, cross-vendor `toolUse["reasoningSignature"]` stripping in `convert_history()`, `_vendor_family()` dot-split fix, `litellm_entry` `gemini/` lookup + Gemini discovery/cost tables, and Google AI Studio + Google AI Ultra (\$40–\$100/mo Developer Program credit) setup docs
+- [ ] **MODEL-07**: First-class native `openai/` API support (`CsabaConsulting/strands-code#17` — `openai = ["strands-agents[openai]", "openai>=2.0.0"]` extra + `_SDK_EXTRA_HINTS`, forwarding `caching=True` & `web_search=True` in `apply_switch()`/`/route`, `litellm_entry` bare-tail lookup + static fallbacks for `GPT-5.4`/`5.6`/`6`/`6.1` & `o3`/`o4-mini`, cache-aware inclusive-`input_tokens` `/cost` discounts, `_vendor_family` `openai` grouping, credential-gated `GET /v1/models` filtered to Responses-capable chat models + curated fallback, non-reasoning / effort-subset guards, Responses-compatible `base_url` handling in `model_for_config()`, documented `use_native_token_count` / `prompt_cache_retention` / `service_tier` / `#3389` replay notes, repeatable UAT & `docs/QUICKSTART.md`)
+- [ ] **MODEL-08**: First-class native `anthropic/` API support (`CsabaConsulting/strands-code#22` — `anthropic` optional extra + `_SDK_EXTRA_HINTS`, cache-aware exclusive-`input_tokens` `/cost` & context `%` accounting for `cacheReadInputTokens` & `cacheWriteInputTokens`, forwarding `caching=True` & `web_search=True` in `apply_switch()`/`/route`, `litellm_entry` bare-tail lookup + static fallbacks for `Claude 5.5` & `Fable 5.2` 1M, `_vendor_family` `anthropic` grouping, credential-gated `GET /v1/models` caching live `max_input_tokens`/`max_tokens`/`capabilities`/`retires_at`, cross-provider Bedrock↔Direct thinking-signature gating, `SummaryBlock` (`compact-2026-09-04`) & `temporary_messages` switch safety, `anthropic-version: 2026-10-21` / `max_tokens` / PDF-text doc constraints & `use_native_token_count` coverage, repeatable UAT & `docs/QUICKSTART.md`)
+- [ ] **MODEL-09**: First-class Meta Model API (`api.meta.ai` / Muse) support (`CsabaConsulting/strands-code#21` — empirical `/v1/responses` vs `/v1/messages` protocol probe, upstream `strands-agents/harness-sdk` feature proposal for `meta/` provider + `shared/model-info.json` Muse entries + `#3389` reasoning replay linkage, thin retireable `meta/` adapter on `OpenAIResponsesModel`, Box-compatible `MODEL_API_KEY` zero-AWS preflight, credential-gated `GET /v1/models` discovery & `("meta", "muse")` grouping, `_MEDIA_LESS` Bedrock Llama scoping so multimodal Muse retains media, cache-aware contributor-tier `/cost` & 1M windows, repeatable UAT & `docs/QUICKSTART.md`)
 
 ### Skills & Extensibility
 
@@ -23,7 +26,7 @@
 
 ### Sandbox & Policy
 
-- [ ] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.2.3+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 5-provider egress profiles with `x-goog-api-key` / `x-api-key` / OpenRouter path-scoping), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
+- [ ] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.2.3+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 7-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
 
 ### Interaction & Review
 
@@ -68,17 +71,20 @@
 |-------------|-------|--------|
 | UPSTREAM-01 | Phase 13 | Complete |
 | MODEL-06 | Phase 14 | Complete |
-| UPSTREAM-02 | Phase 15 | Pending |
-| SKILL-03 | Phase 16 | Pending |
-| SANDBOX-01 | Phase 17 | Pending |
-| LOOP-06 | Phase 18 | Pending |
-| TOOL-05 | Phase 18 | Pending |
-| REVIEW-01 | Phase 18 | Pending |
-| EVAL-01 | Phase 19 | Pending |
+| MODEL-07 | Phase 15 | Pending |
+| MODEL-08 | Phase 15 | Pending |
+| MODEL-09 | Phase 16 | Pending |
+| UPSTREAM-02 | Phase 17 | Pending |
+| SKILL-03 | Phase 18 | Pending |
+| SANDBOX-01 | Phase 19 | Pending |
+| LOOP-06 | Phase 20 | Pending |
+| TOOL-05 | Phase 20 | Pending |
+| REVIEW-01 | Phase 20 | Pending |
+| EVAL-01 | Phase 21 | Pending |
 
 **Coverage:**
-- `v2.0` requirements: 9 total
-- Mapped to phases: 9
+- `v2.0` requirements: 12 total
+- Mapped to phases: 12
 - Unmapped: 0 ✓
 
 ---

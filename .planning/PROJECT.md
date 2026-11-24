@@ -12,7 +12,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 
 **Shipped `v1.0` (2026-10-16, archived 2026-11-21):** All 12 planned phases (41 plans, 129 tasks) shipped end-to-end under GSD Spec-Driven Development (`strands-harness 0.1.2` + `strands-agents 1.58.1`, gated 10-package CLI architecture, 1,549 tests in [RETROSPECTIVE.md](../docs/initial_build/RETROSPECTIVE.md)).
 
-**Active `v2.0` (initialized 2026-11-21 — Phases 13–19):** Aligning with `strands-py >=1.65`, `harness-py >=0.4.0`, Google AI Gemini (including Google AI Ultra credits), `DecisionModel` routing, deny-first remote skills marketplaces (`SKILL-03`), `strands-agents/box` Linux OS sandboxing, interactive UX (`/help`, `@file`, `/review`), and `strands-agents-evals`. See `.planning/ROADMAP.md` and `.planning/research/SUMMARY.md`.
+**Active `v2.0` (initialized 2026-11-21 — Phases 13–21):** Aligning with `strands-py >=1.65`, `harness-py >=0.4.0`, Google AI Gemini (including Google AI Ultra credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) APIs, `DecisionModel` routing, deny-first remote skills marketplaces (`SKILL-03`), `strands-agents/box` Linux OS sandboxing, interactive UX (`/help`, `@file`, `/review`), and `strands-agents-evals`. See `.planning/ROADMAP.md` and `.planning/research/SUMMARY.md`.
 
 ## Requirements
 
@@ -41,15 +41,17 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - ✓ Structural review + 10-package CLI breakup + OKF dead-example removal — Phase 12
 - ✓ GitHub flows via general tool competence (`gh` + shell covers issues/PRs/CI; small `/review` slash deferred to v2) — covered v1.0
 
-### Active (`v2.0` — Phases 13–19, see `.planning/REQUIREMENTS.md`)
+### Active (`v2.0` — Phases 13–21, see `.planning/REQUIREMENTS.md`)
 
-- [ ] **UPSTREAM-01** (Phase 13): Resync onto `strands-agents >=1.65` & `strands-harness >=0.4`, adapt `InjectedBlock` + `Model.model_info`, retire `#5166`/`#5158` shims, enable `streaming=False` for `_NO_STREAMING_TOOLS`
-- [ ] **MODEL-06** (Phase 14): First-class `google/` Gemini (`gemini` extra), Box-compatible provider-aware startup preflight, `reasoningSignature` / `_vendor_family` / `litellm_entry` fixes, AI Studio + Google AI Ultra (\$40–\$100/mo credit) setup docs
-- [ ] **UPSTREAM-02** (Phase 15): Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
-- [ ] **SKILL-03** (Phase 16): Remote skills marketplaces + `./.agent/skills-lock.json` SHA/hash installer into `./.agent/skills-marketplaces/` under deny-first safeguards
-- [ ] **SANDBOX-01** (Phase 17): Strands Box (`v0.2.3+`) Linux wrapper workflow (`box.toml` + Dogwood `policy.dw`, 5-provider egress profiles, temporal rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment)
-- [ ] **LOOP-06 / TOOL-05 / REVIEW-01** (Phase 18): Isolated UX modules (`/help`, gitignore-confined `@file` / `/file` attachment picker + `"document"` switch conversion, Python-collected read-only `/review`)
-- [ ] **EVAL-01** (Phase 19): `strands-agents-evals >=1.10` regression & Crescendo/GOAT/PAIR red-team suite under `scripts/evals/` + `tests/evals/`
+- [x] **UPSTREAM-01** (Phase 13): Resync onto `strands-agents >=1.65` & `strands-harness >=0.4`, adapt `InjectedBlock` + `Model.model_info`, retire `#5166`/`#5158` shims, enable `streaming=False` for `_NO_STREAMING_TOOLS`
+- [x] **MODEL-06** (Phase 14): First-class `google/` Gemini (`gemini` extra), Box-compatible provider-aware startup preflight, `reasoningSignature` / `_vendor_family` / `litellm_entry` fixes, AI Studio + Google AI Ultra (\$40–\$100/mo credit) setup docs
+- [ ] **MODEL-07 / MODEL-08** (Phase 15): First-class native `openai/` & `anthropic/` APIs (`#17`, `#22` — extras + hints, cache-aware `/cost` & context `%`, caching/`web_search` switch preservation, live `/v1/models` discovery & Anthropic metadata cache, API mannerisms, UAT & docs)
+- [ ] **MODEL-09** (Phase 16): First-class Meta Model API (`api.meta.ai` / Muse — `#21`, empirical `/v1/responses` vs `/v1/messages` probe, upstream `strands-agents/harness-sdk` `meta/` proposal + `model_info.json`, thin adapter, `MODEL_API_KEY` preflight, `/model` discovery, multimodal `_MEDIA_LESS` fix, contributor cache `/cost`)
+- [ ] **UPSTREAM-02** (Phase 17): Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
+- [ ] **SKILL-03** (Phase 18): Remote skills marketplaces + `./.agent/skills-lock.json` SHA/hash installer into `./.agent/skills-marketplaces/` under deny-first safeguards
+- [ ] **SANDBOX-01** (Phase 19): Strands Box (`v0.2.3+`) Linux wrapper workflow (`box.toml` + Dogwood `policy.dw`, 7-provider egress profiles, temporal rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment)
+- [ ] **LOOP-06 / TOOL-05 / REVIEW-01** (Phase 20): Isolated UX modules (`/help`, gitignore-confined `@file` / `/file` attachment picker + `"document"` switch conversion, Python-collected read-only `/review`)
+- [ ] **EVAL-01** (Phase 21): `strands-agents-evals >=1.10` regression & Crescendo/GOAT/PAIR red-team suite under `scripts/evals/` + `tests/evals/`
 
 ### Future (`v2.1+`)
 
