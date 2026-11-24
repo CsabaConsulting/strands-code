@@ -5,11 +5,11 @@ current_phase: 15
 current_phase_name: First-Class Native OpenAI & Anthropic APIs
 current_plan: 3
 status: passed
-stopped_at: Phase 15 UAT complete (`6/6 PASS` on `fa51c2d`, `1683/1683` default suite green, live `o1`/`an1`/`gpt-6.2-sol` verified, upstream `#6521` & `#6522` filed)
-last_updated: "2026-11-24T07:44:00Z"
+stopped_at: Phase 15 verified + UAT + security audit complete (`15-SECURITY.md` `10/10 closed`, `threats_open: 0`, `8368ddb`, `1687/1687` default suite + `42/42` rig green)
+last_updated: "2026-11-24T07:59:30Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed Phase 15 UAT (`6/6 PASS`) including GPT-6.2 Sol/Astra local support (`fa51c2d`), live `o1`/`an1`, live discovery/thinking/guard probes
-state_head: fa51c2d
+last_activity_desc: Completed Phase 15 ASVS L1 security audit (`15-SECURITY.md` `10/10 closed`, remediated `T-15-02`/`T-15-03`/`T-15-04` in `8368ddb`)
+state_head: 8368ddb
 progress:
   total_phases: 9
   completed_phases: 3
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Verified + UAT Complete (`15-VERIFICATION.md` `8/8`, `15-UAT.md` `6/6`)
-Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`, `fa51c2d`)
-Status: UAT Complete (`6/6 PASS`, `1683/1683` default suite, live `o1`/`an1`/`gpt-6.2-sol`/discovery/thinking/guard PASS, upstream `#6521` & `#6522` filed)
-Last activity: 2026-11-24 — Added `gpt-6.2-sol`/`gpt-6.2-astra` support (`fa51c2d`) and completed Phase 15 UAT (`15-UAT.md` `6/6 PASS`)
+Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Complete (`15-VERIFICATION.md` `8/8`, `15-UAT.md` `6/6`, `15-SECURITY.md` `10/10 closed`)
+Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`, `fa51c2d`, `8368ddb`)
+Status: Complete + Security Verified (`threats_open: 0`, `1687/1687` default suite + `42/42` rig, live `o1`/`an1`/`gpt-6.2-sol`/discovery/thinking/guard PASS, upstream `#6521` & `#6522` filed)
+Last activity: 2026-11-24 — Completed Phase 15 ASVS L1 security audit (`15-SECURITY.md` `10/10 closed`; closed `T-15-02`/`T-15-03`/`T-15-04` in `8368ddb`)
 
 Progress: [███░░░░░░░] 33%
 
@@ -57,10 +57,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Roadmap expansion (2026-11-23): inserted Phase 15 (`MODEL-07`/`MODEL-08` native OpenAI `#17` & Anthropic `#22`) and Phase 16 (`MODEL-09` Meta Model API `api.meta.ai` / Muse `#21`, upstream draft `docs/upstream/harness_issue_meta_model_api.md`) right after Phase 14, and cleanly renumbered unstarted Phases 15–19 -> 17–21 (expanding Phase 19 Strands Box egress profiles to 7 providers).
 - Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`): added `openai` (`openai>=2.0.0`) & `anthropic` extras + `_SDK_EXTRA_HINTS`, bumped `_AMBIENT_DEFAULT_MODELS` (`claude-sonnet-5-5`, `gpt-6.1-sol`), added `ProviderConfig.api_mode` & harness-preserving `base_url`, shared `resolve_harness_model()` preserving `caching` + `web_search`, normalized inclusive/exclusive `/cost` & cache-discounted usage accounting, added 24h `anthropic-models.json` cache feeding `window_for()` & retiring `route_label()`, gated signed thinking & `SummaryBlock` on `same_provider() and same_vendor()`, added fail-soft `configure_openai_for_model()` guard (filed `strands-agents/harness-sdk#6522`), added `driver.py o1`/`an1` rigs (`O1 PASS`, `AN1 PASS`) + `docs/QUICKSTART.md`, and filed Meta Model API feature proposal `strands-agents/harness-sdk#6521`.
 - Phase 15 UAT & GPT-6.2 bridge (`fa51c2d`, `15-UAT.md` `6/6 PASS`): added `gpt-6.2-sol` (\$2/\$10/\$0.10) & `gpt-6.2-astra` (\$8/\$40/\$0.40) pricing, `1.05M` window, effort guard, and retireable `model_info` bridge while keeping `openai/gpt-6.1-sol` as the ambient default until an intentional upstream resync to `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (which ships `#6265` GPT-6.2 `model-info` and `#6396` Responses system-prompt caching fix).
+- Phase 15 security audit (`8368ddb`, `15-SECURITY.md` `10/10 closed`): closed `T-15-02` (scoped `base_url` by `_base_url_provider` across `build_agent`, `_root`, `apply_switch`, `_route_side_spawn`, `build_btw_agent`, and `ProviderConfig.save_model_choice()`), `T-15-03` (strict `_validate_base_url()`, `0o600` temp-symlink-safe config write, and OpenAI `sk-(?:proj-|svcacct-)?` redaction in `scrub_credentials()`), and `T-15-04` (`_ISO_DATE_RE` sanitization in `route_label()` + symlink-refusing `0o600` atomic cache helpers in `live_pricing.py`).
 
 ### Pending Todos
 
-- Run `/gsd-secure-phase 15`, optionally resync `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (to retire the `gpt-6.2` bridge and bump the ambient default to `openai/gpt-6.2-sol`), then advance to Phase 16 (`MODEL-09` Meta Model API `#21`).
+- Optionally resync `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (to retire the `gpt-6.2` bridge and bump the ambient default to `openai/gpt-6.2-sol`), then advance to Phase 16 (`MODEL-09` Meta Model API `#21`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521`, and `#6522` (plus `#6480`–`#6484`).
 
 ### Blockers/Concerns
@@ -73,6 +74,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T07:44:00Z
-Stopped at: Phase 15 UAT complete (`6/6 PASS` on `fa51c2d`, `1683/1683` default suite green, live `o1`/`an1`/`gpt-6.2-sol` verified, upstream `#6521` & `#6522` filed) — ready for `/gsd-secure-phase 15`, `/gsd-discuss-phase 16`, or `1.66.0`/`0.5.0` upstream resync
-Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-UAT.md
+Last session: 2026-11-24T07:59:30Z
+Stopped at: Phase 15 verified + UAT + security audit complete (`15-SECURITY.md` `10/10 closed`, `threats_open: 0`, `8368ddb`, `1687/1687` default suite + `42/42` rig green) — ready for `/gsd-discuss-phase 16` or `1.66.0`/`0.5.0` upstream resync
+Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-SECURITY.md
