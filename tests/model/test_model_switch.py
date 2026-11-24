@@ -4395,3 +4395,122 @@ class TestMetaModelAdapter:
             entry_main.model_for_config("meta/muse-spark-1.3-contributor")
             == "meta/muse-spark-1.3-contributor"
         )
+
+    def test_muse_multimodal_media_and_bedrock_llama_scoping(self):
+        from strands_code_cli.model.model_switch import (
+            convert_history,
+            supports_media,
+            supports_reasoning,
+        )
+
+        for mid in (
+            "meta/muse-spark-1.3-contributor",
+            "meta/muse-spark-1.3",
+            "meta/muse-wonder-1.0",
+            "meta/muse-ember-1.0",
+        ):
+            assert supports_media(mid) is True
+            assert supports_reasoning(mid) is False
+        assert supports_media("meta.llama3-70b-instruct-v1:0") is False
+        assert supports_media("us.meta.llama4-scout-17b-instruct-v1:0") is False
+        assert supports_media("litellm/openrouter/meta/llama-x") is False
+
+        history = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {
+                                "text": "secret thought",
+                                "signature": "sig",
+                            }
+                        }
+                    },
+                    {"text": "hi"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"image": {"format": "png", "source": {"bytes": b"x"}}}],
+            },
+        ]
+        converted = convert_history(
+            history, "anthropic/claude-sonnet-5-5", "meta/muse-spark-1.3-contributor"
+        )
+        assert any(
+            "secret thought" in b.get("text", "")
+            for b in converted[0]["content"]
+            if "text" in b
+        )
+        assert not any("reasoningContent" in b for b in converted[0]["content"])
+        assert "image" in converted[1]["content"][0]
+
+    def test_meta_discovery_filtering_tree_grouping_and_isolation(self, monkeypatch):
+        import sys
+        import types
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_META_MODELS,
+            _discover_meta_models,
+            _vendor_family,
+            build_model_tree,
+            discover_models,
+        )
+
+        assert _vendor_family("meta/muse-spark-1.3-contributor") == ("meta", "muse")
+        assert _vendor_family("muse-ember-1.0") == ("meta", "muse")
+        assert _vendor_family("muse-wonder-1.0") == ("meta", "muse")
+
+        monkeypatch.setitem(sys.modules, "boto3", None)
+        assert _discover_meta_models() == ([], False)
+        opts_unkeyed, offline_u = discover_models(configured=["bedrock/x"])
+        assert offline_u is True
+        assert opts_unkeyed == ["bedrock/x"]
+
+        monkeypatch.setenv("MODEL_API_KEY", "k-meta")
+        monkeypatch.setenv("META_BASE_URL", "https://meta-catalog.local/v1/")
+        client_calls: list = []
+
+        class _FakeClient:
+            def __init__(self, **kw):
+                client_calls.append(kw)
+                self.models = types.SimpleNamespace(
+                    list=lambda: iter(
+                        [
+                            types.SimpleNamespace(id="muse-spark-1.3-contributor"),
+                            types.SimpleNamespace(id="muse-spark-1.3"),
+                            types.SimpleNamespace(id="muse-wonder-1.0"),
+                            types.SimpleNamespace(id="muse-ember-1.0"),
+                            types.SimpleNamespace(id="muse-image-1.0"),
+                            types.SimpleNamespace(id="muse-voice-transcribe-1.0"),
+                            types.SimpleNamespace(id="sam-3.1"),
+                        ]
+                    )
+                )
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = _FakeClient
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+        found, online = _discover_meta_models()
+        assert online is True
+        assert client_calls == [
+            {"api_key": "k-meta", "base_url": "https://meta-catalog.local/v1"}
+        ]
+        assert found == [
+            "meta/muse-spark-1.3-contributor",
+            "meta/muse-spark-1.3",
+            "meta/muse-wonder-1.0",
+            "meta/muse-ember-1.0",
+        ]
+        merged, offline_m = discover_models()
+        assert offline_m is False
+        assert "meta/muse-spark-1.3-contributor" in merged
+        assert all("muse-image" not in m and "sam-3.1" not in m for m in merged)
+        tree = dict(build_model_tree(merged))
+        assert "muse" in dict(tree["meta"])
+
+        monkeypatch.setitem(sys.modules, "openai", None)
+        fallback, online2 = _discover_meta_models()
+        assert online2 is False
+        assert fallback == list(CURATED_META_MODELS)

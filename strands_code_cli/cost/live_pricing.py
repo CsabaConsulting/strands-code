@@ -507,6 +507,8 @@ def _litellm_keys(model_id: str) -> list[str]:
     elif lowered.startswith(("anthropic/", "openai/")):
         prefix = lowered.partition("/")[0]
         keys = [model_id, tail, f"{prefix}/{tail}"]
+    elif lowered.startswith("meta/"):
+        keys = [model_id, f"meta/{tail}", tail]
     else:
         keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
     target = _openrouter_id(model_id)
@@ -514,6 +516,8 @@ def _litellm_keys(model_id: str) -> list[str]:
         keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])
     if not lowered.startswith("google/") and "gemini" in tail.lower():
         keys.extend([f"gemini/{tail}", tail])
+    if not lowered.startswith("meta/") and tail.lower().startswith("muse-"):
+        keys.extend([f"meta/{tail}", tail])
     return list(dict.fromkeys(keys))
 
 

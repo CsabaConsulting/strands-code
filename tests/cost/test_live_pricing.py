@@ -915,3 +915,32 @@ class TestOpenAIAnthropicLivePricing:
             encoding="utf-8",
         )
         assert live_pricing.anthropic_models_cache() == {}
+
+    def test_meta_litellm_entry_keys_and_bundled_muse_rates(self, monkeypatch):
+        keys = live_pricing._litellm_keys("meta/muse-spark-1.3-contributor")
+        assert keys[0] == "meta/muse-spark-1.3-contributor"
+        assert "bedrock/meta/muse-spark-1.3-contributor" not in keys
+        assert "meta/muse-ember-1.0" in live_pricing._litellm_keys("muse-ember-1.0")
+
+        contrib = live_pricing.litellm_entry("meta/muse-spark-1.3-contributor")
+        assert contrib is not None
+        assert contrib["in"] == pytest.approx(0.10)
+        assert contrib["cache_read"] == pytest.approx(0.002)
+        assert contrib["out"] == pytest.approx(0.20)
+        assert contrib["window"] == 1_048_576.0
+
+        _fake_litellm(
+            monkeypatch,
+            {
+                "meta/muse-wonder-1.0": {
+                    "input_cost_per_token": 4.0e-6,
+                    "output_cost_per_token": 20.0e-6,
+                    "cache_read_input_token_cost": 2.0e-7,
+                    "max_input_tokens": 1_048_576,
+                }
+            },
+        )
+        wonder = live_pricing.litellm_entry("meta/muse-wonder-1.0")
+        assert wonder is not None
+        assert wonder["cache_read"] == pytest.approx(0.20)
+        assert wonder["window"] == 1_048_576.0

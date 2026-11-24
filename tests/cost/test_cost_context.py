@@ -1389,3 +1389,61 @@ class TestCacheAwareUsageAndCost:
             0,
             0,
         )
+
+    def test_meta_muse_static_pricing_50x_cache_window_usage_and_scrub(
+        self, monkeypatch
+    ):
+        from strands_code_cli.cost.cost_context import scrub_credentials
+        from strands_code_cli.loop.core import record_turn_metrics
+
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(live_pricing, "litellm_entry", lambda _id: None)
+
+        assert cost_context.price_for("meta/muse-spark-1.3-contributor") == (0.10, 0.20)
+        assert cost_context.price_for("meta/muse-spark-1.3") == (1.25, 4.25)
+        assert cost_context.price_for("meta/muse-wonder-1.0") == (4.00, 20.00)
+        assert cost_context.price_for("meta/muse-ember-1.0") == (0.10, 0.50)
+
+        assert cost_context.cache_prices_for(
+            "meta/muse-spark-1.3-contributor"
+        ) == pytest.approx((0.10, 0.002, 0.10, 0.20))
+        assert cost_context.cache_prices_for("meta/muse-ember-1.0") == pytest.approx(
+            (0.10, 0.004, 0.10, 0.50)
+        )
+        assert cost_context.cache_prices_for("meta/muse-wonder-1.0") == pytest.approx(
+            (4.00, 0.20, 4.00, 20.00)
+        )
+        assert cost_context.cache_prices_for("meta/muse-spark-1.3") == pytest.approx(
+            (1.25, 0.15, 1.25, 4.25)
+        )
+        for mid in (
+            "meta/muse-spark-1.3-contributor",
+            "meta/muse-spark-1.3",
+            "meta/muse-wonder-1.0",
+            "meta/muse-ember-1.0",
+        ):
+            assert window_for(mid) == 1_048_576
+
+        # Probe-verified inclusive inputTokens on Meta /v1/responses
+        turns: list[dict[str, Any]] = []
+        line = record_turn_metrics(
+            self._usage_result(1250, 129, cache_read=226, total_tok=1379),
+            "meta/muse-spark-1.3-contributor",
+            turns,
+        )
+        assert line is not None
+        assert "18% cached" in line
+        assert turns[0]["input_tokens"] == 1250
+        assert turns[0]["cache_read_tokens"] == 226
+        expected_usd = (1024 * 0.10 + 226 * 0.002 + 129 * 0.20) / 1_000_000
+        assert cost_for(
+            1250, 129, "meta/muse-spark-1.3-contributor", cache_read_tokens=226
+        ) == pytest.approx(expected_usd)
+
+        raw = (
+            "LLM_1607358788850350_nx9SecretToken1234 "
+            "Authorization: Bearer LLM|1607358788850350|pipeSecret5678"
+        )
+        scrubbed = scrub_credentials(raw)
+        assert "LLM_1607" not in scrubbed
+        assert "LLM|1607" not in scrubbed

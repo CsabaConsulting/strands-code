@@ -56,7 +56,9 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
     # The bedrock/openai row mirrors the harness _supports_media finding
     # (OpenAI-family Converse models reject image fields, failing turns).
     ("bedrock", "openai", None, None),
-    (None, "meta", None, None),
+    # Bedrock Llama 3/4 is text-only while Meta Model API Muse models are multimodal.
+    ("bedrock", "meta", "llama3", None),
+    ("bedrock", "meta", "llama4", None),
     (None, "deepseek", None, None),
     (None, "amazon", "titan", None),
     # Nova 1 only: generation-scoped substrings. Nova 2 Lite takes
@@ -622,6 +624,26 @@ CURATED_ANTHROPIC_MODELS: tuple[str, ...] = (
 )
 """Static fallback Anthropic choices offered only when Anthropic creds exist."""
 
+CURATED_META_MODELS: tuple[str, ...] = (
+    "meta/muse-spark-1.3-contributor",
+    "meta/muse-spark-1.3",
+    "meta/muse-wonder-1.0",
+    "meta/muse-ember-1.0",
+)
+"""Static fallback Meta Model API choices offered only when Meta creds exist."""
+
+_META_NON_CHAT_TOKENS: tuple[str, ...] = (
+    "image",
+    "voice",
+    "transcribe",
+    "audio",
+    "sam-",
+    "embed",
+    "tts",
+    "video",
+    "moderation",
+)
+
 _OPENAI_NON_CHAT_TOKENS: tuple[str, ...] = (
     "embed",
     "rerank",
@@ -741,12 +763,49 @@ def _discover_anthropic_models() -> tuple[list[str], bool]:
     return (list(CURATED_ANTHROPIC_MODELS), False)
 
 
+def _is_meta_chat_model(model_id: str) -> bool:
+    """True for Responses-capable Meta Muse chat/reasoning model ids."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        return False
+    lowered = model_id.strip().lower()
+    if any(token in lowered for token in _META_NON_CHAT_TOKENS):
+        return False
+    return lowered.startswith("muse-")
+
+
+def _discover_meta_models() -> tuple[list[str], bool]:
+    """List live Meta Muse models from api.meta.ai/v1 when Meta credentials exist."""
+    from strands_code_cli.entry.first_run import (
+        has_meta_credentials,
+        meta_api_key,
+        meta_base_url,
+    )
+
+    if not has_meta_credentials():
+        return ([], False)
+    try:
+        import openai  # lazy: optional [meta] / [openai] extra
+
+        client = openai.OpenAI(api_key=meta_api_key(), base_url=meta_base_url())
+        found = [
+            f"meta/{item.id.strip()}"
+            for item in client.models.list()
+            if _is_meta_chat_model(getattr(item, "id", ""))
+        ]
+        deduped = list(dict.fromkeys(found))
+        if deduped:
+            return (deduped, True)
+    except Exception:
+        pass
+    return (list(CURATED_META_MODELS), False)
+
+
 def discover_models(
     region: str | None = None, configured: list[str] | None = None
 ) -> tuple[list[str], bool]:
     """List available chat model ids across configured/credentialed providers.
 
-    Lazy imports keep AWS, Google, OpenAI, and Anthropic SDKs optional.
+    Lazy imports keep AWS, Google, OpenAI, Anthropic, and Meta SDKs optional.
     Credentialed providers query live catalogs (or curated fallbacks
     offline); unkeyed providers never clutter another provider's picker.
 
@@ -762,18 +821,18 @@ def discover_models(
     google_opts, google_online = _discover_google_models()
     openai_opts, openai_online = _discover_openai_models()
     anthropic_opts, anthropic_online = _discover_anthropic_models()
-    if bedrock_online or google_online or openai_online or anthropic_online:
-        return (
-            list(
-                dict.fromkeys(bedrock_opts + google_opts + openai_opts + anthropic_opts)
-            ),
-            False,
-        )
+    meta_opts, meta_online = _discover_meta_models()
+    keyed_opts = google_opts + openai_opts + anthropic_opts + meta_opts
+    if (
+        bedrock_online
+        or google_online
+        or openai_online
+        or anthropic_online
+        or meta_online
+    ):
+        return (list(dict.fromkeys(bedrock_opts + keyed_opts)), False)
     fallback = list(configured) if configured else []
-    return (
-        list(dict.fromkeys(fallback + google_opts + openai_opts + anthropic_opts)),
-        True,
-    )
+    return (list(dict.fromkeys(fallback + keyed_opts)), True)
 
 
 _ROUTE_PREFIXES = ("global.", "us.", "eu.", "apac.", "au.", "jp.")
@@ -869,6 +928,8 @@ def _infer_bare_vendor(base: str) -> tuple[str, str] | None:
         return ("openai", base)
     if lowered in ("o1", "o3") or lowered.startswith(("o1-", "o3-", "o4-")):
         return ("openai", base)
+    if lowered.startswith("muse-"):
+        return ("meta", base)
     return None
 
 

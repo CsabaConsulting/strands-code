@@ -73,6 +73,12 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     # Introductory pricing through 2026-11-30 ($4.00/$20.00 standard effective 2026-12-01).
     "gemini-4-argon": (2.00, 10.00),
     "gemini-4-carbon": (2.00, 10.00),
+    "muse-spark-1.3-contributor": (0.10, 0.20),
+    "muse-spark-1.2-contributor": (0.10, 0.20),
+    "muse-spark-": (1.25, 4.25),
+    "muse-wonder-": (4.00, 20.00),
+    # Meta Muse Ember (<200K prompts $0.10/$0.004/$0.50; >200K prompts $0.30/$0.012/$1.50).
+    "muse-ember-": (0.10, 0.50),
     "claude-opus-": (5.00, 25.00),
     "claude-sonnet-": (3.00, 15.00),
     "claude-haiku-": (1.00, 5.00),
@@ -118,6 +124,7 @@ MODEL_LIMITS: dict[str, int] = {
     "gemini-4-neon": 1_048_576,
     "gemini-4-argon": 1_048_576,
     "gemini-4-carbon": 1_048_576,
+    "muse-": 1_048_576,
     "claude-opus-": 128_000,
     "claude-sonnet-": 128_000,
     "claude-haiku-": 64_000,
@@ -314,6 +321,14 @@ def _default_cache_rates(model_id: str, in_rate: float) -> tuple[float, float]:
         return (in_rate * 0.50, in_rate)
     if "gpt-6.2-" in lowered:
         return (in_rate * 0.05, in_rate)
+    if "muse-" in lowered and "-contributor" in lowered:
+        return (in_rate * 0.02, in_rate)
+    if "muse-ember-" in lowered:
+        return (in_rate * 0.04, in_rate)
+    if "muse-wonder-" in lowered:
+        return (in_rate * 0.05, in_rate)
+    if "muse-spark-" in lowered:
+        return (in_rate * 0.12, in_rate)
     if any(key in lowered for key in ("o1", "o3", "o4-", "gpt-4.1")):
         return (in_rate * 0.25, in_rate)
     return (in_rate * 0.10, in_rate)
@@ -816,7 +831,8 @@ _CRED_PATTERNS = (
     re.compile(r"(?i)(aws_secret_access_key|api_key|bearer)\s*[:=]\s*\S+"),
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{8,}"),
     re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),
-    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]+=*"),
+    re.compile(r"LLM[_|]\d+[_|][A-Za-z0-9\-_]{12,}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/|]+=*"),
 )
 
 
