@@ -65,7 +65,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 ### Pending Todos
 
 - Run `/gsd-verify-work 16` / `/gsd-secure-phase 16` / `/gsd-validate-phase 16` to finish Phase 16 UAT, security & Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
-- Review and approve held title+body revision in `docs/upstream/harness_issue_meta_model_api.md` before updating `strands-agents/harness-sdk#6521` (`gh issue edit`); monitor `#6510`, `#6521`, and `#6522`.
+- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
 

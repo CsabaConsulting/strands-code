@@ -2,17 +2,17 @@
 
 https://github.com/strands-agents/harness-sdk/issues/6521
 
-> **HOLD BEFORE UPDATING `#6521`:** Review and approve the proposed revised title and body below (and remove this disclosure banner only if undesired) before running `gh issue edit 6521 -R strands-agents/harness-sdk`.
+Updated: 2026-11-24 (title and body updated in place with empirical verification from live api.meta.ai/v1 testing).
 
 ---
 
-# Proposed Title
+# Title
 
 `[FEATURE] Add first-class Meta Model API (meta/ / Muse) provider in Harness and shared/model-info.json`
 
 ---
 
-# Proposed Body
+# Body
 
 ```markdown
 *(Disclosure: empirical update drafted with AI assistance and reviewed/edited by me; see `team/AI_USAGE_POLICY.md`.)*
