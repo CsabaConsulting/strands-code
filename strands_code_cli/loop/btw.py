@@ -454,6 +454,8 @@ def build_btw_agent(
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
         kwargs["model"] = fresh_side_model(kwargs["model"])
+        if isinstance(getattr(kwargs["model"], "_strands_model_ref", None), str):
+            kwargs["caching"] = False
     steering_hook = kwargs.pop("steering_hook", None)
     if "hooks" in kwargs:
         hooks = list(kwargs["hooks"] or [])

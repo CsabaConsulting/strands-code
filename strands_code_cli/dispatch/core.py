@@ -80,6 +80,7 @@ _SDK_EXTRA_HINTS = {
     "google": "gemini",
     "openai": "openai",
     "anthropic": "anthropic",
+    "meta": "meta",
 }
 """Optional-extra install hints keyed by provider prefix."""
 
@@ -88,9 +89,9 @@ def _sdk_hint(selection: str) -> str:
     """Install hint for a missing provider SDK (ImportError path).
 
     Bare ids and ARNs resolve through Bedrock (boto3, ``agentcore``
-    extra); ``litellm/``, ``google/``, ``openai/``, and ``anthropic/``
-    ids map to their matching extras. Anything else keeps the generic
-    pointer.
+    extra); ``litellm/``, ``google/``, ``openai/``, ``anthropic/``, and
+    ``meta/`` ids map to their matching extras. Anything else keeps the
+    generic pointer.
     """
     if selection.startswith("arn:") or "/" not in selection:
         provider = "bedrock"
@@ -668,9 +669,12 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_harness.models import resolve_model
 
     from strands_code_cli.model.model_switch import (
+        _provider_of,
+        build_meta_model,
         build_model_tree,
         discover_models,
         normalize_model_ref,
+        upstream_supports_meta,
     )
 
     if not rest:
@@ -682,13 +686,17 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
             return _ModelCascade(tree, current_model).run()
         return _model_list_message(tree, seen)
     selection = rest.strip()
+    target = normalize_model_ref(selection)
     try:
-        resolve_model(normalize_model_ref(selection), DEFAULT_MODEL)
+        if _provider_of(target) == "meta" and not upstream_supports_meta():
+            build_meta_model(target)
+        else:
+            resolve_model(target, DEFAULT_MODEL)
     except ValueError as exc:
         return ("reply", f"Unknown model {selection!r}: {exc}")
     except ImportError as exc:
         return ("reply", f"Cannot use model {selection!r}: {exc}{_sdk_hint(selection)}")
-    return ("model", normalize_model_ref(selection))
+    return ("model", target)
 
 
 def _routing_holder(routing: RoutingState | None) -> RoutingState:

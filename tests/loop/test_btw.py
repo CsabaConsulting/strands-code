@@ -869,6 +869,38 @@ class TestBuildBtwAgent:
         )
         assert "reasoning" not in oai_model.config["params"]
 
+    def test_build_btw_agent_preserves_meta_model_ref_and_base_url_scope(
+        self, monkeypatch
+    ):
+        import strands_code_cli.loop.btw as btw_mod
+        from strands_code_cli.model.model_switch import build_meta_model, model_id_of
+
+        monkeypatch.setenv("MODEL_API_KEY", "test-meta-token")
+        meta_model = build_meta_model("meta/muse-spark-1.3-contributor")
+        captured: dict = {}
+
+        def fake_create_harness(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(model=meta_model)
+
+        monkeypatch.setattr(btw_mod, "create_harness", fake_create_harness)
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+        build_btw_agent(
+            {
+                "model": meta_model,
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+                "_base_url": "https://meta-proxy.local/v1",
+                "_base_url_provider": "meta",
+            },
+            [],
+            "meta side?",
+        )
+        assert captured["caching"] is False
+        assert model_id_of(meta_model, "?") == "meta/muse-spark-1.3-contributor"
+        assert meta_model.client_args["base_url"] == "https://meta-proxy.local/v1"
+
 
 def _idle_btw(**overrides):
     """BtwContext double with a real BtwQueue (submit/echo tests)."""

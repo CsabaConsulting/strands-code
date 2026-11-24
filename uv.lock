@@ -255,6 +255,12 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/49/7b/a0c69f7a530a3648f8c0100af74d11f9fca7b307c352f1db8b679f37107d/anthropic-2.13.0-py3-none-any.whl", hash = "sha256:b9f61dc45a9630108f96135ecb726ffe1a6fd1f70dd2c9db5621eaaca62c16ec", size = 2613482, upload-time = "2026-11-23T18:35:01.841Z" },
 ]
 
+[package.optional-dependencies]
+bedrock = [
+    { name = "boto3" },
+    { name = "botocore" },
+]
+
 [[package]]
 name = "anyio"
 version = "4.15.1"
@@ -4982,7 +4988,7 @@ wheels = [
 
 [[package]]
 name = "strands-agents"
-version = "1.65.0"
+version = "1.66.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -5000,9 +5006,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/31/ccfa8d64b4df059f3c6c82c726c3f2c5630f412daa8409a681da76919db8/strands_agents-1.65.0.tar.gz", hash = "sha256:cf0c348b98798723a0bf8bc001dc065e3d7a960ac09e6dfce98c2d7338fc5514", size = 2005369, upload-time = "2026-11-13T18:46:16.969Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/d5/1183b37eade397f9cfbe17b0c5d2808db7b6cd4d1487eb6e58091e59d003/strands_agents-1.66.0.tar.gz", hash = "sha256:6344cee166910fc390ffd5e8afae93cfb99689fc1a9064f0dbf71b262a13d634", size = 2098351, upload-time = "2026-11-23T17:42:45.709Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/fb/375afbd6b85410fc5f572639804e690dbad7b4f02a9625092c531e07acb5/strands_agents-1.65.0-py3-none-any.whl", hash = "sha256:5e8dd8538fea593763f9da9aecf72f5b71f421413ba8fafbeef1b2ccd3093658", size = 1012483, upload-time = "2026-11-13T18:46:14.9Z" },
+    { url = "https://files.pythonhosted.org/packages/73/ae/060464e060fb1e86283bd72a05c0e445b63a25b0d7b954c7a925f1936ddb/strands_agents-1.66.0-py3-none-any.whl", hash = "sha256:2d270a2bc54e5f26de17b23d776a8b9b484b55295c724659944fd50d2807dfda", size = 1055847, upload-time = "2026-11-23T17:42:43.821Z" },
 ]
 
 [package.optional-dependencies]
@@ -5053,6 +5059,10 @@ gemini = [
 litellm = [
     { name = "litellm" },
 ]
+meta = [
+    { name = "openai" },
+    { name = "strands-agents", extra = ["openai"] },
+]
 openai = [
     { name = "openai" },
     { name = "strands-agents", extra = ["openai"] },
@@ -5084,20 +5094,22 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.0" },
     { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.104" },
     { name = "mcp", specifier = ">=1.30.0" },
+    { name = "openai", marker = "extra == 'meta'", specifier = ">=2.0.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=2.0.0" },
     { name = "platformdirs", specifier = ">=4.11.12" },
     { name = "prompt-toolkit", specifier = ">=3.0.53" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.0" },
     { name = "smolagents", specifier = ">=1.24.0" },
-    { name = "strands-agents", specifier = ">=1.65.0" },
+    { name = "strands-agents", specifier = ">=1.66.0" },
     { name = "strands-agents", extras = ["anthropic"], marker = "extra == 'anthropic'" },
     { name = "strands-agents", extras = ["gemini"], marker = "extra == 'gemini'" },
+    { name = "strands-agents", extras = ["openai"], marker = "extra == 'meta'" },
     { name = "strands-agents", extras = ["openai"], marker = "extra == 'openai'" },
-    { name = "strands-harness", specifier = ">=0.4.0" },
+    { name = "strands-harness", specifier = ">=0.5.0" },
     { name = "typer", specifier = ">=0.27.2" },
 ]
-provides-extras = ["agentcore", "litellm", "gemini", "openai", "anthropic"]
+provides-extras = ["agentcore", "litellm", "gemini", "openai", "anthropic", "meta"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -5115,17 +5127,20 @@ dev = [
 
 [[package]]
 name = "strands-harness"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "anthropic", extra = ["bedrock"] },
+    { name = "boto3" },
+    { name = "botocore" },
     { name = "pydantic", version = "2.13.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.15'" },
     { name = "pydantic", version = "2.14.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.15'" },
     { name = "pydantic-monty" },
     { name = "strands-agents", extra = ["otel"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1b/9e/8e03c20df09a978a06fd15d89643422803ff61e5332281c97edb8ddff3ed/strands_harness-0.4.0.tar.gz", hash = "sha256:90677dae8fd6f93a1b99871eb489b2cee54736456ddcc34e5631f926b4cc3825", size = 169088, upload-time = "2026-11-12T22:34:54.438Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/6f/bc7dff5443a72f5a6dd62640a2ecda189aa3e6ae1b8927796d605ec3591d/strands_harness-0.5.0.tar.gz", hash = "sha256:02b34d54255eb27a443303c80b45f2362750b04e45028cb69726862478faeae0", size = 181313, upload-time = "2026-11-23T17:43:00.017Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/6b/686f2cd9ff5bd82f4cc8f6a2ce74dbcf4904464ddaf7792f1074fad8ada9/strands_harness-0.4.0-py3-none-any.whl", hash = "sha256:33be4f4741753b39b2c4606b926c81d84dc84b6c40b1be0b3f0e981d760b00a0", size = 93455, upload-time = "2026-11-12T22:34:52.882Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/fc/2c86a3c62b918b40f0f1d627ae6471c81c7cd3e06e630029000e722d37fb/strands_harness-0.5.0-py3-none-any.whl", hash = "sha256:d97fb0bc0b4384db99841b788dbcddcf238f611b70007cfacfe72ccc4cf2a1a3", size = 99056, upload-time = "2026-11-23T17:42:58.816Z" },
 ]
 
 [[package]]

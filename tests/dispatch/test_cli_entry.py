@@ -483,9 +483,12 @@ class TestSdkHints:
     def test_openai_and_anthropic_sdk_hints(self):
         from strands_code_cli.dispatch.core import _sdk_hint
 
-        assert "strands-code-agent[openai]" in _sdk_hint("openai/gpt-6.1-sol")
+        assert "strands-code-agent[openai]" in _sdk_hint("openai/gpt-6.2-sol")
         assert "strands-code-agent[anthropic]" in _sdk_hint(
             "anthropic/claude-sonnet-5-5"
+        )
+        assert "strands-code-agent[meta]" in _sdk_hint(
+            "meta/muse-spark-1.3-contributor"
         )
 
     def test_model_dispatch_openai_and_anthropic_import_errors_show_hints(
@@ -507,3 +510,26 @@ class TestSdkHints:
                 )
             assert action == "reply"
             assert f"strands-code-agent[{extra}]" in message
+
+    def test_model_dispatch_meta_succeeds_and_import_error_shows_hint(
+        self, tmp_path, monkeypatch
+    ):
+        index = _fresh_index(tmp_path)
+        action, value = dispatch(
+            "/model meta/muse-spark-1.3-contributor",
+            session_id=index.mint(),
+            index=index,
+        )
+        assert (action, value) == ("model", "meta/muse-spark-1.3-contributor")
+
+        with patch(
+            "strands_code_cli.model.model_switch.build_meta_model",
+            side_effect=ImportError("openai>=2.0.0 missing"),
+        ):
+            action, message = dispatch(
+                "/model meta/muse-spark-1.3-contributor",
+                session_id=index.mint(),
+                index=index,
+            )
+        assert action == "reply"
+        assert "strands-code-agent[meta]" in message

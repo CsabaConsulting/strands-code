@@ -179,16 +179,21 @@ class TestResolveSpike:
     def test_bedrock_global_id_resolves(self):
         model = resolve_model(
             "bedrock/global.anthropic.claude-sonnet-4-6",
-            default="bedrock/global.anthropic.claude-opus-5",
+            default="bedrock/global.anthropic.claude-opus-5-5",
         )
-        assert type(model).__name__ == "BedrockModel"
+        # harness 0.5.0 (#4683) builds Claude-on-Bedrock via AnthropicModel(AsyncAnthropicBedrock)
+        assert type(model).__name__ == "AnthropicModel"
+        assert type(model.client).__name__ == "AsyncAnthropicBedrock"
         assert (
             model.get_config().get("model_id") == "global.anthropic.claude-sonnet-4-6"
         )
 
     def test_bare_bedrock_id_defaults_to_bedrock(self):
-        model = resolve_model("anthropic.claude-sonnet-4-6", default="bedrock/x")
-        assert type(model).__name__ == "BedrockModel"
+        claude = resolve_model("anthropic.claude-sonnet-4-6", default="bedrock/x")
+        assert type(claude).__name__ == "AnthropicModel"
+        assert type(claude.client).__name__ == "AsyncAnthropicBedrock"
+        nova = resolve_model("us.amazon.nova-2-lite-v1:0", default="bedrock/x")
+        assert type(nova).__name__ == "BedrockModel"
 
     def test_arn_prefix_preserved_verbatim(self):
         model = resolve_model("us.anthropic.claude-sonnet-4-6", default="bedrock/x")
@@ -259,7 +264,8 @@ class TestNormalizeModelRef:
 
         agent = SimpleNamespace(model="old", messages=[])
         _model, resolved = apply_switch(agent, self._ARN)
-        assert type(agent.model).__name__ == "BedrockModel"
+        assert type(agent.model).__name__ == "AnthropicModel"
+        assert type(agent.model.client).__name__ == "AsyncAnthropicBedrock"
         assert resolved == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
@@ -404,7 +410,8 @@ class TestSwapSeam:
         new_id = "bedrock/global.anthropic.claude-sonnet-4-6"
         model, resolved_id = apply_switch(agent, new_id)
         assert resolved_id == "global.anthropic.claude-sonnet-4-6"
-        assert type(agent.model).__name__ == "BedrockModel"
+        assert type(agent.model).__name__ == "AnthropicModel"
+        assert type(agent.model.client).__name__ == "AsyncAnthropicBedrock"
         assert len(agent.messages) == before  # history untouched by the swap
 
         # Swap back to the offline double: the next turn still succeeds and
@@ -2201,7 +2208,8 @@ class TestIdleOnlySwap:
         assert resolved == "global.anthropic.claude-sonnet-4-6"
         assert reply.startswith("Model: bedrock/global.anthropic.claude-sonnet-4-6")
         assert "messages kept" in reply
-        assert type(agent.model).__name__ == "BedrockModel"
+        assert type(agent.model).__name__ == "AnthropicModel"
+        assert type(agent.model.client).__name__ == "AsyncAnthropicBedrock"
         # Tool pairs survived conversion byte-identical.
         uses = {
             block["toolUse"]["toolUseId"]
@@ -3867,17 +3875,23 @@ class TestSameProviderSummaryAndOpenAIGuard:
             configure_openai_for_model(model_id, f_off)
             assert "reasoning" not in f_off.config["params"]
 
-    def test_configure_openai_for_model_gpt62_model_info_bridge(self, monkeypatch):
+    def test_configure_openai_for_model_gpt62_native_sdk_and_effort_clamp(self):
         import strands.models._model_info as sdk_model_info
         from strands.models.openai_responses import OpenAIResponsesModel
 
+        import strands_code_cli.model.model_switch as switch_mod
         from strands_code_cli.model.model_switch import (
             CURATED_OPENAI_MODELS,
             configure_openai_for_model,
         )
 
+        assert not hasattr(switch_mod, "_gpt_62_model_info_fallback")
         assert "openai/gpt-6.2-sol" in CURATED_OPENAI_MODELS
         assert "openai/gpt-6.2-astra" in CURATED_OPENAI_MODELS
+        assert (
+            sdk_model_info.lookup_model_info("gpt-6.2-sol").limits.context_window
+            == 1_050_000
+        )
 
         real_model = OpenAIResponsesModel(
             client_args={"api_key": "test"}, model_id="gpt-6.2-sol"
@@ -3887,24 +3901,12 @@ class TestSameProviderSummaryAndOpenAIGuard:
         assert real_model.model_info.limits.max_output_tokens == 128_000
         assert real_model.model_info.capabilities.prompt_caching == "cache_points"
 
-        preserved_override = sdk_model_info.ModelInfo(
-            limits=sdk_model_info.ModelLimits(context_window=500_000)
-        )
-        fake_with_override = self._fake_openai({"reasoning": {"effort": "high"}})
-        fake_with_override.config["model_info"] = preserved_override
-        configure_openai_for_model("openai/gpt-6.2-sol", fake_with_override)
-        assert fake_with_override.config["model_info"] is preserved_override
-
-        monkeypatch.setattr(
-            sdk_model_info,
-            "lookup_model_info",
-            lambda _k: sdk_model_info.ModelInfo(
-                limits=sdk_model_info.ModelLimits(context_window=1_050_000)
-            ),
-        )
-        fake_upgraded = self._fake_openai({"reasoning": {"effort": "high"}})
-        configure_openai_for_model("openai/gpt-6.2-astra", fake_upgraded)
-        assert "model_info" not in fake_upgraded.config
+        f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+        configure_openai_for_model("openai/gpt-6.2-sol", f_min)
+        assert f_min.config["params"]["reasoning"]["effort"] == "low"
+        f_off = self._fake_openai({"reasoning": {"effort": "off"}})
+        configure_openai_for_model("openai/gpt-6.2-astra", f_off)
+        assert "reasoning" not in f_off.config["params"]
 
     def test_configure_openai_for_model_fails_soft_and_wires_all_sites(
         self, monkeypatch, tmp_path
@@ -4273,3 +4275,123 @@ class TestLiveOpenAIAndAnthropicDiscovery:
         )
         res = resolve_harness_model("openai/gpt-6.1-sol")
         assert "web_search" not in res.kwargs
+
+
+class TestMetaModelAdapter:
+    """Thin auto-retiring meta/ adapter on OpenAIResponsesModel (Phase 16)."""
+
+    def test_build_meta_model_protocol_caching_effort_and_web_search(self, monkeypatch):
+        import warnings
+
+        from strands.models.openai_responses import OpenAIResponsesModel
+
+        from strands_code_cli.model.model_switch import (
+            build_meta_model,
+            model_id_of,
+            upstream_supports_meta,
+        )
+
+        assert upstream_supports_meta() is False
+        monkeypatch.setenv("MODEL_API_KEY", "test-meta-token")
+        monkeypatch.setenv("META_BASE_URL", "https://custom-meta.local/v1/")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            model = build_meta_model("meta/muse-spark-1.3-contributor")
+            req = model._format_request(
+                messages=[{"role": "user", "content": [{"text": "hi"}]}]
+            )
+        assert [w for w in caught if issubclass(w.category, UserWarning)] == []
+        assert isinstance(model, OpenAIResponsesModel)
+        assert model._strands_model_ref == "meta/muse-spark-1.3-contributor"
+        assert model_id_of(model, "fallback") == "meta/muse-spark-1.3-contributor"
+        assert model.client_args == {
+            "base_url": "https://custom-meta.local/v1",
+            "api_key": "test-meta-token",
+        }
+        assert model.model_info.capabilities.prompt_caching == "auto"
+        assert model.model_info.limits.context_window == 1_048_576
+        assert model.model_info.limits.max_output_tokens == 131_072
+        cfg = model.get_config()
+        assert cfg["cache_config"].ttl is None
+        assert "prompt_cache_options" not in req
+        assert cfg["params"] == {
+            "reasoning": {"effort": "high"},
+            "tools": [{"type": "web_search"}],
+        }
+
+        off_model = build_meta_model("meta/muse-ember-1.0", effort="none")
+        assert "reasoning" not in off_model.get_config()["params"]
+        off_model2 = build_meta_model("meta/muse-ember-1.0", effort="off")
+        assert "reasoning" not in off_model2.get_config()["params"]
+        max_model = build_meta_model("meta/muse-wonder-1.0", effort="max")
+        assert max_model.get_config()["params"]["reasoning"] == {"effort": "max"}
+
+    def test_meta_adapter_auto_retires_and_wires_startup_switch_route(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        import strands_code_cli.entry.main as entry_main
+        from strands_code_cli.model.model_switch import (
+            apply_switch,
+            configure_base_url_for_model,
+            model_id_of,
+            resolve_harness_model,
+            upstream_supports_meta,
+        )
+
+        monkeypatch.setenv("MODEL_API_KEY", "test-meta-token")
+        # Startup flow: model_for_config -> build_agent sets caching=False + keeps ref
+        built_model = entry_main.model_for_config("meta/muse-spark-1.3-contributor")
+        assert model_id_of(built_model, "") == "meta/muse-spark-1.3-contributor"
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            entry_main,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=built_model),
+        )
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+        entry_main.build_agent("sess-meta", tmp_path / "sess", model=built_model)
+        assert captured["caching"] is False
+
+        # /model + /route switch seam
+        agent = SimpleNamespace(
+            model=None,
+            messages=[],
+            _base_url="https://override.meta.local/v1",
+            _base_url_provider="meta",
+        )
+        swapped, resolved_id = apply_switch(
+            agent, "meta/muse-wonder-1.0", effort="xhigh"
+        )
+        assert resolved_id == "meta/muse-wonder-1.0"
+        assert swapped.client_args["base_url"] == "https://override.meta.local/v1"
+        assert swapped.get_config()["params"]["reasoning"] == {"effort": "xhigh"}
+
+        meta_stub = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+        configure_base_url_for_model(
+            "meta/muse-spark-1.3", meta_stub, base_url="https://proxy.meta.local/v1"
+        )
+        assert meta_stub.client_args["base_url"] == "https://proxy.meta.local/v1"
+
+        # Auto-retire check when upstream strands-harness adds "meta" to _PROVIDERS
+        monkeypatch.setitem(harness_models._PROVIDERS, "meta", object())
+        assert upstream_supports_meta() is True
+        delegated: list = []
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda *a, **kw: delegated.append((a, kw)) or SimpleNamespace(kwargs=kw),
+        )
+        resolve_harness_model("meta/muse-spark-1.3-contributor")
+        assert delegated and delegated[0][0][0] == "meta/muse-spark-1.3-contributor"
+        assert (
+            entry_main.model_for_config("meta/muse-spark-1.3-contributor")
+            == "meta/muse-spark-1.3-contributor"
+        )

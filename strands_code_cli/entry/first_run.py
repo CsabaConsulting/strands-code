@@ -15,21 +15,26 @@ BEDROCK_SETUP_POINTER = (
     "No AWS credentials found. strands-code runs its model on Amazon Bedrock.\n"
     "Set credentials via the ambient boto3 chain (env vars, ~/.aws/config, or an "
     "IAM role), or set a provider key (GOOGLE_API_KEY / GEMINI_API_KEY, "
-    "ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY with --model "
-    "litellm/openrouter/<vendor>/<model>), then relaunch."
+    "ANTHROPIC_API_KEY, OPENAI_API_KEY, MODEL_API_KEY / META_API_KEY, or "
+    "OPENROUTER_API_KEY with --model litellm/openrouter/<vendor>/<model>), "
+    "then relaunch."
 )
+
+META_DEFAULT_BASE_URL = "https://api.meta.ai/v1"
 
 _TRUTHY = frozenset({"1", "true", "yes"})
 
 _PROVIDER_ENV_KEYS: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
+    "meta": ("MODEL_API_KEY", "META_API_KEY"),
     "openrouter": ("OPENROUTER_API_KEY", "LITELLM_API_KEY"),
 }
 
 _AMBIENT_DEFAULT_MODELS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("anthropic/claude-sonnet-5-5", ("ANTHROPIC_API_KEY",)),
-    ("openai/gpt-6.1-sol", ("OPENAI_API_KEY",)),
+    ("openai/gpt-6.2-sol", ("OPENAI_API_KEY",)),
+    ("meta/muse-spark-1.3-contributor", ("MODEL_API_KEY", "META_API_KEY")),
 )
 
 _LITELLM_ANY_KEYS = (
@@ -37,6 +42,8 @@ _LITELLM_ANY_KEYS = (
     "LITELLM_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
+    "MODEL_API_KEY",
+    "META_API_KEY",
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
 )
@@ -88,6 +95,33 @@ def has_openai_credentials(env: Mapping[str, str] | None = None) -> bool:
 def has_anthropic_credentials(env: Mapping[str, str] | None = None) -> bool:
     """Return True when non-empty Anthropic API key presence is configured."""
     return _nonempty("ANTHROPIC_API_KEY", env)
+
+
+def has_meta_credentials(env: Mapping[str, str] | None = None) -> bool:
+    """Return True when non-empty Meta Model API key presence is configured."""
+    return _nonempty("MODEL_API_KEY", env) or _nonempty("META_API_KEY", env)
+
+
+def meta_api_key(env: Mapping[str, str] | None = None) -> str | None:
+    """Return configured Meta API key (MODEL_API_KEY primary, META_API_KEY fallback)."""
+    source = os.environ if env is None else env
+    for name in ("MODEL_API_KEY", "META_API_KEY"):
+        val = (source.get(name) or "").strip()
+        if val:
+            return val
+    return None
+
+
+def meta_base_url(env: Mapping[str, str] | None = None) -> str:
+    """Return validated Meta Model API base URL (defaulting to api.meta.ai/v1)."""
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    source = os.environ if env is None else env
+    raw = (source.get("META_BASE_URL") or "").strip()
+    if not raw:
+        return META_DEFAULT_BASE_URL
+    _validate_base_url(raw)
+    return raw.rstrip("/")
 
 
 def disable_cwd_dotenv() -> None:
@@ -163,6 +197,14 @@ def _run_bedrock_probe(probe: Callable[[], None] | None) -> None:
         _fail_preflight(BEDROCK_SETUP_POINTER)
 
 
+def _validate_meta_env() -> None:
+    """Fail fast with exit code 2 when META_BASE_URL is malformed."""
+    try:
+        meta_base_url()
+    except ValueError as exc:
+        _fail_preflight(f"Invalid META_BASE_URL: {exc}")
+
+
 def _check_explicit_provider(
     provider: str,
     base_url: str | None,
@@ -179,7 +221,9 @@ def _check_explicit_provider(
             )
         return
     if provider in _PROVIDER_ENV_KEYS:
-        if provider in ("openai", "anthropic") and base_url:
+        if provider == "meta" and base_url is None:
+            _validate_meta_env()
+        if provider in ("openai", "anthropic", "meta") and base_url:
             return
         keys = _PROVIDER_ENV_KEYS[provider]
         if not any(_nonempty(name) for name in keys):
@@ -230,6 +274,8 @@ def preflight_credentials(
         return "google/gemini-3.8-flash"
     for candidate, keys in _AMBIENT_DEFAULT_MODELS:
         if any(_nonempty(name) for name in keys):
+            if candidate.startswith("meta/"):
+                _validate_meta_env()
             return candidate
     if _nonempty("OPENROUTER_API_KEY"):
         _fail_preflight(

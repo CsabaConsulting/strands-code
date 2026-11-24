@@ -146,7 +146,77 @@ class TestPreflightGate:
         assert preflight_credentials(probe=_no_creds) == "anthropic/claude-sonnet-5-5"
         monkeypatch.delenv("ANTHROPIC_API_KEY")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
-        assert preflight_credentials(probe=_no_creds) == "openai/gpt-6.1-sol"
+        assert preflight_credentials(probe=_no_creds) == "openai/gpt-6.2-sol"
+
+    def test_meta_ambient_auto_pick_priority_and_helpers(self, monkeypatch, capsys):
+        from strands_code_cli.entry.first_run import (
+            META_DEFAULT_BASE_URL,
+            has_meta_credentials,
+            meta_api_key,
+            meta_base_url,
+        )
+
+        assert has_meta_credentials({}) is False
+        assert has_meta_credentials({"MODEL_API_KEY": "   "}) is False
+        assert has_meta_credentials({"MODEL_API_KEY": "strands_box_meta"}) is True
+        assert has_meta_credentials({"META_API_KEY": "fallback_tok"}) is True
+        assert meta_api_key({"MODEL_API_KEY": "primary", "META_API_KEY": "sec"}) == (
+            "primary"
+        )
+        assert meta_api_key({"META_API_KEY": " sec "}) == "sec"
+        assert meta_api_key({}) is None
+        assert meta_base_url({}) == META_DEFAULT_BASE_URL
+        assert (
+            meta_base_url({"META_BASE_URL": "https://meta-proxy.local/v1/"})
+            == "https://meta-proxy.local/v1"
+        )
+        for bad_url in (
+            "ftp://api.meta.ai/v1",
+            "https://user:pass@api.meta.ai/v1",
+            "https://api.meta.ai/v1 bad",
+        ):
+            with pytest.raises(ValueError):
+                meta_base_url({"META_BASE_URL": bad_url})
+
+        monkeypatch.setenv("MODEL_API_KEY", "any-meta-token")
+        assert (
+            preflight_credentials(probe=_no_creds) == "meta/muse-spark-1.3-contributor"
+        )
+        # Priority: OpenAI beats Meta; Meta beats OpenRouter error
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        assert (
+            preflight_credentials(probe=_no_creds) == "meta/muse-spark-1.3-contributor"
+        )
+        monkeypatch.setenv("OPENAI_API_KEY", "oai-key")
+        assert preflight_credentials(probe=_no_creds) == "openai/gpt-6.2-sol"
+        monkeypatch.delenv("OPENAI_API_KEY")
+        monkeypatch.delenv("OPENROUTER_API_KEY")
+        monkeypatch.delenv("MODEL_API_KEY")
+
+        monkeypatch.setenv("META_API_KEY", "fallback-token")
+        assert (
+            preflight_credentials(probe=_no_creds) == "meta/muse-spark-1.3-contributor"
+        )
+        monkeypatch.setenv("META_BASE_URL", "ftp://bad.example/v1")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(probe=_no_creds)
+        assert exc_info.value.exit_code == 2
+        assert "META_BASE_URL" in capsys.readouterr().err
+        monkeypatch.delenv("META_BASE_URL")
+        monkeypatch.delenv("META_API_KEY")
+
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(model="meta/muse-wonder-1.0", probe=_creds_ok)
+        assert exc_info.value.exit_code == 2
+        assert "MODEL_API_KEY" in capsys.readouterr().err
+        assert (
+            preflight_credentials(
+                model="meta/muse-wonder-1.0",
+                base_url="https://meta-proxy.local/v1",
+                probe=_no_creds,
+            )
+            is None
+        )
 
     def test_has_openai_and_anthropic_credentials_presence_only(self, monkeypatch):
         assert has_openai_credentials({}) is False

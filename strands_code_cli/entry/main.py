@@ -33,6 +33,7 @@ from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
     _provider_of,
+    build_meta_model,
     configure_base_url_for_model,
     configure_gemini_for_model,
     configure_openai_for_model,
@@ -40,6 +41,7 @@ from strands_code_cli.model.model_switch import (
     model_id_of,
     normalize_model_ref,
     scoped_base_url,
+    upstream_supports_meta,
 )
 from strands_code_cli.policy.diff_gate import (
     PendingStore,
@@ -114,6 +116,11 @@ def model_for_config(
     if model is None:
         return None
     prefix, _, rest = model.partition("/") if "/" in model else ("bedrock", "", model)
+    if prefix == "meta" and not upstream_supports_meta():
+        try:
+            return build_meta_model(model, base_url=base_url)
+        except ImportError:
+            return model
     use_chat_completions = base_url and (
         prefix == "litellm" or (prefix == "openai" and api_mode == "chat")
     )
@@ -200,11 +207,14 @@ def build_agent(
     if (
         base_url
         and isinstance(model, str)
-        and model.partition("/")[0].lower() in ("openai", "anthropic")
+        and model.partition("/")[0].lower() in ("openai", "anthropic", "meta")
     ):
         kwargs["builtin_tools"]["web_fetch"] = {"model": model}
     if model is not None:
         kwargs["model"] = model
+        if isinstance(getattr(model, "_strands_model_ref", None), str):
+            # Pre-built Meta adapter already carries CacheConfig(); avoid harness warning.
+            kwargs["caching"] = False
     agent = create_harness(**kwargs)
     resolved_model = getattr(agent, "model", None)
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")

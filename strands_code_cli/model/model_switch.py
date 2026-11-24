@@ -945,6 +945,9 @@ def estimate_fit(
 
 def model_id_of(model: Any, fallback: str) -> str:
     """Best-effort model id string for replies and table lookups."""
+    explicit_ref = getattr(model, "_strands_model_ref", None)
+    if isinstance(explicit_ref, str) and explicit_ref:
+        return explicit_ref
     get_config = getattr(model, "get_config", None)
     if callable(get_config):
         try:
@@ -1126,42 +1129,15 @@ def _openai_reasoning_params(
     return {**params, "reasoning": {**reasoning, "effort": mapped}}
 
 
-def _gpt_62_model_info_fallback(base_key: str, config: dict[str, Any]) -> Any:
-    """Retireable model_info bridge for gpt-6.2-* until strands-agents ships it."""
-    if not base_key.startswith(("gpt-6.2-sol", "gpt-6.2-astra")):
-        return None
-    if config.get("model_info") is not None:
-        return None
-    try:
-        from strands.models._model_info import (
-            ModelCapabilities,
-            ModelInfo,
-            ModelLimits,
-            lookup_model_info,
-        )
-    except ImportError:
-        return None
-    if lookup_model_info(base_key).limits.context_window is not None:
-        return None
-    return ModelInfo(
-        capabilities=ModelCapabilities(prompt_caching="cache_points"),
-        limits=ModelLimits(
-            context_window=1_050_000,
-            max_output_tokens=128_000,
-        ),
-    )
-
-
 def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
-    """Apply OpenAI compatibility guards and retireable GPT-6.2 metadata bridge.
+    """Apply OpenAI compatibility guards for non-reasoning and effort-subset models.
 
     ``strands_harness.models._openai()`` emits ``reasoning.effort='high'``
     unconditionally on OpenAI models and passes routed effort strings verbatim;
     non-reasoning models (``gpt-4o``, ``gpt-4.1*``) and effort-subset models
     (``o1``/``o3``/``o4-mini``, ``gpt-5``..``gpt-5.2``, ``gpt-6-astra``,
     ``gpt-6.1-sol``, ``gpt-6.2-*``) reject unsupported values on the Responses
-    API. Also bridges ``model_info`` for ``gpt-6.2-*`` when the installed SDK
-    lacks it yet.
+    API.
     """
     if not model_id or resolved is None:
         return resolved
@@ -1174,23 +1150,101 @@ def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
     if config is None:
         return resolved
     base_key = _base_key(normalized).lower()
-    updates: dict[str, Any] = {}
     params = config.get("params")
-    if isinstance(params, dict):
-        updated_params = _openai_reasoning_params(base_key, params)
-        if updated_params is not None:
-            updates["params"] = updated_params
-    fallback_info = _gpt_62_model_info_fallback(base_key, config)
-    if fallback_info is not None:
-        updates["model_info"] = fallback_info
-    if not updates:
+    if not isinstance(params, dict):
+        return resolved
+    updated_params = _openai_reasoning_params(base_key, params)
+    if updated_params is None:
         return resolved
     update = getattr(resolved, "update_config", None)
     if callable(update):
         try:
-            update(**updates)
+            update(params=updated_params)
         except Exception:
             pass
+    return resolved
+
+
+_META_EFFORT_LEVELS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
+
+
+def upstream_supports_meta() -> bool:
+    """Return True once strands-harness natively registers the ``meta`` provider."""
+    try:
+        import strands_harness.models as harness_models
+    except ImportError:
+        return False
+    return "meta" in getattr(harness_models, "_PROVIDERS", {})
+
+
+def _normalize_meta_effort(effort: str | None) -> str | None:
+    """Map harness effort onto api.meta.ai/v1 supported values (None omits reasoning)."""
+    if effort is None:
+        return "high"
+    low = effort.strip().lower()
+    if low == "auto":
+        return "high"
+    if low in ("none", "off"):
+        return None
+    return low if low in _META_EFFORT_LEVELS else "high"
+
+
+def _meta_model_info() -> Any:
+    """ModelInfo with automatic caching and 1M Muse window (no cache_points)."""
+    from strands.models._model_info import ModelCapabilities, ModelInfo, ModelLimits
+
+    return ModelInfo(
+        capabilities=ModelCapabilities(prompt_caching="auto"),
+        limits=ModelLimits(
+            context_window=1_048_576,
+            max_output_tokens=131_072,
+        ),
+    )
+
+
+def build_meta_model(
+    model_ref: str,
+    *,
+    effort: str | None = None,
+    web_search: bool = True,
+    caching: bool = True,
+    base_url: str | None = None,
+) -> Any:
+    """Build a retireable OpenAIResponsesModel targeting Meta Model API."""
+    from strands.models import CacheConfig
+    from strands.models.openai_responses import OpenAIResponsesModel
+
+    from strands_code_cli.entry.first_run import meta_api_key, meta_base_url
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    normalized = normalize_model_ref(model_ref)
+    provider, _, tail = normalized.partition("/")
+    if provider.lower() != "meta" or not tail.strip():
+        raise ValueError(f"Expected meta/<model>, got {model_ref!r}")
+    tail = tail.strip()
+    if base_url is not None:
+        _validate_base_url(base_url)
+        endpoint = base_url.rstrip("/")
+    else:
+        endpoint = meta_base_url()
+    client_args: dict[str, Any] = {"base_url": endpoint}
+    api_key = meta_api_key()
+    if api_key:
+        client_args["api_key"] = api_key
+    params: dict[str, Any] = {}
+    mapped_effort = _normalize_meta_effort(effort)
+    if mapped_effort is not None:
+        params["reasoning"] = {"effort": mapped_effort}
+    if web_search:
+        params["tools"] = [{"type": "web_search"}]
+    extra: dict[str, Any] = {"model_info": _meta_model_info()}
+    if caching:
+        # Use CacheConfig() without strategy='auto' to avoid UserWarning when prompt_caching='auto'.
+        extra["cache_config"] = CacheConfig()
+    if params:
+        extra["params"] = params
+    resolved = OpenAIResponsesModel(client_args=client_args, model_id=tail, **extra)
+    resolved._strands_model_ref = f"meta/{tail}"
     return resolved
 
 
@@ -1284,11 +1338,13 @@ def configure_base_url_for_model(
     if not base_url or not model_id or resolved is None:
         return resolved
     provider = _provider_of(normalize_model_ref(model_id))
-    if provider == "openai":
+    if provider in ("openai", "meta"):
         if getattr(resolved, "_bedrock_mantle_config", None) is not None:
             return resolved
         client_args = getattr(resolved, "client_args", None)
-        if isinstance(client_args, dict) and not client_args.get("base_url"):
+        if isinstance(client_args, dict) and (
+            provider == "meta" or not client_args.get("base_url")
+        ):
             client_args["base_url"] = base_url
     elif provider == "anthropic":
         client = getattr(resolved, "client", None)
@@ -1314,16 +1370,21 @@ def resolve_harness_model(
     base_url: str | None = None,
 ) -> Any:
     """Resolve a model preserving harness caching, web_search, and post-applied base_url."""
+    import strands_harness.models as harness_models
     from strands_harness.models import resolve_model, supports_web_search
 
     normalized = normalize_model_ref(model_ref)
+    if _provider_of(normalized) == "meta" and not upstream_supports_meta():
+        return build_meta_model(normalized, effort=effort, base_url=base_url)
     target_default = default or normalized
     kwargs: dict[str, Any] = {
         "caching": True,
         "caching_explicit": False,
     }
     try:
-        if supports_web_search(normalized):
+        has_search = bool(supports_web_search(normalized))
+        kind_fn = getattr(harness_models, "_web_search_kind", None)
+        if has_search and (not callable(kind_fn) or kind_fn(normalized) == "native"):
             kwargs["web_search"] = True
     except Exception:
         pass
