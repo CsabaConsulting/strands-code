@@ -1519,6 +1519,7 @@ class TestRouteValidate:
         text = report.format()
         assert "known in the cached decisions catalog" in text
         assert "engine: local model nimble — ok" in text
+        assert "engine: local model nimble — ok" in text  # dedup guard
 
 
 class TestBoolLevelNormalization:
@@ -1560,3 +1561,89 @@ class TestBoolLevelNormalization:
         assert (
             routing_mod._parse_candidate({"id": "x", "levels": ["auto", 3]}, 0) is None
         )
+
+
+class TestOptInDecisionsAPIAndLLMStrategy:
+    def test_order_and_primary_accept_decisions_api_and_llm(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {order: [decisions_api, llm], llm_model: openai/gpt-4o-mini}\n",
+        )
+        strategy = load_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
+        assert strategy is not None
+        assert strategy.engine.order == ["decisions_api", "llm"]
+        assert strategy.engine.decisions_api_model is None
+        assert strategy.engine.llm_model == "openai/gpt-4o-mini"
+
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
+        assert report.valid is True
+        text = report.format()
+        assert "decisions_api model ~typesafe/jev-latest — ok" in text
+        assert "llm model openai/gpt-4o-mini — ok" in text
+
+        for pri in ("decisions_api", "llm"):
+            extra = (
+                f"engine: {{primary: {pri}"
+                + (", llm_model: openai/gpt-4o-mini" if pri == "llm" else "")
+                + "}\n"
+            )
+            p_path = _write(
+                tmp_path / f"{pri}.yaml",
+                f"candidates: [{{id: a/1}}]\ndirectives: d\n{extra}",
+            )
+            p_strategy = load_strategy(
+                global_path=tmp_path / "absent.yaml", repo_path=p_path
+            )
+            assert p_strategy is not None and p_strategy.engine.primary == pri
+            assert (
+                validate_strategy(
+                    global_path=tmp_path / "absent.yaml", repo_path=p_path
+                ).valid
+                is True
+            )
+
+    def test_missing_llm_model_fails_validation_and_validate_makes_zero_network_calls(
+        self, tmp_path, monkeypatch
+    ):
+        import strands_code_cli.routing.transports as transports
+
+        def _no_net(*_a, **_kw):
+            raise AssertionError("validate_strategy must make zero network calls")
+
+        monkeypatch.setattr(transports, "make_async_client", _no_net)
+        monkeypatch.setattr(transports, "make_sync_client", _no_net)
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: [llm]}\n",
+        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
+        assert report.valid is False
+        text = report.format()
+        assert "order lists llm with no llm_model" in text
+        assert "fix: set engine.llm_model" in text
+
+    def test_save_strategy_drops_jev_api_key_shaped_keys(self, tmp_path, caplog):
+        import logging
+
+        data = {
+            "candidates": [{"id": "a/1"}],
+            "directives": "d",
+            "JEV_API_KEY": "jev-secret-1",
+            "engine": {
+                "order": ["decisions_api"],
+                "decisions_api_model": "~typesafe/jev-latest",
+                "jev_api_key": "jev-secret-2",
+            },
+        }
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
+            path = save_strategy(
+                data, "global", global_path=tmp_path / "cfg" / "g.yaml"
+            )
+        saved = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "JEV_API_KEY" not in saved
+        assert "jev_api_key" not in saved.get("engine", {})
+        assert saved["engine"]["order"] == ["decisions_api"]
+        assert "jev-secret" not in path.read_text(encoding="utf-8")
+        assert "secret-shaped" in caplog.text

@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from strands.decisions import DecisionResult, Question, Uncertain
 from strands.decisions.types import DecisionMetadata
+from strands.models.model import Model
 from strands.types.exceptions import (
     ContextWindowOverflowException,
     ModelThrottledException,
@@ -23,6 +24,8 @@ from strands.types.exceptions import (
 import strands_code_cli.routing.transports as transports
 from strands_code_cli.routing.transports import (
     DECISION_BODY_MAX_BYTES,
+    DECISIONS_API_DEFAULT_MODEL,
+    DECISIONS_API_URL,
     OLLAMA_KEEP_ALIVE,
     OPENROUTER_DECISIONS_URL,
     TYPESAFE_DECISIONS_URL,
@@ -35,6 +38,8 @@ from strands_code_cli.routing.transports import (
     failure_reason,
     is_retryable_decision_error,
     run_decision_sync,
+    run_decisions_api_decision,
+    run_llm_decision,
     run_ollama_decision,
     run_openrouter_decision,
     run_typesafe_decision,
@@ -532,3 +537,250 @@ class TestUncertainNarrowingAndAsyncBridge:
             for res in (or_res, ol_res, ts_res):
                 assert res.answers is None
                 assert res.error == "invalid body"
+
+
+class _FakeLLMModel(Model):
+    def __init__(self, handler, usage: dict[str, int] | None = None) -> None:
+        self._handler = handler
+        self._usage = usage or {
+            "inputTokens": 120,
+            "outputTokens": 15,
+            "totalTokens": 135,
+        }
+
+    def update_config(self, **model_config) -> None:
+        pass
+
+    def get_config(self) -> dict[str, Any]:
+        return {}
+
+    async def stream(self, *args, **kwargs):
+        if False:
+            yield {}
+
+    async def structured_output(self, output_model, prompt, system_prompt=None, **kw):
+        raw = self._handler(output_model, prompt, system_prompt)
+        if hasattr(raw, "__await__"):
+            raw = await raw
+        yield {"event": {"metadata": {"usage": dict(self._usage)}}}
+        yield {"output": output_model.model_validate(raw)}
+
+
+class TestDecisionsAPIAndLLMDecisionModels:
+    def test_decisions_api_unwraps_envelope_defaults_model_and_reports_zero_cost(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("JEV_API_KEY", "jev-secret")
+        seen: list[dict[str, Any]] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            seen.append(
+                {
+                    "url": str(request.url),
+                    "auth": request.headers.get("authorization"),
+                    "body": json.loads(request.content.decode("utf-8")),
+                }
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "result": {
+                            "answers": {
+                                "pick_model": {
+                                    "type": "choice",
+                                    "choice": "a/1",
+                                    "probabilities": {
+                                        "a/1": 0.3333,
+                                        "b/2": 0.3333,
+                                        "c/3": 0.3333,
+                                    },
+                                    "confidence": 0.3333,
+                                }
+                            },
+                            "usage": {"input_tokens": 250, "output_tokens": 12},
+                        }
+                    },
+                },
+            )
+
+        _patch_httpx(monkeypatch, _handler)
+        raw_q = {
+            "pick_model": {
+                "type": "choice",
+                "instructions": "Pick one",
+                "criteria": {"a/1": "first", "b/2": "second", "c/3": "third"},
+            }
+        }
+        res = run_decisions_api_decision(
+            model_id=None,
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions=raw_q,
+        )
+        assert res.answers is not None
+        assert res.answers["pick_model"]["choice"] == "a/1"
+        assert res.cost is None
+        assert res.model == DECISIONS_API_DEFAULT_MODEL
+        assert seen[0]["url"] == DECISIONS_API_URL
+        assert seen[0]["auth"] == "Bearer " + "jev-secret"
+        assert seen[0]["body"]["model"] == DECISIONS_API_DEFAULT_MODEL
+
+    def test_decisions_api_handles_keyless_nonzero_code_retries_and_connect_error(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        missing = run_decisions_api_decision(
+            model_id=None, state={"ask": "hi"}, questions=_model_raw_questions()
+        )
+        assert missing == transports.EngineResult(answers=None)
+
+        monkeypatch.setenv("JEV_API_KEY", "jev-secret")
+        attempts: list[int] = []
+
+        def _code_err(request: httpx.Request) -> httpx.Response:
+            attempts.append(1)
+            if request.headers.get("x-test") == "bad-code":
+                return httpx.Response(200, json={"code": 402, "message": "no balance"})
+            return httpx.Response(200, json={"code": 402, "message": "no balance"})
+
+        _patch_httpx(monkeypatch, _code_err)
+        err_res = run_decisions_api_decision(
+            model_id="~typesafe/jev-latest",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        assert err_res.answers is None
+        assert err_res.error == "invalid body"
+        assert len(attempts) == 1
+
+        # 429 retries once; 401 and ConnectError never retry
+        retry_calls: list[int] = []
+
+        def _throttle_then_ok(request: httpx.Request) -> httpx.Response:
+            retry_calls.append(1)
+            if len(retry_calls) == 1:
+                return httpx.Response(429, json={"error": "slow"})
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"result": _choice_payload(cost=None)}},
+            )
+
+        _patch_httpx(monkeypatch, _throttle_then_ok)
+        ok_res = run_decisions_api_decision(
+            model_id=None, state={"ask": "hi"}, questions=_model_raw_questions()
+        )
+        assert ok_res.answers is not None and len(retry_calls) == 2
+
+        four_oh_one: list[int] = []
+
+        def _unauth(request: httpx.Request) -> httpx.Response:
+            four_oh_one.append(1)
+            return httpx.Response(401, json={"error": "bad key"})
+
+        _patch_httpx(monkeypatch, _unauth)
+        res_401 = run_decisions_api_decision(
+            model_id=None, state={"ask": "hi"}, questions=_model_raw_questions()
+        )
+        assert res_401.error == "HTTP 401" and len(four_oh_one) == 1
+
+        conn_calls: list[int] = []
+
+        def _refused(request: httpx.Request) -> httpx.Response:
+            conn_calls.append(1)
+            raise httpx.ConnectError("Connection refused", request=request)
+
+        _patch_httpx(monkeypatch, _refused)
+        res_conn = run_decisions_api_decision(
+            model_id=None, state={"ask": "hi"}, questions=_model_raw_questions()
+        )
+        assert res_conn.error == "refused" and len(conn_calls) == 1
+
+    def test_llm_decision_commits_holds_uncertain_estimates_cost_and_honors_timeout(
+        self, monkeypatch
+    ):
+        import strands_code_cli.cost.cost_context as cost_ctx
+        import strands_code_cli.model.model_switch as switch_mod
+
+        resolve_calls: list[tuple[Any, dict[str, Any]]] = []
+        fake_commit = _FakeLLMModel(
+            lambda _om, _p, _s: {"pick_model": {"answer": "a/1"}}
+        )
+
+        def _fake_resolve(ref, default=None, **kw):
+            resolve_calls.append(((ref, default), kw))
+            return fake_commit
+
+        monkeypatch.setattr(switch_mod, "resolve_harness_model", _fake_resolve)
+        monkeypatch.setattr(
+            cost_ctx,
+            "cost_for",
+            lambda in_t, out_t, mid: 0.00123 if mid == "openai/gpt-4o-mini" else None,
+        )
+        res = run_llm_decision(
+            llm_model="openai/gpt-4o-mini",
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions=_model_raw_questions(),
+        )
+        assert res.answers == {"pick_model": {"type": "llm_choice", "choice": "a/1"}}
+        assert res.cost == pytest.approx(0.00123)
+        assert res.model == "openai/gpt-4o-mini"
+        assert resolve_calls == [
+            (
+                ("openai/gpt-4o-mini", "openai/gpt-4o-mini"),
+                {"effort": "off", "web_search": False, "caching": False},
+            )
+        ]
+
+        # Uncertain short-circuits cleanly
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda *_a, **_kw: _FakeLLMModel(
+                lambda _om, _p, _s: {
+                    "pick_model": {"answer": "uncertain", "reason": "ambiguous"}
+                }
+            ),
+        )
+        unc = run_llm_decision(
+            llm_model="openai/gpt-4o-mini",
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions=_model_raw_questions(),
+        )
+        assert unc.answers is None
+        assert unc.uncertain is True
+        assert unc.error == "ambiguous"
+
+        # Timeout holds cleanly
+        async def _slow(_om, _p, _s):
+            await asyncio.sleep(0.2)
+            return {"pick_model": {"answer": "a/1"}}
+
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda *_a, **_kw: _FakeLLMModel(_slow),
+        )
+        timed_out = run_llm_decision(
+            llm_model="openai/gpt-4o-mini",
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions=_model_raw_questions(),
+            timeout=0.01,
+        )
+        assert timed_out.answers is None
+        assert timed_out.error == "timeout"
+
+        # Resolve failure holds cleanly
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda *_a, **_kw: (_ for _ in ()).throw(ValueError("unknown provider")),
+        )
+        bad_resolve = run_llm_decision(
+            llm_model="bad/model",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        assert bad_resolve.answers is None
+        assert bad_resolve.error == "invalid body"

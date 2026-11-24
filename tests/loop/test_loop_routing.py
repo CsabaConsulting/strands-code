@@ -8,12 +8,16 @@ for real.
 
 from __future__ import annotations
 
+import json
 import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
+import httpx
 import pytest
+from strands.models.model import Model
 
 import strands_code_cli.loop.core as loop_mod
 import strands_code_cli.routing.core as routing_mod
@@ -1578,3 +1582,244 @@ class TestRoutedPickNoPersist:
         assert len(hits) == 1
         window = "\n".join(lines[max(0, hits[0] - 20) : hits[0]])
         assert 'action == "model"' in window
+
+
+class _FakeStructuredLLM(Model):
+    def __init__(self, selector) -> None:
+        self._selector = selector
+
+    def update_config(self, **model_config) -> None:
+        pass
+
+    def get_config(self) -> dict[str, Any]:
+        return {}
+
+    async def stream(self, *args, **kwargs):
+        if False:
+            yield {}
+
+    async def structured_output(self, output_model, prompt, system_prompt=None, **kw):
+        text = str(prompt[0]["content"][0]["text"])
+        payload = self._selector(output_model, text)
+        yield {
+            "event": {"metadata": {"usage": {"inputTokens": 50, "outputTokens": 10}}}
+        }
+        yield {"output": output_model.model_validate(payload)}
+
+
+class TestOptInEngineLoopAndBtw:
+    def test_decisions_api_routes_main_and_btw_with_apply_model_action_and_rich_history(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import strands_code_cli.routing.transports as transports
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import canonical_prefix_hash
+
+        monkeypatch.setenv("JEV_API_KEY", "jev-secret")
+
+        def _dapi_handler(request: httpx.Request) -> httpx.Response:
+            qs = json.loads(request.content.decode())["questions"]
+            wants_effort = "pick_effort" in qs
+            key = "pick_effort" if wants_effort else "pick_model"
+            ans = (
+                {
+                    "type": "choice",
+                    "choice": "low",
+                    "probabilities": {"low": 0.8, "high": 0.2},
+                    "confidence": 0.8,
+                }
+                if wants_effort
+                else {
+                    "type": "choice",
+                    "choice": HAIKU,
+                    "probabilities": {HAIKU: 0.9, NOVA_MICRO: 0.1},
+                    "confidence": 0.9,
+                }
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "message": "ok",
+                    "data": {
+                        "result": {
+                            "answers": {key: ans},
+                            "usage": {"input_tokens": 100, "output_tokens": 12},
+                        }
+                    },
+                },
+            )
+
+        monkeypatch.setattr(
+            transports,
+            "make_async_client",
+            lambda timeout, headers=None: httpx.AsyncClient(
+                transport=httpx.MockTransport(_dapi_handler),
+                timeout=httpx.Timeout(timeout),
+                headers=headers or {},
+            ),
+        )
+        strategy = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low", "high"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+            ],
+            directives="trivial asks go cheap",
+            engine=RoutingEngine(order=["decisions_api"]),
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        stash = [{"role": "user", "content": [{"text": "prior"}]}]
+        rich = RichHistory()
+        rich.model_id = NOVA_MICRO
+        rich.length = 1
+        rich.prefix_hash = canonical_prefix_hash(stash)
+        rich.messages = list(stash)
+        agent = SimpleNamespace(
+            messages=list(stash),
+            model=SimpleNamespace(config=SimpleNamespace(model_id=NOVA_MICRO)),
+            _harness_kwargs={
+                "model": SimpleNamespace(config=SimpleNamespace(model_id=NOVA_MICRO))
+            },
+            _session_manager=None,
+        )
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        served_main = loop_mod._route_pre_turn(
+            agent,
+            current_model=NOVA_MICRO,
+            ask_text="hello",
+            rich=rich,
+            index=index,
+            session_id=sid,
+            stash_path=tmp_path / "rich.json",
+            routing=RoutingState(initial="on"),
+            routing_events=[],
+        )
+        assert served_main == HAIKU
+        assert rich.messages == stash
+        builds: list = []
+        monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+        events: list = []
+        ctx = loop_mod._btw_context_for(
+            agent, routing=RoutingState(initial="on"), routing_events=events
+        )
+        ctx.build("side ask")
+        assert len(builds) == 1
+        assert events[0]["held"] is False
+        assert events[0]["decision_model"] == "~typesafe/jev-latest"
+        assert "Routed (btw)" in capsys.readouterr().out
+        assert saved == []
+
+    def test_keyless_decisions_api_emits_one_time_skip_note(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        loop_mod._emitted_chain_skip_notes.clear()
+        strategy = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low", "high"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+            ],
+            directives="trivial asks go cheap",
+            engine=RoutingEngine(
+                order=["decisions_api", "openrouter"], decision_model="cheap/decider"
+            ),
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        monkeypatch.setattr(
+            routing_mod, "decide_via_openrouter", lambda **kw: _table_result(HAIKU)
+        )
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        calls: list = []
+        _drive(
+            monkeypatch,
+            ["hi", "again"],
+            agent,
+            index,
+            NOVA_MICRO,
+            _serving_invoke(calls),
+        )
+        out = capsys.readouterr().out
+        assert out.count("decisions_api engine skipped: JEV_API_KEY not set") == 1
+        loop_mod._emitted_chain_skip_notes.clear()
+
+    def test_llm_engine_routes_and_holds_uncertain_preserving_history(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        import strands_code_cli.model.model_switch as switch_mod
+
+        strategy = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low", "high"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+            ],
+            directives="trivial asks go cheap",
+            engine=RoutingEngine(order=["llm"], llm_model="openai/gpt-4o-mini"),
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        saved: list[str] = []
+        _no_persist(monkeypatch, saved)
+
+        def _commit_selector(output_model, text):
+            fields = output_model.model_fields
+            alias = next(f.alias for f in fields.values())
+            val = "low" if alias == "pick_effort" else HAIKU
+            return {alias: {"answer": val}}
+
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda ref, *a, **kw: _FakeStructuredLLM(_commit_selector),
+        )
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        events: list = []
+        served = loop_mod._route_pre_turn(
+            agent,
+            current_model=NOVA_MICRO,
+            ask_text="hello",
+            rich=None,
+            index=index,
+            session_id=index.mint(),
+            stash_path=None,
+            routing=RoutingState(initial="on"),
+            routing_events=events,
+        )
+        assert served == HAIKU
+        assert "model n/a, effort n/a" in " ".join(capsys.readouterr().out.split())
+        assert events[-1]["model_confidence"] is None
+        assert events[-1]["effort_confidence"] is None
+
+        # Uncertain holds immediately with history byte-identical
+        def _uncertain_selector(output_model, text):
+            alias = next(f.alias for f in output_model.model_fields.values())
+            return {alias: {"answer": "uncertain", "reason": "ambiguous"}}
+
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda ref, *a, **kw: _FakeStructuredLLM(_uncertain_selector),
+        )
+        prior_msgs = [{"role": "user", "content": [{"text": "keep me"}]}]
+        agent2 = SimpleNamespace(
+            messages=list(prior_msgs),
+            model=SimpleNamespace(config=SimpleNamespace(model_id=NOVA_MICRO)),
+            _harness_kwargs={
+                "model": SimpleNamespace(config=SimpleNamespace(model_id=NOVA_MICRO))
+            },
+            _session_manager=None,
+        )
+        btw_events: list = []
+        builds: list = []
+        monkeypatch.setattr(loop_mod, "build_btw_agent", _capture_build(builds))
+        ctx = loop_mod._btw_context_for(
+            agent2, routing=RoutingState(initial="on"), routing_events=btw_events
+        )
+        ctx.build("ambiguous?")
+        assert agent2.messages == prior_msgs
+        assert btw_events[-1]["held"] is True

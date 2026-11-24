@@ -1534,6 +1534,8 @@ class TestLocalEngine:
             "openrouter",
             "local",
             "native",
+            "decisions_api",
+            "llm",
         ]
 
     def test_engine_result_defaults_to_zero_usage(self):
@@ -2104,6 +2106,132 @@ class TestNativeFaults:
     def test_decision_model_for_names_native_model(self):
         strategy = self._native_only()
         assert decision_model_for(strategy, "native") == NATIVE_PIN
+
+
+class TestDecisionsAPIAndLLMEngines:
+    def test_decisions_api_gates_and_emits_skip_note_when_keyless(self, monkeypatch):
+        from strands_code_cli.routing.core import (
+            DECISIONS_API_DEFAULT_MODEL,
+            decisions_api_engine_ready,
+            route_status_text,
+        )
+
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        assert decisions_api_engine_ready() is False
+        strategy = _strategy(engine=RoutingEngine(order=["decisions_api"]))
+        assert chain_skip_notes(strategy) == [
+            "decisions_api engine skipped: JEV_API_KEY not set"
+        ]
+        assert (
+            decision_model_for(strategy, "decisions_api") == DECISIONS_API_DEFAULT_MODEL
+        )
+        status = route_status_text(RoutingState("on"), strategy)
+        assert "decisions_api (~typesafe/jev-latest)" in status
+
+        monkeypatch.setenv("JEV_API_KEY", "jev-secret")
+        assert decisions_api_engine_ready() is True
+        assert chain_skip_notes(strategy) == []
+
+        def _low_conf(request):
+            return _json_response(
+                {
+                    "code": 0,
+                    "data": {
+                        "result": {
+                            "answers": {
+                                "pick_model": {
+                                    "type": "choice",
+                                    "choice": HAIKU,
+                                    "probabilities": {HAIKU: 0.55, NOVA_MICRO: 0.45},
+                                    "confidence": 0.55,
+                                }
+                            },
+                            "usage": {"input_tokens": 20, "output_tokens": 5},
+                        }
+                    },
+                }
+            )
+
+        _mock_httpx(monkeypatch, _low_conf)
+        pick, eng, _usage, detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None and eng == "decisions_api"
+        assert "confidence 55% < 62%" in detail
+
+    def test_llm_engine_bypasses_gate_and_uncertain_holds_without_fallback(
+        self, monkeypatch
+    ):
+        import strands_code_cli.routing.core as routing_mod
+        from strands_code_cli.routing.core import route_status_text
+
+        strategy = _strategy(
+            engine=RoutingEngine(
+                order=["llm", "openrouter"],
+                llm_model="openai/gpt-4o-mini",
+                decision_model="c/d",
+            )
+        )
+        assert decision_model_for(strategy, "llm") == "openai/gpt-4o-mini"
+        status = route_status_text(RoutingState("on"), strategy)
+        assert "llm (openai/gpt-4o-mini), openrouter (c/d)" in status
+
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_llm",
+            lambda **_kw: EngineResult(
+                answers={"pick_model": {"type": "llm_choice", "choice": HAIKU}}
+                if "pick_model" in _kw["questions"]
+                else {"pick_effort": {"type": "llm_choice", "choice": "low"}},
+                input_tokens=40,
+                output_tokens=10,
+                cost=0.0005,
+                model="openai/gpt-4o-mini",
+            ),
+        )
+        pick, eng, usage, _ = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick == RoutingPick(
+            model=HAIKU,
+            effort="low",
+            model_confidence=None,
+            effort_confidence=None,
+            tie_break=False,
+        )
+        assert eng == "llm"
+        assert usage == (80, 20, pytest.approx(0.001))
+
+        # Uncertain halts immediately without falling back to openrouter
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_llm",
+            lambda **_kw: EngineResult(answers=None, uncertain=True, error="uncertain"),
+        )
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **_kw: (_ for _ in ()).throw(AssertionError("must not fall back")),
+        )
+        held_pick, held_eng, _, held_detail = decide(
+            strategy, current_model=SONNET, side=False, ask="hi"
+        )
+        assert held_pick is None and held_eng == "llm"
+        assert held_detail == "llm uncertain"
+
+        # System One engines reject non-choice llm_choice payloads
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **_kw: EngineResult(
+                answers={"pick_model": {"type": "llm_choice", "choice": HAIKU}}
+            ),
+        )
+        bad_pick, bad_eng, _, bad_detail = decide(
+            _strategy(), current_model=SONNET, side=False, ask="hi"
+        )
+        assert bad_pick is None and bad_eng == "openrouter"
+        assert "invalid table" in bad_detail
 
 
 class TestRoutedEffort:

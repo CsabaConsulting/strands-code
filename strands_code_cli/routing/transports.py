@@ -776,6 +776,46 @@ def run_ollama_decision(
     )
 
 
+def _run_folded_system_one(
+    *,
+    dm_cls: type[DecisionModel],
+    api_key: str,
+    model_id: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float,
+    compute_cost: Callable[[DecisionResult], float | None],
+) -> EngineResult:
+    try:
+        state_str, sdk_questions, truncated = build_folded_state_and_questions(
+            state, questions, model_id=model_id, uncertainty=False
+        )
+    except ValueError:
+        return EngineResult(answers=None, error="invalid body")
+
+    async def _invoke() -> DecisionResult:
+        async with make_async_client(
+            timeout, headers={"User-Agent": "strands-code"}
+        ) as client:
+            dm = dm_cls(
+                api_key=api_key,
+                model_id=model_id,
+                default_min_confidence=0.0,
+                http_client=client,
+            )  # type: ignore[call-arg]
+            return await dm.ask(state_str, sdk_questions)
+
+    try:
+        result = run_decision_sync(_invoke, retry=True)
+    except Exception as exc:
+        return EngineResult(
+            answers=None, error=failure_reason(exc), truncated=truncated
+        )
+    return decision_result_to_engine_result(
+        result, raw_questions=questions, cost=compute_cost(result), truncated=truncated
+    )
+
+
 def run_typesafe_decision(
     *,
     native_model: str,
@@ -789,24 +829,96 @@ def run_typesafe_decision(
     api_key = os.environ.get("TYPESAFE_API_KEY")
     if not api_key or not native_model:
         return EngineResult(answers=None)
+    return _run_folded_system_one(
+        dm_cls=TypeSafeDecisionModel,
+        api_key=api_key,
+        model_id=native_model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+        compute_cost=lambda res: (
+            _count((res.usage or {}).get("inputTokens"))
+            * TYPESAFE_INPUT_USD_PER_MTOK
+            / 1_000_000
+        ),
+    )
+
+
+def run_decisions_api_decision(
+    *,
+    model_id: str | None = None,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float = DECISION_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """Execute one decisionapi.net request via ``DecisionsAPIDecisionModel``."""
+    from strands.decisions import DecisionsAPIDecisionModel
+
+    api_key = os.environ.get("JEV_API_KEY")
+    if not api_key:
+        return EngineResult(answers=None)
+    resolved_model = (
+        model_id.strip()
+        if isinstance(model_id, str) and model_id.strip()
+        else DECISIONS_API_DEFAULT_MODEL
+    )
+    return _run_folded_system_one(
+        dm_cls=DecisionsAPIDecisionModel,
+        api_key=api_key,
+        model_id=resolved_model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+        compute_cost=lambda _res: None,
+    )
+
+
+def _estimate_llm_cost(llm_model: str, in_tok: int, out_tok: int) -> float | None:
+    if in_tok <= 0 and out_tok <= 0:
+        return None
+    from strands_code_cli.cost.cost_context import cost_for
+
+    try:
+        return cost_for(in_tok, out_tok, llm_model)
+    except Exception:
+        return None
+
+
+def run_llm_decision(
+    *,
+    llm_model: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float = DECISION_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """Execute one closed decision via upstream ``LLMDecisionModel``."""
+    from strands.decisions import LLMDecisionModel
+
+    from strands_code_cli.model.model_switch import resolve_harness_model
+
+    if not isinstance(llm_model, str) or not llm_model.strip():
+        return EngineResult(answers=None)
+    target_model = llm_model.strip()
+    try:
+        resolved_model = resolve_harness_model(
+            target_model,
+            target_model,
+            effort="off",
+            web_search=False,
+            caching=False,
+        )
+    except Exception as exc:
+        return EngineResult(answers=None, error=failure_reason(exc))
     try:
         state_str, sdk_questions, truncated = build_folded_state_and_questions(
-            state, questions, model_id=native_model, uncertainty=False
+            state, questions, model_id=target_model, uncertainty=True
         )
     except ValueError:
         return EngineResult(answers=None, error="invalid body")
 
     async def _invoke() -> DecisionResult:
-        async with make_async_client(
-            timeout, headers={"User-Agent": "strands-code"}
-        ) as client:
-            dm = TypeSafeDecisionModel(
-                api_key=api_key,
-                model_id=native_model,
-                default_min_confidence=0.0,
-                http_client=client,
-            )
-            return await dm.ask(state_str, sdk_questions)
+        dm = LLMDecisionModel(model=resolved_model)
+        return await asyncio.wait_for(dm.ask(state_str, sdk_questions), timeout=timeout)
 
     try:
         result = run_decision_sync(_invoke, retry=True)
@@ -814,8 +926,17 @@ def run_typesafe_decision(
         return EngineResult(
             answers=None, error=failure_reason(exc), truncated=truncated
         )
-    in_tok = _count((result.usage or {}).get("inputTokens"))
-    cost = in_tok * TYPESAFE_INPUT_USD_PER_MTOK / 1_000_000
+    usage = result.usage or {}
+    est_cost = _estimate_llm_cost(
+        target_model,
+        _count(usage.get("inputTokens")),
+        _count(usage.get("outputTokens")),
+    )
     return decision_result_to_engine_result(
-        result, raw_questions=questions, cost=cost, truncated=truncated
+        result,
+        raw_questions=questions,
+        cost=est_cost,
+        truncated=truncated,
+        llm_mode=True,
+        reported_model=target_model,
     )

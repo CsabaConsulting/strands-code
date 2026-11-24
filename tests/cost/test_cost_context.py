@@ -657,6 +657,72 @@ class TestRoutingEntries:
             "  ask ?: ? [model n/a, effort n/a] via ? $0.0000"
         ]
 
+    def test_decisions_api_entry_renders_zero_actual_spend(self):
+        event = _routed_event(
+            engine="decisions_api",
+            input_tokens=300,
+            output_tokens=15,
+            decision_cost=None,
+            decision_model="~typesafe/jev-latest",
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model 85%, effort n/a] via decisions_api $0.0000"
+        ]
+
+    def test_llm_entry_renders_and_folds_estimated_spend_lane(self, monkeypatch):
+        monkeypatch.setattr(
+            cost_context,
+            "price_for",
+            lambda mid: (0.15, 0.60) if mid == "openai/gpt-4o-mini" else None,
+        )
+        event = _routed_event(
+            engine="llm",
+            model_confidence=None,
+            effort_confidence=None,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            decision_cost=0.75,
+            decision_model="openai/gpt-4o-mini",
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert _routing_lines(report) == [
+            "  ask 1: a/routed (low) [model n/a, effort n/a] via llm $0.7500"
+        ]
+        assert " actual" not in report
+        assert "Total: in 1.00M, out 1.00M, $0.7500" in report
+        assert "Prices:" in report
+
+    def test_mixed_actual_turn_and_llm_router_split_correctly(self, monkeypatch):
+        monkeypatch.setattr(
+            cost_context,
+            "price_for",
+            lambda mid: (0.15, 0.60) if mid == "openai/gpt-4o-mini" else None,
+        )
+        turns = [
+            {
+                "turn": 1,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "reported_cost": 0.25,
+                "model": "openai/gpt-6.2-sol",
+            }
+        ]
+        events = [
+            _routed_event(
+                engine="llm",
+                model_confidence=None,
+                effort_confidence=None,
+                input_tokens=1000,
+                output_tokens=200,
+                decision_cost=0.05,
+                decision_model="openai/gpt-4o-mini",
+            )
+        ]
+        report = cost_report(turns, "openai/gpt-6.2-sol", routing=events)
+        assert "Total: in 2.00K, out 700, $0.3000" in report
+        assert "(actual $0.2500 + estimated $0.0500)" in report
+
 
 # ----------------------------------------------------------------------
 # /context + compact + clear spike on the replay model

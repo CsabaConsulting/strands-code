@@ -4781,3 +4781,60 @@ class TestMetaModelAdapter:
         assert captured["builtin_tools"]["web_fetch"] == {
             "model": "meta/muse-spark-1.3-contributor"
         }
+
+    def test_resolve_harness_model_can_suppress_web_search_and_caching(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model import model_switch
+        from strands_code_cli.model.model_switch import resolve_harness_model
+
+        calls: list[dict] = []
+        monkeypatch.setattr(harness_models, "supports_web_search", lambda _m: True)
+        monkeypatch.setattr(
+            harness_models, "_web_search_kind", lambda _m: "native", raising=False
+        )
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda _m, _d, **kw: calls.append(kw) or SimpleNamespace(kwargs=kw),
+        )
+        resolve_harness_model(
+            "openai/gpt-6.2-sol",
+            effort="off",
+            web_search=False,
+            caching=False,
+        )
+        assert calls[-1] == {
+            "caching": False,
+            "caching_explicit": True,
+            "effort": "off",
+        }
+
+        meta_calls: list[dict] = []
+        monkeypatch.setattr(model_switch, "upstream_supports_meta", lambda: False)
+        monkeypatch.setattr(
+            model_switch,
+            "build_meta_model",
+            lambda ref, **kw: (
+                meta_calls.append({"ref": ref, **kw}) or SimpleNamespace()
+            ),
+        )
+        resolve_harness_model(
+            "meta/muse-spark-1.3-contributor",
+            effort="off",
+            web_search=False,
+            caching=False,
+        )
+        assert meta_calls == [
+            {
+                "ref": "meta/muse-spark-1.3-contributor",
+                "effort": "off",
+                "base_url": None,
+                "web_search": False,
+                "caching": False,
+            }
+        ]

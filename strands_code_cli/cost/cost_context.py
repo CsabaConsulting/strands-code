@@ -501,6 +501,8 @@ def _routing_line(event: dict[str, Any]) -> str:
         head += " [held]"
     spend = _reported_spend(event)
     if spend is not None:
+        if engine == "llm":
+            return f"{head} ${spend:.4f}"
         return f"{head} ${spend:.4f} actual"
     return f"{head} $0.0000"
 
@@ -557,12 +559,14 @@ def _fold_routing_events(
     routing: list[dict[str, Any]],
     lines: list[str],
     provenances: list[str],
-) -> tuple[int, int, float, bool]:
-    """Append Routing section rows and return folded tokens/actual spend."""
+) -> tuple[int, int, float, bool, float, bool]:
+    """Append Routing rows and return tokens plus actual/estimated USD totals."""
     lines.append("Routing:")
     total_in = total_out = 0
     total_actual = 0.0
+    total_estimated = 0.0
     has_actual = False
+    has_estimated = False
     for event in routing:
         if not isinstance(event, dict):
             continue
@@ -577,9 +581,13 @@ def _fold_routing_events(
         spend = _reported_spend(event)
         if spend is None:
             continue
-        # Reported routing spend lands in the actuals lane (D-10).
-        has_actual = True
-        total_actual += spend
+        if event.get("engine") == "llm":
+            has_estimated = True
+            total_estimated += spend
+        else:
+            # System One reported/flat routing spend lands in the actuals lane.
+            has_actual = True
+            total_actual += spend
         decision_model = event.get("decision_model")
         if not decision_model:
             continue
@@ -588,7 +596,14 @@ def _fold_routing_events(
             provenance = "native computed input rate"
         if provenance not in provenances:
             provenances.append(provenance)
-    return (total_in, total_out, total_actual, has_actual)
+    return (
+        total_in,
+        total_out,
+        total_actual,
+        has_actual,
+        total_estimated,
+        has_estimated,
+    )
 
 
 def cost_report(
@@ -633,11 +648,15 @@ def cost_report(
             has_estimated = True
             total_estimated += estimated
     if routing:
-        r_in, r_out, r_actual, r_has = _fold_routing_events(routing, lines, provenances)
+        r_in, r_out, r_actual, r_has_act, r_est, r_has_est = _fold_routing_events(
+            routing, lines, provenances
+        )
         total_in += r_in
         total_out += r_out
         total_actual += r_actual
-        has_actual = has_actual or r_has
+        has_actual = has_actual or r_has_act
+        total_estimated += r_est
+        has_estimated = has_estimated or r_has_est
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"
     if has_actual or has_estimated:
         total += f", ${total_actual + total_estimated:.4f}"

@@ -1480,6 +1480,8 @@ def resolve_harness_model(
     *,
     effort: str | None = None,
     base_url: str | None = None,
+    web_search: bool = True,
+    caching: bool = True,
 ) -> Any:
     """Resolve a model preserving harness caching, web_search, and post-applied base_url."""
     import strands_harness.models as harness_models
@@ -1487,19 +1489,28 @@ def resolve_harness_model(
 
     normalized = normalize_model_ref(model_ref)
     if _provider_of(normalized) == "meta" and not upstream_supports_meta():
-        return build_meta_model(normalized, effort=effort, base_url=base_url)
+        return build_meta_model(
+            normalized,
+            effort=effort,
+            base_url=base_url,
+            web_search=web_search,
+            caching=caching,
+        )
     target_default = default or normalized
     kwargs: dict[str, Any] = {
-        "caching": True,
-        "caching_explicit": False,
+        "caching": bool(caching),
+        "caching_explicit": not caching,
     }
-    try:
-        has_search = bool(supports_web_search(normalized))
-        kind_fn = getattr(harness_models, "_web_search_kind", None)
-        if has_search and (not callable(kind_fn) or kind_fn(normalized) == "native"):
-            kwargs["web_search"] = True
-    except Exception:
-        pass
+    if web_search:
+        try:
+            has_search = bool(supports_web_search(normalized))
+            kind_fn = getattr(harness_models, "_web_search_kind", None)
+            if has_search and (
+                not callable(kind_fn) or kind_fn(normalized) == "native"
+            ):
+                kwargs["web_search"] = True
+        except Exception:
+            pass
     if effort is not None:
         kwargs["effort"] = effort
     model = resolve_model(normalized, target_default, **kwargs)

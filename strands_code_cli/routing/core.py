@@ -42,6 +42,8 @@ from strands_code_cli.routing.transports import (
     ollama_base,
     ollama_headers,
     preflight_get,
+    run_decisions_api_decision,
+    run_llm_decision,
     run_ollama_decision,
     run_openrouter_decision,
     run_typesafe_decision,
@@ -51,6 +53,8 @@ from strands_code_cli.routing.transports import (
 DECISION_BODY_MAX_BYTES = _transports.DECISION_BODY_MAX_BYTES
 OPENROUTER_DECISIONS_URL = _transports.OPENROUTER_DECISIONS_URL
 TYPESAFE_DECISIONS_URL = _transports.TYPESAFE_DECISIONS_URL
+DECISIONS_API_URL = _transports.DECISIONS_API_URL
+DECISIONS_API_DEFAULT_MODEL = _transports.DECISIONS_API_DEFAULT_MODEL
 TYPESAFE_INPUT_USD_PER_MTOK = _transports.TYPESAFE_INPUT_USD_PER_MTOK
 OLLAMA_KEEP_ALIVE = _transports.OLLAMA_KEEP_ALIVE
 OLLAMA_PREFLIGHT_TIMEOUT_SECONDS = _transports.OLLAMA_PREFLIGHT_TIMEOUT_SECONDS
@@ -119,8 +123,21 @@ _ENGINE_KEYS = {
     "local_base_url",
     "order",
     "native_model",
+    "decisions_api_model",
+    "llm_model",
     "skip_notes",
 }
+_VALID_ORDER_ENGINES = ("native", "openrouter", "local", "decisions_api", "llm")
+_VALID_PRIMARY_ENGINES = ("openrouter", "local", "decisions_api", "llm", "off")
+_ENGINE_STRING_KEYS = (
+    "primary",
+    "decision_model",
+    "local_model",
+    "local_base_url",
+    "native_model",
+    "decisions_api_model",
+    "llm_model",
+)
 
 
 @dataclass
@@ -145,6 +162,8 @@ class RoutingEngine:
     local_base_url: str | None = None
     order: list[str] | None = None
     native_model: str | None = None
+    decisions_api_model: str | None = None
+    llm_model: str | None = None
     skip_notes: bool = True
 
 
@@ -269,7 +288,7 @@ def _parse_engine_order(raw: dict[str, Any], engine: RoutingEngine) -> None:
         else:
             names: list[str] = []
             for entry in order:
-                if entry not in ("native", "openrouter", "local"):
+                if entry not in _VALID_ORDER_ENGINES:
                     logger.warning(
                         "Ignoring unknown routing engine %r in 'order'", entry
                     )
@@ -290,49 +309,40 @@ def _parse_engine(raw: object) -> RoutingEngine:
     unknown = set(raw) - _ENGINE_KEYS
     if unknown:
         logger.warning("Ignoring unknown routing engine keys: %s", sorted(unknown))
-    for key in ("primary", "decision_model", "local_model", "local_base_url"):
+    for key in _ENGINE_STRING_KEYS:
         value = raw.get(key)
         if value is None:
             continue
         if key == "primary" and isinstance(value, bool):
-            # YAML 1.1 folds unquoted on/off (yes/no) to bools: honor
-            # the intent instead of warn-and-defaulting an explicit off.
-            setattr(engine, key, "openrouter" if value else "off")
+            engine.primary = "openrouter" if value else "off"
             continue
         if not isinstance(value, str):
             logger.warning("Ignoring routing engine %r (not a string)", key)
             continue
         setattr(engine, key, value)
-    if engine.primary not in ("openrouter", "local", "off"):
+    if engine.primary not in _VALID_PRIMARY_ENGINES:
         logger.warning(
             "Ignoring routing engine primary %r "
-            "(expected openrouter|local|off); using openrouter",
+            "(expected openrouter|local|decisions_api|llm|off); using openrouter",
             engine.primary,
         )
         engine.primary = "openrouter"
     _parse_engine_order(raw, engine)
-    native_model = raw.get("native_model")
-    if native_model is not None:
-        if not isinstance(native_model, str):
-            logger.warning("Ignoring routing engine 'native_model' (not a string)")
-        else:
-            engine.native_model = native_model
     skip_notes = raw.get("skip_notes", True)
     if not isinstance(skip_notes, bool):
         logger.warning("Ignoring routing engine 'skip_notes' (not true/false)")
     else:
         engine.skip_notes = skip_notes
     base_url = engine.local_base_url
-    if base_url is not None:
-        if not base_url.strip():
-            engine.local_base_url = None
-        elif not _valid_base_url(base_url):
-            logger.warning(
-                "Ignoring routing local_base_url %r (http/https only); using %s",
-                base_url,
-                OLLAMA_DEFAULT_HOST,
-            )
-            engine.local_base_url = OLLAMA_DEFAULT_HOST
+    if base_url is not None and not base_url.strip():
+        engine.local_base_url = None
+    elif base_url is not None and not _valid_base_url(base_url):
+        logger.warning(
+            "Ignoring routing local_base_url %r (http/https only); using %s",
+            base_url,
+            OLLAMA_DEFAULT_HOST,
+        )
+        engine.local_base_url = OLLAMA_DEFAULT_HOST
     return engine
 
 
@@ -672,6 +682,68 @@ def _openrouter_catalog_lines(decision_model: str) -> tuple[bool, list[str]]:
     ]
 
 
+def _validate_single_order_engine(
+    name: str, engine: RoutingEngine, lines: list[str]
+) -> bool:
+    """Validate one engine entry in ``engine.order`` without network I/O."""
+    if name == "openrouter":
+        if not engine.decision_model:
+            lines.append(
+                "engine: INVALID — order lists openrouter with no decision_model"
+            )
+            lines.append(
+                "fix: set engine.decision_model to a decisions-catalog id, "
+                "or re-run /route setup"
+            )
+            return False
+        passed, extra = _openrouter_catalog_lines(engine.decision_model)
+        lines.extend(extra)
+        return passed
+    if name == "local":
+        if not engine.local_model:
+            lines.append("engine: INVALID — order lists local with no local_model")
+            lines.append(
+                "fix: set engine.local_model to your Ollama tag, "
+                "or drop local from engine.order"
+            )
+            return False
+        lines.append(f"engine: local model {engine.local_model} — ok")
+        return True
+    if name == "native":
+        if not engine.native_model:
+            lines.append("engine: INVALID — order lists native with no native_model")
+            lines.append(
+                f"fix: set engine.native_model to {NATIVE_JEV_PIN}, or re-run /route setup"
+            )
+            return False
+        if engine.native_model not in _NATIVE_MODEL_IDS:
+            lines.append(
+                "engine: INVALID — native model "
+                f"{engine.native_model!r} is not a verified native id"
+            )
+            lines.append(
+                f"fix: set engine.native_model to {NATIVE_JEV_PIN} "
+                "(full semver pin; minor-only and prefixed forms are rejected)"
+            )
+            return False
+        lines.append(f"engine: native model {engine.native_model} — ok")
+        return True
+    if name == "decisions_api":
+        model_id = engine.decisions_api_model or DECISIONS_API_DEFAULT_MODEL
+        lines.append(f"engine: decisions_api model {model_id} — ok")
+        return True
+    if name == "llm":
+        if not engine.llm_model:
+            lines.append("engine: INVALID — order lists llm with no llm_model")
+            lines.append(
+                "fix: set engine.llm_model to a provider/model id (e.g. openai/gpt-4o-mini)"
+            )
+            return False
+        lines.append(f"engine: llm model {engine.llm_model} — ok")
+        return True
+    return True
+
+
 def _validate_engine_order_chain(
     raw_engine: object,
     raw_order: object,
@@ -690,71 +762,22 @@ def _validate_engine_order_chain(
         lines.append("fix: set engine.order to a list like [native, openrouter]")
     else:
         for entry in raw_order:
-            if entry not in ("native", "openrouter", "local"):
+            if entry not in _VALID_ORDER_ENGINES:
                 ok = False
                 lines.append(
                     f"engine: INVALID — unknown engine {entry!r} in engine.order"
                 )
                 lines.append(
                     f"fix: remove {entry!r} from engine.order "
-                    "(expected native|openrouter|local)"
+                    "(expected native|openrouter|local|decisions_api|llm)"
                 )
     order = _effective_order(engine)
     if not order:
         lines.append("engine: primary off — routing disabled by config")
     else:
         for name in order:
-            if name == "openrouter":
-                if not engine.decision_model:
-                    ok = False
-                    lines.append(
-                        "engine: INVALID — order lists openrouter "
-                        "with no decision_model"
-                    )
-                    lines.append(
-                        "fix: set engine.decision_model to a decisions-catalog "
-                        "id, or re-run /route setup"
-                    )
-                else:
-                    passed, extra = _openrouter_catalog_lines(engine.decision_model)
-                    if not passed:
-                        ok = False
-                    lines.extend(extra)
-            elif name == "local":
-                if not engine.local_model:
-                    ok = False
-                    lines.append(
-                        "engine: INVALID — order lists local with no local_model"
-                    )
-                    lines.append(
-                        "fix: set engine.local_model to your Ollama tag, "
-                        "or drop local from engine.order"
-                    )
-                else:
-                    lines.append(f"engine: local model {engine.local_model} — ok")
-            elif name == "native":
-                if not engine.native_model:
-                    ok = False
-                    lines.append(
-                        "engine: INVALID — order lists native with no native_model"
-                    )
-                    lines.append(
-                        f"fix: set engine.native_model to {NATIVE_JEV_PIN}, "
-                        "or re-run /route setup"
-                    )
-                elif engine.native_model not in _NATIVE_MODEL_IDS:
-                    ok = False
-                    lines.append(
-                        "engine: INVALID — native model "
-                        f"{engine.native_model!r} is not a verified native id"
-                    )
-                    lines.append(
-                        f"fix: set engine.native_model to {NATIVE_JEV_PIN} "
-                        "(full semver pin; minor-only and prefixed "
-                        "forms are rejected)"
-                    )
-                else:
-                    lines.append(f"engine: native model {engine.native_model} — ok")
+            if not _validate_single_order_engine(name, engine, lines):
+                ok = False
     return ok
 
 
@@ -770,7 +793,8 @@ def _validate_engine_legacy_primary(
         )
     if engine.primary == "off":
         lines.append("engine: primary off — routing disabled by config")
-    elif engine.primary == "local":
+        return True
+    if engine.primary == "local":
         if not engine.local_model:
             ok = False
             lines.append("engine: INVALID — primary is local with no local_model")
@@ -787,21 +811,23 @@ def _validate_engine_legacy_primary(
             )
         else:
             lines.append("engine: no decision model (unused while primary is local)")
+        return ok
+    if engine.primary in ("decisions_api", "llm"):
+        return _validate_single_order_engine(engine.primary, engine, lines)
+    if not engine.decision_model:
+        ok = False
+        lines.append(
+            f"engine: INVALID — primary is {engine.primary} with no decision_model"
+        )
+        lines.append(
+            "fix: set engine.decision_model to a decisions-catalog id, "
+            "or re-run /route setup"
+        )
     else:
-        if not engine.decision_model:
+        passed, extra = _openrouter_catalog_lines(engine.decision_model)
+        if not passed:
             ok = False
-            lines.append(
-                f"engine: INVALID — primary is {engine.primary} with no decision_model"
-            )
-            lines.append(
-                "fix: set engine.decision_model to a decisions-catalog id, "
-                "or re-run /route setup"
-            )
-        else:
-            passed, extra = _openrouter_catalog_lines(engine.decision_model)
-            if not passed:
-                ok = False
-            lines.extend(extra)
+        lines.extend(extra)
     return ok
 
 
@@ -939,17 +965,14 @@ def _validate_engine_head(
     ok = True
     if (
         isinstance(raw_primary, str)
-        and raw_primary
-        not in (
-            "openrouter",
-            "local",
-            "off",
-        )
+        and raw_primary not in _VALID_PRIMARY_ENGINES
         and not explicit_order
     ):
         ok = False
         lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
-        lines.append("fix: set engine.primary to openrouter|local|off")
+        lines.append(
+            "fix: set engine.primary to openrouter|local|decisions_api|llm|off"
+        )
     raw_base_url = (
         raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None
     )
@@ -1169,6 +1192,38 @@ def decide_via_typesafe(
     )
 
 
+def decide_via_decisions_api(
+    *,
+    model_id: str | None = None,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float = DECISION_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """One routing decision via upstream DecisionsAPIDecisionModel."""
+    return run_decisions_api_decision(
+        model_id=model_id,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+    )
+
+
+def decide_via_llm(
+    *,
+    llm_model: str,
+    state: dict[str, Any],
+    questions: dict[str, Any],
+    timeout: float = DECISION_TIMEOUT_SECONDS,
+) -> EngineResult:
+    """One routing decision via upstream LLMDecisionModel."""
+    return run_llm_decision(
+        llm_model=llm_model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+    )
+
+
 _ollama_base = ollama_base
 _ollama_headers = ollama_headers
 
@@ -1199,6 +1254,11 @@ def native_engine_ready() -> bool:
     presentation layer.
     """
     return bool(os.environ.get("TYPESAFE_API_KEY"))
+
+
+def decisions_api_engine_ready() -> bool:
+    """True when a decisionapi.net call is worth attempting: JEV_API_KEY present."""
+    return bool(os.environ.get("JEV_API_KEY"))
 
 
 def local_engine_ready(base: str | None, tag: str) -> bool:
@@ -1450,27 +1510,54 @@ def _local_unready_attempt(
     return EngineResult(answers=None, error="unready")
 
 
+def _decisions_api_attempt(
+    strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
+) -> EngineResult | None:
+    """Decisions API chain link: None without JEV_API_KEY."""
+    if not os.environ.get("JEV_API_KEY"):
+        return None
+    return decide_via_decisions_api(
+        model_id=strategy.engine.decisions_api_model,
+        state=state,
+        questions=questions,
+    )
+
+
+def _llm_attempt(
+    strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
+) -> EngineResult | None:
+    """LLM chain link: None without a configured llm_model."""
+    llm_model = strategy.engine.llm_model
+    if not llm_model:
+        return None
+    return decide_via_llm(
+        llm_model=llm_model,
+        state=state,
+        questions=questions,
+    )
+
+
 register_engine("openrouter", _openrouter_attempt)
 register_engine("local", _ollama_attempt)
 register_engine("native", _typesafe_attempt)
+register_engine("decisions_api", _decisions_api_attempt)
+register_engine("llm", _llm_attempt)
 
 
 def chain_skip_notes(strategy: RoutingStrategy) -> list[str]:
-    """One-line D-03 notes for listed-but-skipped engines (native only).
-
-    A native engine listed in the effective order with a model
-    configured but no ``TYPESAFE_API_KEY`` is skipped by the chain;
-    this carries the single line naming the skip. The print site
-    honors ``skip_notes`` (plan 09-02).
-    """
+    """One-line D-03 notes for listed-but-skipped engines."""
     engine = strategy.engine
+    order = _effective_order(engine)
+    notes: list[str] = []
     if (
-        "native" in _effective_order(engine)
+        "native" in order
         and engine.native_model
         and not os.environ.get("TYPESAFE_API_KEY")
     ):
-        return ["native engine skipped: TYPESAFE_API_KEY not set"]
-    return []
+        notes.append("native engine skipped: TYPESAFE_API_KEY not set")
+    if "decisions_api" in order and not os.environ.get("JEV_API_KEY"):
+        notes.append("decisions_api engine skipped: JEV_API_KEY not set")
+    return notes
 
 
 def _link_detail(name: str, error: str | None) -> str:
@@ -1506,6 +1593,8 @@ def is_pause_detail(detail: str) -> bool:
 _LEGACY_PRIMARY_ORDER = {
     "openrouter": ["openrouter", "local"],
     "local": ["local"],
+    "decisions_api": ["decisions_api"],
+    "llm": ["llm"],
     "off": [],
 }
 """Legacy primary values mapped to their equivalent engine order (D-01)."""
@@ -1566,10 +1655,24 @@ def _merge_cost(first: float | None, second: float | None) -> float | None:
 
 
 def _evaluate_effort_answer(
+    name: str,
     result: EngineResult,
 ) -> tuple[str | None, float | None, tuple[int, int, float | None] | None]:
     """Validate one pick_effort answer; returns ``(effort, confidence, usage)``."""
     raw_effort = (result.answers or {}).get("pick_effort")
+    if (
+        name == "llm"
+        and isinstance(raw_effort, dict)
+        and raw_effort.get("type") == "llm_choice"
+    ):
+        choice = raw_effort.get("choice")
+        if not isinstance(choice, str) or not choice.strip():
+            return None, None, None
+        return (
+            choice,
+            None,
+            (result.input_tokens, result.output_tokens, result.cost),
+        )
     table = _validate_effort_answer(raw_effort)
     if table is None:
         return None, None, None
@@ -1619,7 +1722,7 @@ def _decide_effort(
             logger.debug(
                 "Routing effort decision via %s served by %s", name, result.model
             )
-        top, top_prob, usage_triple = _evaluate_effort_answer(result)
+        top, top_prob, usage_triple = _evaluate_effort_answer(name, result)
         if top is None or usage_triple is None:
             failed, detail = name, _link_detail(name, "invalid table")
             informative = True
@@ -1791,6 +1894,25 @@ def _find_candidate(strategy: RoutingStrategy, model_id: str) -> RoutingCandidat
     return next(entry for entry in strategy.candidates if entry.id == model_id)
 
 
+def _select_model_from_result(
+    name: str, result: EngineResult, strategy: RoutingStrategy
+) -> tuple[str | None, float | None, bool, str] | None:
+    raw = (result.answers or {}).get("pick_model")
+    if name == "llm" and isinstance(raw, dict) and raw.get("type") == "llm_choice":
+        choice = raw.get("choice")
+        live = {candidate.id for candidate in strategy.candidates}
+        if not isinstance(choice, str) or choice not in live:
+            return None
+        return choice, None, False, ""
+    answer = validate_choice_answer(raw, strategy.candidates)
+    if answer is None:
+        return None
+    model_id, tie_break, gate_detail = gate_model(answer, strategy)
+    if model_id is None:
+        return None, None, False, gate_detail
+    return model_id, float(answer["probabilities"][model_id]), tie_break, gate_detail
+
+
 def _evaluate_model_answer(
     name: str,
     result: EngineResult,
@@ -1807,12 +1929,10 @@ def _evaluate_model_answer(
     Returns ``(False, None)`` when ``pick_model`` failed schema validation
     (continuing the chain) or ``(True, verdict)`` on route or hard hold.
     """
-    answer = validate_choice_answer(
-        (result.answers or {}).get("pick_model"), strategy.candidates
-    )
-    if answer is None:
+    selection = _select_model_from_result(name, result, strategy)
+    if selection is None:
         return False, None
-    model_id, tie_break, gate_detail = gate_model(answer, strategy)
+    model_id, model_confidence, tie_break, gate_detail = selection
     if model_id is None:
         return True, (
             None,
@@ -1846,7 +1966,7 @@ def _evaluate_model_answer(
     pick = RoutingPick(
         model=model_id,
         effort=effort,
-        model_confidence=float(answer["probabilities"][model_id]),
+        model_confidence=model_confidence,
         effort_confidence=effort_confidence,
         tie_break=tie_break,
     )
@@ -2008,9 +2128,10 @@ def decision_model_for(strategy: RoutingStrategy, engine: str) -> str | None:
     """Decision model id behind one engine name, for /cost accounting.
 
     ``openrouter`` prices at the API decision model, ``local`` at the
-    daemon model, ``native`` at the native model; anything else
-    (``resolve`` holds, unknown engines) has no decision model and
-    prices nothing (T-08-08).
+    daemon model, ``native`` at the native model, ``decisions_api`` at
+    the decisionapi.net model (default ``~typesafe/jev-latest``), and
+    ``llm`` at the LLM router model; anything else (``resolve`` holds,
+    unknown engines) has no decision model and prices nothing (T-08-08).
     """
     if engine == "openrouter":
         return strategy.engine.decision_model
@@ -2018,6 +2139,10 @@ def decision_model_for(strategy: RoutingStrategy, engine: str) -> str | None:
         return strategy.engine.local_model
     if engine == "native":
         return strategy.engine.native_model
+    if engine == "decisions_api":
+        return strategy.engine.decisions_api_model or DECISIONS_API_DEFAULT_MODEL
+    if engine == "llm":
+        return strategy.engine.llm_model
     return None
 
 
@@ -2163,8 +2288,21 @@ def route_status_text(routing: RoutingState, strategy: RoutingStrategy | None) -
     count = len(strategy.candidates)
     noun = "candidate" if count == 1 else "candidates"
     lines.append(f"Strategy: {source} ({count} {noun})")
-    decision = strategy.engine.decision_model or "(no decision model)"
-    lines.append(f"Engine: {strategy.engine.primary} ({decision})")
+    if strategy.engine.order is not None:
+        if not strategy.engine.order:
+            lines.append("Engine: off")
+        else:
+            chain_parts = ", ".join(
+                f"{name} ({decision_model_for(strategy, name) or 'none'})"
+                for name in strategy.engine.order
+            )
+            lines.append(f"Engine: {chain_parts}")
+    else:
+        decision = (
+            decision_model_for(strategy, strategy.engine.primary)
+            or "(no decision model)"
+        )
+        lines.append(f"Engine: {strategy.engine.primary} ({decision})")
     return "\n".join(lines)
 
 
