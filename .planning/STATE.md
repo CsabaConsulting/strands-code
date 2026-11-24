@@ -5,11 +5,11 @@ current_phase: 14
 current_phase_name: First-Class Google Gemini & Provider-Aware Startup
 current_plan: 3
 status: phase_complete
-stopped_at: Phase 14 executed and verified across all 6 CI gates (`1642 passed, 0 failed`) — ready for `/gsd-verify-work 14` or `/gsd-discuss-phase 15`
-last_updated: "2026-11-22T08:12:00Z"
-last_activity: 2026-11-22
-last_activity_desc: Phase 14 completed (`14-01`..`14-03`, `947c5a7` / `52b0963` / `a2395d4`, `14-VERIFICATION.md` passed `8/8`)
-state_head: a2395d4
+stopped_at: Phase 14 UAT (`14-UAT.md` `6/6 PASS`) & ASVS L1 security audit (`14-SECURITY.md` `10/10 closed`, `T-14-02` remediated, `1647 passed, 0 failed`) signed off — ready for `/gsd-discuss-phase 15`
+last_updated: "2026-11-24T00:03:35Z"
+last_activity: 2026-11-23
+last_activity_desc: Phase 14 security audit verified (`14-SECURITY.md` `threats_open: 0`, `T-14-02` CWD `.env` guard)
+state_head: dae7c23
 progress:
   total_phases: 7
   completed_phases: 2
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 Phase: 14 of 19 (First-Class Google Gemini & Provider-Aware Startup) — Complete (`14-VERIFICATION.md` passed)
 Plan: 3 of 3 complete in Phase 14
-Status: Phase 14 complete (`MODEL-06`, `1642 passed, 0 failed` across CI gates); ready for `/gsd-verify-work 14` or `/gsd-discuss-phase 15`
-Last activity: 2026-11-22 — Completed Phase 14 (`947c5a7`, `52b0963`, `a2395d4`) and verified all 6 CI gates
+Status: Phase 14 complete, UAT (`14-UAT.md` `6/6 PASS`) & security audit (`14-SECURITY.md` `10/10 closed`) signed off (`1647 passed, 0 failed`); ready for `/gsd-discuss-phase 15`
+Last activity: 2026-11-23 — Remediated `T-14-02` (`disable_cwd_dotenv`) and signed off `14-SECURITY.md` (`10/10 closed`, `1647 passed`)
 
 Progress: [███░░░░░░░] 29%
 
@@ -52,11 +52,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Scoped revisit of `D-05` queued for Phase 17 (`SANDBOX-01`): host-side deterministic Dogwood (`policy.dw`) inside Strands Box only.
 - Phase 13 (`31ecc3e`, `8c8b70f`): `strands-agents>=1.65.0` / `strands-harness>=0.4.0` locked with no upper pins (`D-01`); route-aware `window_for` (`D-02`); preemptive Bedrock `streaming=False` for `_NO_STREAMING_TOOLS` (`D-03`); hybrid session restore via `prepare_resumed_history` + `#5166` wire stripping (`D-04`); `InjectedBlock` token/hash/fork handling (`D-05`); `PolicyHumanInTheLoop` preserves `[deny]` / Plan-mode `Deny.reason` under 1.65 inline HITL actions.
 - Phase 13 post-verify hardening & live UAT (`51b15b6`, `9fecb81`, `900a7d9`, `073c9e1`): closed `T-13-02` stale `_last_by_tag` HITL window (`13-SECURITY.md`); added Bedrock-scoped unary `_NO_STREAMING_TOOLS` rows for verified Mistral Large 24.02/24.07, Pixtral Large 25.02, and Writer Palmyra X4/X5 (plus `"bedrock"` scoping on Meta Llama 3/4); added repeatable `u1`/`u2`/`u3` tmux UAT scenarios in `scripts/uattest/scenarios_upstream.py`.
-- Phase 14 (`947c5a7`, `52b0963`, `a2395d4`): added `gemini` optional extra + `_SDK_EXTRA_HINTS["google"]`; replaced unconditional STS preflight with Box-compatible presence-only multi-provider gate + `--model` session flag; added `google/` `supports_reasoning`, cross-vendor `toolUse["reasoningSignature"]` stripping with `RichHistory` / `canonical_prefix_hash` preserve, decimal-safe `_vendor_family`, Gemini 2.5 `thinking_budget` adapter (`configure_gemini_for_model` across 4 sites), credential-gated `/model` discovery, `litellm_entry` `gemini/` + static Gemini tables + non-Bedrock Price List skip, `driver.py g1` rig, and `docs/QUICKSTART.md` Ultra credit guide + `docs/upstream/harness_issue_gemini25_thinking.md`.
+- Phase 14 (`947c5a7`, `52b0963`, `a2395d4`): added `gemini` optional extra + `_SDK_EXTRA_HINTS["google"]`; replaced unconditional STS preflight with Box-compatible presence-only multi-provider gate + `--model` session flag; added `google/` `supports_reasoning`, cross-vendor `toolUse["reasoningSignature"]` stripping with `RichHistory` / `canonical_prefix_hash` preserve, decimal-safe `_vendor_family`, Gemini 2.5 `thinking_budget` adapter (`configure_gemini_for_model` across 4 sites), credential-gated `/model` discovery, `litellm_entry` `gemini/` + static Gemini tables + non-Bedrock Price List skip, `driver.py g1` rig, and `docs/QUICKSTART.md` Ultra credit guide + `docs/upstream/harness_issue_gemini25_thinking.md` (filed `strands-agents/harness-sdk#6510`).
+- Phase 14 post-verify UAT & security audit (`14-UAT.md` `6/6 PASS`, `14-SECURITY.md` `10/10 closed`): discovered & closed `T-14-02` (third-party `smolagents.remote_executors:48` / `litellm._process_defaults:24` calling `dotenv.load_dotenv()` on CWD `.env` at import time) via `disable_cwd_dotenv()` in `entry/first_run.py` + `strands_code_cli/__init__.py` (`TestCwdDotenvGuard`).
 
 ### Pending Todos
 
-- Run `/gsd-verify-work 14` for conversational UAT (including optional live `driver.py g1` once a valid AI Studio / Vertex key is exported), or `/gsd-discuss-phase 15` to begin Phase 15 (`UPSTREAM-02`).
+- Run `/gsd-discuss-phase 15` to begin Phase 15 (`UPSTREAM-02`), and monitor upstream issue `strands-agents/harness-sdk#6510` (plus `#6480`–`#6484`) before opening any Gemini 2.5 harness PR.
 
 ### Blockers/Concerns
 
@@ -68,6 +69,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-22T08:12:00Z
-Stopped at: Phase 14 complete (`14-01`..`14-03`, `14-VERIFICATION.md` passed `8/8`) — ready for `/gsd-verify-work 14` or `/gsd-discuss-phase 15`
-Resume file: .planning/phases/14-first-class-google-gemini-provider-aware-startup/14-VERIFICATION.md
+Last session: 2026-11-24T00:03:35Z
+Stopped at: Phase 14 UAT (`14-UAT.md` `6/6 PASS`) & ASVS L1 security audit (`14-SECURITY.md` `10/10 closed`, `1647 passed, 0 failed`) signed off — ready for `/gsd-discuss-phase 15`
+Resume file: .planning/phases/14-first-class-google-gemini-provider-aware-startup/14-SECURITY.md

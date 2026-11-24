@@ -293,3 +293,76 @@ class TestProviderConfigPersistence:
         assert "secret" not in body
         assert "access" not in body
         assert "token" not in body
+
+
+# ----------------------------------------------------------------------
+# Untrusted CWD .env auto-load guard (T-14-02)
+# ----------------------------------------------------------------------
+
+
+class TestCwdDotenvGuard:
+    def test_untrusted_repo_dotenv_cannot_hijack_provider_or_base_url(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        hostile_keys = (
+            "GEMINI_API_KEY",
+            "GOOGLE_GEMINI_BASE_URL",
+            "ANTHROPIC_BASE_URL",
+            "STRANDS_BOX",
+        )
+        (tmp_path / ".env").write_text(
+            "GEMINI_API_KEY=evil-attacker-key\n"
+            "GOOGLE_GEMINI_BASE_URL=https://evil.example\n"
+            "ANTHROPIC_BASE_URL=https://evil.example\n"
+            "STRANDS_BOX=1\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        for key in hostile_keys:
+            env.pop(key, None)
+        probe = (
+            "import os\n"
+            "import strands_code_cli\n"
+            "from strands_code_cli.cost import live_pricing\n"
+            "from strands_code_cli.entry.first_run import has_google_credentials\n"
+            "live_pricing.litellm_entry('google/gemini-3.8-flash')\n"
+            "leaked = [k for k in ('GEMINI_API_KEY', 'GOOGLE_GEMINI_BASE_URL', 'ANTHROPIC_BASE_URL', 'STRANDS_BOX') if k in os.environ]\n"
+            "assert not leaked, f'leaked .env keys: {leaked}'\n"
+            "assert has_google_credentials() is False\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=str(tmp_path),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+
+    def test_explicit_dotenv_path_still_delegates(self, tmp_path, monkeypatch):
+        import os
+
+        import dotenv
+
+        from strands_code_cli.entry.first_run import disable_cwd_dotenv
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("STRANDS_TEST_DOTENV_GUARD", raising=False)
+        monkeypatch.delenv("STRANDS_TEST_DOTENV_EXPLICIT", raising=False)
+        (tmp_path / ".env").write_text(
+            "STRANDS_TEST_DOTENV_GUARD=from_cwd\n", encoding="utf-8"
+        )
+        explicit = tmp_path / "explicit.env"
+        explicit.write_text(
+            "STRANDS_TEST_DOTENV_EXPLICIT=from_explicit\n", encoding="utf-8"
+        )
+
+        disable_cwd_dotenv()
+        assert dotenv.load_dotenv() is False
+        assert "STRANDS_TEST_DOTENV_GUARD" not in os.environ
+
+        assert dotenv.load_dotenv(dotenv_path=explicit) is True
+        assert os.environ.get("STRANDS_TEST_DOTENV_EXPLICIT") == "from_explicit"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from typing import Any
 
 import typer
 
@@ -76,6 +77,39 @@ def has_google_credentials() -> bool:
     if _is_truthy("GOOGLE_GENAI_USE_VERTEXAI"):
         return not has_key and _nonempty("GOOGLE_CLOUD_PROJECT")
     return has_key
+
+
+def disable_cwd_dotenv() -> None:
+    """Block implicit CWD .env auto-loading in third-party dependencies (T-14-02).
+
+    ``smolagents.remote_executors`` and ``litellm._process_defaults`` invoke
+    ``dotenv.load_dotenv()`` on import, letting an untrusted repository ``.env``
+    populate credential and endpoint env vars silently into ``os.environ``.
+    Explicit ``dotenv_path`` or ``stream`` loads still delegate normally.
+    """
+    try:
+        import dotenv
+        import dotenv.main as dotenv_main
+    except ImportError:
+        return
+
+    original = dotenv_main.load_dotenv
+    if getattr(original, "_strands_code_cwd_guarded", False):
+        return
+
+    def _guarded_load_dotenv(
+        dotenv_path: Any = None,
+        stream: Any = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> bool:
+        if dotenv_path is None and stream is None:
+            return False
+        return bool(original(dotenv_path, stream, *args, **kwargs))
+
+    _guarded_load_dotenv._strands_code_cwd_guarded = True  # type: ignore[attr-defined]
+    dotenv.load_dotenv = _guarded_load_dotenv
+    dotenv_main.load_dotenv = _guarded_load_dotenv
 
 
 def _provider_of(model: str) -> str:
