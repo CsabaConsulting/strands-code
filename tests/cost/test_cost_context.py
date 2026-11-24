@@ -1262,3 +1262,26 @@ class TestCacheAwareUsageAndCost:
             }
         ]
         assert estimate_messages_tokens(malformed) == 0
+
+    def test_gpt_62_static_pricing_cache_rates_and_window(self, monkeypatch):
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(live_pricing, "litellm_entry", lambda _id: None)
+        assert cost_context.price_for("openai/gpt-6.2-sol") == (2.00, 10.00)
+        assert cost_context.price_for("openai/gpt-6.2-astra") == (8.00, 40.00)
+        assert cost_context.cache_prices_for("openai/gpt-6.2-sol") == (
+            2.00,
+            0.10,
+            2.00,
+            10.00,
+        )
+        assert cost_context.cache_prices_for("openai/gpt-6.2-astra") == (
+            8.00,
+            0.40,
+            8.00,
+            40.00,
+        )
+        assert window_for("openai/gpt-6.2-sol") == 1_050_000
+        assert window_for("openai/gpt-6.2-astra") == 1_050_000
+        assert cost_for(
+            1_000_000, 100_000, "openai/gpt-6.2-sol", cache_read_tokens=500_000
+        ) == pytest.approx(2.05)

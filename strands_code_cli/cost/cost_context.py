@@ -41,6 +41,8 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     "gpt-6-luna": (0.10, 0.50),
     "gpt-6.1-terra": (1.00, 5.00),
     "gpt-6.1-sol": (2.00, 10.00),
+    "gpt-6.2-sol": (2.00, 10.00),
+    "gpt-6.2-astra": (8.00, 40.00),
     "gpt-6-astra": (10.00, 50.00),
     "o3": (2.00, 8.00),
     "o4-mini": (1.10, 4.40),
@@ -97,6 +99,7 @@ MODEL_LIMITS: dict[str, int] = {
     "gpt-5.6-": 1_050_000,
     "gpt-6-": 1_050_000,
     "gpt-6.1-": 1_050_000,
+    "gpt-6.2-": 1_050_000,
     "o3": 200_000,
     "o4-mini": 200_000,
     "gemini-2.5-flash-lite": 1_048_576,
@@ -309,6 +312,8 @@ def _default_cache_rates(model_id: str, in_rate: float) -> tuple[float, float]:
         return (in_rate * 0.10, in_rate * 1.25)
     if "gpt-4o" in lowered:
         return (in_rate * 0.50, in_rate)
+    if "gpt-6.2-" in lowered:
+        return (in_rate * 0.05, in_rate)
     if any(key in lowered for key in ("o1", "o3", "o4-", "gpt-4.1")):
         return (in_rate * 0.25, in_rate)
     return (in_rate * 0.10, in_rate)

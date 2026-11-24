@@ -600,6 +600,8 @@ def _discover_google_models() -> tuple[list[str], bool]:
 
 
 CURATED_OPENAI_MODELS: tuple[str, ...] = (
+    "openai/gpt-6.2-sol",
+    "openai/gpt-6.2-astra",
     "openai/gpt-6.1-sol",
     "openai/gpt-6.1-terra",
     "openai/gpt-6-astra",
@@ -1093,7 +1095,7 @@ def _target_openai_effort(base_key: str, effort: str) -> str | None:
     ):
         if low in ("xhigh", "max"):
             return "high"
-    elif base_key.startswith(("gpt-6-astra", "gpt-6.1-sol")):
+    elif base_key.startswith(("gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-")):
         if low == "minimal":
             return "low"
     return None
@@ -1119,14 +1121,42 @@ def _openai_reasoning_params(
     return {**params, "reasoning": {**reasoning, "effort": mapped}}
 
 
+def _gpt_62_model_info_fallback(base_key: str, config: dict[str, Any]) -> Any:
+    """Retireable model_info bridge for gpt-6.2-* until strands-agents ships it."""
+    if not base_key.startswith(("gpt-6.2-sol", "gpt-6.2-astra")):
+        return None
+    if config.get("model_info") is not None:
+        return None
+    try:
+        from strands.models._model_info import (
+            ModelCapabilities,
+            ModelInfo,
+            ModelLimits,
+            lookup_model_info,
+        )
+    except ImportError:
+        return None
+    if lookup_model_info(base_key).limits.context_window is not None:
+        return None
+    return ModelInfo(
+        capabilities=ModelCapabilities(prompt_caching="cache_points"),
+        limits=ModelLimits(
+            context_window=1_050_000,
+            max_output_tokens=128_000,
+        ),
+    )
+
+
 def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
-    """Strip/clamp unsupported ``params['reasoning']`` on native OpenAI models.
+    """Apply OpenAI compatibility guards and retireable GPT-6.2 metadata bridge.
 
     ``strands_harness.models._openai()`` emits ``reasoning.effort='high'``
     unconditionally on OpenAI models and passes routed effort strings verbatim;
     non-reasoning models (``gpt-4o``, ``gpt-4.1*``) and effort-subset models
     (``o1``/``o3``/``o4-mini``, ``gpt-5``..``gpt-5.2``, ``gpt-6-astra``,
-    ``gpt-6.1-sol``) reject unsupported values on the Responses API.
+    ``gpt-6.1-sol``, ``gpt-6.2-*``) reject unsupported values on the Responses
+    API. Also bridges ``model_info`` for ``gpt-6.2-*`` when the installed SDK
+    lacks it yet.
     """
     if not model_id or resolved is None:
         return resolved
@@ -1138,16 +1168,22 @@ def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
     config = _read_model_config(resolved)
     if config is None:
         return resolved
+    base_key = _base_key(normalized).lower()
+    updates: dict[str, Any] = {}
     params = config.get("params")
-    if not isinstance(params, dict):
-        return resolved
-    updated_params = _openai_reasoning_params(_base_key(normalized).lower(), params)
-    if updated_params is None:
+    if isinstance(params, dict):
+        updated_params = _openai_reasoning_params(base_key, params)
+        if updated_params is not None:
+            updates["params"] = updated_params
+    fallback_info = _gpt_62_model_info_fallback(base_key, config)
+    if fallback_info is not None:
+        updates["model_info"] = fallback_info
+    if not updates:
         return resolved
     update = getattr(resolved, "update_config", None)
     if callable(update):
         try:
-            update(params=updated_params)
+            update(**updates)
         except Exception:
             pass
     return resolved

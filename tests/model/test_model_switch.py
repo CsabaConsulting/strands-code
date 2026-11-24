@@ -3731,7 +3731,12 @@ class TestSameProviderSummaryAndOpenAIGuard:
             configure_openai_for_model(model_id, f_none)
             assert "reasoning" not in f_none.config["params"]
 
-        for model_id in ("openai/gpt-6-astra", "openai/gpt-6.1-sol"):
+        for model_id in (
+            "openai/gpt-6-astra",
+            "openai/gpt-6.1-sol",
+            "openai/gpt-6.2-sol",
+            "openai/gpt-6.2-astra",
+        ):
             f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
             configure_openai_for_model(model_id, f_min)
             assert f_min.config["params"]["reasoning"]["effort"] == "low"
@@ -3741,6 +3746,45 @@ class TestSameProviderSummaryAndOpenAIGuard:
             f_off = self._fake_openai({"reasoning": {"effort": "off"}})
             configure_openai_for_model(model_id, f_off)
             assert "reasoning" not in f_off.config["params"]
+
+    def test_configure_openai_for_model_gpt62_model_info_bridge(self, monkeypatch):
+        import strands.models._model_info as sdk_model_info
+        from strands.models.openai_responses import OpenAIResponsesModel
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_OPENAI_MODELS,
+            configure_openai_for_model,
+        )
+
+        assert "openai/gpt-6.2-sol" in CURATED_OPENAI_MODELS
+        assert "openai/gpt-6.2-astra" in CURATED_OPENAI_MODELS
+
+        real_model = OpenAIResponsesModel(
+            client_args={"api_key": "test"}, model_id="gpt-6.2-sol"
+        )
+        configure_openai_for_model("openai/gpt-6.2-sol", real_model)
+        assert real_model.context_window_limit == 1_050_000
+        assert real_model.model_info.limits.max_output_tokens == 128_000
+        assert real_model.model_info.capabilities.prompt_caching == "cache_points"
+
+        preserved_override = sdk_model_info.ModelInfo(
+            limits=sdk_model_info.ModelLimits(context_window=500_000)
+        )
+        fake_with_override = self._fake_openai({"reasoning": {"effort": "high"}})
+        fake_with_override.config["model_info"] = preserved_override
+        configure_openai_for_model("openai/gpt-6.2-sol", fake_with_override)
+        assert fake_with_override.config["model_info"] is preserved_override
+
+        monkeypatch.setattr(
+            sdk_model_info,
+            "lookup_model_info",
+            lambda _k: sdk_model_info.ModelInfo(
+                limits=sdk_model_info.ModelLimits(context_window=1_050_000)
+            ),
+        )
+        fake_upgraded = self._fake_openai({"reasoning": {"effort": "high"}})
+        configure_openai_for_model("openai/gpt-6.2-astra", fake_upgraded)
+        assert "model_info" not in fake_upgraded.config
 
     def test_configure_openai_for_model_fails_soft_and_wires_all_sites(
         self, monkeypatch, tmp_path
