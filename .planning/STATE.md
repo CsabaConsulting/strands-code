@@ -1,14 +1,14 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: 15
-current_phase_name: First-Class Native OpenAI & Anthropic APIs
-current_plan: 3
-status: passed
-stopped_at: Phase 15 verified + UAT + security + Nyquist validation complete (`15-VALIDATION.md` `validated`, `638bc2e`, `1694/1694` default suite + `42/42` rig green)
-last_updated: "2026-11-24T08:12:30Z"
+current_phase: 16
+current_phase_name: First-Class Meta Model API (api.meta.ai / Muse) & Upstream Enablement
+current_plan: 0
+status: discussed
+stopped_at: Phase 16 discussion complete (16-CONTEXT.md & 16-DISCUSSION-LOG.md locked) — ready for /gsd-plan-phase 16
+last_updated: "2026-11-24T08:40:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed Phase 15 Nyquist branch validation (`15-VALIDATION.md` `validated`, `1694/1694` default suite green at `638bc2e`)
+last_activity_desc: Completed /gsd-discuss-phase 16 (locked D-01..D-08 incl. 1.66.0/0.5.0 resync & gpt-6.2-sol default bump)
 state_head: 638bc2e
 progress:
   total_phases: 9
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 15 — First-Class Native OpenAI & Anthropic APIs (`MODEL-07`, `MODEL-08`)
+**Current focus:** Milestone `v2.0` · Phase 16 — First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement (`MODEL-09`)
 
 ## Current Position
 
-Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Complete (`15-VERIFICATION.md` `8/8`, `15-UAT.md` `6/6`, `15-SECURITY.md` `10/10`, `15-VALIDATION.md` `validated`)
-Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`, `fa51c2d`, `8368ddb`, `638bc2e`)
-Status: Complete + Validated (`nyquist_compliant: true`, `threats_open: 0`, `1694/1694` default suite + `42/42` rig, live `o1`/`an1`/`gpt-6.2-sol`/discovery/thinking/guard PASS, upstream `#6521` & `#6522` filed)
-Last activity: 2026-11-24 — Filled Phase 15 Nyquist branch coverage (`638bc2e`) and marked `15-VALIDATION.md` `validated`
+Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Context locked (`16-CONTEXT.md` `D-01`–`D-08`)
+Plan: 0 of 0 planned yet in Phase 16
+Status: Discussed (ready for `/gsd-plan-phase 16`)
+Last activity: 2026-11-24 — Locked Phase 16 architectural decisions (`16-CONTEXT.md` & `16-DISCUSSION-LOG.md`)
 
 Progress: [███░░░░░░░] 33%
 
@@ -59,10 +59,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 15 UAT & GPT-6.2 bridge (`fa51c2d`, `15-UAT.md` `6/6 PASS`): added `gpt-6.2-sol` (\$2/\$10/\$0.10) & `gpt-6.2-astra` (\$8/\$40/\$0.40) pricing, `1.05M` window, effort guard, and retireable `model_info` bridge while keeping `openai/gpt-6.1-sol` as the ambient default until an intentional upstream resync to `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (which ships `#6265` GPT-6.2 `model-info` and `#6396` Responses system-prompt caching fix).
 - Phase 15 security audit (`8368ddb`, `15-SECURITY.md` `10/10 closed`): closed `T-15-02` (scoped `base_url` by `_base_url_provider` across `build_agent`, `_root`, `apply_switch`, `_route_side_spawn`, `build_btw_agent`, and `ProviderConfig.save_model_choice()`), `T-15-03` (strict `_validate_base_url()`, `0o600` temp-symlink-safe config write, and OpenAI `sk-(?:proj-|svcacct-)?` redaction in `scrub_credentials()`), and `T-15-04` (`_ISO_DATE_RE` sanitization in `route_label()` + symlink-refusing `0o600` atomic cache helpers in `live_pricing.py`).
 - Phase 15 Nyquist validation (`638bc2e`, `15-VALIDATION.md` `validated`): filled remaining branch tests across `entry/`, `cost/`, and `model/` (`1694/1694` default suite + `42/42` rig green).
+- Phase 16 discussion (`16-CONTEXT.md` `D-01`–`D-08`): locked ambient default `meta/muse-spark-1.3-contributor` ordered `Google -> Anthropic -> OpenAI -> Meta -> OpenRouter -> Bedrock`, `meta` optional extra alias + `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL`, live `api.meta.ai/v1` probe + retireable `meta/` adapter + live `driver.py m1` UAT, folded `strands-agents>=1.66.0` / `strands-harness>=0.5.0` upstream resync retiring `_gpt_62_model_info_fallback()` and bumping OpenAI ambient default to `openai/gpt-6.2-sol`, `_MEDIA_LESS` Bedrock Llama scoping, cache-aware contributor `/cost`, and held `docs/upstream/harness_comment_6521_meta_probe.md` draft for `#6521`.
 
 ### Pending Todos
 
-- Optionally resync `strands-agents>=1.66.0` / `strands-harness>=0.5.0` (to retire the `gpt-6.2` bridge and bump the ambient default to `openai/gpt-6.2-sol`), then advance to Phase 16 (`MODEL-09` Meta Model API `#21`).
+- Run `/gsd-plan-phase 16` (`MODEL-09` Meta Model API `#21` + folded `1.66.0`/`0.5.0` upstream resync), starting with the live empirical `api.meta.ai/v1` protocol probe using `MODEL_API_KEY` from `.env`.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521`, and `#6522` (plus `#6480`–`#6484`).
 
 ### Blockers/Concerns
@@ -75,6 +76,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T08:12:30Z
-Stopped at: Phase 15 verified + UAT + security + Nyquist validation complete (`15-VALIDATION.md` `validated`, `638bc2e`, `1694/1694` default suite + `42/42` rig green) — ready for `/gsd-discuss-phase 16` or `1.66.0`/`0.5.0` upstream resync
-Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-VALIDATION.md
+Last session: 2026-11-24T08:40:00Z
+Stopped at: Phase 16 discussion complete (`16-CONTEXT.md` & `16-DISCUSSION-LOG.md` locked) — ready for `/gsd-plan-phase 16`
+Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-CONTEXT.md

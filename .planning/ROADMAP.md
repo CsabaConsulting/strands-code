@@ -101,11 +101,12 @@ Plans:
 **Goal**: Deliver first-class support for Meta's Model API (`https://api.meta.ai/v1` — Muse Wonder, Muse Spark, contributor tiers, and Muse Ember) while driving upstream `meta/` provider & Muse `model_info.json` enablement in `strands-agents/harness-sdk`
 **Depends on**: Phase 15
 **Requirements**: `MODEL-09`
-**Tracks**: `CsabaConsulting/strands-code#21`, `docs/upstream/harness_issue_meta_model_api.md`
+**Tracks**: `CsabaConsulting/strands-code#21`, `strands-agents/harness-sdk#6521`, `docs/upstream/harness_issue_meta_model_api.md`
 **Success Criteria** (what must be TRUE):
-  1. An empirical live probe validates `https://api.meta.ai/v1` (`/v1/responses` vs `/v1/messages`, `prompt_cache_key`/`prompt_cache_options` tolerance, encrypted reasoning replay, `GET /v1/models`), and the upstream feature proposal (`docs/upstream/harness_issue_meta_model_api.md`) for a Harness `meta/` provider + `shared/model-info.json` Muse entries + `#3389` encrypted reasoning replay is coordinated on `strands-agents/harness-sdk`
-  2. `strands-code` ships a thin, retireable `meta/` adapter backed by `OpenAIResponsesModel` (`https://api.meta.ai/v1`), Box-compatible `MODEL_API_KEY` zero-AWS preflight, credential-gated `GET /v1/models` discovery with `("meta", "muse")` grouping, and scoped `_MEDIA_LESS` rules so multimodal Muse Spark / Muse Wonder retain image/media support while Bedrock Llama remains protected
-  3. Cache-aware `/cost` resolves `meta/muse-*` cached/uncached rates (LiteLLM bundled + static fallbacks including `muse-ember-1.0` & `-contributor` 50× cached discount) and 1M context windows, backed by a repeatable `scripts/uattest/` scenario and `docs/QUICKSTART.md` guide
+  1. An empirical live probe validates `https://api.meta.ai/v1` (`/v1/responses` vs `/v1/messages`, `prompt_cache_key`/`prompt_cache_options` tolerance, encrypted reasoning replay, `GET /v1/models`), and a held follow-up empirical probe comment (`docs/upstream/harness_comment_6521_meta_probe.md`) is drafted for human review before posting to `strands-agents/harness-sdk#6521`
+  2. `strands-code` ships a thin, retireable `meta/` adapter backed by `OpenAIResponsesModel` (`https://api.meta.ai/v1`), `meta` extra + `_SDK_EXTRA_HINTS["meta"]`, Box-compatible `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL` zero-AWS preflight (`meta/muse-spark-1.3-contributor` ambient default ordered `Google -> Anthropic -> OpenAI -> Meta -> OpenRouter -> Bedrock`), credential-gated `GET /v1/models` discovery with `("meta", "muse")` grouping, and scoped `_MEDIA_LESS` rules so multimodal Muse retains media support while Bedrock Llama remains protected
+  3. Cache-aware `/cost` resolves `meta/muse-*` cached/uncached rates (LiteLLM bundled + static fallbacks including `muse-ember-1.0` & `-contributor` 50× cached discount) and 1M context windows, backed by a repeatable `scripts/uattest/` (`driver.py m1`) live UAT scenario and `docs/QUICKSTART.md` guide
+  4. `pyproject.toml` and `uv.lock` resync onto `strands-agents>=1.66.0` and `strands-harness>=0.5.0` (no upper pins), retiring `_gpt_62_model_info_fallback()` cleanly, bumping OpenAI ambient default to `openai/gpt-6.2-sol`, and adapting any upstream `1.66.0`/`0.5.0` behavior changes with all CI gates green
 
 **Plans**: TBD
 
@@ -179,7 +180,7 @@ Plans:
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 0/0 | Not started | - |
+| 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 0/0 | Discussed | - |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
