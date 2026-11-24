@@ -901,6 +901,24 @@ class TestBuildBtwAgent:
         assert model_id_of(meta_model, "?") == "meta/muse-spark-1.3-contributor"
         assert meta_model.client_args["base_url"] == "https://meta-proxy.local/v1"
 
+        fresh_meta = build_meta_model("meta/muse-ember-1.0")
+        monkeypatch.setattr(
+            btw_mod, "create_harness", lambda **_kw: SimpleNamespace(model=fresh_meta)
+        )
+        build_btw_agent(
+            {
+                "model": fresh_meta,
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+                "_base_url": "https://openai-proxy.local/v1",
+                "_base_url_provider": "openai",
+            },
+            [],
+            "foreign base_url ignored?",
+        )
+        assert fresh_meta.client_args["base_url"] == "https://api.meta.ai/v1"
+
 
 def _idle_btw(**overrides):
     """BtwContext double with a real BtwQueue (submit/echo tests)."""

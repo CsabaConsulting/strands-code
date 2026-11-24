@@ -231,6 +231,25 @@ class TestPreflightGate:
             is None
         )
 
+    def test_explicit_meta_validates_meta_base_url_unless_explicit_base_url(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("MODEL_API_KEY", "k-meta")
+        monkeypatch.setenv("META_BASE_URL", "ftp://bad.example/v1")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(model="meta/muse-wonder-1.0", probe=lambda: None)
+        assert exc_info.value.exit_code == 2
+        assert "META_BASE_URL" in capsys.readouterr().err
+
+        assert (
+            preflight_credentials(
+                model="meta/muse-wonder-1.0",
+                base_url="https://proxy.example/v1",
+                probe=lambda: None,
+            )
+            is None
+        )
+
     def test_has_openai_and_anthropic_credentials_presence_only(self, monkeypatch):
         assert has_openai_credentials({}) is False
         assert has_openai_credentials({"OPENAI_API_KEY": "   "}) is False

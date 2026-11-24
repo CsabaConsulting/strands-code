@@ -4618,3 +4618,166 @@ class TestMetaModelAdapter:
                 configure_base_url_for_model(
                     "meta/muse-spark-1.3", stub, base_url=bad_url
                 )
+
+    def test_meta_discovery_effort_and_model_config_edge_branches(self, monkeypatch):
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_META_MODELS,
+            _discover_meta_models,
+            _is_meta_chat_model,
+            _normalize_meta_effort,
+            build_meta_model,
+            upstream_supports_meta,
+        )
+
+        # _is_meta_chat_model edge inputs
+        for bad_id in (None, "", "   ", "llama-3.3", "muse-spark\x7f", "muse-spark\t1"):
+            assert _is_meta_chat_model(bad_id) is False  # type: ignore[arg-type]
+        assert _is_meta_chat_model("  muse-spark-1.3  ") is True
+
+        # _normalize_meta_effort edge inputs
+        assert _normalize_meta_effort("auto") == "high"
+        assert _normalize_meta_effort("  MINIMAL  ") == "minimal"
+        assert _normalize_meta_effort("ultra") == "high"
+
+        # _discover_meta_models fallback paths (all filtered or RuntimeError)
+        monkeypatch.setenv("MODEL_API_KEY", "k-meta")
+
+        class _OnlyFilteredClient:
+            def __init__(self, **_kw):
+                self.models = SimpleNamespace(
+                    list=lambda: iter(
+                        [
+                            SimpleNamespace(id="muse-image-1.0"),
+                            SimpleNamespace(id="sam-3.1"),
+                        ]
+                    )
+                )
+
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = _OnlyFilteredClient
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+        assert _discover_meta_models() == (list(CURATED_META_MODELS), False)
+
+        class _BoomClient:
+            def __init__(self, **_kw):
+                self.models = SimpleNamespace(
+                    list=lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+                )
+
+        fake_openai.OpenAI = _BoomClient
+        assert _discover_meta_models() == (list(CURATED_META_MODELS), False)
+
+        # upstream_supports_meta ImportError fallback
+        monkeypatch.delitem(sys.modules, "strands_harness.models", raising=False)
+        monkeypatch.setitem(sys.modules, "strands_harness.models", None)
+        assert upstream_supports_meta() is False
+        monkeypatch.setitem(sys.modules, "strands_harness.models", harness_models)
+
+        # build_meta_model edge inputs and optional kwargs disabled
+        import openai as real_openai
+        import pytest
+
+        monkeypatch.setitem(sys.modules, "openai", real_openai)
+        for bad_ref in ("openai/gpt-6.2-sol", "meta/", "meta/   "):
+            with pytest.raises(ValueError):
+                build_meta_model(bad_ref)
+
+        bare_meta = build_meta_model(
+            "meta/muse-ember-1.0", effort="none", web_search=False, caching=False
+        )
+        bare_cfg = bare_meta.get_config()
+        assert not bare_cfg.get("params")
+        assert bare_cfg.get("cache_config") is None
+
+    def test_meta_base_url_harness_web_search_and_entry_edge_branches(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        import strands_code_cli.entry.main as entry_main
+        from strands_code_cli.model.model_switch import (
+            configure_base_url_for_model,
+            resolve_harness_model,
+        )
+
+        # configure_base_url_for_model overwrites meta/ (stripped) vs preserves openai/
+        meta_stub = SimpleNamespace(
+            client_args={"base_url": "https://api.meta.ai/v1"},
+            _bedrock_mantle_config=None,
+        )
+        configure_base_url_for_model(
+            "meta/muse-spark-1.3", meta_stub, base_url="https://meta-proxy.local/v1/"
+        )
+        assert meta_stub.client_args["base_url"] == "https://meta-proxy.local/v1"
+
+        oai_stub = SimpleNamespace(
+            client_args={"base_url": "https://existing-oai.local/v1"},
+            _bedrock_mantle_config=None,
+        )
+        configure_base_url_for_model(
+            "openai/gpt-6.2-sol", oai_stub, base_url="https://new-oai.local/v1"
+        )
+        assert oai_stub.client_args["base_url"] == "https://existing-oai.local/v1"
+
+        # resolve_harness_model _web_search_kind gating (#5997)
+        calls: list[dict] = []
+        monkeypatch.setattr(harness_models, "supports_web_search", lambda _m: True)
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda _m, _d, **kw: calls.append(kw) or SimpleNamespace(kwargs=kw),
+        )
+        monkeypatch.setattr(
+            harness_models, "_web_search_kind", lambda _m: "agentcore", raising=False
+        )
+        resolve_harness_model("us.amazon.nova-2-lite-v1:0")
+        assert "web_search" not in calls[-1]
+
+        monkeypatch.setattr(
+            harness_models, "_web_search_kind", lambda _m: "native", raising=False
+        )
+        resolve_harness_model("openai/gpt-6.2-sol")
+        assert calls[-1]["web_search"] is True
+
+        monkeypatch.delattr(harness_models, "_web_search_kind", raising=False)
+        resolve_harness_model("openai/gpt-6.2-sol")
+        assert calls[-1]["web_search"] is True
+
+        # entry_main ImportError fallback & string model + base_url web_fetch pin
+        monkeypatch.setattr(
+            entry_main,
+            "build_meta_model",
+            lambda *_a, **_kw: (_ for _ in ()).throw(ImportError("missing openai")),
+        )
+        assert (
+            entry_main.model_for_config("meta/muse-spark-1.3-contributor")
+            == "meta/muse-spark-1.3-contributor"
+        )
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            entry_main,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=None),
+        )
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+        entry_main.build_agent(
+            "sess-meta-str",
+            tmp_path / "sess-meta-str",
+            model="meta/muse-spark-1.3-contributor",
+            base_url="https://meta-proxy.local/v1",
+        )
+        assert captured["builtin_tools"]["web_fetch"] == {
+            "model": "meta/muse-spark-1.3-contributor"
+        }

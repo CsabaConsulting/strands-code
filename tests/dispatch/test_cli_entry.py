@@ -533,3 +533,36 @@ class TestSdkHints:
             )
         assert action == "reply"
         assert "strands-code-agent[meta]" in message
+
+    def test_model_dispatch_meta_invalid_value_and_upstream_auto_retire(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        for bad_cmd in ("/model meta/", "/model meta/muse-spark\x1b[31m"):
+            action, msg = dispatch(
+                bad_cmd,
+                session_id=index.mint(),
+                index=index,
+            )
+            assert action == "reply"
+            assert "Unknown model" in msg
+
+        with (
+            patch(
+                "strands_code_cli.model.model_switch.upstream_supports_meta",
+                return_value=True,
+            ),
+            patch(
+                "strands_code_cli.model.model_switch.build_meta_model",
+                side_effect=AssertionError("must delegate to resolve_model"),
+            ),
+            patch(
+                "strands_harness.models.resolve_model",
+                return_value=object(),
+            ) as mock_resolve,
+        ):
+            action, value = dispatch(
+                "/model meta/muse-spark-1.3-contributor",
+                session_id=index.mint(),
+                index=index,
+            )
+        assert (action, value) == ("model", "meta/muse-spark-1.3-contributor")
+        mock_resolve.assert_called_once()

@@ -921,6 +921,11 @@ class TestOpenAIAnthropicLivePricing:
         assert keys[0] == "meta/muse-spark-1.3-contributor"
         assert "bedrock/meta/muse-spark-1.3-contributor" not in keys
         assert "meta/muse-ember-1.0" in live_pricing._litellm_keys("muse-ember-1.0")
+        assert live_pricing._litellm_keys("meta/muse-spark-1.3") == [
+            "meta/muse-spark-1.3",
+            "muse-spark-1.3",
+        ]
+        assert "meta/muse-spark-1.3" in live_pricing._litellm_keys("muse-spark-1.3")
 
         contrib = live_pricing.litellm_entry("meta/muse-spark-1.3-contributor")
         assert contrib is not None

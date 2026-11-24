@@ -1451,3 +1451,15 @@ class TestCacheAwareUsageAndCost:
         assert "LLM|1607" not in scrubbed
         assert "AbCd+EfGh/IjKl==" not in scrubbed
         assert "SecretToken123456" not in scrubbed
+
+    def test_meta_muse_additional_tier_pricing_and_cache_rates(self, monkeypatch):
+        monkeypatch.setattr(live_pricing, "openrouter_entry", lambda _id: None)
+        monkeypatch.setattr(live_pricing, "litellm_entry", lambda _id: None)
+        assert cost_context.price_for("meta/muse-spark-1.2-contributor") == (0.10, 0.20)
+        assert cost_context.price_for("meta/muse-spark-1.1") == (1.25, 4.25)
+        assert cost_context.cache_prices_for(
+            "meta/muse-spark-1.2-contributor"
+        ) == pytest.approx((0.10, 0.002, 0.10, 0.20))
+        assert cost_context.cache_prices_for("meta/muse-spark-1.1") == pytest.approx(
+            (1.25, 0.15, 1.25, 4.25)
+        )
