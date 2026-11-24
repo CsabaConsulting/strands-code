@@ -64,10 +64,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 16 UAT & `#6521` update (`1e07618`, `aab271f`, `2247b47`, `16-UAT.md` `6/6` passed): merged empirical probe findings into `docs/upstream/harness_issue_meta_model_api.md`, updated `strands-agents/harness-sdk#6521` title and body in place (`0` comments), and completed `16-UAT.md` (`6/6` passed).
 - Phase 16 security audit (`4d32cbc`, `16-SECURITY.md` `10/10 closed`, `threats_open: 0`): closed `T-16-02` (isolated Meta `OpenAIResponsesModel` / discovery client args via `_meta_openai_client_args()` overriding `OPENAI_API_KEY`/`OPENAI_ADMIN_KEY`/`OPENAI_ORG_ID`/`OPENAI_PROJECT_ID`/`OPENAI_WEBHOOK_SECRET`/`OpenAI-*` headers), `T-16-03` (`_validate_base_url()` in `configure_base_url_for_model()`, `_has_unsafe_model_chars()` guard on Meta IDs, and `timeout=5.0, max_retries=0` on discovery), and `T-16-04` (widened `LLM_...`/`LLM|...` scrubbing regex + `MODEL_API_KEY` canary isolation test).
 - Phase 16 Nyquist validation (`16-VALIDATION.md` `validated`, `nyquist_compliant: true`): closed 12 edge branches across `tests/model/`, `tests/entry/`, `tests/dispatch/`, `tests/cost/`, and `tests/loop/` (`1711/1711` default suite + `44/44` rig green, zero runtime edits).
+- Phase 17 discussion (`17-CONTEXT.md` `D-01`–`D-07`): converged `native` onto upstream `TypeSafeDecisionModel` (`state: str` + folded `Question["question"]`), `openrouter` & `local` onto CLI `DecisionModel` subclasses (`OpenRouterDecisionModel`, `OllamaDecisionModel`) in `routing/transports.py`, wired config-only opt-in `"decisions_api"` (`DecisionsAPIDecisionModel` / `JEV_API_KEY`) and `"llm"` (`LLMDecisionModel` / `uncertainty=True` hold on `Uncertain` / `cost_for()`), async-to-sync bridge + per-call `httpx.AsyncClient(timeout=10s)`, preserving `0.62`/`0.04` gating, two-call routing, `apply_model_action`, `/cost` actuals, and offline + opportunistic live verification.
 
 ### Pending Todos
 
-- Phase 16 (`MODEL-09`) fully signed off (`16-UAT.md` `6/6`, `16-SECURITY.md` `10/10`, `16-VALIDATION.md` `validated`); advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
+- Run `/gsd-plan-phase 17` to plan `UPSTREAM-02` (`DecisionModel` convergence across `routing/transports.py` & `routing/core.py`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -80,6 +81,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T20:21:10Z
-Stopped at: Phase 16 complete + UAT (`6/6`), security (`10/10`), & Nyquist (`validated`, `1711/1711` default suite + `44/44` rig green) — ready for `/gsd-discuss-phase 17`
-Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-VALIDATION.md
+Last session: 2026-11-24T21:08:10Z
+Stopped at: Phase 17 discussed (`17-CONTEXT.md` `D-01`–`D-07`, `17-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 17`
+Resume file: .planning/phases/17-decision-routing-convergence-decisionmodel/17-CONTEXT.md

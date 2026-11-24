@@ -15,8 +15,8 @@
 
 - [x] **Phase 13: Upstream SDK & Harness Resync** — Lock `strands-agents >=1.65` & `strands-harness >=0.4`, retire `#5166`/`#5158` workarounds, adapt `InjectedBlock` & `Model.model_info`, enable non-streaming Bedrock Llama tools (completed 2026-11-21)
 - [x] **Phase 14: First-Class Google Gemini & Provider-Aware Startup** — `gemini` extra, Box-compatible provider-aware preflight, cross-provider `reasoningSignature` & `_vendor_family` fixes, `/model` Gemini discovery, `/cost` tables, AI Studio Ultra credit docs (completed 2026-11-22)
-- [ ] **Phase 15: First-Class Native OpenAI & Anthropic APIs** (`#17`, `#22`) — `openai` & `anthropic` extras, cache-aware `/cost` & context `%`, `caching`/`web_search` switch preservation, live `/v1/models` discovery & Anthropic metadata cache, API mannerisms, UAT & docs
-- [ ] **Phase 16: First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement** (`#21`) — Live `/v1/responses` vs `/v1/messages` probe, upstream `strands-agents/harness-sdk` `meta/` proposal, thin `meta/` adapter, `MODEL_API_KEY` preflight, `/model` discovery, multimodal `_MEDIA_LESS` fix & contributor cache `/cost`
+- [x] **Phase 15: First-Class Native OpenAI & Anthropic APIs** (`#17`, `#22`) — `openai` & `anthropic` extras, cache-aware `/cost` & context `%`, `caching`/`web_search` switch preservation, live `/v1/models` discovery & Anthropic metadata cache, API mannerisms, UAT & docs
+- [x] **Phase 16: First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement** (`#21`) — Live `/v1/responses` vs `/v1/messages` probe, upstream `strands-agents/harness-sdk` `meta/` proposal, thin `meta/` adapter, `MODEL_API_KEY` preflight, `/model` discovery, multimodal `_MEDIA_LESS` fix & contributor cache `/cost`
 - [ ] **Phase 17: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [ ] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards
 - [ ] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 7-provider egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs
@@ -194,7 +194,7 @@ Plans:
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
+| 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Discussed (`17-CONTEXT.md`) | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
 | 20. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
