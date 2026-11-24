@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v2.0
 current_phase: 16
 current_phase_name: First-Class Meta Model API (api.meta.ai / Muse) & Upstream Enablement
-current_plan: 0
-status: planned
-stopped_at: Phase 16 planned (16-RESEARCH.md, 16-PATTERNS.md, 16-01..03-PLAN.md, 16-PLAN-CHECK.md PASS) — ready for /gsd-execute-phase 16
-last_updated: "2026-11-24T09:03:00Z"
+current_plan: 3
+status: passed
+stopped_at: Phase 16 complete + verified (`16-VERIFICATION.md` 7/7, `44b9aa4`, live `m1` M1 PASS, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-verify-work 16` or `/gsd-discuss-phase 17`
+last_updated: "2026-11-24T09:40:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed /gsd-plan-phase 16 (live api.meta.ai/v1 probe + 3-wave plan + 16-PLAN-CHECK.md PASS)
-state_head: a64f83c
+last_activity_desc: Executed & verified Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`, `1705/1705` suite + live `driver.py m1` PASS)
+state_head: 44b9aa4
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 11
 ---
 
 # Project State
@@ -28,17 +28,17 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Planned (`16-01`..`16-03` across Waves 1–3, `16-PLAN-CHECK.md` `PASS`)
-Plan: 0 of 3 planned in Phase 16
-Status: Planned (ready for `/gsd-execute-phase 16`)
-Last activity: 2026-11-24 — Researched live `api.meta.ai/v1` protocol + planned Phase 16 (`16-01`..`16-03-PLAN.md`, `16-PLAN-CHECK.md` `PASS`)
+Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Complete (`16-VERIFICATION.md` `7/7`, live `m1` `M1 PASS`)
+Plan: 3 of 3 complete in Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`)
+Status: Passed (`1705/1705` default suite + `44/44` rig + live `m1` `M1 PASS` + live Meta discovery 7 models)
+Last activity: 2026-11-24 — Executed & verified Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`)
 
-Progress: [███░░░░░░░] 33%
+Progress: [████░░░░░░] 44%
 
 ## Performance Metrics
 
 - `v1.0` shipped 2026-10-16: 12 phases, 41 plans, 129 tasks ([v1.0 Archive](.planning/MILESTONES.md))
-- `v2.0` active: 3/9 phases complete (Phases 13–15 done; Phases 16–21 queued)
+- `v2.0` active: 4/9 phases complete (Phases 13–16 done; Phases 17–21 queued)
 
 ## Accumulated Context
 
@@ -60,11 +60,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 15 security audit (`8368ddb`, `15-SECURITY.md` `10/10 closed`): closed `T-15-02` (scoped `base_url` by `_base_url_provider` across `build_agent`, `_root`, `apply_switch`, `_route_side_spawn`, `build_btw_agent`, and `ProviderConfig.save_model_choice()`), `T-15-03` (strict `_validate_base_url()`, `0o600` temp-symlink-safe config write, and OpenAI `sk-(?:proj-|svcacct-)?` redaction in `scrub_credentials()`), and `T-15-04` (`_ISO_DATE_RE` sanitization in `route_label()` + symlink-refusing `0o600` atomic cache helpers in `live_pricing.py`).
 - Phase 15 Nyquist validation (`638bc2e`, `15-VALIDATION.md` `validated`): filled remaining branch tests across `entry/`, `cost/`, and `model/` (`1694/1694` default suite + `42/42` rig green).
 - Phase 16 discussion (`16-CONTEXT.md` `D-01`–`D-08`): locked ambient default `meta/muse-spark-1.3-contributor` ordered `Google -> Anthropic -> OpenAI -> Meta -> OpenRouter -> Bedrock`, `meta` optional extra alias + `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL`, live `api.meta.ai/v1` probe + retireable `meta/` adapter + live `driver.py m1` UAT, folded `strands-agents>=1.66.0` / `strands-harness>=0.5.0` upstream resync retiring `_gpt_62_model_info_fallback()` and bumping OpenAI ambient default to `openai/gpt-6.2-sol`, `_MEDIA_LESS` Bedrock Llama scoping, cache-aware contributor `/cost`, and held `docs/upstream/harness_comment_6521_meta_probe.md` draft for `#6521`.
+- Phase 16 (`cc99d5a`, `4857960`, `44b9aa4`): resynced to `strands-agents==1.66.0` & `strands-harness==0.5.0` (retired `_gpt_62_model_info_fallback()`, gated native `web_search` on `_web_search_kind == "native"`, adapted Claude-on-Bedrock `AnthropicModel(AsyncAnthropicBedrock)` tests, bumped OpenAI default to `openai/gpt-6.2-sol`); added `meta` extra + `_SDK_EXTRA_HINTS["meta"]` + `first_run` helpers + auto-retiring `build_meta_model()` (`CacheConfig()`, `prompt_caching="auto"`, omitted `reasoning` on `"none"`/`"off"`, `_strands_model_ref`); narrowed `_MEDIA_LESS` for multimodal Muse + added filtered `GET /v1/models` Meta discovery (`("meta", "muse")` grouping), LiteLLM/static `muse-ember-1.0` & 50× contributor pricing + `LLM_...`/`LLM|...` scrubbing, repeatable `driver.py m1` (`M1 PASS`), `docs/QUICKSTART.md` guide, and held `docs/upstream/harness_comment_6521_meta_probe.md`.
 
 ### Pending Todos
 
-- Run `/gsd-execute-phase 16` (`16-01`..`16-03` across Waves 1–3, starting with `16-01` tracer: upstream `1.66.0`/`0.5.0` resync + `meta` extra/helpers + auto-retiring `meta/` adapter).
-- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521`, and `#6522` (plus `#6480`–`#6484`).
+- Run `/gsd-verify-work 16` / `/gsd-secure-phase 16` / `/gsd-validate-phase 16` to finish Phase 16 UAT, security & Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
+- Review and optionally post held `docs/upstream/harness_comment_6521_meta_probe.md` to `strands-agents/harness-sdk#6521`; monitor `#6510`, `#6521`, and `#6522`.
 
 ### Blockers/Concerns
 
@@ -76,6 +77,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T09:02:00Z
-Stopped at: Phase 16 planned (16-RESEARCH.md, 16-PATTERNS.md, 16-01..03-PLAN.md, 16-PLAN-CHECK.md PASS) — ready for `/gsd-execute-phase 16`
-Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-01-PLAN.md
+Last session: 2026-11-24T09:40:00Z
+Stopped at: Phase 16 complete + verified (`16-VERIFICATION.md` 7/7, `44b9aa4`, live `m1` M1 PASS, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-verify-work 16` or `/gsd-discuss-phase 17`
+Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-VERIFICATION.md

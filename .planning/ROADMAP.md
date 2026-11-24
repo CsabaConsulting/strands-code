@@ -113,15 +113,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `16-01-PLAN.md` — Tracer: Upstream `1.66.0`/`0.5.0` resync (`_gpt_62_model_info_fallback` retired, `openai/gpt-6.2-sol` default), `meta` extra + `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL` helpers, and thin auto-retiring `meta/` adapter on `OpenAIResponsesModel`
+- [x] `16-01-PLAN.md` — Tracer: Upstream `1.66.0`/`0.5.0` resync (`_gpt_62_model_info_fallback` retired, `openai/gpt-6.2-sol` default), `meta` extra + `MODEL_API_KEY`/`META_API_KEY`/`META_BASE_URL` helpers, and thin auto-retiring `meta/` adapter on `OpenAIResponsesModel` (`cc99d5a`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `16-02-PLAN.md` — `_MEDIA_LESS` Bedrock Llama scoping for multimodal Muse, filtered Meta `GET /v1/models` discovery + `("meta", "muse")` grouping, LiteLLM/static `/cost` + 50× contributor caching & `LLM_...`/`LLM|...` key scrubbing
+- [x] `16-02-PLAN.md` — `_MEDIA_LESS` Bedrock Llama scoping for multimodal Muse, filtered Meta `GET /v1/models` discovery + `("meta", "muse")` grouping, LiteLLM/static `/cost` + 50× contributor caching & `LLM_...`/`LLM|...` key scrubbing (`4857960`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `16-03-PLAN.md` — Repeatable `driver.py m1` live UAT rig (`OPENAI_PRIMARY` → `gpt-6.2-sol`) + live `m1` run, `docs/QUICKSTART.md` guide, held `#6521` empirical probe comment draft & all 6 CI gates
+- [x] `16-03-PLAN.md` — Repeatable `driver.py m1` live UAT rig (`OPENAI_PRIMARY` → `gpt-6.2-sol`) + live `m1` run, `docs/QUICKSTART.md` guide, held `#6521` empirical probe comment draft & all 6 CI gates (`44b9aa4`)
 
 ### Phase 17: Decision Routing Convergence (`DecisionModel`)
 
@@ -193,7 +193,7 @@ Plans:
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 0/3 | Planned | - |
+| 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
