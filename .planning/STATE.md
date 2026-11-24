@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: 16
 current_phase_name: First-Class Meta Model API (api.meta.ai / Muse) & Upstream Enablement
 current_plan: 0
-status: discussed
-stopped_at: Phase 16 discussion complete (16-CONTEXT.md & 16-DISCUSSION-LOG.md locked) — ready for /gsd-plan-phase 16
-last_updated: "2026-11-24T08:40:00Z"
+status: planned
+stopped_at: Phase 16 planned (16-RESEARCH.md, 16-PATTERNS.md, 16-01..03-PLAN.md, 16-PLAN-CHECK.md PASS) — ready for /gsd-execute-phase 16
+last_updated: "2026-11-24T09:03:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed /gsd-discuss-phase 16 (locked D-01..D-08 incl. 1.66.0/0.5.0 resync & gpt-6.2-sol default bump)
-state_head: 638bc2e
+last_activity_desc: Completed /gsd-plan-phase 16 (live api.meta.ai/v1 probe + 3-wave plan + 16-PLAN-CHECK.md PASS)
+state_head: a64f83c
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 8
+  total_plans: 11
   completed_plans: 8
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Context locked (`16-CONTEXT.md` `D-01`–`D-08`)
-Plan: 0 of 0 planned yet in Phase 16
-Status: Discussed (ready for `/gsd-plan-phase 16`)
-Last activity: 2026-11-24 — Locked Phase 16 architectural decisions (`16-CONTEXT.md` & `16-DISCUSSION-LOG.md`)
+Phase: 16 of 21 (First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement) — Planned (`16-01`..`16-03` across Waves 1–3, `16-PLAN-CHECK.md` `PASS`)
+Plan: 0 of 3 planned in Phase 16
+Status: Planned (ready for `/gsd-execute-phase 16`)
+Last activity: 2026-11-24 — Researched live `api.meta.ai/v1` protocol + planned Phase 16 (`16-01`..`16-03-PLAN.md`, `16-PLAN-CHECK.md` `PASS`)
 
 Progress: [███░░░░░░░] 33%
 
@@ -63,7 +63,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 16` (`MODEL-09` Meta Model API `#21` + folded `1.66.0`/`0.5.0` upstream resync), starting with the live empirical `api.meta.ai/v1` protocol probe using `MODEL_API_KEY` from `.env`.
+- Run `/gsd-execute-phase 16` (`16-01`..`16-03` across Waves 1–3, starting with `16-01` tracer: upstream `1.66.0`/`0.5.0` resync + `meta` extra/helpers + auto-retiring `meta/` adapter).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521`, and `#6522` (plus `#6480`–`#6484`).
 
 ### Blockers/Concerns
@@ -76,6 +76,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T08:40:00Z
-Stopped at: Phase 16 discussion complete (`16-CONTEXT.md` & `16-DISCUSSION-LOG.md` locked) — ready for `/gsd-plan-phase 16`
-Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-CONTEXT.md
+Last session: 2026-11-24T09:02:00Z
+Stopped at: Phase 16 planned (16-RESEARCH.md, 16-PATTERNS.md, 16-01..03-PLAN.md, 16-PLAN-CHECK.md PASS) — ready for `/gsd-execute-phase 16`
+Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-01-PLAN.md
