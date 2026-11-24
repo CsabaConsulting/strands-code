@@ -30,6 +30,20 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
     # guides, canonical https://aws.amazon.com/bedrock/pricing. First
     # insertion-order hit wins (specific before family); unknown ids show
     # tokens without money.
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-fable-5-2": (3.00, 15.00),
+    "gpt-5.4": (2.50, 15.00),
+    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-5.6-terra": (2.00, 12.00),
+    "gpt-5.6-sol": (4.00, 20.00),
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-6.1-terra": (1.00, 5.00),
+    "gpt-6.1-sol": (2.00, 10.00),
+    "gpt-6-astra": (10.00, 50.00),
+    "o3": (2.00, 8.00),
+    "o4-mini": (1.10, 4.40),
     "opus-4-8": (5.00, 25.00),
     "opus-4-6": (5.00, 25.00),
     "sonnet-5": (3.00, 15.00),
@@ -73,7 +87,18 @@ MODEL_LIMITS: dict[str, int] = {
     "sonnet-4-6": 1_000_000,
     "haiku-4-5": 200_000,
     "claude-3-haiku": 200_000,
+    "claude-haiku-5-5": 1_000_000,
+    "claude-sonnet-5-5": 1_000_000,
+    "claude-opus-5-5": 1_000_000,
+    "claude-fable-5-2": 1_000_000,
+    "gpt-4.1": 1_047_576,
     "gpt-4o": 128_000,
+    "gpt-5.4": 1_050_000,
+    "gpt-5.6-": 1_050_000,
+    "gpt-6-": 1_050_000,
+    "gpt-6.1-": 1_050_000,
+    "o3": 200_000,
+    "o4-mini": 200_000,
     "gemini-2.5-flash-lite": 1_048_576,
     "gemini-2.5-flash": 1_048_576,
     "gemini-2.5-pro": 1_048_576,
@@ -222,12 +247,26 @@ def _litellm_window(model_id: str) -> int | None:
     return None
 
 
+def _anthropic_cached_window(model_id: str) -> int | None:
+    """Cached Anthropic ``/v1/models`` ``max_input_tokens``, or None."""
+    if live_pricing.live_disabled():
+        return None
+    entry = live_pricing.anthropic_model_entry(model_id)
+    if not entry:
+        return None
+    window = entry.get("max_input_tokens")
+    if isinstance(window, int) and not isinstance(window, bool) and window > 0:
+        return window
+    return None
+
+
 def window_for(model_id: str, *, model: Any = None) -> int | None:
     """Context window per D-02 route-aware precedence, else None.
 
     OpenRouter routes prefer OpenRouter's live endpoint cap first before
     SDK ``model_info``; direct providers consult SDK ``model_info`` first,
-    then LiteLLM bundled and static ``MODEL_LIMITS``.
+    then cached Anthropic ``/v1/models`` metadata, LiteLLM bundled, and
+    static ``MODEL_LIMITS``.
     """
     if live_pricing.is_openrouter_id(model_id):
         endpoint_win = _openrouter_window(model_id)
@@ -243,6 +282,9 @@ def window_for(model_id: str, *, model: Any = None) -> int | None:
         sdk_win = _sdk_window(model_id, model=model)
         if sdk_win is not None:
             return sdk_win
+        anthropic_win = _anthropic_cached_window(model_id)
+        if anthropic_win is not None:
+            return anthropic_win
         live = _live_window(model_id)
         if live is not None:
             return live[0]
@@ -260,12 +302,66 @@ def price_provenance(model_id: str, region: str | None = None) -> str:
     return "unknown"
 
 
-def cost_for(input_tokens: int, output_tokens: int, model_id: str) -> float | None:
-    """USD cost on price hit, else None (tokens-only fallback)."""
-    prices = price_for(model_id)
-    if prices is None:
+def _default_cache_rates(model_id: str, in_rate: float) -> tuple[float, float]:
+    """Static fallback cache read/write per-1M multipliers derived from base input."""
+    lowered = model_id.lower()
+    if "claude" in lowered or lowered.startswith("anthropic/"):
+        return (in_rate * 0.10, in_rate * 1.25)
+    if "gpt-4o" in lowered:
+        return (in_rate * 0.50, in_rate)
+    if any(key in lowered for key in ("o1", "o3", "o4-", "gpt-4.1")):
+        return (in_rate * 0.25, in_rate)
+    return (in_rate * 0.10, in_rate)
+
+
+def cache_prices_for(
+    model_id: str, region: str | None = None
+) -> tuple[float, float, float, float] | None:
+    """USD per 1M ``(in, cache_read, cache_write, out)``, else None."""
+    base = price_for(model_id, region)
+    if base is None:
         return None
-    return input_tokens * prices[0] / 1_000_000 + output_tokens * prices[1] / 1_000_000
+    in_rate, out_rate = base
+    read_rate, write_rate = _default_cache_rates(model_id, in_rate)
+    if not live_pricing.live_disabled():
+        entry = live_pricing.litellm_entry(model_id)
+        if entry is not None:
+            if "cache_read" in entry:
+                read_rate = entry["cache_read"]
+            if "cache_write" in entry:
+                write_rate = entry["cache_write"]
+    return (in_rate, read_rate, write_rate, out_rate)
+
+
+def cost_for(
+    input_tokens: int,
+    output_tokens: int,
+    model_id: str,
+    *,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> float | None:
+    """USD cost on price hit, else None (tokens-only fallback)."""
+    if cache_read_tokens <= 0 and cache_write_tokens <= 0:
+        prices = price_for(model_id)
+        if prices is None:
+            return None
+        return (
+            input_tokens * prices[0] / 1_000_000 + output_tokens * prices[1] / 1_000_000
+        )
+    rates = cache_prices_for(model_id)
+    if rates is None:
+        return None
+    in_rate, read_rate, write_rate, out_rate = rates
+    read_tok = max(0, int(cache_read_tokens))
+    write_tok = max(0, int(cache_write_tokens))
+    uncached = max(0, int(input_tokens) - read_tok - write_tok)
+    return (
+        uncached * in_rate
+        + read_tok * read_rate
+        + write_tok * write_rate
+        + output_tokens * out_rate
+    ) / 1_000_000
 
 
 def format_tokens(count: int) -> str:
@@ -285,11 +381,33 @@ def format_usage(input_tokens: int, window: int | None) -> str:
     return f"{base} ({input_tokens / window * 100:.0f}%)"
 
 
+def _format_usage_with_cache(
+    input_tokens: int,
+    window: int | None,
+    cache_read_tokens: int,
+    cache_write_tokens: int,
+) -> str:
+    """Append compact cache tag only when cached tokens are present."""
+    base = format_usage(input_tokens, window)
+    if input_tokens <= 0:
+        return base
+    if cache_read_tokens > 0:
+        pct = round(cache_read_tokens / input_tokens * 100)
+        return f"{base[:-1]}, {pct}% cached)"
+    if cache_write_tokens > 0:
+        pct = round(cache_write_tokens / input_tokens * 100)
+        return f"{base[:-1]}, {pct}% cache write)"
+    return base
+
+
 def usage_line(
     input_tokens: int,
     output_tokens: int,
     model_id: str,
     reported_cost: float | None = None,
+    *,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ) -> str:
     """Post-turn usage line: tokens + % with money appended only on hit.
 
@@ -297,11 +415,19 @@ def usage_line(
     the estimate (``is not None``: a present 0.0 stays an actual).
     """
     window = window_for(model_id)
-    line = format_usage(input_tokens, window)
+    line = _format_usage_with_cache(
+        input_tokens, window, cache_read_tokens, cache_write_tokens
+    )
     if reported_cost is not None:
         line += f" ${reported_cost:.2f} actual"
         return line
-    cost = cost_for(input_tokens, output_tokens, model_id)
+    cost = cost_for(
+        input_tokens,
+        output_tokens,
+        model_id,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+    )
     if cost is not None:
         line += f" ${cost:.2f}"
     return line
@@ -359,6 +485,92 @@ def _routing_line(event: dict[str, Any]) -> str:
     return f"{head} $0.0000"
 
 
+def _format_input_cell(row: dict[str, Any]) -> str:
+    """Format one turn's input/output tokens plus optional cache breakdown."""
+    turn = row.get("turn", "?")
+    in_tok = int(row.get("input_tokens", 0))
+    out_tok = int(row.get("output_tokens", 0))
+    cache_read = max(0, int(row.get("cache_read_tokens", 0) or 0))
+    cache_write = max(0, int(row.get("cache_write_tokens", 0) or 0))
+    parts: list[str] = []
+    if cache_read > 0:
+        parts.append(f"{format_tokens(cache_read)} cached")
+    if cache_write > 0:
+        parts.append(f"{format_tokens(cache_write)} write")
+    suffix = f" ({', '.join(parts)})" if parts else ""
+    return (
+        f"  turn {turn}: in {format_tokens(in_tok)}{suffix}, "
+        f"out {format_tokens(out_tok)}"
+    )
+
+
+def _format_turn_row(
+    row: dict[str, Any], model_id: str, provenances: list[str]
+) -> tuple[str, float | None, float | None]:
+    """Render a turn row and return ``(cell, actual_usd, estimated_usd)``."""
+    in_tok = int(row.get("input_tokens", 0))
+    out_tok = int(row.get("output_tokens", 0))
+    cache_read = max(0, int(row.get("cache_read_tokens", 0) or 0))
+    cache_write = max(0, int(row.get("cache_write_tokens", 0) or 0))
+    row_model = row.get("model", model_id)
+    cell = _format_input_cell(row)
+    reported = row.get("reported_cost")
+    if reported is not None:
+        # Actual-wins (D-09): exactly one money lane per row, never both.
+        return (f"{cell}, ${reported:.4f} actual", float(reported), None)
+    turn_cost = cost_for(
+        in_tok,
+        out_tok,
+        row_model,
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+    )
+    if turn_cost is None:
+        return (cell, None, None)
+    provenance = price_provenance(row_model)
+    if provenance not in provenances:
+        provenances.append(provenance)
+    return (f"{cell}, ${turn_cost:.4f}", None, turn_cost)
+
+
+def _fold_routing_events(
+    routing: list[dict[str, Any]],
+    lines: list[str],
+    provenances: list[str],
+) -> tuple[int, int, float, bool]:
+    """Append Routing section rows and return folded tokens/actual spend."""
+    lines.append("Routing:")
+    total_in = total_out = 0
+    total_actual = 0.0
+    has_actual = False
+    for event in routing:
+        if not isinstance(event, dict):
+            continue
+        lines.append(_routing_line(event))
+        try:
+            in_tok = int(event.get("input_tokens", 0))
+            out_tok = int(event.get("output_tokens", 0))
+        except (TypeError, ValueError):
+            continue
+        total_in += in_tok
+        total_out += out_tok
+        spend = _reported_spend(event)
+        if spend is None:
+            continue
+        # Reported routing spend lands in the actuals lane (D-10).
+        has_actual = True
+        total_actual += spend
+        decision_model = event.get("decision_model")
+        if not decision_model:
+            continue
+        provenance = price_provenance(decision_model)
+        if event.get("engine") == "native" and provenance == "unknown":
+            provenance = "native computed input rate"
+        if provenance not in provenances:
+            provenances.append(provenance)
+    return (total_in, total_out, total_actual, has_actual)
+
+
 def cost_report(
     session_turns: list[dict[str, Any]],
     model_id: str,
@@ -390,57 +602,22 @@ def cost_report(
     has_estimated = False
     provenances: list[str] = []
     for row in session_turns:
-        turn = row.get("turn", "?")
-        in_tok = int(row.get("input_tokens", 0))
-        out_tok = int(row.get("output_tokens", 0))
-        row_model = row.get("model", model_id)
-        total_in += in_tok
-        total_out += out_tok
-        cell = (
-            f"  turn {turn}: in {format_tokens(in_tok)}, out {format_tokens(out_tok)}"
-        )
-        reported = row.get("reported_cost")
-        if reported is not None:
-            # Actual-wins (D-09): exactly one money lane per row, never both.
-            has_actual = True
-            total_actual += reported
-            cell += f", ${reported:.4f} actual"
-        else:
-            turn_cost = cost_for(in_tok, out_tok, row_model)
-            if turn_cost is not None:
-                has_estimated = True
-                total_estimated += turn_cost
-                cell += f", ${turn_cost:.4f}"
-                provenance = price_provenance(row_model)
-                if provenance not in provenances:
-                    provenances.append(provenance)
+        total_in += int(row.get("input_tokens", 0))
+        total_out += int(row.get("output_tokens", 0))
+        cell, actual, estimated = _format_turn_row(row, model_id, provenances)
         lines.append(cell)
+        if actual is not None:
+            has_actual = True
+            total_actual += actual
+        if estimated is not None:
+            has_estimated = True
+            total_estimated += estimated
     if routing:
-        lines.append("Routing:")
-        for event in routing:
-            if not isinstance(event, dict):
-                continue
-            lines.append(_routing_line(event))
-            try:
-                in_tok = int(event.get("input_tokens", 0))
-                out_tok = int(event.get("output_tokens", 0))
-            except (TypeError, ValueError):
-                continue
-            total_in += in_tok
-            total_out += out_tok
-            spend = _reported_spend(event)
-            if spend is not None:
-                # Reported routing spend lands in the actuals lane (D-10);
-                # derived zeros from absent costs never open it.
-                has_actual = True
-                total_actual += spend
-                decision_model = event.get("decision_model")
-                if decision_model:
-                    provenance = price_provenance(decision_model)
-                    if event.get("engine") == "native" and provenance == "unknown":
-                        provenance = "native computed input rate"
-                    if provenance not in provenances:
-                        provenances.append(provenance)
+        r_in, r_out, r_actual, r_has = _fold_routing_events(routing, lines, provenances)
+        total_in += r_in
+        total_out += r_out
+        total_actual += r_actual
+        has_actual = has_actual or r_has
     total = f"Total: in {format_tokens(total_in)}, out {format_tokens(total_out)}"
     if has_actual or has_estimated:
         total += f", ${total_actual + total_estimated:.4f}"
@@ -588,6 +765,11 @@ def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
                 text_val = injected.get("text")
                 if text_val is not None:
                     chars += len(str(text_val))
+            summary = block.get("summary")
+            if isinstance(summary, dict):
+                summary_text = summary.get("text")
+                if isinstance(summary_text, str):
+                    chars += len(summary_text)
     return max(1, chars // 4) if chars else 0
 
 

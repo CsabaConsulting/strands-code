@@ -791,3 +791,81 @@ class TestPriceTable:
         live_pricing.refresh_caches(region="us-west-2")
         table = cost_context.price_table(region="us-west-2")
         assert "…and 5 more" in table
+
+
+class TestOpenAIAnthropicLivePricing:
+    def test_litellm_entry_bare_tails_and_cache_rates(self, monkeypatch):
+        _fake_litellm(
+            monkeypatch,
+            {
+                "gpt-6.1-sol": {
+                    "input_cost_per_token": 2.0e-6,
+                    "output_cost_per_token": 10.0e-6,
+                    "cache_read_input_token_cost": 1.0e-7,
+                    "cache_creation_input_token_cost": 2.5e-6,
+                    "max_input_tokens": 922000,
+                },
+                "claude-sonnet-5-5": {
+                    "input_cost_per_token": 2.0e-6,
+                    "output_cost_per_token": 10.0e-6,
+                    "cache_read_input_token_cost": 1.0e-7,
+                    "cache_creation_input_token_cost": 2.5e-6,
+                    "max_input_tokens": 1000000,
+                },
+            },
+        )
+        openai_hit = live_pricing.litellm_entry("openai/gpt-6.1-sol")
+        assert openai_hit is not None
+        assert openai_hit["in"] == pytest.approx(2.0)
+        assert openai_hit["out"] == pytest.approx(10.0)
+        assert openai_hit["cache_read"] == pytest.approx(0.10)
+        assert openai_hit["cache_write"] == pytest.approx(2.50)
+        assert openai_hit["window"] == 922000.0
+
+        anthropic_hit = live_pricing.litellm_entry("anthropic/claude-sonnet-5-5")
+        assert anthropic_hit is not None
+        assert anthropic_hit["cache_read"] == pytest.approx(0.10)
+        assert anthropic_hit["cache_write"] == pytest.approx(2.50)
+        assert anthropic_hit["window"] == 1000000.0
+
+    def test_store_anthropic_models_cache_roundtrip_ttl_and_kill_switch(
+        self, monkeypatch
+    ):
+        live_pricing.store_anthropic_models(
+            [
+                {
+                    "id": "claude-custom-test",
+                    "max_input_tokens": 512000,
+                    "max_tokens": 64000,
+                    "retires_at": "2027-01-15T00:00:00Z",
+                }
+            ]
+        )
+        cache = live_pricing.anthropic_models_cache()
+        assert "claude-custom-test" in cache
+        entry = live_pricing.anthropic_model_entry("anthropic/claude-custom-test")
+        assert entry is not None and entry["max_input_tokens"] == 512000
+        assert entry["retires_at"] == "2027-01-15T00:00:00Z"
+        assert cost_context.window_for("anthropic/claude-custom-test") == 512000
+
+        # Expired cache returns empty
+        path = live_pricing._cache_dir() / live_pricing.ANTHROPIC_MODELS_CACHE_FILE
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["fetched_at"] = 0
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        assert live_pricing.anthropic_models_cache() == {}
+        assert (
+            live_pricing.anthropic_model_entry("anthropic/claude-custom-test") is None
+        )
+
+        # Corrupt JSON fails soft
+        path.write_text("{corrupt", encoding="utf-8")
+        assert live_pricing.anthropic_models_cache() == {}
+
+        # Kill switch prevents both writes and reads
+        monkeypatch.setenv("STRANDS_CODE_NO_LIVE_PRICING", "1")
+        live_pricing.store_anthropic_models(
+            [{"id": "claude-blocked", "max_input_tokens": 999999}]
+        )
+        assert live_pricing.anthropic_models_cache() == {}
+        assert live_pricing.anthropic_model_entry("anthropic/claude-blocked") is None

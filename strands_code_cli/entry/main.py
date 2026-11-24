@@ -34,6 +34,7 @@ from strands_code_cli.memory.memory_file import load_memory, register_memory_plu
 from strands_code_cli.model.model_switch import (
     configure_base_url_for_model,
     configure_gemini_for_model,
+    configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
 )
@@ -213,6 +214,7 @@ def build_agent(
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
+    configure_openai_for_model(target_id, resolved_model)
     configure_base_url_for_model(target_id, resolved_model, base_url=base_url)
     if isinstance(model, str):
         # Initial-build wrap (D-07): a session starting on an OpenRouter

@@ -196,6 +196,31 @@ class TestForkBtwHistory:
         )
         assert [m["role"] for m in forked] == ["assistant", "user", "assistant", "user"]
 
+    def test_converts_anthropic_summary_blocks_to_text(self):
+        from strands_code_cli.model.model_switch import SUMMARY_LABEL
+
+        parent = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "summary": {
+                            "provider": "anthropic",
+                            "signature": "S",
+                            "text": "Compacted prior exchange",
+                        }
+                    },
+                    {"summary": {"provider": "anthropic", "text": "   "}},
+                ],
+            },
+            {"role": "user", "content": [{"text": "continue"}]},
+        ]
+        forked = fork_btw_history(parent, "why slow?")
+        assert forked[0]["content"] == [
+            {"text": f"{SUMMARY_LABEL}\nCompacted prior exchange"}
+        ]
+        assert all("summary" not in block for msg in forked for block in msg["content"])
+
 
 class TestForkScope:
     """G-7-1b A+B: the forked side prompt bounds scope structurally (D-04/D-09)."""
@@ -788,6 +813,39 @@ class TestBuildBtwAgent:
         )
         assert "_base_url" not in created
         assert oai_model.client_args["base_url"] == "https://proxy.local/v1"
+
+    def test_build_btw_agent_calls_configure_openai_for_model(self, monkeypatch):
+        import strands_code_cli.loop.btw as btw_mod
+
+        class _OaiModel:
+            def __init__(self):
+                self.config = {"params": {"reasoning": {"effort": "high"}}}
+                self._bedrock_mantle_config = None
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kw):
+                self.config.update(kw)
+
+        oai_model = _OaiModel()
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kwargs: SimpleNamespace(model=oai_model),
+        )
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+        build_btw_agent(
+            {
+                "model": "openai/gpt-4o",
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+            },
+            [],
+            "why slow?",
+        )
+        assert "reasoning" not in oai_model.config["params"]
 
 
 def _idle_btw(**overrides):

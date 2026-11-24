@@ -78,6 +78,7 @@ from strands_code_cli.model.model_switch import (
     MODEL_REFUSAL,
     UNARY_TOOL_MODE_NOTE,
     _has_reasoning,
+    _provider_of,
     apply_switch,
     canonical_prefix_hash,
     convert_history,
@@ -87,6 +88,7 @@ from strands_code_cli.model.model_switch import (
     normalize_model_ref,
     prepare_resumed_history,
     resolve_harness_model,
+    same_provider,
     same_vendor,
     supports_reasoning,
     supports_streaming_tools,
@@ -313,6 +315,49 @@ _UNSET: Any = object()
 """Sentinel distinguishing an omitted reported_cost from explicit None."""
 
 
+def _is_exclusive_usage_provider(model_id: str) -> bool:
+    """True when ``inputTokens`` excludes cached read/write token counts."""
+    lowered = model_id.lower()
+    if lowered.startswith(("anthropic/", "bedrock/", "arn:")):
+        return True
+    return "/" not in lowered
+
+
+def _extract_prompt_usage(
+    result: Any,
+    current_model: str,
+    raw_in: int,
+    raw_out: int,
+) -> tuple[int, int, int]:
+    """Normalize ``(total_input_tokens, cache_read, cache_write)`` from SDK metrics."""
+    try:
+        summary = result.metrics.get_summary()
+        usage = summary.get("accumulated_usage") if isinstance(summary, dict) else None
+    except Exception:
+        return (raw_in, 0, 0)
+    if not isinstance(usage, dict):
+        return (raw_in, 0, 0)
+    try:
+        cache_read = max(0, int(usage.get("cacheReadInputTokens", 0) or 0))
+        cache_write = max(0, int(usage.get("cacheWriteInputTokens", 0) or 0))
+        total_tok = int(usage.get("totalTokens", 0) or 0)
+    except (TypeError, ValueError):
+        return (raw_in, 0, 0)
+    if cache_read == 0 and cache_write == 0:
+        return (raw_in, 0, 0)
+    if total_tok > 0:
+        total_in = (
+            raw_in
+            if raw_in + raw_out == total_tok
+            else raw_in + cache_read + cache_write
+        )
+    elif _is_exclusive_usage_provider(current_model):
+        total_in = raw_in + cache_read + cache_write
+    else:
+        total_in = raw_in
+    return (total_in, cache_read, cache_write)
+
+
 def record_turn_metrics(
     result: Any,
     current_model: str,
@@ -342,20 +387,34 @@ def record_turn_metrics(
     except Exception:
         return None
     try:
-        in_tok = int(metrics.get("input_tokens", 0))
+        raw_in = int(metrics.get("input_tokens", 0))
         out_tok = int(metrics.get("output_tokens", 0))
     except (TypeError, ValueError):
         return None
-    row = {
+    in_tok, cache_read, cache_write = _extract_prompt_usage(
+        result, current_model, raw_in, out_tok
+    )
+    row: dict[str, Any] = {
         "turn": len(session_turns) + 1,
         "input_tokens": in_tok,
         "output_tokens": out_tok,
         "model": current_model,
     }
+    if cache_read > 0:
+        row["cache_read_tokens"] = cache_read
+    if cache_write > 0:
+        row["cache_write_tokens"] = cache_write
     if reported is not None:
         row["reported_cost"] = reported
     session_turns.append(row)
-    return usage_line(in_tok, out_tok, current_model, reported_cost=reported)
+    return usage_line(
+        in_tok,
+        out_tok,
+        current_model,
+        reported_cost=reported,
+        cache_read_tokens=cache_read,
+        cache_write_tokens=cache_write,
+    )
 
 
 def maybe_auto_compact(agent: Any, current_model: str) -> str | None:
@@ -1046,6 +1105,30 @@ def _turn_appended_empty(before: int, messages: list) -> bool:
     return not any(m.get("content") for m in appended if m.get("role") == "assistant")
 
 
+def _should_restore_rich(rich: RichHistory | None, new_id: str, source: list) -> bool:
+    """True when stashed provider-native thinking/summary blocks can restore."""
+    if (
+        rich is None
+        or rich.messages is None
+        or rich.model_id is None
+        or rich.prefix_hash is None
+    ):
+        return False
+    can_restore_provider = supports_reasoning(new_id) or (
+        _provider_of(new_id) == "anthropic"
+    )
+    if not (
+        can_restore_provider
+        and same_vendor(rich.model_id, new_id)
+        and same_provider(rich.model_id, new_id)
+    ):
+        return False
+    return (
+        len(source) >= rich.length
+        and canonical_prefix_hash(source[: rich.length]) == rich.prefix_hash
+    )
+
+
 def apply_model_action(
     agent: Any,
     new_id: str,
@@ -1059,7 +1142,7 @@ def apply_model_action(
 
     Idle only: a running turn gets the immediate refusal reply, never a
     queue (D-01 fail-closed). Otherwise restore-then-convert (the rich
-    stash when switching back to a same-vendor thinking model),
+    stash when switching back to a same-vendor, same-provider model),
     convert-when-fits else summarize-old + keep-recent +
     replay-last-user-message, then the tracer-winning in-place swap.
 
@@ -1085,16 +1168,8 @@ def apply_model_action(
     _model, resolved_id = apply_switch(agent, new_id, effort=effort)
     source = list(agent.messages)
     restored = False
-    if (
-        rich is not None
-        and rich.messages is not None
-        and rich.model_id is not None
-        and rich.prefix_hash is not None
-        and supports_reasoning(new_id)
-        and same_vendor(rich.model_id, new_id)
-        and len(source) >= rich.length
-        and canonical_prefix_hash(source[: rich.length]) == rich.prefix_hash
-    ):
+    if _should_restore_rich(rich, new_id, source):
+        assert rich is not None and rich.messages is not None
         source = copy.deepcopy(rich.messages) + copy.deepcopy(source[rich.length :])
         restored = True
     convert_from = current_model

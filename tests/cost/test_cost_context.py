@@ -1092,3 +1092,173 @@ class TestSdkModelInfoWindow:
             == 1_000_000
         )
         assert window_for("litellm/openrouter/mystery/custom-model") == 77_777
+
+
+class TestCacheAwareUsageAndCost:
+    @staticmethod
+    def _usage_result(
+        in_tok: int,
+        out_tok: int,
+        *,
+        cache_read: int = 0,
+        cache_write: int = 0,
+        total_tok: int = 0,
+    ):
+        usage: dict[str, int] = {
+            "inputTokens": in_tok,
+            "outputTokens": out_tok,
+        }
+        if cache_read:
+            usage["cacheReadInputTokens"] = cache_read
+        if cache_write:
+            usage["cacheWriteInputTokens"] = cache_write
+        if total_tok:
+            usage["totalTokens"] = total_tok
+
+        class _R:
+            class metrics:
+                @staticmethod
+                def get_summary():
+                    return {
+                        "accumulated_usage": usage,
+                        "total_cycles": 1,
+                        "total_duration": 0.5,
+                    }
+
+        return _R()
+
+    def test_record_turn_metrics_anthropic_exclusive_vs_openai_inclusive(self):
+        from strands_code_cli.loop.core import record_turn_metrics
+
+        anthropic_turns: list[dict[str, Any]] = []
+        a_line = record_turn_metrics(
+            self._usage_result(
+                100,
+                300,
+                cache_read=125_000,
+                cache_write=40_500,
+                total_tok=165_900,
+            ),
+            "anthropic/claude-sonnet-5-5",
+            anthropic_turns,
+        )
+        assert a_line is not None
+        assert "(17%, 75% cached)" in a_line
+        assert anthropic_turns == [
+            {
+                "turn": 1,
+                "input_tokens": 165_600,
+                "output_tokens": 300,
+                "model": "anthropic/claude-sonnet-5-5",
+                "cache_read_tokens": 125_000,
+                "cache_write_tokens": 40_500,
+            }
+        ]
+
+        openai_turns: list[dict[str, Any]] = []
+        o_line = record_turn_metrics(
+            self._usage_result(
+                165_600,
+                300,
+                cache_read=125_000,
+                cache_write=0,
+                total_tok=165_900,
+            ),
+            "openai/gpt-6.1-sol",
+            openai_turns,
+        )
+        assert o_line is not None
+        assert "(16%, 75% cached)" in o_line
+        assert openai_turns == [
+            {
+                "turn": 1,
+                "input_tokens": 165_600,
+                "output_tokens": 300,
+                "model": "openai/gpt-6.1-sol",
+                "cache_read_tokens": 125_000,
+            }
+        ]
+        rates = cost_context.cache_prices_for("openai/gpt-6.1-sol")
+        assert rates is not None
+        expected = (
+            (165_600 - 125_000) * rates[0] + 125_000 * rates[1] + 300 * rates[3]
+        ) / 1_000_000
+        assert cost_for(
+            165_600, 300, "openai/gpt-6.1-sol", cache_read_tokens=125_000
+        ) == pytest.approx(expected)
+
+    def test_zero_cache_turns_byte_identical_usage_and_report(self):
+        line_no_cache = usage_line(1000, 500, "anthropic/claude-sonnet-5-5")
+        line_zero = usage_line(
+            1000,
+            500,
+            "anthropic/claude-sonnet-5-5",
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+        )
+        assert line_no_cache == line_zero == "1.00K (0%) $0.01"
+        assert "cached" not in line_zero
+
+        turns = [{"turn": 1, "input_tokens": 1000, "output_tokens": 500}]
+        report = cost_report(turns, "anthropic/claude-sonnet-5-5")
+        assert "turn 1: in 1.00K, out 500, $0.0070" in report
+        assert "cached" not in report
+
+    def test_cost_report_renders_cache_read_and_write_cells(self):
+        report = cost_report(
+            [
+                {
+                    "turn": 1,
+                    "input_tokens": 165_600,
+                    "output_tokens": 300,
+                    "cache_read_tokens": 125_000,
+                    "cache_write_tokens": 40_500,
+                },
+                {
+                    "turn": 2,
+                    "input_tokens": 165_600,
+                    "output_tokens": 300,
+                    "cache_read_tokens": 125_000,
+                },
+                {
+                    "turn": 3,
+                    "input_tokens": 40_600,
+                    "output_tokens": 100,
+                    "cache_write_tokens": 40_500,
+                },
+            ],
+            "anthropic/claude-sonnet-5-5",
+        )
+        assert "turn 1: in 165.60K (125.00K cached, 40.50K write)" in report
+        assert "turn 2: in 165.60K (125.00K cached)," in report
+        assert "turn 3: in 40.60K (40.50K write)," in report
+        assert (
+            usage_line(165_600, 300, "mystery/unknown-model", cache_read_tokens=125_000)
+            == "165.60K (n/a, 75% cached)"
+        )
+
+    def test_estimate_messages_tokens_counts_summary_blocks(self):
+        from strands_code_cli.cost.cost_context import estimate_messages_tokens
+
+        summary_msg = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "summary": {
+                            "provider": "anthropic",
+                            "signature": "S",
+                            "text": "x" * 400,
+                        }
+                    }
+                ],
+            }
+        ]
+        assert estimate_messages_tokens(summary_msg) == 100
+        malformed = [
+            {
+                "role": "assistant",
+                "content": [{"summary": None}, {"summary": {"text": None}}],
+            }
+        ]
+        assert estimate_messages_tokens(malformed) == 0

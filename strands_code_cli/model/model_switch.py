@@ -217,6 +217,17 @@ def same_vendor(first_id: str, second_id: str) -> bool:
     return _vendor_of(first_id) == _vendor_of(second_id)
 
 
+def same_provider(first_id: str, second_id: str) -> bool:
+    """True when both normalized ids route through the same provider API."""
+    return _provider_of(normalize_model_ref(first_id)) == _provider_of(
+        normalize_model_ref(second_id)
+    )
+
+
+SUMMARY_LABEL = "Compaction summary preserved as text:"
+"""Prefix marking text-ified Anthropic compaction summaries across switches."""
+
+
 TRACE_LABEL = "Thinking trace (internal reasoning preserved as text):"
 """Prefix marking text-ified thinking (weak models mimic unlabeled traces).
 
@@ -271,11 +282,12 @@ def _canonical_block(block: Any) -> dict[str, Any] | None:
         or "injected" in block
         or "image" in block
         or "video" in block
+        or "summary" in block
     ):
         return None
     text = block.get("text")
     if isinstance(text, str) and (
-        text.startswith((TRACE_LABEL,) + _LEGACY_TRACE_LABELS)
+        text.startswith((TRACE_LABEL, SUMMARY_LABEL) + _LEGACY_TRACE_LABELS)
         or _MEDIA_PLACEHOLDER_RE.fullmatch(text) is not None
     ):
         return None
@@ -369,32 +381,61 @@ def _media_placeholder_block(block: dict[str, Any]) -> dict[str, Any]:
     return {"text": f"[{kind}: {media_format}, {size} bytes]"}
 
 
+def _convert_summary_block(block: dict[str, Any], new_id: str) -> dict[str, Any] | None:
+    """Keep Anthropic SummaryBlock verbatim only on Anthropic targets."""
+    payload = block.get("summary")
+    if not isinstance(payload, dict):
+        return None
+    target_provider = _provider_of(normalize_model_ref(new_id))
+    source_provider = payload.get("provider")
+    if target_provider == "anthropic" and source_provider in (None, "anthropic"):
+        return copy.deepcopy(block)
+    text = payload.get("text")
+    if isinstance(text, str) and text.strip():
+        return {"text": f"{SUMMARY_LABEL}\n{text}"}
+    return None
+
+
+def _convert_block(
+    block: dict[str, Any], new_id: str, reasoning_ok: bool, media_ok: bool
+) -> dict[str, Any] | None:
+    """Convert one ContentBlock across providers, returning None to drop."""
+    if "reasoningContent" in block:
+        return _convert_reasoning_block(block, new_id, reasoning_ok)
+    if "summary" in block:
+        return _convert_summary_block(block, new_id)
+    if isinstance(block.get("text"), str) and block["text"].startswith(
+        _LEGACY_TRACE_LABELS
+    ):
+        return _migrate_trace_block(block)
+    if "toolUse" in block:
+        return _convert_tool_use_block(block, reasoning_ok)
+    if ("image" in block or "video" in block) and not media_ok:
+        return _media_placeholder_block(block)
+    return copy.deepcopy(block)
+
+
 def convert_history(
     messages: list[dict[str, Any]], old_id: str, new_id: str
 ) -> list[dict[str, Any]]:
     """Convert SDK ContentBlocks from the old model id to the new one.
 
     - reasoningContent round-trips only for harness-verified thinking
-      targets sharing the source vendor AND carrying a signature (or
-      redactedContent); everything else becomes labeled trace text
-      (``TRACE_LABEL`` + original; warn), with empty traces dropped
-      (LiteLLM #9063 precedent). The label keeps weak models from
-      mimicking internal reasoning as assistant speech.
+      targets sharing BOTH source vendor and provider AND carrying a
+      signature (or redactedContent); everything else becomes labeled
+      trace text (``TRACE_LABEL`` + original; warn), with empty traces
+      dropped.
+    - Anthropic ``SummaryBlock`` keeps verbatim on Anthropic targets and
+      becomes ``SUMMARY_LABEL`` text elsewhere.
     - toolUse/toolResult blocks stay byte-identical (adapter layer owns them).
     - Image/video blocks → placeholder text on media-less targets.
-    - Retired trace labels migrate to the current label, so pre-upgrade
-      sessions heal on their next switch (the bracketed shape muted Gemma).
-    - Never trims: trimming happens at pair boundaries in compaction only.
-
-    Args:
-        messages: Source history (never mutated; a converted copy returns).
-        old_id: Current model id string (same-vendor check for thinking).
-        new_id: Target model id string.
-
-    Returns:
-        The converted message list.
+    - Retired trace labels migrate to the current label.
     """
-    reasoning_ok = supports_reasoning(new_id) and same_vendor(old_id, new_id)
+    reasoning_ok = (
+        supports_reasoning(new_id)
+        and same_vendor(old_id, new_id)
+        and same_provider(old_id, new_id)
+    )
     media_ok = supports_media(new_id)
     converted: list[dict[str, Any]] = []
     for message in messages:
@@ -403,24 +444,9 @@ def convert_history(
             if key not in ("role", "content"):
                 new_message[key] = copy.deepcopy(value)
         for block in message.get("content", []):
-            if "reasoningContent" in block:
-                converted_block = _convert_reasoning_block(block, new_id, reasoning_ok)
-                if converted_block is not None:
-                    new_message["content"].append(converted_block)
-                continue
-            elif isinstance(block.get("text"), str) and block["text"].startswith(
-                _LEGACY_TRACE_LABELS
-            ):
-                new_message["content"].append(_migrate_trace_block(block))
-                continue
-            elif "toolUse" in block:
-                new_message["content"].append(
-                    _convert_tool_use_block(block, reasoning_ok)
-                )
-            elif ("image" in block or "video" in block) and not media_ok:
-                new_message["content"].append(_media_placeholder_block(block))
-            else:
-                new_message["content"].append(copy.deepcopy(block))
+            converted_block = _convert_block(block, new_id, reasoning_ok, media_ok)
+            if converted_block is not None:
+                new_message["content"].append(converted_block)
         converted.append(new_message)
     return converted
 
@@ -573,15 +599,154 @@ def _discover_google_models() -> tuple[list[str], bool]:
     return (list(CURATED_GEMINI_MODELS), False)
 
 
+CURATED_OPENAI_MODELS: tuple[str, ...] = (
+    "openai/gpt-6.1-sol",
+    "openai/gpt-6.1-terra",
+    "openai/gpt-6-astra",
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.4",
+    "openai/o3",
+    "openai/o4-mini",
+)
+"""Static fallback OpenAI choices offered only when OpenAI creds exist."""
+
+CURATED_ANTHROPIC_MODELS: tuple[str, ...] = (
+    "anthropic/claude-opus-5-5",
+    "anthropic/claude-sonnet-5-5",
+    "anthropic/claude-haiku-5-5",
+    "anthropic/claude-fable-5-2",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-sonnet-4-6",
+)
+"""Static fallback Anthropic choices offered only when Anthropic creds exist."""
+
+_OPENAI_NON_CHAT_TOKENS: tuple[str, ...] = (
+    "embed",
+    "rerank",
+    "whisper",
+    "tts",
+    "audio",
+    "transcribe",
+    "realtime",
+    "dall-e",
+    "gpt-image",
+    "sora",
+    "moderation",
+    "davinci",
+    "babbage",
+    "omni-",
+    "instruct",
+    "diarize",
+)
+
+
+def _is_openai_chat_model(model_id: str) -> bool:
+    """True for Responses-capable OpenAI chat/reasoning model ids."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        return False
+    lowered = model_id.strip().lower()
+    if any(token in lowered for token in _OPENAI_NON_CHAT_TOKENS):
+        return False
+    return lowered in ("o1", "o3") or lowered.startswith(
+        ("gpt-", "chatgpt-", "o1-", "o3-", "o4-")
+    )
+
+
+def _discover_openai_models() -> tuple[list[str], bool]:
+    """List live OpenAI chat/reasoning models when OpenAI credentials exist."""
+    from strands_code_cli.entry.first_run import has_openai_credentials
+
+    if not has_openai_credentials():
+        return ([], False)
+    try:
+        import openai  # lazy: optional [openai] extra
+
+        client = openai.OpenAI()
+        found = [
+            f"openai/{item.id.strip()}"
+            for item in client.models.list()
+            if _is_openai_chat_model(getattr(item, "id", ""))
+        ]
+        deduped = list(dict.fromkeys(found))
+        if deduped:
+            return (deduped, True)
+    except Exception:
+        pass
+    return (list(CURATED_OPENAI_MODELS), False)
+
+
+def _serialize_capabilities(raw_caps: Any) -> dict[str, Any] | None:
+    """Convert Pydantic or dict capabilities to JSON-safe dict."""
+    if isinstance(raw_caps, dict):
+        return dict(raw_caps)
+    dump = getattr(raw_caps, "model_dump", None)
+    if callable(dump):
+        try:
+            dumped = dump(mode="json")
+            return dumped if isinstance(dumped, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _extract_anthropic_model_meta(item: Any) -> dict[str, Any] | None:
+    """Extract JSON-safe Anthropic /v1/models metadata from one SDK item."""
+    raw_id = getattr(item, "id", None)
+    if not isinstance(raw_id, str) or not raw_id.strip():
+        return None
+    meta: dict[str, Any] = {"id": raw_id.strip()}
+    for field in ("max_input_tokens", "max_tokens", "line"):
+        val = getattr(item, field, None)
+        if val is not None:
+            meta[field] = val
+    caps = _serialize_capabilities(getattr(item, "capabilities", None))
+    if caps is not None:
+        meta["capabilities"] = caps
+    retires = getattr(item, "retires_at", None)
+    if hasattr(retires, "isoformat"):
+        meta["retires_at"] = retires.isoformat()
+    elif isinstance(retires, str) and retires.strip():
+        meta["retires_at"] = retires.strip()
+    return meta
+
+
+def _discover_anthropic_models() -> tuple[list[str], bool]:
+    """List live Anthropic models (caching metadata for 24h) when keyed."""
+    from strands_code_cli.entry.first_run import has_anthropic_credentials
+
+    if not has_anthropic_credentials():
+        return ([], False)
+    try:
+        import anthropic  # lazy: optional [anthropic] extra
+
+        import strands_code_cli.cost.live_pricing as live_pricing
+
+        client = anthropic.Anthropic()
+        metas: list[dict[str, Any]] = []
+        found: list[str] = []
+        for item in client.models.list():
+            meta = _extract_anthropic_model_meta(item)
+            if meta is None:
+                continue
+            metas.append(meta)
+            found.append(f"anthropic/{meta['id']}")
+        deduped = list(dict.fromkeys(found))
+        if deduped:
+            live_pricing.store_anthropic_models(metas)
+            return (deduped, True)
+    except Exception:
+        pass
+    return (list(CURATED_ANTHROPIC_MODELS), False)
+
+
 def discover_models(
     region: str | None = None, configured: list[str] | None = None
 ) -> tuple[list[str], bool]:
     """List available chat model ids across configured/credentialed providers.
 
-    Lazy imports keep AWS and Google SDKs optional. When Google credentials
-    exist (API key or Vertex ADC), live ``generateContent`` Gemini models
-    (or curated fallbacks offline) merge cleanly with Bedrock models;
-    AWS-only users never see uncredentialed Gemini entries.
+    Lazy imports keep AWS, Google, OpenAI, and Anthropic SDKs optional.
+    Credentialed providers query live catalogs (or curated fallbacks
+    offline); unkeyed providers never clutter another provider's picker.
 
     Args:
         region: Bedrock region (None -> boto3 default chain).
@@ -593,10 +758,20 @@ def discover_models(
     """
     bedrock_opts, bedrock_online = _discover_bedrock_models(region)
     google_opts, google_online = _discover_google_models()
-    if bedrock_online or google_online:
-        return (list(dict.fromkeys(bedrock_opts + google_opts)), False)
+    openai_opts, openai_online = _discover_openai_models()
+    anthropic_opts, anthropic_online = _discover_anthropic_models()
+    if bedrock_online or google_online or openai_online or anthropic_online:
+        return (
+            list(
+                dict.fromkeys(bedrock_opts + google_opts + openai_opts + anthropic_opts)
+            ),
+            False,
+        )
     fallback = list(configured) if configured else []
-    return (list(dict.fromkeys(fallback + google_opts)), True)
+    return (
+        list(dict.fromkeys(fallback + google_opts + openai_opts + anthropic_opts)),
+        True,
+    )
 
 
 _ROUTE_PREFIXES = ("global.", "us.", "eu.", "apac.", "au.", "jp.")
@@ -652,17 +827,42 @@ def route_label(route: str) -> str:
     """Short picker label for a route; the value stays the verbatim string.
 
     ``arn:aws:bedrock:us-west-2:123:inference-profile/global.foo`` becomes
-    ``profile global.foo (us-west-2)``. Non-ARN entries display verbatim.
+    ``profile global.foo (us-west-2)``. Cached Anthropic retirements
+    append `` (retires YYYY-MM-DD)``. Non-ARN entries otherwise display
+    verbatim.
     """
     if route.startswith("arn:"):
         parts = route.split(":")
         region = parts[3] if len(parts) > 4 else "?"
         return f"profile {route.rsplit('/', 1)[-1]} ({region})"
+    try:
+        import strands_code_cli.cost.live_pricing as live_pricing
+
+        entry = live_pricing.anthropic_model_entry(route)
+        retires = entry.get("retires_at") if entry else None
+        if isinstance(retires, str) and len(retires.strip()) >= 10:
+            return f"{route} (retires {retires.strip()[:10]})"
+    except Exception:
+        pass
     return route
 
 
 _COMPOUND_FAMILIES = (("gpt", "oss"),)
 _PURE_VENDOR_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+
+
+def _infer_bare_vendor(base: str) -> tuple[str, str] | None:
+    """Infer ``(vendor, rest)`` for bare provider-stripped catalog ids."""
+    lowered = base.lower()
+    if lowered == "gemini" or lowered.startswith("gemini-"):
+        return ("google", base)
+    if lowered.startswith("claude-"):
+        return ("anthropic", base)
+    if lowered.startswith("gpt-"):
+        return ("openai", base)
+    if lowered in ("o1", "o3") or lowered.startswith(("o1-", "o3-", "o4-")):
+        return ("openai", base)
+    return None
 
 
 def _vendor_family(base: str) -> tuple[str, str]:
@@ -671,8 +871,9 @@ def _vendor_family(base: str) -> tuple[str, str]:
     Vendor is the first dot segment (``anthropic``) when pure alphanumeric;
     family is the first dash token of the remainder (``claude``, ``nova``,
     ``gemma``), except known compound families (``gpt-oss`` vs ``gpt``)
-    which keep two tokens. Decimal dots inside model versions (e.g.
-    ``gemini-2.5-pro``, ``gpt-5.4``) never trigger a vendor split.
+    which keep two tokens. Bare ``gemini-*``, ``claude-*``, ``gpt-*``, and
+    ``o1``/``o3``/``o4-*`` catalog ids infer their vendor cleanly while
+    unknown decimal-dotted ids stay grouped under themselves.
     """
     if "/" in base:
         vendor, _, rest = base.partition("/")
@@ -680,10 +881,11 @@ def _vendor_family(base: str) -> tuple[str, str]:
         prefix, dot, rest = base.partition(".")
         if dot and _PURE_VENDOR_RE.fullmatch(prefix):
             vendor = prefix
-        elif base.lower() == "gemini" or base.lower().startswith("gemini-"):
-            vendor, rest = "google", base
         else:
-            return (base, base)
+            inferred = _infer_bare_vendor(base)
+            if inferred is None:
+                return (base, base)
+            vendor, rest = inferred
     tokens = rest.split("-")
     if len(tokens) >= 2 and (tokens[0], tokens[1]) in _COMPOUND_FAMILIES:
         return (vendor, "-".join(tokens[:2]))
@@ -858,10 +1060,104 @@ def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
     return resolved
 
 
+_OPENAI_NON_REASONING_PREFIXES = (
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-4-turbo",
+    "chatgpt-4o",
+    "gpt-3.5",
+)
+
+
+def _is_openai_non_reasoning(base_key: str) -> bool:
+    """True for OpenAI chat models that reject Responses reasoning.effort."""
+    return (
+        base_key == "gpt-4"
+        or "chat-latest" in base_key
+        or base_key.startswith(_OPENAI_NON_REASONING_PREFIXES)
+    )
+
+
+def _target_openai_effort(base_key: str, effort: str) -> str | None:
+    """Return normalized effort for OpenAI model family, or '' to strip, None if unchanged."""
+    low = effort.strip().lower()
+    if low in ("none", "off"):
+        return ""
+    if base_key in ("o1", "o3") or base_key.startswith(("o1-", "o3-", "o4-")):
+        if low == "minimal":
+            return "low"
+        if low in ("xhigh", "max"):
+            return "high"
+    elif base_key == "gpt-5" or base_key.startswith(
+        ("gpt-5-", "gpt-5.0", "gpt-5.1", "gpt-5.2")
+    ):
+        if low in ("xhigh", "max"):
+            return "high"
+    elif base_key.startswith(("gpt-6-astra", "gpt-6.1-sol")):
+        if low == "minimal":
+            return "low"
+    return None
+
+
+def _openai_reasoning_params(
+    base_key: str, params: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Build updated ``params`` without mutating shared dicts in place."""
+    reasoning = params.get("reasoning")
+    if not isinstance(reasoning, dict):
+        return None
+    if _is_openai_non_reasoning(base_key):
+        return {k: v for k, v in params.items() if k != "reasoning"}
+    effort = reasoning.get("effort")
+    if not isinstance(effort, str):
+        return None
+    mapped = _target_openai_effort(base_key, effort)
+    if mapped is None:
+        return None
+    if mapped == "":
+        return {k: v for k, v in params.items() if k != "reasoning"}
+    return {**params, "reasoning": {**reasoning, "effort": mapped}}
+
+
+def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
+    """Strip/clamp unsupported ``params['reasoning']`` on native OpenAI models.
+
+    ``strands_harness.models._openai()`` emits ``reasoning.effort='high'``
+    unconditionally on OpenAI models and passes routed effort strings verbatim;
+    non-reasoning models (``gpt-4o``, ``gpt-4.1*``) and effort-subset models
+    (``o1``/``o3``/``o4-mini``, ``gpt-5``..``gpt-5.2``, ``gpt-6-astra``,
+    ``gpt-6.1-sol``) reject unsupported values on the Responses API.
+    """
+    if not model_id or resolved is None:
+        return resolved
+    normalized = normalize_model_ref(model_id)
+    if _provider_of(normalized) != "openai":
+        return resolved
+    if getattr(resolved, "_bedrock_mantle_config", None) is not None:
+        return resolved
+    config = _read_model_config(resolved)
+    if config is None:
+        return resolved
+    params = config.get("params")
+    if not isinstance(params, dict):
+        return resolved
+    updated_params = _openai_reasoning_params(_base_key(normalized).lower(), params)
+    if updated_params is None:
+        return resolved
+    update = getattr(resolved, "update_config", None)
+    if callable(update):
+        try:
+            update(params=updated_params)
+        except Exception:
+            pass
+    return resolved
+
+
 def _has_reasoning(messages: list[dict[str, Any]]) -> bool:
-    """True when any block carries reasoningContent or a toolUse thought signature."""
+    """True when any block carries reasoningContent, SummaryBlock, or signature."""
     return any(
         "reasoningContent" in block
+        or "summary" in block
         or (
             isinstance(block.get("toolUse"), dict)
             and "reasoningSignature" in block["toolUse"]
@@ -979,6 +1275,7 @@ def resolve_harness_model(
     model = reported_cost.wrap_for_openrouter(normalized, model)
     model = configure_streaming_for_model(normalized, model)
     model = configure_gemini_for_model(normalized, model)
+    model = configure_openai_for_model(normalized, model)
     return configure_base_url_for_model(normalized, model, base_url=base_url)
 
 

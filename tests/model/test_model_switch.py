@@ -3052,7 +3052,8 @@ class TestGeminiCrossProviderSafety:
         )
 
         assert _vendor_family("gemini-2.5-pro") == ("google", "gemini")
-        assert _vendor_family("gpt-5.4") == ("gpt-5.4", "gpt-5.4")
+        assert _vendor_family("custom-1.5") == ("custom-1.5", "custom-1.5")
+        assert _vendor_family("gpt-5.4") == ("openai", "gpt")
         tree = build_model_tree(
             ["google/gemini-2.5-pro", "google/gemini-3-flash-preview"]
         )
@@ -3451,3 +3452,549 @@ class TestConfigureBaseUrlAndResolveHarness:
         assert fake_model.client_args["base_url"] == "https://oai-proxy.example/v1"
         assert agent._base_url == "https://oai-proxy.example/v1"
         assert agent._harness_kwargs["_base_url"] == "https://oai-proxy.example/v1"
+
+
+class TestSameProviderSummaryAndOpenAIGuard:
+    def test_same_provider_and_cross_provider_thinking_roundtrip(
+        self, monkeypatch, tmp_path
+    ):
+        import copy
+        import warnings
+
+        import strands_code_cli.loop.core as loop_core
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
+        from strands_code_cli.model.model_switch import (
+            TRACE_LABEL,
+            convert_history,
+            same_provider,
+            same_vendor,
+        )
+
+        assert same_vendor(
+            "anthropic/claude-sonnet-5-5",
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+        )
+        assert not same_provider(
+            "anthropic/claude-sonnet-5-5",
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+        )
+        assert same_provider("anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5")
+        assert same_provider(
+            "bedrock/global.anthropic.claude-sonnet-4-6", "anthropic.claude-haiku-4-5"
+        )
+
+        signed_history = [
+            {"role": "user", "content": [{"text": "solve carefully"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {
+                                "text": "anthropic secret chain",
+                                "signature": "ANTHROPIC_SIG_1",
+                            }
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "toolUseId": "t1",
+                            "name": "read",
+                            "input": {"path": "x.py"},
+                            "reasoningSignature": b"SIG_BYTES",
+                        }
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "t1", "content": [{"text": "ok"}]}}
+                ],
+            },
+            {"role": "assistant", "content": [{"text": "done"}]},
+        ]
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            converted = convert_history(
+                signed_history,
+                "anthropic/claude-sonnet-5-5",
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+            )
+        assert any(
+            TRACE_LABEL in str(w.message)
+            or "Dropping reasoningContent" in str(w.message)
+            for w in caught
+        )
+        assert all("reasoningContent" not in b for m in converted for b in m["content"])
+        assert converted[1]["content"][0]["text"].startswith(TRACE_LABEL)
+        assert "reasoningSignature" not in converted[1]["content"][1]["toolUse"]
+
+        # Full RichHistory stash -> Bedrock -> restore on switch back to Anthropic
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(copy.deepcopy(signed_history))
+        rich = RichHistory()
+        monkeypatch.setattr(
+            loop_core, "apply_switch", lambda ag, new_id, **kw: (ag.model, new_id)
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _id1, reply1 = apply_model_action(
+                agent,
+                "bedrock/global.anthropic.claude-sonnet-4-6",
+                turn_running=False,
+                current_model="anthropic/claude-sonnet-5-5",
+                rich=rich,
+            )
+        assert "thinking restored" not in reply1
+        assert all(
+            "reasoningContent" not in b for m in agent.messages for b in m["content"]
+        )
+
+        # Switching back to another anthropic/ model restores the stashed raw blocks
+        _id2, reply2 = apply_model_action(
+            agent,
+            "anthropic/claude-opus-5-5",
+            turn_running=False,
+            current_model="bedrock/global.anthropic.claude-sonnet-4-6",
+            rich=rich,
+        )
+        assert "thinking restored" in reply2
+        assert (
+            agent.messages[1]["content"][0]["reasoningContent"]["reasoningText"][
+                "signature"
+            ]
+            == "ANTHROPIC_SIG_1"
+        )
+        assert (
+            agent.messages[1]["content"][1]["toolUse"]["reasoningSignature"]
+            == b"SIG_BYTES"
+        )
+
+    def test_summary_block_switch_and_rich_history_restore(self, monkeypatch, tmp_path):
+        import copy
+
+        import strands_code_cli.loop.core as loop_core
+        from strands_code_cli.loop.core import RichHistory, apply_model_action
+        from strands_code_cli.model.model_switch import (
+            SUMMARY_LABEL,
+            _has_reasoning,
+            canonical_prefix_hash,
+            convert_history,
+        )
+
+        summary_history = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "summary": {
+                            "provider": "anthropic",
+                            "signature": "SUM_SIG",
+                            "text": "Prior 10 turns compacted.",
+                        }
+                    },
+                    {"summary": {"provider": "anthropic", "text": "   "}},
+                ],
+            },
+            {"role": "user", "content": [{"text": "continue"}]},
+        ]
+        assert _has_reasoning(summary_history) is True
+
+        same_prov = convert_history(
+            summary_history, "anthropic/claude-sonnet-5-5", "anthropic/claude-opus-5-5"
+        )
+        assert same_prov[0]["content"][0] == summary_history[0]["content"][0]
+
+        for target in (
+            "openai/gpt-6.1-sol",
+            "bedrock/global.anthropic.claude-sonnet-4-6",
+            "google/gemini-3-flash-preview",
+        ):
+            converted = convert_history(
+                summary_history, "anthropic/claude-sonnet-5-5", target
+            )
+            assert converted[0]["content"] == [
+                {"text": f"{SUMMARY_LABEL}\nPrior 10 turns compacted."}
+            ]
+            assert canonical_prefix_hash(converted) == canonical_prefix_hash(
+                summary_history
+            )
+
+        # Round-trip restore via RichHistory
+        agent = _make_replay_agent(str(uuid.uuid4()), tmp_path / "sessions")
+        agent.messages.extend(copy.deepcopy(summary_history))
+        rich = RichHistory()
+        monkeypatch.setattr(
+            loop_core, "apply_switch", lambda ag, new_id, **kw: (ag.model, new_id)
+        )
+        apply_model_action(
+            agent,
+            "openai/gpt-6.1-sol",
+            turn_running=False,
+            current_model="anthropic/claude-sonnet-5-5",
+            rich=rich,
+        )
+        assert agent.messages[0]["content"] == [
+            {"text": f"{SUMMARY_LABEL}\nPrior 10 turns compacted."}
+        ]
+        apply_model_action(
+            agent,
+            "anthropic/claude-haiku-5-5",
+            turn_running=False,
+            current_model="openai/gpt-6.1-sol",
+            rich=rich,
+        )
+        assert agent.messages[0]["content"][0]["summary"]["signature"] == "SUM_SIG"
+
+    def test_vendor_family_openai_anthropic_and_tree_grouping(self):
+        from strands_code_cli.model.model_switch import _vendor_family, build_model_tree
+
+        assert _vendor_family("claude-sonnet-5-5") == ("anthropic", "claude")
+        assert _vendor_family("gpt-6.1-sol") == ("openai", "gpt")
+        assert _vendor_family("gpt-oss-120b") == ("openai", "gpt-oss")
+        assert _vendor_family("o3") == ("openai", "o3")
+        assert _vendor_family("o4-mini") == ("openai", "o4")
+        assert _vendor_family("o1-preview") == ("openai", "o1")
+        assert _vendor_family("gemini-2.5-pro") == ("google", "gemini")
+        assert _vendor_family("x") == ("x", "x")
+
+        tree = dict(
+            build_model_tree(
+                [
+                    "anthropic/claude-sonnet-5-5",
+                    "openai/gpt-6.1-sol",
+                    "openai/o3",
+                    "openai/gpt-oss-120b",
+                    "bedrock/x",
+                ]
+            )
+        )
+        assert list(dict(tree["anthropic"])) == ["claude"]
+        assert list(dict(tree["openai"])) == ["gpt", "gpt-oss", "o3"]
+        assert "x" in tree
+
+    @staticmethod
+    def _fake_openai(params):
+        class _FakeOpenAI:
+            def __init__(self, initial_params):
+                self.config = {"params": initial_params}
+                self._bedrock_mantle_config = None
+
+            def get_config(self):
+                return self.config
+
+            def update_config(self, **kw):
+                self.config.update(kw)
+
+        return _FakeOpenAI(params)
+
+    def test_configure_openai_for_model_strips_and_clamps(self):
+        from strands_code_cli.model.model_switch import configure_openai_for_model
+
+        for model_id in (
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            "openai/gpt-4.1",
+            "openai/gpt-4.1-mini",
+            "openai/gpt-4-turbo",
+            "openai/chatgpt-4o-latest",
+            "openai/gpt-3.5-turbo",
+        ):
+            orig_params = {"reasoning": {"effort": "high"}, "temperature": 0.2}
+            fake = self._fake_openai(orig_params)
+            configure_openai_for_model(model_id, fake)
+            assert "reasoning" not in fake.config["params"], model_id
+            assert fake.config["params"]["temperature"] == 0.2
+            assert "reasoning" in orig_params  # original dict not mutated
+
+        for model_id in ("openai/o1", "openai/o3", "openai/o4-mini"):
+            f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+            configure_openai_for_model(model_id, f_min)
+            assert f_min.config["params"]["reasoning"]["effort"] == "low"
+            f_xh = self._fake_openai({"reasoning": {"effort": "xhigh"}})
+            configure_openai_for_model(model_id, f_xh)
+            assert f_xh.config["params"]["reasoning"]["effort"] == "high"
+            f_off = self._fake_openai({"reasoning": {"effort": "off"}})
+            configure_openai_for_model(model_id, f_off)
+            assert "reasoning" not in f_off.config["params"]
+
+        for model_id in ("openai/gpt-5", "openai/gpt-5.1", "openai/gpt-5.2"):
+            f_max = self._fake_openai({"reasoning": {"effort": "max"}})
+            configure_openai_for_model(model_id, f_max)
+            assert f_max.config["params"]["reasoning"]["effort"] == "high"
+            f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+            configure_openai_for_model(model_id, f_min)
+            assert f_min.config["params"]["reasoning"]["effort"] == "minimal"
+            f_none = self._fake_openai({"reasoning": {"effort": "none"}})
+            configure_openai_for_model(model_id, f_none)
+            assert "reasoning" not in f_none.config["params"]
+
+        for model_id in ("openai/gpt-6-astra", "openai/gpt-6.1-sol"):
+            f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+            configure_openai_for_model(model_id, f_min)
+            assert f_min.config["params"]["reasoning"]["effort"] == "low"
+            f_xh = self._fake_openai({"reasoning": {"effort": "xhigh"}})
+            configure_openai_for_model(model_id, f_xh)
+            assert f_xh.config["params"]["reasoning"]["effort"] == "xhigh"
+            f_off = self._fake_openai({"reasoning": {"effort": "off"}})
+            configure_openai_for_model(model_id, f_off)
+            assert "reasoning" not in f_off.config["params"]
+
+    def test_configure_openai_for_model_fails_soft_and_wires_all_sites(
+        self, monkeypatch, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        import strands_code_cli.entry.main as entry_main
+        from strands_code_cli.model.model_switch import (
+            apply_switch,
+            configure_openai_for_model,
+            resolve_harness_model,
+        )
+
+        mantle = self._fake_openai({"reasoning": {"effort": "high"}})
+        mantle._bedrock_mantle_config = object()
+        configure_openai_for_model("openai/gpt-4o", mantle)
+        assert mantle.config["params"]["reasoning"]["effort"] == "high"
+
+        anthropic_fake = self._fake_openai({"reasoning": {"effort": "high"}})
+        configure_openai_for_model("anthropic/claude-sonnet-5-5", anthropic_fake)
+        assert anthropic_fake.config["params"]["reasoning"]["effort"] == "high"
+
+        boom = self._fake_openai({"reasoning": {"effort": "high"}})
+
+        def _boom(**_kw):
+            raise RuntimeError("boom")
+
+        boom.update_config = _boom
+        assert configure_openai_for_model("openai/gpt-4o", boom) is boom
+
+        switched_fake = self._fake_openai({"reasoning": {"effort": "high"}})
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *_a, **_k: switched_fake
+        )
+        apply_switch(SimpleNamespace(), "openai/gpt-4o")
+        assert "reasoning" not in switched_fake.config["params"]
+
+        routed_fake = self._fake_openai({"reasoning": {"effort": "xhigh"}})
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *_a, **_k: routed_fake
+        )
+        resolve_harness_model("openai/o3", effort="xhigh")
+        assert routed_fake.config["params"]["reasoning"]["effort"] == "high"
+
+        built_fake = self._fake_openai({"reasoning": {"effort": "high"}})
+        monkeypatch.setattr(
+            entry_main,
+            "create_harness",
+            lambda **_kw: SimpleNamespace(model=built_fake),
+        )
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+        entry_main.build_agent("s-oai", tmp_path / "sess", model="openai/gpt-4.1-mini")
+        assert "reasoning" not in built_fake.config["params"]
+
+
+class TestLiveOpenAIAndAnthropicDiscovery:
+    def test_discover_openai_models_gating_filtering_and_fallback(self, monkeypatch):
+        import sys
+        import types
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_OPENAI_MODELS,
+            _discover_openai_models,
+        )
+
+        # No OPENAI_API_KEY -> empty, offline (no unkeyed clutter)
+        assert _discover_openai_models() == ([], False)
+
+        # Keyed + live SDK -> filters strictly to Responses chat/reasoning models
+        monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+        entries = [
+            types.SimpleNamespace(id="gpt-6.1-sol"),
+            types.SimpleNamespace(id="gpt-5.4"),
+            types.SimpleNamespace(id="o3"),
+            types.SimpleNamespace(id="o4-mini"),
+            types.SimpleNamespace(id="gpt-4o"),
+            types.SimpleNamespace(id="gpt-4.1"),
+            types.SimpleNamespace(id="chatgpt-4o-latest"),
+            types.SimpleNamespace(id="text-embedding-3-large"),
+            types.SimpleNamespace(id="whisper-1"),
+            types.SimpleNamespace(id="tts-1"),
+            types.SimpleNamespace(id="gpt-image-1"),
+            types.SimpleNamespace(id="gpt-4o-realtime-preview"),
+            types.SimpleNamespace(id="omni-moderation-latest"),
+            types.SimpleNamespace(id="dall-e-3"),
+            types.SimpleNamespace(id="babbage-002"),
+            types.SimpleNamespace(id="davinci-002"),
+            types.SimpleNamespace(id="gpt-3.5-turbo-instruct"),
+            types.SimpleNamespace(id="gpt-4o-transcribe"),
+            types.SimpleNamespace(id="gpt-4o-audio-preview"),
+            types.SimpleNamespace(id="sora-2"),
+            types.SimpleNamespace(id="gpt-4o-mini-tts"),
+            types.SimpleNamespace(id="gpt-4o-transcribe-diarize"),
+        ]
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = lambda **kw: types.SimpleNamespace(
+            models=types.SimpleNamespace(list=lambda: iter(entries))
+        )
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+
+        models, online = _discover_openai_models()
+        assert online is True
+        assert models == [
+            "openai/gpt-6.1-sol",
+            "openai/gpt-5.4",
+            "openai/o3",
+            "openai/o4-mini",
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
+            "openai/chatgpt-4o-latest",
+        ]
+
+        # Keyed offline / missing SDK -> curated fallback
+        monkeypatch.setitem(sys.modules, "openai", None)
+        fallback, online2 = _discover_openai_models()
+        assert online2 is False
+        assert fallback == list(CURATED_OPENAI_MODELS)
+
+    def test_discover_anthropic_models_gating_caching_and_fallback(
+        self, monkeypatch, tmp_path
+    ):
+        import datetime as dt
+        import sys
+        import types
+
+        import strands_code_cli.cost.live_pricing as live_pricing
+        from strands_code_cli.model.model_switch import (
+            CURATED_ANTHROPIC_MODELS,
+            _discover_anthropic_models,
+        )
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+
+        # Unkeyed -> empty, offline
+        assert _discover_anthropic_models() == ([], False)
+
+        # Keyed + live SDK -> discovers models and stores 24h JSON-safe metadata
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+
+        class _Caps:
+            def model_dump(self, mode: str = "json"):
+                return {"thinking": {"supported": True}}
+
+        entries = [
+            types.SimpleNamespace(
+                id="claude-sonnet-5-5",
+                max_input_tokens=1_000_000,
+                max_tokens=128_000,
+                capabilities=_Caps(),
+                line="sonnet",
+                retires_at=None,
+            ),
+            types.SimpleNamespace(
+                id="claude-opus-4-1",
+                max_input_tokens=200_000,
+                max_tokens=32_000,
+                capabilities={"thinking": {"supported": True}},
+                line="opus",
+                retires_at=dt.datetime(2027, 2, 1, 0, 0, tzinfo=dt.timezone.utc),
+            ),
+        ]
+        fake_anthropic = types.ModuleType("anthropic")
+        fake_anthropic.Anthropic = lambda **kw: types.SimpleNamespace(
+            models=types.SimpleNamespace(list=lambda: iter(entries))
+        )
+        monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic)
+
+        models, online = _discover_anthropic_models()
+        assert online is True
+        assert models == ["anthropic/claude-sonnet-5-5", "anthropic/claude-opus-4-1"]
+
+        cached = live_pricing.anthropic_model_entry("anthropic/claude-opus-4-1")
+        assert cached is not None
+        assert cached["max_input_tokens"] == 200_000
+        assert cached["retires_at"].startswith("2027-02-01")
+        assert live_pricing.anthropic_model_entry("anthropic/claude-sonnet-5-5")[
+            "capabilities"
+        ] == {"thinking": {"supported": True}}
+
+        # Keyed offline / SDK missing -> curated fallback
+        monkeypatch.setitem(sys.modules, "anthropic", None)
+        fallback, online2 = _discover_anthropic_models()
+        assert online2 is False
+        assert fallback == list(CURATED_ANTHROPIC_MODELS)
+
+    def test_discover_models_merges_keyed_providers_without_unkeyed_leak(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+
+        from strands_code_cli.model.model_switch import (
+            CURATED_ANTHROPIC_MODELS,
+            discover_models,
+        )
+
+        # Unkeyed Bedrock-only user never sees OpenAI/Anthropic entries
+        monkeypatch.setitem(sys.modules, "boto3", None)
+        opts_unkeyed, off_unkeyed = discover_models(configured=["bedrock/x"])
+        assert off_unkeyed is True
+        assert opts_unkeyed == ["bedrock/x"]
+
+        # Multi-key user: OpenAI online + Anthropic offline fallback merge cleanly
+        monkeypatch.setenv("OPENAI_API_KEY", "k-oai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k-ant")
+        fake_openai = types.ModuleType("openai")
+        fake_openai.OpenAI = lambda **kw: types.SimpleNamespace(
+            models=types.SimpleNamespace(
+                list=lambda: iter([types.SimpleNamespace(id="gpt-6.1-sol")])
+            )
+        )
+        monkeypatch.setitem(sys.modules, "openai", fake_openai)
+        monkeypatch.setitem(sys.modules, "anthropic", None)
+
+        merged, offline = discover_models()
+        assert offline is False
+        assert "openai/gpt-6.1-sol" in merged
+        for entry in CURATED_ANTHROPIC_MODELS:
+            assert entry in merged
+        assert all(not m.startswith("google/") for m in merged)
+
+    def test_route_label_surfaces_anthropic_retires_date(self, monkeypatch, tmp_path):
+        import strands_code_cli.cost.live_pricing as live_pricing
+        from strands_code_cli.model.model_switch import normalize_model_ref, route_label
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+
+        live_pricing.store_anthropic_models(
+            [
+                {
+                    "id": "claude-opus-4-1",
+                    "max_input_tokens": 200_000,
+                    "retires_at": "2027-02-01T00:00:00Z",
+                }
+            ]
+        )
+        assert (
+            route_label("anthropic/claude-opus-4-1")
+            == "anthropic/claude-opus-4-1 (retires 2027-02-01)"
+        )
+        assert normalize_model_ref("anthropic/claude-opus-4-1") == (
+            "anthropic/claude-opus-4-1"
+        )
+        assert route_label("openai/gpt-6.1-sol") == "openai/gpt-6.1-sol"
+
+        monkeypatch.setenv("STRANDS_CODE_NO_LIVE_PRICING", "1")
+        assert route_label("anthropic/claude-opus-4-1") == "anthropic/claude-opus-4-1"

@@ -477,8 +477,55 @@ def openrouter_entry(model_id: str) -> dict[str, float] | None:
     return dict(entry) if isinstance(entry, dict) else None
 
 
+ANTHROPIC_MODELS_CACHE_FILE = "anthropic-models.json"
+"""Disk cache for live Anthropic /v1/models metadata (24h TTL)."""
+
+_LITELLM_RATE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("in", "input_cost_per_token"),
+    ("out", "output_cost_per_token"),
+    ("cache_read", "cache_read_input_token_cost"),
+    ("cache_write", "cache_creation_input_token_cost"),
+)
+
+
+def _litellm_keys(model_id: str) -> list[str]:
+    """Ordered LiteLLM lookup keys from exact id to bare tail."""
+    lowered = model_id.lower()
+    tail = model_id.rsplit("/", 1)[-1]
+    if lowered.startswith("google/"):
+        keys = [f"gemini/{tail}", tail, model_id]
+    elif lowered.startswith(("anthropic/", "openai/")):
+        prefix = lowered.partition("/")[0]
+        keys = [model_id, tail, f"{prefix}/{tail}"]
+    else:
+        keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
+    target = _openrouter_id(model_id)
+    if target is not None:
+        keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])
+    if not lowered.startswith("google/") and "gemini" in tail.lower():
+        keys.extend([f"gemini/{tail}", tail])
+    return list(dict.fromkeys(keys))
+
+
+def _parse_litellm_entry(raw: Any) -> dict[str, float] | None:
+    """Parse one bundled LiteLLM record into per-1M rates (with cache) and window."""
+    if not isinstance(raw, dict):
+        return None
+    entry: dict[str, float] = {}
+    try:
+        for dst_key, src_key in _LITELLM_RATE_FIELDS:
+            if raw.get(src_key) is not None:
+                entry[dst_key] = float(raw[src_key]) * 1_000_000
+    except (TypeError, ValueError):
+        return None
+    window = raw.get("max_input_tokens")
+    if isinstance(window, (int, float)) and window > 0:
+        entry["window"] = float(window)
+    return entry or None
+
+
 def litellm_entry(model_id: str) -> dict[str, float] | None:
-    """Bundled-model-cost (in/out per-1M, window) when installed, else None.
+    """Bundled-model-cost (in/cache/out per-1M, window) when installed, else None.
 
     Partial entries are fine — a price without a window (or vice versa)
     still merges with the other layers field by field.
@@ -490,37 +537,66 @@ def litellm_entry(model_id: str) -> dict[str, float] | None:
     table = getattr(litellm, "model_cost", None)
     if not isinstance(table, dict):
         return None
-    # bedrock_mantle/ is LiteLLM's prefix for Bedrock-hosted third-party
-    # models (31 keys across 7 vendors: openai, qwen, google, deepseek,
-    # anthropic, moonshotai, xai) — the only layer pricing GPT-on-Bedrock.
-    tail = model_id.rsplit("/", 1)[-1]
-    if model_id.lower().startswith("google/"):
-        keys = [f"gemini/{tail}", tail, model_id]
-    else:
-        keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
-    target = _openrouter_id(model_id)
-    if target is not None:
-        keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])
-    if not model_id.lower().startswith("google/") and "gemini" in tail.lower():
-        keys.extend([f"gemini/{tail}", tail])
-    for key in keys:
-        raw = table.get(key)
+    for key in _litellm_keys(model_id):
+        parsed = _parse_litellm_entry(table.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def store_anthropic_models(entries: list[dict[str, Any]]) -> None:
+    """Persist Anthropic ``/v1/models`` metadata entries for 24h (no secrets)."""
+    if _live_disabled() or not entries:
+        return
+    models: dict[str, dict[str, Any]] = {}
+    for raw in entries:
         if not isinstance(raw, dict):
             continue
-        entry: dict[str, float] = {}
-        try:
-            if raw.get("input_cost_per_token") is not None:
-                entry["in"] = float(raw["input_cost_per_token"]) * 1_000_000
-            if raw.get("output_cost_per_token") is not None:
-                entry["out"] = float(raw["output_cost_per_token"]) * 1_000_000
-        except (TypeError, ValueError):
+        raw_id = raw.get("id")
+        if not isinstance(raw_id, str) or not raw_id.strip():
             continue
-        window = raw.get("max_input_tokens")
-        if isinstance(window, (int, float)) and window > 0:
-            entry["window"] = float(window)
-        if entry:
-            return entry
-    return None
+        tail = raw_id.strip().removeprefix("anthropic/")
+        cleaned = {k: v for k, v in raw.items() if v is not None}
+        cleaned["id"] = tail
+        models[tail] = cleaned
+    if not models:
+        return
+    _write_cache(
+        _cache_dir() / ANTHROPIC_MODELS_CACHE_FILE,
+        {"fetched_at": time.time(), "models": models},
+    )
+
+
+def anthropic_models_cache() -> dict[str, dict[str, Any]]:
+    """Fresh 24h cached Anthropic ``/v1/models`` metadata keyed by model id."""
+    if _live_disabled():
+        return {}
+    payload = _read_cache(_cache_dir() / ANTHROPIC_MODELS_CACHE_FILE)
+    if payload is None:
+        return {}
+    try:
+        fetched_at = float(payload.get("fetched_at", 0))
+    except (TypeError, ValueError):
+        return {}
+    if time.time() - fetched_at >= CACHE_TTL_SECONDS:
+        return {}
+    models = payload.get("models")
+    return dict(models) if isinstance(models, dict) else {}
+
+
+def anthropic_model_entry(model_id: str) -> dict[str, Any] | None:
+    """Cached metadata for an ``anthropic/`` or bare Claude model id, or None."""
+    if _live_disabled() or not model_id:
+        return None
+    lowered = model_id.lower()
+    if lowered.startswith("anthropic/"):
+        tail = model_id.split("/", 1)[1]
+    elif "/" not in model_id:
+        tail = model_id
+    else:
+        return None
+    entry = anthropic_models_cache().get(tail)
+    return dict(entry) if isinstance(entry, dict) else None
 
 
 def refresh_caches(region: str | None = None) -> dict[str, Any]:

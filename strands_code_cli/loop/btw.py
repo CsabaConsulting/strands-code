@@ -32,8 +32,10 @@ from strands_harness.memory import resolve_memory
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
+    SUMMARY_LABEL,
     configure_base_url_for_model,
     configure_gemini_for_model,
+    configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
 )
@@ -181,6 +183,26 @@ def render_btw_cancelled(question: str) -> None:
         print_plain(console, "--- end btw ---")
 
 
+def _fork_message_content(
+    message: Mapping[str, Any], answered: set[str]
+) -> list[dict[str, Any]]:
+    """Filter/convert one parent message's blocks for a /btw side-agent fork."""
+    blocks: list[dict[str, Any]] = []
+    for block in message.get("content", []):
+        if "reasoningContent" in block or "injected" in block:
+            continue
+        if "toolUse" in block and block["toolUse"].get("toolUseId") not in answered:
+            continue
+        if "summary" in block:
+            payload = block.get("summary")
+            text = payload.get("text") if isinstance(payload, dict) else None
+            if isinstance(text, str) and text.strip():
+                blocks.append({"text": f"{SUMMARY_LABEL}\n{text}"})
+            continue
+        blocks.append(copy.deepcopy(block))
+    return blocks
+
+
 def fork_btw_history(messages: list | None, question: str) -> list:
     """Fork parent history for the side agent (replicated harness "all").
 
@@ -188,8 +210,9 @@ def fork_btw_history(messages: list | None, question: str) -> list:
     algorithm (never import harness privates across the package
     boundary): deep-copy, drop ``toolUse`` blocks with no matching
     ``toolResult``, strip all ``reasoningContent`` and ``injected`` blocks
-    (the side agent runs its own memory injector), drop messages left
-    empty. The framed btw question becomes the trailing user turn —
+    (the side agent runs its own memory injector), convert Anthropic
+    ``summary`` blocks to labeled text, and drop messages left empty.
+    The framed btw question becomes the trailing user turn —
     absorbed into the trailing message when it is already user-role, so
     emitted roles strictly alternate (per the harness ``_with_history``
     rule). A trailing user turn with raw text (the mid-turn in-flight main
@@ -204,17 +227,9 @@ def fork_btw_history(messages: list | None, question: str) -> list:
         if "toolResult" in block
     }
     for message in messages or []:
-        content = [
-            block
-            for block in message.get("content", [])
-            if "reasoningContent" not in block
-            and "injected" not in block
-            and (
-                "toolUse" not in block or block["toolUse"].get("toolUseId") in answered
-            )
-        ]
+        content = _fork_message_content(message, answered)
         if content:
-            forked.append({"role": message["role"], "content": copy.deepcopy(content)})
+            forked.append({"role": message["role"], "content": content})
     framed = {"text": f"{BTW_FORK_PREAMBLE}\n\n{question}"}
     if forked and forked[-1]["role"] == "user":
         # Mid-turn spawn: the trailing user turn is the unanswered main
@@ -465,6 +480,7 @@ def build_btw_agent(
     )
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
+    configure_openai_for_model(target_id, resolved_model)
     configure_base_url_for_model(target_id, resolved_model, base_url=base_url)
     register_memory_plugin(agent, load_memory)
     return agent, prompt
