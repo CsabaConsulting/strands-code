@@ -36,6 +36,8 @@ from strands_code_cli.routing.core import (
     build_model_question,
     chain_skip_notes,
     decide,
+    decide_via_decisions_api,
+    decide_via_llm,
     decide_via_ollama,
     decide_via_openrouter,
     decide_via_typesafe,
@@ -2921,3 +2923,79 @@ class TestLiveEngines:
         assert abs(sum(probs.values()) - 1.0) < 1e-6
         assert result.model, "live response logged no serving snapshot"
         assert result.cost is None, "local decisions report zero spend"
+
+    @pytest.mark.integration
+    def test_decisions_api_live_decision_returns_typed_table(self):
+        import os
+
+        if not os.environ.get("JEV_API_KEY"):
+            pytest.skip("JEV_API_KEY not set")
+        candidates = [
+            RoutingCandidate(id="live/a"),
+            RoutingCandidate(id="live/b"),
+        ]
+        state = build_decision_state(
+            ask="live probe", directives="live probe", side=False
+        )
+        questions = {
+            "pick_model": build_model_question(
+                candidates=candidates, directives="live probe"
+            )
+        }
+        result = decide_via_decisions_api(
+            model_id="~typesafe/jev-latest", state=state, questions=questions
+        )
+        assert result.answers is not None, (
+            f"live decisionapi.net call failed ({result.error}) — check JEV_API_KEY, "
+            "account balance, and network"
+        )
+        answer = validate_choice_answer(result.answers.get("pick_model"), candidates)
+        assert answer is not None, "live answer failed typed validation"
+        probs = answer["probabilities"]
+        assert abs(sum(probs.values()) - 1.0) <= 1e-6 + len(probs) * 5e-5
+        assert result.input_tokens > 0, "live response reported no input tokens"
+        assert result.cost is None
+
+    @pytest.mark.integration
+    def test_llm_live_decision_routes_or_holds_uncertain(self):
+        llm_model = _pick_live_llm_model()
+        if llm_model is None:
+            pytest.skip("no direct LLM credential set for live LLMDecisionModel probe")
+        candidates = [
+            RoutingCandidate(id="live/a", criteria="Short trivial asks"),
+            RoutingCandidate(id="live/b", criteria="Complex architectural refactors"),
+        ]
+        state = build_decision_state(
+            ask="live probe", directives="Short trivial asks use live/a", side=False
+        )
+        questions = {
+            "pick_model": build_model_question(
+                candidates=candidates, directives="Short trivial asks use live/a"
+            )
+        }
+        result = decide_via_llm(llm_model=llm_model, state=state, questions=questions)
+        assert result.error is None or result.uncertain, (
+            f"live LLMDecisionModel call failed on {llm_model} ({result.error})"
+        )
+        if result.uncertain:
+            assert result.answers is None
+        else:
+            assert result.answers is not None
+            pick = result.answers.get("pick_model")
+            assert isinstance(pick, dict) and pick.get("type") == "llm_choice"
+            assert pick.get("choice") in {c.id for c in candidates}
+        assert result.input_tokens >= 0
+
+
+def _pick_live_llm_model() -> str | None:
+    import os
+
+    if os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+        return "google/gemini-3.8-flash"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "openai/gpt-6.2-sol"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "anthropic/claude-haiku-4-5"
+    if os.environ.get("MODEL_API_KEY") or os.environ.get("META_API_KEY"):
+        return "meta/muse-spark-1.3-contributor"
+    return None

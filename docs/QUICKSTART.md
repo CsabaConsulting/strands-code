@@ -251,6 +251,20 @@ keys via `--model ollama/<model>` (or `--model litellm/ollama_chat/<model>`).
   gateway key), or via `--extra litellm` with `LITELLM_BASE_URL` +
   `LITELLM_API_KEY`.
 
+### Model routing & decision keys
+
+Optional pre-turn routing (`/route setup`, see [ROUTING.md](ROUTING.md)) keeps
+provider credentials separate in env vars:
+
+- `TYPESAFE_API_KEY`: direct **TypeSafe System One API** (`api.typesafe.ai`,
+  `engine.order: [native]`, pinned `jev-1.13.0`).
+- `JEV_API_KEY`: **decisionapi.net** multi-provider aggregator
+  (`engine.order: [decisions_api]`, opt-in config defaulting to
+  `~typesafe/jev-latest`). Kept separate from `TYPESAFE_API_KEY` so both keys
+  coexist cleanly without colliding.
+- `OPENROUTER_API_KEY` / Ollama / `engine.order: [llm]`: OpenRouter Decisions,
+  local Ollama `/v1/systemone`, or any configured LLM via `engine.llm_model`.
+
 ## Model capabilities (advanced)
 
 Mid-session `/model` switches convert history to what the target accepts

@@ -18,11 +18,17 @@ exactly as before.
   criteria prose, and the current ask text only (truncated) — never
   history, tool results, or file contents. Prices and windows never
   enter the call; the model judges, code computes.
-- **Engines**: true Decision APIs only — OpenRouter
-  `/api/alpha/decisions`, a local Ollama daemon (`/v1/systemone`,
-  needs Ollama ≥0.35 plus a decision-model pull), and the native
-  TypeSafe engine (`POST https://api.typesafe.ai/v1/systemone`,
+- **Engines**: all routing transports converge onto
+  `strands.decisions.DecisionModel` (`TypeSafeDecisionModel`,
+  `DecisionsAPIDecisionModel`, `OpenRouterDecisionModel`,
+  `OllamaDecisionModel`, and optional `LLMDecisionModel`). Default setup
+  uses OpenRouter `/api/alpha/decisions`, a local Ollama daemon
+  (`/v1/systemone`, needs Ollama ≥0.35 plus a decision-model pull), and
+  the native TypeSafe engine (`POST https://api.typesafe.ai/v1/systemone`,
   keyed by env-only `TYPESAFE_API_KEY`, pinned to `jev-1.13.0`).
+  Config-only opt-in engines add `decisions_api` (`decisionapi.net`,
+  keyed by `JEV_API_KEY`, defaulting to `~typesafe/jev-latest`) and `llm`
+  (any configured `provider/model` via `engine.llm_model`).
   The chain follows your ordered engines list, then holds the
   current model — no heuristic ever picks a model, and a short ask
   can still mean deep work.
@@ -88,6 +94,46 @@ pin, `jev-latest` is the explicit opt-in alias (it drifts — every
 verdict logs the serving snapshot so moves stay visible).
 Minor-only (`jev-1.13`) and prefixed (`typesafe/jev-1.13`) forms are
 invalid on native and 400; use the pin.
+
+## Opt-in `decisions_api` & `llm` engines
+
+Both extra `DecisionModel` engines are **config-only opt-in** in
+`routing.yaml` (neither joins `/route setup` or default fallback chains,
+and `/route validate` makes zero network calls for them):
+
+- **`decisions_api` (`decisionapi.net`, `JEV_API_KEY`):** multi-provider
+  System One aggregator backed by `DecisionsAPIDecisionModel`,
+  defaulting to `~typesafe/jev-latest` (override via
+  `engine.decisions_api_model`), participating in `0.62`/`0.04`
+  probability gating, reporting `$0.0000` in `/cost`, and emitting a
+  one-line skip note when listed without `JEV_API_KEY`. Use `JEV_API_KEY`
+  for `decisionapi.net` and `TYPESAFE_API_KEY` for direct TypeSafe
+  (`api.typesafe.ai`) — the keys do not collide. Note: free models such
+  as `respan/span-01-lite:free` on `decisionapi.net` support boolean
+  `noul` questions only and reject multi-choice routing; keep
+  `decisions_api_model` on a choice-capable model such as
+  `~typesafe/jev-latest`.
+
+```yaml
+engine:
+  order: [decisions_api, openrouter]
+  decisions_api_model: ~typesafe/jev-latest
+  decision_model: typesafe/jev-1.13
+```
+
+- **`llm` (`LLMDecisionModel`):** closed-choice structured-output routing
+  using any configured `provider/model` in `engine.llm_model` (`effort="off"`,
+  `web_search=False`, `caching=False`). Runs with `uncertainty=True` so
+  ambiguous asks hold current immediately (`<engine> uncertain`) instead
+  of guessing or falling back; bypasses numeric `0.62`/`0.04` gating
+  (`model n/a, effort n/a`); and folds estimated USD spend into the
+  `/cost` **estimated** lane (omitting the `actual` tag).
+
+```yaml
+engine:
+  order: [llm]
+  llm_model: openai/gpt-4o-mini
+```
 
 ## Example strategies
 
@@ -161,15 +207,19 @@ Manual file edits are allowed and expected — the schema is plain YAML:
 - `benchmarks` is a user-editable snapshot (`swe_verified`, `lmarena_coding`,
   `aa_index`) stamped with a `pulled:` date; live prices come from the
   catalog at decision time, never from the snapshot.
-- `engine.primary` is `openrouter`, `local`, or `off` (`off` disables
-  routing). `decision_model` must be a decisions-catalog id (never an
-  alias); `local_model` names your Ollama tag when `primary` is `local`
-  (`nimble` is the default tag). `local_base_url` optionally re-points a
-  non-loopback daemon. New files use the ordered shape instead:
-  `engine.order` lists engines in try order (`native`, `openrouter`,
-  `local`), `native_model` carries the pinned Jev id when native is
-  listed, and `skip_notes` (true/false, default true) governs the
-  keyless-skip note. An explicit `order` wins over `primary`.
+- `engine.primary` is `openrouter`, `local`, `decisions_api`, `llm`, or
+  `off` (`off` disables routing). `decision_model` must be a
+  decisions-catalog id (never an alias); `local_model` names your Ollama
+  tag when `primary` is `local` (`nimble` is the default tag);
+  `local_base_url` optionally re-points a non-loopback daemon;
+  `decisions_api_model` sets an optional `decisionapi.net` model id
+  (defaults to `~typesafe/jev-latest`); and `llm_model` names the
+  `provider/model` used by `llm`. New files use the ordered shape
+  instead: `engine.order` lists engines in try order (`native`,
+  `openrouter`, `local`, `decisions_api`, `llm`), `native_model` carries
+  the pinned Jev id when native is listed, and `skip_notes`
+  (true/false, default true) governs keyless-skip notes. An explicit
+  `order` wins over `primary`.
 - Repo wins whole-file over global; delete or fix the repo file to fall back.
 - Re-run `/route validate` after every manual edit — it judges the real file.
 
@@ -177,8 +227,11 @@ Manual file edits are allowed and expected — the schema is plain YAML:
 
 Strategy files never hold keys. The OpenRouter key is runtime-supplied via
 `OPENROUTER_API_KEY` (read at call time, sent header-only, never logged);
-the native key is runtime-supplied via `TYPESAFE_API_KEY` under the same
-posture; the local daemon uses `OLLAMA_HOST` with no key on loopback.
+the native TypeSafe (`api.typesafe.ai`) key is runtime-supplied via
+`TYPESAFE_API_KEY` and the `decisionapi.net` aggregator key via
+`JEV_API_KEY` under the same posture (these two keys map to separate
+hosts and never collide); the local daemon uses `OLLAMA_HOST` with no
+key on loopback; `llm` reuses your configured model provider key.
 Guided setup never prompts for keys and drops any `api_key`-shaped key
 it finds.
 
