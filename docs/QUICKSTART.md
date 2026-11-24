@@ -242,6 +242,15 @@ export LITELLM_API_KEY="<key>"
 then `/model litellm/openrouter/<vendor>/<model>`. Local Ollama runs without API
 keys via `--model ollama/<model>` (or `--model litellm/ollama_chat/<model>`).
 
+- **Other multi-model gateways & neocloud aggregators (BYO `base_url`):**
+  OpenAI-compatible routers and aggregators — such as **Respan**
+  (`https://gateway.respan.ai/v1`) or **AIHubMix** (`https://aihubmix.com/v1`) —
+  work without dedicated provider extras by pointing `~/.config/strands-code/config.yaml`
+  at their OpenAI-compatible endpoint (see `base_url` / `api_mode: chat` under
+  [OpenAI](#openai-zero-aws-required) above, with `OPENAI_API_KEY` holding your
+  gateway key), or via `--extra litellm` with `LITELLM_BASE_URL` +
+  `LITELLM_API_KEY`.
+
 ## Model capabilities (advanced)
 
 Mid-session `/model` switches convert history to what the target accepts
