@@ -32,6 +32,7 @@ from strands_code_cli.loop.core import run_loop
 from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
+    configure_base_url_for_model,
     configure_gemini_for_model,
     configure_streaming_for_model,
     model_id_of,
@@ -90,30 +91,46 @@ def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
     return index.mint()
 
 
-def model_for_config(model: str | None, base_url: str | None = None) -> Any:
-    """Map a persisted model string (+ optional endpoint host) to a model.
+def model_for_config(
+    model: str | None,
+    base_url: str | None = None,
+    api_mode: str | None = None,
+) -> Any:
+    """Map a persisted model string (+ optional endpoint host / api_mode) to a model.
 
-    Plain ``provider/name`` strings pass through for ``create_harness`` to
-    resolve. Custom OpenAI-compatible endpoints (``openai/`` or ``litellm/``
-    prefix with a persisted non-secret ``base_url`` host) build an
-    ``OpenAIModel`` with ``client_args={"base_url": ...}`` — the key is never
-    persisted, only supplied at runtime. Falls back to the string when the
-    optional provider SDK is unavailable.
+    Plain ``provider/name`` strings — including ``openai/`` and ``anthropic/``
+    with a custom ``base_url`` in default ``responses`` mode — pass through as
+    strings so ``create_harness`` retains ``effort``, ``CacheConfig``, and
+    native ``web_search``, with ``base_url`` post-applied by ``build_agent``.
+    Custom ``litellm/`` gateways or explicit ``api_mode == "chat"`` on
+    ``openai/`` build a legacy Chat Completions ``OpenAIModel`` (stripping the
+    ``openai/`` prefix). Falls back to the string when the optional provider
+    SDK is unavailable.
     """
     if model is None:
         return None
-    prefix = model.partition("/")[0] if "/" in model else "bedrock"
-    if base_url and prefix in ("openai", "litellm"):
+    prefix, _, rest = model.partition("/") if "/" in model else ("bedrock", "", model)
+    use_chat_completions = base_url and (
+        prefix == "litellm" or (prefix == "openai" and api_mode == "chat")
+    )
+    if use_chat_completions:
         try:
             from strands.models.openai import OpenAIModel
 
-            return OpenAIModel(model_id=model, client_args={"base_url": base_url})
+            chat_id = rest if prefix == "openai" else model
+            return OpenAIModel(model_id=chat_id, client_args={"base_url": base_url})
         except ImportError:
             pass  # provider SDK missing: harness resolve reports it
     return model
 
 
-def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
+def build_agent(
+    session_id: str,
+    session_dir: str | Path,
+    model: Any = None,
+    *,
+    base_url: str | None = None,
+):
     """Construct the session agent through the harness factory only.
 
     The harness default tool set (shell/read/write/edit live) is edited via
@@ -176,9 +193,18 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
         "skills": skills_plugin,
         "memory": True,
     }
+    if (
+        base_url
+        and isinstance(model, str)
+        and model.partition("/")[0].lower() in ("openai", "anthropic")
+    ):
+        kwargs["builtin_tools"]["web_fetch"] = {"model": model}
     if model is not None:
         kwargs["model"] = model
     agent = create_harness(**kwargs)
+    if base_url:
+        kwargs["_base_url"] = base_url
+        agent._base_url = base_url
     # Stash the factory kwargs for /btw side-agent rebuilds (LOOP-03):
     # the loop replays this dict through create_harness with the
     # delegate overrides, so the child is built the way the parent was.
@@ -187,6 +213,7 @@ def build_agent(session_id: str, session_dir: str | Path, model: Any = None):
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
+    configure_base_url_for_model(target_id, resolved_model, base_url=base_url)
     if isinstance(model, str):
         # Initial-build wrap (D-07): a session starting on an OpenRouter
         # id captures from turn one. In-place promotion preserves the
@@ -267,7 +294,8 @@ def _root(
     agent = build_agent(
         resolved,
         DEFAULT_SESSION_DIR,
-        model=model_for_config(effective_model, config.base_url),
+        model=model_for_config(effective_model, config.base_url, config.api_mode),
+        base_url=config.base_url,
     )
     run_loop(
         agent,

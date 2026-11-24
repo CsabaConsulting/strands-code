@@ -80,14 +80,13 @@ from strands_code_cli.model.model_switch import (
     _has_reasoning,
     apply_switch,
     canonical_prefix_hash,
-    configure_gemini_for_model,
-    configure_streaming_for_model,
     convert_history,
     estimate_fit,
     from_stash_json,
     model_id_of,
     normalize_model_ref,
     prepare_resumed_history,
+    resolve_harness_model,
     same_vendor,
     supports_reasoning,
     supports_streaming_tools,
@@ -443,7 +442,6 @@ def _route_side_spawn(
             held=True,
         )
         return
-    from strands_harness.models import resolve_model
 
     kwargs["model"] = live_model
     try:
@@ -506,12 +504,12 @@ def _route_side_spawn(
             )
             return
         try:
-            routed = resolve_model(pick.model, pick.model, effort=pick.effort)
-            from strands_code_cli.cost.reported_cost import wrap_for_openrouter
-
-            routed = wrap_for_openrouter(pick.model, routed)
-            routed = configure_streaming_for_model(pick.model, routed)
-            routed = configure_gemini_for_model(pick.model, routed)
+            routed = resolve_harness_model(
+                pick.model,
+                pick.model,
+                effort=pick.effort,
+                base_url=kwargs.get("_base_url"),
+            )
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
             _record_routing_event(
                 routing_events,

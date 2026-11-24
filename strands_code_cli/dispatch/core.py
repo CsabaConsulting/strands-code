@@ -78,6 +78,8 @@ _SDK_EXTRA_HINTS = {
     "litellm": "litellm",
     "bedrock": "agentcore",
     "google": "gemini",
+    "openai": "openai",
+    "anthropic": "anthropic",
 }
 """Optional-extra install hints keyed by provider prefix."""
 
@@ -86,8 +88,9 @@ def _sdk_hint(selection: str) -> str:
     """Install hint for a missing provider SDK (ImportError path).
 
     Bare ids and ARNs resolve through Bedrock (boto3, ``agentcore``
-    extra); ``litellm/`` ids need the ``litellm`` extra; ``google/`` ids
-    need the ``gemini`` extra. Anything else keeps the generic pointer.
+    extra); ``litellm/``, ``google/``, ``openai/``, and ``anthropic/``
+    ids map to their matching extras. Anything else keeps the generic
+    pointer.
     """
     if selection.startswith("arn:") or "/" not in selection:
         provider = "bedrock"

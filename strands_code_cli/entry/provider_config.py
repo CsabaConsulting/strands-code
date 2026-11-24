@@ -18,12 +18,36 @@ logger = logging.getLogger(__name__)
 _CONFIG_DIR_NAME = "strands-code"
 _CONFIG_FILE_NAME = "config.yaml"
 
-_KNOWN_KEYS = {"model", "base_url", "codeact", "codeact_remember"}
+_KNOWN_KEYS = {"model", "base_url", "api_mode", "codeact", "codeact_remember"}
+VALID_API_MODES = ("responses", "chat")
 
 
 def default_config_path() -> Path:
     """User config file path (platformdirs home, never a repo-relative path)."""
     return Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _CONFIG_FILE_NAME
+
+
+def _validate_provider_fields(
+    *,
+    model: Any,
+    base_url: Any,
+    api_mode: Any,
+    codeact: Any,
+    codeact_remember: Any,
+) -> None:
+    """Validate persisted provider configuration field types and enums."""
+    if model is not None and not isinstance(model, str):
+        raise ValueError("Provider config 'model' must be a string")
+    if base_url is not None and not isinstance(base_url, str):
+        raise ValueError("Provider config 'base_url' must be a string")
+    if api_mode is not None and (
+        not isinstance(api_mode, str) or api_mode not in VALID_API_MODES
+    ):
+        raise ValueError("Provider config 'api_mode' must be one of responses|chat")
+    if codeact is not None and codeact not in CodeactState.VALID:
+        raise ValueError("Provider config 'codeact' must be one of tool|code|both")
+    if codeact_remember is not None and not isinstance(codeact_remember, bool):
+        raise ValueError("Provider config 'codeact_remember' must be a bool")
 
 
 @dataclass
@@ -32,7 +56,8 @@ class ProviderConfig:
 
     The loaded ``model`` string feeds ``create_harness`` as a constructor
     kwarg; the file holds only the model string plus the non-secret
-    ``base_url`` host for custom OpenAI-compatible endpoints — never keys.
+    ``base_url`` host and optional ``api_mode`` (``responses|chat``) for
+    custom OpenAI-compatible endpoints — never keys.
 
     Phase 11 adds the CodeAct session-start keys (D-02/D-03):
     ``codeact`` is the persisted last interface choice, honored only
@@ -42,6 +67,7 @@ class ProviderConfig:
 
     model: str | None = None
     base_url: str | None = None
+    api_mode: str | None = None
     codeact: str | None = None
     codeact_remember: bool = False
 
@@ -50,9 +76,9 @@ class ProviderConfig:
         """Load config fail-soft: missing or corrupt files yield defaults.
 
         Raises:
-            ValueError: On unknown keys, a non-string model value, a
-                codeact value outside ``tool|code|both``, or a
-                non-bool codeact_remember value.
+            ValueError: On unknown keys, invalid field types, an
+                ``api_mode`` outside ``responses|chat``, or a ``codeact``
+                value outside ``tool|code|both``.
         """
         resolved = Path(path) if path is not None else default_config_path()
         if resolved.is_symlink():
@@ -73,20 +99,21 @@ class ProviderConfig:
         if unknown:
             raise ValueError(f"Unknown provider config keys: {sorted(unknown)}")
         model = data.get("model")
-        if model is not None and not isinstance(model, str):
-            raise ValueError("Provider config 'model' must be a string")
         base_url = data.get("base_url")
-        if base_url is not None and not isinstance(base_url, str):
-            raise ValueError("Provider config 'base_url' must be a string")
+        api_mode = data.get("api_mode")
         codeact = data.get("codeact")
-        if codeact is not None and codeact not in CodeactState.VALID:
-            raise ValueError("Provider config 'codeact' must be one of tool|code|both")
         remember = data.get("codeact_remember")
-        if remember is not None and not isinstance(remember, bool):
-            raise ValueError("Provider config 'codeact_remember' must be a bool")
+        _validate_provider_fields(
+            model=model,
+            base_url=base_url,
+            api_mode=api_mode,
+            codeact=codeact,
+            codeact_remember=remember,
+        )
         return cls(
             model=model,
             base_url=base_url,
+            api_mode=api_mode,
             codeact=codeact,
             codeact_remember=bool(remember),
         )
@@ -114,16 +141,13 @@ class ProviderConfig:
         Returns:
             The config file path written.
         """
-        if self.model is not None and not isinstance(self.model, str):
-            raise ValueError("Provider config 'model' must be a string")
-        if self.base_url is not None and not isinstance(self.base_url, str):
-            raise ValueError("Provider config 'base_url' must be a string")
-        if self.codeact is not None and self.codeact not in CodeactState.VALID:
-            raise ValueError("Provider config 'codeact' must be one of tool|code|both")
-        if self.codeact_remember is not None and not isinstance(
-            self.codeact_remember, bool
-        ):
-            raise ValueError("Provider config 'codeact_remember' must be a bool")
+        _validate_provider_fields(
+            model=self.model,
+            base_url=self.base_url,
+            api_mode=self.api_mode,
+            codeact=self.codeact,
+            codeact_remember=self.codeact_remember,
+        )
         resolved = Path(path) if path is not None else default_config_path()
         if resolved.is_symlink():
             raise ValueError(f"Provider config must not be a symlink: {resolved}")
@@ -132,6 +156,8 @@ class ProviderConfig:
             payload["model"] = self.model
         if self.base_url is not None:
             payload["base_url"] = self.base_url
+        if self.api_mode is not None:
+            payload["api_mode"] = self.api_mode
         if self.codeact is not None:
             payload["codeact"] = self.codeact
         if self.codeact_remember:

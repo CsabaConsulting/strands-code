@@ -2102,10 +2102,16 @@ class TestModelRouterBranch:
         assert action == "reply"
         assert "Supported providers" in message
 
-    def test_uninstallable_provider_reply_fail_soft(self, tmp_path):
+    def test_uninstallable_provider_reply_fail_soft(self, tmp_path, monkeypatch):
+        import strands_harness.models as harness_models
+
         from strands_code_cli.dispatch.core import dispatch
         from strands_code_cli.session.session_index import SessionIndex
 
+        def _missing_sdk(*_args, **_kwargs):
+            raise ImportError("anthropic sdk missing in probe")
+
+        monkeypatch.setattr(harness_models, "resolve_model", _missing_sdk)
         index = SessionIndex(tmp_path / "index")
         action, message = dispatch(
             "/model anthropic/claude-3-7-sonnet-latest",
@@ -2114,6 +2120,7 @@ class TestModelRouterBranch:
         )
         assert action == "reply"
         assert "anthropic/claude-3-7-sonnet-latest" in message
+        assert "strands-code-agent[anthropic]" in message
 
     def test_arn_prefix_preserved_verbatim(self, tmp_path):
         from strands_code_cli.dispatch.core import dispatch
@@ -2326,6 +2333,8 @@ class TestModelPersistence:
 
     def test_model_for_config_shapes(self, monkeypatch):
         import builtins
+        import sys
+        import types
 
         from strands_code_cli.entry.main import model_for_config
 
@@ -2334,8 +2343,46 @@ class TestModelPersistence:
             model_for_config("bedrock/global.anthropic.claude-sonnet-4-6")
             == "bedrock/global.anthropic.claude-sonnet-4-6"
         )
-        # Simulated missing provider SDK → verbatim string fallback, never a
+        # Default responses/messages mode preserves strings so create_harness keeps
+        # effort, CacheConfig, and native web_search intact even with base_url.
+        assert (
+            model_for_config("openai/gpt-6.1-sol", "https://proxy.local/v1")
+            == "openai/gpt-6.1-sol"
+        )
+        assert (
+            model_for_config(
+                "anthropic/claude-sonnet-5-5",
+                "https://anth-proxy.local",
+                api_mode="responses",
+            )
+            == "anthropic/claude-sonnet-5-5"
+        )
+
+        # Opt-in api_mode="chat" strips the openai/ prefix for Chat Completions
+        # OpenAIModel and falls back to the string when SDK is absent.
+        built_args: list = []
+
+        class _FakeOpenAIChat:
+            def __init__(self, **kwargs):
+                built_args.append(kwargs)
+
+        fake_mod = types.ModuleType("strands.models.openai")
+        fake_mod.OpenAIModel = _FakeOpenAIChat
+        monkeypatch.setitem(sys.modules, "strands.models.openai", fake_mod)
+        chat_model = model_for_config(
+            "openai/nemotron-70b", "https://proxy.local/v1", api_mode="chat"
+        )
+        assert isinstance(chat_model, _FakeOpenAIChat)
+        assert built_args == [
+            {
+                "model_id": "nemotron-70b",
+                "client_args": {"base_url": "https://proxy.local/v1"},
+            }
+        ]
+
+        # Simulated missing provider SDK -> verbatim string fallback, never a
         # raise (hermetic: must not depend on which extras are installed).
+        monkeypatch.delitem(sys.modules, "strands.models.openai", raising=False)
         real_import = builtins.__import__
 
         def _no_openai(name, *args, **kwargs):
@@ -2347,7 +2394,9 @@ class TestModelPersistence:
 
         monkeypatch.setattr(builtins, "__import__", _no_openai)
         assert (
-            model_for_config("openai/nemotron-70b", "https://proxy.local/v1")
+            model_for_config(
+                "openai/nemotron-70b", "https://proxy.local/v1", api_mode="chat"
+            )
             == "openai/nemotron-70b"
         )
 
@@ -2411,7 +2460,7 @@ class TestReportedWrapScope:
         )
         assert calls[-1] == (
             ("litellm/openrouter/qwen/qwen3-32b", "litellm/openrouter/qwen/qwen3-32b"),
-            {"effort": "high"},
+            {"caching": True, "caching_explicit": False, "effort": "high"},
         )
         assert agent.model is model
         assert callable(getattr(model, "take_reported_costs", None))
@@ -2426,7 +2475,10 @@ class TestReportedWrapScope:
         monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve_other)
         model, resolved_id = apply_switch(agent, "bedrock/anthropic.claude-x")
         assert calls[plain_calls:] == [
-            (("bedrock/anthropic.claude-x", "bedrock/anthropic.claude-x"), {})
+            (
+                ("bedrock/anthropic.claude-x", "bedrock/anthropic.claude-x"),
+                {"caching": True, "caching_explicit": False},
+            )
         ]
         assert model is other
         assert agent.model is other
@@ -3329,3 +3381,73 @@ class TestGeminiCrossProviderSafety:
             is None
         )
         assert _is_google_chat_model(SimpleNamespace(name=None)) is None
+
+
+class TestConfigureBaseUrlAndResolveHarness:
+    def test_apply_switch_forwards_caching_web_search_and_base_url(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import anthropic
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model.model_switch import apply_switch
+
+        calls: list = []
+        oai_double = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+
+        def _spy_resolve(*args, **kwargs):
+            calls.append((args, kwargs))
+            return oai_double
+
+        monkeypatch.setattr(harness_models, "resolve_model", _spy_resolve)
+        agent = SimpleNamespace(
+            model=None, messages=[], _base_url="https://proxy.local/v1"
+        )
+        apply_switch(agent, "openai/gpt-6.1-sol")
+        assert calls == [
+            (
+                ("openai/gpt-6.1-sol", "openai/gpt-6.1-sol"),
+                {"caching": True, "caching_explicit": False, "web_search": True},
+            )
+        ]
+        assert oai_double.client_args["base_url"] == "https://proxy.local/v1"
+
+        anth_client = anthropic.AsyncAnthropic(api_key="test")
+        anth_double = SimpleNamespace(client=anth_client)
+        monkeypatch.setattr(
+            harness_models, "resolve_model", lambda *a, **kw: anth_double
+        )
+        apply_switch(agent, "anthropic/claude-sonnet-5-5")
+        assert str(anth_client.base_url).rstrip("/") == "https://proxy.local/v1"
+
+    def test_build_agent_pins_web_fetch_and_post_applies_base_url(
+        self, tmp_path, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import strands_code_cli.entry.main as entry_main
+
+        captured: dict = {}
+        fake_model = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+
+        def _fake_create_harness(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(model=fake_model)
+
+        monkeypatch.setattr(entry_main, "create_harness", _fake_create_harness)
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+
+        agent = entry_main.build_agent(
+            "sess-base-url",
+            tmp_path / "sess",
+            model="openai/gpt-6.1-sol",
+            base_url="https://oai-proxy.example/v1",
+        )
+        assert captured["model"] == "openai/gpt-6.1-sol"
+        assert captured["builtin_tools"]["web_fetch"] == {"model": "openai/gpt-6.1-sol"}
+        assert fake_model.client_args["base_url"] == "https://oai-proxy.example/v1"
+        assert agent._base_url == "https://oai-proxy.example/v1"
+        assert agent._harness_kwargs["_base_url"] == "https://oai-proxy.example/v1"

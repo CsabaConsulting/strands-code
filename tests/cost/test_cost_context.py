@@ -994,6 +994,13 @@ class TestLoopUsageWiring:
 
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert set(payload) <= {"model", "base_url"}  # keys only, never secrets
+        ProviderConfig(
+            model="openai/gpt-6.1-sol",
+            base_url="https://proxy.local",
+            api_mode="chat",
+        ).save(path)
+        payload_with_mode = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert set(payload_with_mode) <= {"model", "base_url", "api_mode"}
 
         from pathlib import Path as _Path
 

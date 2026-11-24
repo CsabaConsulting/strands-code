@@ -41,6 +41,8 @@ dependencies = [
 agentcore = ["boto3>=1.35.0"]
 litellm = ["litellm>=1.104"]
 gemini = ["strands-agents[gemini]"]
+openai = ["strands-agents[openai]", "openai>=2.0.0"]
+anthropic = ["strands-agents[anthropic]"]
 
 [project.scripts]
 strands-code = "strands_code_cli.entry.main:main"

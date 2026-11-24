@@ -1259,7 +1259,12 @@ class TestSideRouting:
             "anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         assert kwargs["effort"] == "low"  # decided level
-        assert seen == [((HAIKU, HAIKU), {"effort": "low"})]
+        assert seen == [
+            (
+                (HAIKU, HAIKU),
+                {"caching": True, "caching_explicit": False, "effort": "low"},
+            )
+        ]
         out = capsys.readouterr().out
         flat = " ".join(out.split())  # console width may wrap the line
         assert "Routed (btw)" in out  # side head, never the main head

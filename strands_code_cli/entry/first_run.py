@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import typer
@@ -28,8 +28,8 @@ _PROVIDER_ENV_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 _AMBIENT_DEFAULT_MODELS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("anthropic/claude-sonnet-4-6", ("ANTHROPIC_API_KEY",)),
-    ("openai/gpt-5.4", ("OPENAI_API_KEY",)),
+    ("anthropic/claude-sonnet-5-5", ("ANTHROPIC_API_KEY",)),
+    ("openai/gpt-6.1-sol", ("OPENAI_API_KEY",)),
 )
 
 _LITELLM_ANY_KEYS = (
@@ -42,8 +42,9 @@ _LITELLM_ANY_KEYS = (
 )
 
 
-def _nonempty(name: str) -> bool:
-    return bool(os.environ.get(name, "").strip())
+def _nonempty(name: str, env: Mapping[str, str] | None = None) -> bool:
+    source = os.environ if env is None else env
+    return bool((source.get(name) or "").strip())
 
 
 def _is_truthy(name: str) -> bool:
@@ -77,6 +78,16 @@ def has_google_credentials() -> bool:
     if _is_truthy("GOOGLE_GENAI_USE_VERTEXAI"):
         return not has_key and _nonempty("GOOGLE_CLOUD_PROJECT")
     return has_key
+
+
+def has_openai_credentials(env: Mapping[str, str] | None = None) -> bool:
+    """Return True when non-empty OpenAI API key presence is configured."""
+    return _nonempty("OPENAI_API_KEY", env)
+
+
+def has_anthropic_credentials(env: Mapping[str, str] | None = None) -> bool:
+    """Return True when non-empty Anthropic API key presence is configured."""
+    return _nonempty("ANTHROPIC_API_KEY", env)
 
 
 def disable_cwd_dotenv() -> None:
@@ -168,7 +179,7 @@ def _check_explicit_provider(
             )
         return
     if provider in _PROVIDER_ENV_KEYS:
-        if provider == "openai" and base_url:
+        if provider in ("openai", "anthropic") and base_url:
             return
         keys = _PROVIDER_ENV_KEYS[provider]
         if not any(_nonempty(name) for name in keys):

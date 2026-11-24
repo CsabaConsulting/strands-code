@@ -18,6 +18,8 @@ from typer.testing import CliRunner
 
 from strands_code_cli.entry.first_run import (
     BEDROCK_SETUP_POINTER,
+    has_anthropic_credentials,
+    has_openai_credentials,
     preflight_credentials,
 )
 from strands_code_cli.entry.provider_config import ProviderConfig
@@ -141,10 +143,25 @@ class TestPreflightGate:
 
     def test_anthropic_and_openai_ambient_auto_pick(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        assert preflight_credentials(probe=_no_creds) == "anthropic/claude-sonnet-4-6"
+        assert preflight_credentials(probe=_no_creds) == "anthropic/claude-sonnet-5-5"
         monkeypatch.delenv("ANTHROPIC_API_KEY")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
-        assert preflight_credentials(probe=_no_creds) == "openai/gpt-5.4"
+        assert preflight_credentials(probe=_no_creds) == "openai/gpt-6.1-sol"
+
+    def test_has_openai_and_anthropic_credentials_presence_only(self, monkeypatch):
+        assert has_openai_credentials({}) is False
+        assert has_openai_credentials({"OPENAI_API_KEY": "   "}) is False
+        assert has_openai_credentials({"OPENAI_API_KEY": "strands_box_oai"}) is True
+        assert has_anthropic_credentials({}) is False
+        assert has_anthropic_credentials({"ANTHROPIC_API_KEY": "\t"}) is False
+        assert (
+            has_anthropic_credentials({"ANTHROPIC_API_KEY": "strands_box_ant"}) is True
+        )
+
+        monkeypatch.setenv("OPENAI_API_KEY", "any-non-prefix-val")
+        assert has_openai_credentials() is True
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "any-non-prefix-val")
+        assert has_anthropic_credentials() is True
 
     def test_openrouter_ambient_requires_explicit_model_then_passes(
         self, monkeypatch, capsys
@@ -370,6 +387,25 @@ class TestProviderConfigPersistence:
         assert "secret" not in body
         assert "access" not in body
         assert "token" not in body
+
+    def test_api_mode_round_trip_and_validation(self, tmp_path):
+        path = tmp_path / "config.yaml"
+        ProviderConfig(
+            model="openai/gpt-6.1-sol",
+            base_url="https://proxy.local/v1",
+            api_mode="chat",
+        ).save(path)
+        loaded = ProviderConfig.load(path)
+        assert loaded.api_mode == "chat"
+
+        ProviderConfig(model="openai/gpt-6.1-sol", api_mode="responses").save(path)
+        assert ProviderConfig.load(path).api_mode == "responses"
+
+        path.write_text("model: openai/gpt-4o\napi_mode: legacy\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="api_mode"):
+            ProviderConfig.load(path)
+        with pytest.raises(ValueError, match="api_mode"):
+            ProviderConfig(model="openai/gpt-4o", api_mode="legacy").save(path)
 
 
 # ----------------------------------------------------------------------

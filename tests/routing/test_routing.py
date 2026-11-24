@@ -2264,7 +2264,12 @@ class TestRoutedEffort:
         agent = SimpleNamespace()
         _model, resolved = apply_switch(agent, HAIKU, effort="high")
         assert resolved == HAIKU
-        assert calls == [((HAIKU, HAIKU), {"effort": "high"})]
+        assert calls == [
+            (
+                (HAIKU, HAIKU),
+                {"caching": True, "caching_explicit": False, "effort": "high"},
+            )
+        ]
 
     def test_apply_switch_without_effort_calls_two_args(self, monkeypatch):
         from types import SimpleNamespace
@@ -2281,7 +2286,7 @@ class TestRoutedEffort:
 
         monkeypatch.setattr(harness_models, "resolve_model", _fake_resolve)
         apply_switch(SimpleNamespace(), HAIKU)
-        assert calls == [((HAIKU, HAIKU), {})]  # byte-identical two-arg call
+        assert calls == [((HAIKU, HAIKU), {"caching": True, "caching_explicit": False})]
 
     def test_validate_accepts_listed_level_on_reasoning_candidate(self):
         pick = RoutingPick(model=HAIKU, effort="high")

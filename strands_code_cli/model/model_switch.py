@@ -920,12 +920,75 @@ def prepare_resumed_history(
     return True
 
 
+def configure_base_url_for_model(
+    model_id: str,
+    resolved: Any,
+    *,
+    base_url: str | None = None,
+) -> Any:
+    """Post-apply a persisted ProviderConfig.base_url without losing harness goodies."""
+    if not base_url or not model_id or resolved is None:
+        return resolved
+    provider = _provider_of(normalize_model_ref(model_id))
+    if provider == "openai":
+        if getattr(resolved, "_bedrock_mantle_config", None) is not None:
+            return resolved
+        client_args = getattr(resolved, "client_args", None)
+        if isinstance(client_args, dict) and not client_args.get("base_url"):
+            client_args["base_url"] = base_url
+    elif provider == "anthropic":
+        client = getattr(resolved, "client", None)
+        cls_name = type(client).__name__ if client is not None else ""
+        if (
+            client is not None
+            and hasattr(client, "base_url")
+            and "Bedrock" not in cls_name
+            and "Vertex" not in cls_name
+        ):
+            try:
+                client.base_url = base_url
+            except Exception:
+                pass
+    return resolved
+
+
+def resolve_harness_model(
+    model_ref: str,
+    default: str | None = None,
+    *,
+    effort: str | None = None,
+    base_url: str | None = None,
+) -> Any:
+    """Resolve a model preserving harness caching, web_search, and post-applied base_url."""
+    from strands_harness.models import resolve_model, supports_web_search
+
+    normalized = normalize_model_ref(model_ref)
+    target_default = default or normalized
+    kwargs: dict[str, Any] = {
+        "caching": True,
+        "caching_explicit": False,
+    }
+    try:
+        if supports_web_search(normalized):
+            kwargs["web_search"] = True
+    except Exception:
+        pass
+    if effort is not None:
+        kwargs["effort"] = effort
+    model = resolve_model(normalized, target_default, **kwargs)
+    model = reported_cost.wrap_for_openrouter(normalized, model)
+    model = configure_streaming_for_model(normalized, model)
+    model = configure_gemini_for_model(normalized, model)
+    return configure_base_url_for_model(normalized, model, base_url=base_url)
+
+
 def apply_switch(
     agent: Any,
     new_string: str,
     default: str | None = None,
     *,
     effort: str | None = None,
+    base_url: str | None = None,
 ) -> tuple[Any, str]:
     """Resolve and in-place swap the agent's model (tracer-winning seam).
 
@@ -938,20 +1001,22 @@ def apply_switch(
         new_string: ``"provider/name"`` selection (bare Bedrock ids allowed).
         default: Default model string when selection is empty.
         effort: Routed thinking level, forwarded to ``resolve_model``
-            only when not None (two-arg behavior is byte-identical).
+            only when not None.
+        base_url: Optional custom endpoint host override; defaults to
+            ``getattr(agent, "_base_url", None)``.
 
     Returns:
         ``(model, resolved_id)`` for replies and persistence.
     """
-    from strands_harness.models import resolve_model
-
-    new_string = normalize_model_ref(new_string)
-    if effort is None:
-        model = resolve_model(new_string, default or new_string)
-    else:
-        model = resolve_model(new_string, default or new_string, effort=effort)
-    model = reported_cost.wrap_for_openrouter(new_string, model)
-    model = configure_streaming_for_model(new_string, model)
-    model = configure_gemini_for_model(new_string, model)
+    normalized = normalize_model_ref(new_string)
+    effective_base_url = (
+        base_url if base_url is not None else getattr(agent, "_base_url", None)
+    )
+    model = resolve_harness_model(
+        normalized,
+        default,
+        effort=effort,
+        base_url=effective_base_url,
+    )
     agent.model = model
-    return (model, model_id_of(model, new_string))
+    return (model, model_id_of(model, normalized))

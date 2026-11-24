@@ -479,3 +479,31 @@ class TestSdkHints:
             )
         assert action == "reply"
         assert "strands-code-agent[gemini]" in message
+
+    def test_openai_and_anthropic_sdk_hints(self):
+        from strands_code_cli.dispatch.core import _sdk_hint
+
+        assert "strands-code-agent[openai]" in _sdk_hint("openai/gpt-6.1-sol")
+        assert "strands-code-agent[anthropic]" in _sdk_hint(
+            "anthropic/claude-sonnet-5-5"
+        )
+
+    def test_model_dispatch_openai_and_anthropic_import_errors_show_hints(
+        self, tmp_path
+    ):
+        index = _fresh_index(tmp_path)
+        for target, extra in (
+            ("openai/gpt-6.1-sol", "openai"),
+            ("anthropic/claude-sonnet-5-5", "anthropic"),
+        ):
+            with patch(
+                "strands_harness.models.resolve_model",
+                side_effect=ImportError(f"{extra} sdk not installed"),
+            ):
+                action, message = dispatch(
+                    f"/model {target}",
+                    session_id=index.mint(),
+                    index=index,
+                )
+            assert action == "reply"
+            assert f"strands-code-agent[{extra}]" in message

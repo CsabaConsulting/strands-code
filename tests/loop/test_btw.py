@@ -763,6 +763,32 @@ class TestBuildBtwAgent:
             "thinking_budget": -1
         }
 
+    def test_build_btw_agent_applies_base_url_without_leaking_kwarg(self, monkeypatch):
+        import strands_code_cli.loop.btw as btw_mod
+
+        created: dict = {}
+        oai_model = SimpleNamespace(client_args={}, _bedrock_mantle_config=None)
+
+        def fake_create_harness(**kwargs):
+            created.update(kwargs)
+            return SimpleNamespace(model=oai_model)
+
+        monkeypatch.setattr(btw_mod, "create_harness", fake_create_harness)
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+        build_btw_agent(
+            {
+                "model": "openai/gpt-6.1-sol",
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+                "_base_url": "https://proxy.local/v1",
+            },
+            [],
+            "why slow?",
+        )
+        assert "_base_url" not in created
+        assert oai_model.client_args["base_url"] == "https://proxy.local/v1"
+
 
 def _idle_btw(**overrides):
     """BtwContext double with a real BtwQueue (submit/echo tests)."""
