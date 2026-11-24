@@ -64,7 +64,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ### Pending Todos
 
-- Run `/gsd-verify-work 16` / `/gsd-secure-phase 16` / `/gsd-validate-phase 16` to finish Phase 16 UAT, security & Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
+- Run `/gsd-secure-phase 16` / `/gsd-validate-phase 16` to finish Phase 16 security & Nyquist sign-off, or advance to Phase 17 (`UPSTREAM-02` `DecisionModel`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -77,6 +77,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T09:40:00Z
-Stopped at: Phase 16 complete + verified (`16-VERIFICATION.md` 7/7, `44b9aa4`, live `m1` M1 PASS, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-verify-work 16` or `/gsd-discuss-phase 17`
-Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-VERIFICATION.md
+Last session: 2026-11-24T19:23:13Z
+Stopped at: Phase 16 UAT complete (`16-UAT.md` 6/6 passed, live `m1`/`o1`/discovery/`/btw`, `aab271f`, 1705/1705 default suite + 44/44 rig green) — ready for `/gsd-secure-phase 16` or `/gsd-validate-phase 16`
+Resume file: .planning/phases/16-first-class-meta-model-api-muse/16-UAT.md
