@@ -61,7 +61,7 @@ Existing test infrastructure covers Plans `15-01` and `15-02`; `tests/rig/test_u
 | Behavior | Requirement | Why Live Creds Required | Test Instructions | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | Live native OpenAI `openai/gpt-6.1-sol` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model openai/gpt-6.1-terra` switch (`driver.py o1`) | `MODEL-07` | Requires `OPENAI_API_KEY` (+ `--extra openai`) | `python3 scripts/uattest/driver.py o1` | ✅ `O1 PASS` (`/tmp/uatr8/o1.log`; 49% cached, `\$0.0181`) |
-| Live native Anthropic `anthropic/claude-sonnet-5-5` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model anthropic/claude-haiku-5-5` switch (`driver.py an1`) | `MODEL-08` | Requires `ANTHROPIC_API_KEY` (+ `--extra anthropic`) | `python3 scripts/uattest/driver.py an1` | ⚠️ blocked on external Anthropic billing credits (live `/v1/models` 15 models PASS, boot + `1.00M` `/context` + `api.anthropic.com` auth PASS) |
+| Live native Anthropic `anthropic/claude-sonnet-5-5` zero-AWS launch, tool turn, `/context`, `/cost`, and `/model anthropic/claude-haiku-5-5` switch (`driver.py an1`) | `MODEL-08` | Requires `ANTHROPIC_API_KEY` (+ `--extra anthropic`) | `python3 scripts/uattest/driver.py an1` | ✅ `AN1 PASS` (`/tmp/uatr8/an1.log`; 49% cached, `\$0.0196`, `4 messages kept`) |
 
 ---
 

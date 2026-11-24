@@ -72,7 +72,7 @@
 | UPSTREAM-01 | Phase 13 | Complete |
 | MODEL-06 | Phase 14 | Complete |
 | MODEL-07 | Phase 15 | Complete |
-| MODEL-08 | Phase 15 | Complete (an1 awaiting credits) |
+| MODEL-08 | Phase 15 | Complete |
 | MODEL-09 | Phase 16 | Pending |
 | UPSTREAM-02 | Phase 17 | Pending |
 | SKILL-03 | Phase 18 | Pending |

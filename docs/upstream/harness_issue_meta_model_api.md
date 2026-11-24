@@ -1,24 +1,12 @@
-# Upstream Feature Proposal: First-Class Meta Model API (`api.meta.ai` / Muse) Provider in Harness and Shared Model Info
+# Filed URL
 
-> **HOLD BEFORE PUBLISHING:** Complete `## Human Overview` in your own words per `team/AI_USAGE_POLICY.md`. Per `CONTRIBUTING.md`, this feature proposal intentionally has **no PR branch yet** — file the issue first to align with maintainers on provider naming, `model_info` entries, and Responses API caching/reasoning semantics.
-
-- **Target repo:** `strands-agents/harness-sdk` (`main` / tag `python/v1.65.0`, `strands-harness 0.4.0`)
-- **Downstream reference:** `CsabaConsulting/strands-code#21`
+https://github.com/strands-agents/harness-sdk/issues/6521
 
 ---
 
-## 1. Issue Title
-
-```text
-[FEATURE] Add first-class Meta Model API (api.meta.ai / Muse) provider in Harness and shared model-info
-```
-
-## 2. Issue Body
-
-```markdown
 ## Human Overview
 
-[TODO: Replace with a brief 2-3 sentence summary in your own words before publishing — e.g.: `LlamaAPIModel` targets Meta's retired legacy Llama API and is slated for removal in v2.0, leaving no built-in Harness provider or `model_info.json` metadata for Meta's current Meta Model API (`https://api.meta.ai/v1`, serving Muse Wonder, Muse Spark, and Muse Ember). Since Meta recommends `/v1/responses` natively for agentic loops, adding a `meta/<model>` provider built on `OpenAIResponsesModel` (matching `bedrock-mantle`'s pattern) plus Muse `model_info` entries would support Meta's models cleanly without LiteLLM indirection or manual `client_args` plumbing.]
+`LlamaAPIModel` targets Meta's retired legacy Llama API and is slated for removal in v2.0, leaving no built-in Harness provider or `model_info.json` metadata for Meta's current Meta Model API (`https://api.meta.ai/v1`, serving Muse Wonder, Muse Spark, and Muse Ember). Since Meta recommends `/v1/responses` natively for agentic loops, adding a `meta/<model>` provider built on `OpenAIResponsesModel` (matching `bedrock-mantle`'s pattern) plus Muse `model_info` entries would support Meta's models cleanly without LiteLLM indirection or manual `client_args` plumbing.
 
 ## SDK Language
 
@@ -65,16 +53,3 @@ Coding agents and high-context agentic CLIs (such as `CsabaConsulting/strands-co
 - Downstream issue & real-world Muse Spark coding build retrospective: `CsabaConsulting/strands-code#21`.
 
 </details>
-```
-
----
-
-## 3. Held Publish Command (Run Only After Human Review)
-
-```bash
-# Edit ## Human Overview in your own words first, then copy ONLY the fenced markdown block from Section 2 (excluding the top HOLD notice and Section 3) to /tmp/meta_model_api_issue.md (never pass this whole wrapper file directly to --body-file)
-gh issue create \
-  --repo strands-agents/harness-sdk \
-  --title "[FEATURE] Add first-class Meta Model API (api.meta.ai / Muse) provider in Harness and shared model-info" \
-  --body-file /tmp/meta_model_api_issue.md
-```

@@ -4,11 +4,11 @@ milestone: v2.0
 current_phase: 15
 current_phase_name: First-Class Native OpenAI & Anthropic APIs
 current_plan: 3
-status: human_needed
-stopped_at: Phase 15 execution complete (`1681/1681` default suite green, `o1` `O1 PASS`, live OpenAI/Anthropic `/v1/models` PASS; `an1` live turn blocked on Anthropic credit balance)
-last_updated: "2026-11-24T05:52:00Z"
+status: passed
+stopped_at: Phase 15 passed (`1681/1681` default suite green, live `o1` `O1 PASS`, live `an1` `AN1 PASS`, upstream issues `#6521` & `#6522` filed)
+last_updated: "2026-11-24T06:30:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Executed Phase 15 Waves 1-3 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`), ran CI gates + live discovery + `driver.py o1` (`15-VERIFICATION.md`)
+last_activity_desc: Verified live Anthropic `driver.py an1` (`AN1 PASS`) and filed upstream issues `strands-agents/harness-sdk#6521` and `#6522` (`15-VERIFICATION.md` 8/8 passed)
 state_head: 3b8ab4f
 progress:
   total_phases: 9
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Complete (`human_needed` for live `an1` credits)
+Phase: 15 of 21 (First-Class Native OpenAI & Anthropic APIs) — Passed (`15-VERIFICATION.md` `8/8`)
 Plan: 3 of 3 complete in Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`)
-Status: Code & CI complete (`1681/1681` default suite, live `o1` `O1 PASS`, live `/v1/models` PASS); live `an1` completion turn awaiting Anthropic account billing credits
-Last activity: 2026-11-24 — Executed Phase 15 (`15-01`..`15-03`, `15-VERIFICATION.md`, `15-VALIDATION.md`)
+Status: Passed (`1681/1681` default suite, live `/v1/models` PASS, live `o1` `O1 PASS`, live `an1` `AN1 PASS`, upstream issues `#6521` & `#6522` filed)
+Last activity: 2026-11-24 — Verified `an1` (`AN1 PASS`) and filed `harness-sdk#6521` & `#6522` (`15-VERIFICATION.md`, `15-VALIDATION.md`)
 
 Progress: [███░░░░░░░] 33%
 
@@ -55,14 +55,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 14 (`947c5a7`, `52b0963`, `a2395d4`): added `gemini` optional extra + `_SDK_EXTRA_HINTS["google"]`; replaced unconditional STS preflight with Box-compatible presence-only multi-provider gate + `--model` session flag; added `google/` `supports_reasoning`, cross-vendor `toolUse["reasoningSignature"]` stripping with `RichHistory` / `canonical_prefix_hash` preserve, decimal-safe `_vendor_family`, Gemini 2.5 `thinking_budget` adapter (`configure_gemini_for_model` across 4 sites), credential-gated `/model` discovery, `litellm_entry` `gemini/` + static Gemini tables + non-Bedrock Price List skip, `driver.py g1` rig, and `docs/QUICKSTART.md` Ultra credit guide + `docs/upstream/harness_issue_gemini25_thinking.md` (filed `strands-agents/harness-sdk#6510`).
 - Phase 14 post-verify UAT, security audit & Nyquist validation (`05c68a2`, `82f3760`, `3a4912c`): `14-UAT.md` `6/6 PASS`; closed `T-14-02` (third-party `smolagents.remote_executors:48` / `litellm._process_defaults:24` calling `dotenv.load_dotenv()` on CWD `.env` at import time) via `disable_cwd_dotenv()` in `entry/first_run.py` + `strands_code_cli/__init__.py` (`TestCwdDotenvGuard`, `14-SECURITY.md` `10/10 closed`); filled 7 Nyquist branch tests (`14-VALIDATION.md` `1654 passed`).
 - Roadmap expansion (2026-11-23): inserted Phase 15 (`MODEL-07`/`MODEL-08` native OpenAI `#17` & Anthropic `#22`) and Phase 16 (`MODEL-09` Meta Model API `api.meta.ai` / Muse `#21`, upstream draft `docs/upstream/harness_issue_meta_model_api.md`) right after Phase 14, and cleanly renumbered unstarted Phases 15–19 -> 17–21 (expanding Phase 19 Strands Box egress profiles to 7 providers).
-- Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`): added `openai` (`openai>=2.0.0`) & `anthropic` extras + `_SDK_EXTRA_HINTS`, bumped `_AMBIENT_DEFAULT_MODELS` (`claude-sonnet-5-5`, `gpt-6.1-sol`), added `ProviderConfig.api_mode` & harness-preserving `base_url`, shared `resolve_harness_model()` preserving `caching` + `web_search`, normalized inclusive/exclusive `/cost` & cache-discounted usage accounting, added 24h `anthropic-models.json` cache feeding `window_for()` & retiring `route_label()`, gated signed thinking & `SummaryBlock` on `same_provider() and same_vendor()`, added fail-soft `configure_openai_for_model()` guard + held upstream draft `docs/upstream/harness_issue_openai_reasoning_guard.md`, and added `driver.py o1`/`an1` rigs + `docs/QUICKSTART.md`.
+- Phase 15 (`27bedc5`, `15d98a4`, `eeceb59`, `b102735`, `3b8ab4f`): added `openai` (`openai>=2.0.0`) & `anthropic` extras + `_SDK_EXTRA_HINTS`, bumped `_AMBIENT_DEFAULT_MODELS` (`claude-sonnet-5-5`, `gpt-6.1-sol`), added `ProviderConfig.api_mode` & harness-preserving `base_url`, shared `resolve_harness_model()` preserving `caching` + `web_search`, normalized inclusive/exclusive `/cost` & cache-discounted usage accounting, added 24h `anthropic-models.json` cache feeding `window_for()` & retiring `route_label()`, gated signed thinking & `SummaryBlock` on `same_provider() and same_vendor()`, added fail-soft `configure_openai_for_model()` guard (filed `strands-agents/harness-sdk#6522`), added `driver.py o1`/`an1` rigs (`O1 PASS`, `AN1 PASS`) + `docs/QUICKSTART.md`, and filed Meta Model API feature proposal `strands-agents/harness-sdk#6521`.
 
 ### Pending Todos
 
-- Top up Anthropic API credits for the `.env` key and re-run `bash -c 'set -a && source .env && set +a && .venv/bin/python scripts/uattest/driver.py an1'` to observe live `AN1 PASS`.
 - Run `/gsd-verify-work 15` and `/gsd-secure-phase 15`, then advance to Phase 16 (`MODEL-09` Meta Model API `#21`).
-- Review held upstream drafts `docs/upstream/harness_issue_openai_reasoning_guard.md` and `docs/upstream/harness_issue_meta_model_api.md` (completing `## Human Overview` first).
-- Monitor upstream issues `strands-agents/harness-sdk#6510` (plus `#6480`–`#6484`) before opening any Gemini 2.5 harness PR.
+- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521`, and `#6522` (plus `#6480`–`#6484`).
 
 ### Blockers/Concerns
 
@@ -74,6 +72,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-24T05:52:00Z
-Stopped at: Phase 15 complete (`1681/1681` default suite green, live `o1` `O1 PASS`, live OpenAI/Anthropic `/v1/models` PASS; `an1` blocked on Anthropic account billing credits) — next: top up Anthropic credits for `driver.py an1`, `/gsd-verify-work 15`, `/gsd-secure-phase 15`, or Phase 16 (`MODEL-09`)
+Last session: 2026-11-24T06:30:00Z
+Stopped at: Phase 15 passed (`1681/1681` default suite green, live `o1` `O1 PASS`, live `an1` `AN1 PASS`, upstream issues `#6521` & `#6522` filed) — ready for `/gsd-verify-work 15`, `/gsd-secure-phase 15`, or `/gsd-discuss-phase 16`
 Resume file: .planning/phases/15-first-class-native-openai-anthropic-apis/15-VERIFICATION.md

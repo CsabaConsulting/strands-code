@@ -178,7 +178,7 @@ Plans:
 | 1–12 | `v1.0` | 41/41 | Complete | 2026-10-16 |
 | 13. Upstream SDK & Harness Resync | `v2.0` | 2/2 | Complete | 2026-11-21 |
 | 14. First-Class Google Gemini & Provider-Aware Startup | `v2.0` | 3/3 | Complete | 2026-11-22 |
-| 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete (an1 awaiting Anthropic credits) | 2026-11-24 |
+| 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 0/0 | Not started | - |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 0/0 | Not started | - |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/0 | Not started | - |
