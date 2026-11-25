@@ -1,4 +1,4 @@
-"""Strands Box Linux containment config, 7-provider egress, Dogwood policy & diagnostics (SANDBOX-01)."""
+"""Strands Box Linux containment config, 8-provider egress, Dogwood policy & diagnostics (SANDBOX-01)."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -51,15 +52,23 @@ _BOX_BINARIES: tuple[str, ...] = (
     "strands-box-contain-trampoline",
     "strands-box-sock-alias",
 )
-_SYSTEM_READ_DIRS: tuple[str, ...] = (
-    "/usr",
-    "/bin",
-    "/lib",
-    "/lib64",
-    "/etc/ssl",
-    "/etc/resolv.conf",
+_REFUSED_ROOTS: frozenset[Path] = frozenset(
+    Path(p)
+    for p in (
+        "/",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/etc",
+        "/tmp",
+        "/var",
+        "/dev",
+        "/proc",
+        "/sys",
+    )
 )
-_SYSTEM_READ_FILES: tuple[str, ...] = ("/etc/hosts", "/etc/nsswitch.conf")
 _APPARMOR_SYSCTL = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
 _APPARMOR_PROFILE = Path("/etc/apparmor.d/strands-box")
 APPARMOR_PROFILE_SNIPPET = """abi <abi/4.0>,
@@ -170,6 +179,27 @@ def _refuse_symlink(path: Path, label: str = "path") -> None:
         raise ValueError(f"Refusing symlink parent for {label}: {path.parent}")
 
 
+def _is_refused_root(path: Path) -> bool:
+    return Path(os.path.realpath(path)) in _REFUSED_ROOTS
+
+
+def _ensure_dir(path: Path, label: str) -> Path:
+    _refuse_symlink(path, label)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    return Path(os.path.realpath(path))
+
+
+def _needs_python_interpreter(tool_path: Path) -> bool:
+    try:
+        with tool_path.open("rb") as handle:
+            head = handle.read(256)
+    except OSError:
+        return False
+    first_line = head.splitlines()[0] if head else b""
+    return first_line.startswith(b"#!") and b"python" in first_line.lower()
+
+
 def _atomic_write_text(path: Path, content: str) -> Path:
     _refuse_symlink(path, path.name)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,9 +234,13 @@ def default_box_config_dir(repo_root: Path) -> Path:
     return base / _REPOS_DIR / repo_config_id(repo_root)
 
 
-def default_box_data_dir(repo_root: Path) -> Path:
+def default_box_data_dir(repo_root: Path, *, home: Path | None = None) -> Path:
     """Return host-only ``~/.local/share/strands-box/repos/<repo-id>`` box_dir."""
-    base = Path(platformdirs.user_data_dir(_BOX_APP_NAME))
+    base = (
+        home / ".local" / "share" / _BOX_APP_NAME
+        if home is not None
+        else Path(platformdirs.user_data_dir(_BOX_APP_NAME))
+    )
     return base / _REPOS_DIR / repo_config_id(repo_root)
 
 
@@ -351,48 +385,121 @@ def _append_unique(bucket: list[Path], cand: Path) -> None:
         bucket.append(cand)
 
 
+def _coalesce_dirs(paths: Sequence[Path]) -> list[Path]:
+    """Collapse duplicate or nested directory grants to their minimal enclosing set."""
+    unique: list[Path] = []
+    for path in paths:
+        _append_unique(unique, path)
+    ordered = sorted(unique, key=lambda p: len(p.parts))
+    kept: list[Path] = []
+    for cand in ordered:
+        if not any(cand == parent or parent in cand.parents for parent in kept):
+            kept.append(cand)
+    return [p for p in unique if p in kept]
+
+
 def _resolve_tool_commands(venv_bin: Path | None, env_path: str) -> dict[str, Path]:
     resolved: dict[str, Path] = {}
-    fallbacks = {
-        "git": Path("/usr/bin/git"),
-        "pytest": (venv_bin / "pytest") if venv_bin else Path("/usr/bin/pytest"),
-        "rg": Path("/usr/bin/rg"),
-        "ruff": (venv_bin / "ruff") if venv_bin else Path("/usr/bin/ruff"),
-        "uv": Path("/usr/bin/uv"),
-    }
     for name in ("git", "pytest", "rg", "ruff", "uv"):
         cand = venv_bin / name if venv_bin else None
         if cand is not None and cand.is_file():
-            resolved[name] = cand
+            resolved[name] = Path(os.path.realpath(cand))
             continue
         hit = shutil.which(name, path=env_path)
-        resolved[name] = Path(hit) if hit else fallbacks[name]
+        if hit and Path(hit).is_file():
+            resolved[name] = Path(os.path.realpath(hit))
     return resolved
 
 
 def _resolve_cli_command(
     venv_bin: Path | None,
-    py_bin: Path,
+    py_real: Path,
     env_path: str,
     exec_paths: list[Path],
 ) -> list[str]:
-    """Resolve strands-code launcher command and record its executable paths."""
+    """Resolve strands-code launcher command and record its canonical executable path."""
     cand = venv_bin / "strands-code" if venv_bin is not None else None
     cli_bin = (
         str(cand)
         if cand is not None and cand.is_file()
         else shutil.which("strands-code", path=env_path)
     )
-    if cli_bin:
-        cli_path = Path(cli_bin)
-        _append_unique(exec_paths, cli_path)
-        _append_unique(exec_paths, Path(os.path.realpath(cli_path)))
-        return [cli_bin]
+    if cli_bin and Path(cli_bin).is_file():
+        cli_real = Path(os.path.realpath(cli_bin))
+        _append_unique(exec_paths, cli_real)
+        return [str(cli_real)]
     return [
-        str(py_bin),
+        str(py_real),
         "-c",
         "from strands_code_cli.entry.main import main; main()",
     ]
+
+
+def _valid_nonroot_dir(cand: Path | None) -> Path | None:
+    if cand is None:
+        return None
+    resolved = Path(os.path.realpath(cand))
+    if not resolved.is_dir() or resolved in _REFUSED_ROOTS:
+        return None
+    return resolved
+
+
+def _resolve_venv_dir(ws: Path, py_bin: Path) -> Path | None:
+    if (ws / ".venv").exists():
+        return _valid_nonroot_dir(ws / ".venv")
+    if py_bin.parent.name == "bin":
+        return _valid_nonroot_dir(py_bin.parent.parent)
+    return None
+
+
+def _resolve_code_dirs(
+    home_dir: Path, explicit_home: Path | None
+) -> tuple[Path, Path, Path]:
+    cfg_raw = (
+        home_dir / ".config" / _CODE_APP_NAME
+        if explicit_home is not None
+        else platformdirs.user_config_dir(_CODE_APP_NAME)
+    )
+    cache_raw = (
+        home_dir / ".cache" / _CODE_APP_NAME
+        if explicit_home is not None
+        else platformdirs.user_cache_dir(_CODE_APP_NAME)
+    )
+    code_cfg = Path(os.path.realpath(cfg_raw))
+    code_cache = Path(os.path.realpath(cache_raw))
+    return code_cfg, code_cache, code_cache / "tmp"
+
+
+def _system_arch_lib_dir() -> Path | None:
+    for cand in (
+        Path(f"/usr/lib/{platform.machine()}-linux-gnu"),
+        Path("/usr/lib64"),
+    ):
+        valid = _valid_nonroot_dir(cand)
+        if valid is not None:
+            return valid
+    return None
+
+
+def _python_extension_exec_dirs(
+    stdlib_dir: Path | None, venv_dir: Path | None
+) -> list[Path]:
+    cands: list[Path] = []
+    if stdlib_dir is not None:
+        dyn = _valid_nonroot_dir(stdlib_dir / "lib-dynload")
+        if dyn is not None:
+            cands.append(dyn)
+    raw_platlib = sysconfig.get_paths().get("platlib")
+    if raw_platlib:
+        plat = _valid_nonroot_dir(Path(raw_platlib))
+        if plat is not None:
+            cands.append(plat)
+    if venv_dir is not None:
+        for sp in sorted(venv_dir.glob("lib/python*/site-packages")):
+            valid = _valid_nonroot_dir(sp)
+            if valid is not None:
+                cands.append(valid)
+    return _coalesce_dirs(cands)
 
 
 def resolve_runtime_paths(
@@ -404,7 +511,7 @@ def resolve_runtime_paths(
 ) -> dict[str, Any]:
     """Resolve canonical repo, `.venv`, `uv` Python, and config/cache paths."""
     env_map = os.environ if env is None else env
-    home_dir = home if home is not None else Path.home()
+    home_dir = Path(os.path.realpath(home if home is not None else Path.home()))
     env_path = env_map.get("PATH", os.defpath)
     ws = Path(os.path.realpath(repo_root))
     py_bin = (
@@ -412,53 +519,62 @@ def resolve_runtime_paths(
     )
     py_real = Path(os.path.realpath(py_bin))
 
-    venv_dir: Path | None = None
-    if (ws / ".venv").exists():
-        venv_dir = Path(os.path.realpath(ws / ".venv"))
-    elif py_bin.parent.name == "bin":
-        venv_dir = Path(os.path.realpath(py_bin.parent.parent))
+    venv_dir = _resolve_venv_dir(ws, py_bin)
     venv_bin = venv_dir / "bin" if venv_dir is not None else None
+    code_cfg, code_cache, tmp_dir = _resolve_code_dirs(home_dir, home)
 
-    code_cfg = Path(os.path.realpath(platformdirs.user_config_dir(_CODE_APP_NAME)))
-    code_cache = Path(os.path.realpath(platformdirs.user_cache_dir(_CODE_APP_NAME)))
-    uv_python_dir = home_dir / ".local" / "share" / "uv" / "python"
+    raw_stdlib = sysconfig.get_paths().get("stdlib")
+    stdlib_dir = _valid_nonroot_dir(Path(raw_stdlib)) if raw_stdlib else None
+    package_root = _valid_nonroot_dir(Path(__file__).resolve().parents[2])
+    py_root = _valid_nonroot_dir(py_real.parent.parent)
+    uv_python_dir = _valid_nonroot_dir(home_dir / ".local" / "share" / "uv" / "python")
+    arch_lib_dir = _system_arch_lib_dir()
 
-    read_paths: list[Path] = [Path(p) for p in _SYSTEM_READ_DIRS]
+    read_paths: list[Path] = []
     for cand in (
         ws,
         venv_dir,
-        py_real.parent.parent,
-        uv_python_dir.resolve() if uv_python_dir.exists() else None,
+        package_root,
+        stdlib_dir,
+        py_root,
+        uv_python_dir,
+        arch_lib_dir,
         code_cfg,
         code_cache,
-        Path("/tmp"),
     ):
-        if cand is not None:
+        if cand is not None and not _is_refused_root(cand):
             _append_unique(read_paths, cand)
+    read_paths = _coalesce_dirs(read_paths)
 
     write_paths: list[Path] = []
-    for cand in (ws, code_cfg, code_cache, Path("/tmp")):
-        _append_unique(write_paths, cand)
+    for cand in (ws, code_cfg, code_cache):
+        if not _is_refused_root(cand):
+            _append_unique(write_paths, cand)
+    write_paths = _coalesce_dirs(write_paths)
 
     tools = _resolve_tool_commands(venv_bin, env_path)
-    tools["python"] = py_bin
-
-    exec_paths: list[Path] = []
-    for cand in (*tools.values(), py_real):
-        _append_unique(exec_paths, cand)
-
-    agent_cmd = _resolve_cli_command(venv_bin, py_bin, env_path, exec_paths)
+    exec_paths: list[Path] = [py_real]
+    agent_cmd = _resolve_cli_command(venv_bin, py_real, env_path, exec_paths)
+    exec_paths.extend(_python_extension_exec_dirs(stdlib_dir, venv_dir))
+    exec_paths = _coalesce_dirs(exec_paths)
     return {
         "home": home_dir,
         "workspace": ws,
+        "venv_dir": venv_dir,
         "venv_bin": venv_bin,
+        "package_root": package_root,
+        "stdlib_dir": stdlib_dir,
+        "py_root": py_root,
+        "uv_python_dir": uv_python_dir,
+        "arch_lib_dir": arch_lib_dir,
         "py_bin": py_bin,
         "py_real": py_real,
+        "code_cfg": code_cfg,
+        "code_cache": code_cache,
+        "tmp_dir": tmp_dir,
         "agent_command": agent_cmd,
         "read": read_paths,
-        "read_file": [Path(p) for p in _SYSTEM_READ_FILES],
         "write": write_paths,
-        "list": [ws],
         "exec": exec_paths,
         "tools": tools,
     }
@@ -625,17 +741,68 @@ def _render_agent_env(
         (env.get("TERM") or "xterm-256color").strip() or "xterm-256color", "TERM"
     )
     out: dict[str, str] = {
-        "HOME": str(runtime["home"]),
         "PATH": ":".join(path_parts),
         "TERM": term,
+        "TMPDIR": str(runtime["tmp_dir"]),
         "STRANDS_BOX": "1",
     }
-    colorterm = env.get("COLORTERM")
-    if isinstance(colorterm, str) and colorterm.strip():
-        out["COLORTERM"] = _reject_control_chars(colorterm.strip(), "COLORTERM")
+    for key in ("COLORTERM", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        val = env.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = _reject_control_chars(val.strip(), key)
     if "bedrock" in providers:
         out["AWS_REGION"] = aws_region
     return out
+
+
+def _is_under_any(target: Path, dirs: Sequence[Path]) -> bool:
+    return any(target == d or d in target.parents for d in dirs)
+
+
+def _render_tool_section(
+    tool_name: str, tool_path: Path, runtime: Mapping[str, Any]
+) -> list[str]:
+    ws: Path = runtime["workspace"]
+    code_cache: Path = runtime["code_cache"]
+    tool_read: list[Path] = [ws]
+    if tool_name in ("pytest", "ruff", "uv"):
+        cands: list[Path | None] = [runtime.get("venv_dir")]
+        if tool_name == "pytest":
+            cands.extend(
+                [
+                    runtime.get("package_root"),
+                    runtime.get("stdlib_dir"),
+                    runtime.get("py_root"),
+                    runtime.get("uv_python_dir"),
+                    runtime.get("arch_lib_dir"),
+                ]
+            )
+        cands.append(code_cache)
+        for cand in cands:
+            if cand is not None and not _is_refused_root(cand):
+                _append_unique(tool_read, cand)
+    tool_read = _coalesce_dirs(tool_read)
+
+    section = [
+        "",
+        f"[tool.{tool_name}]",
+        f"command = {_toml_list([str(tool_path)])}",
+        f"[tool.{tool_name}.filesystem]",
+        f"read = {_toml_list([str(p) for p in tool_read], f'tool.{tool_name}.read')}",
+    ]
+    py_real: Path = runtime["py_real"]
+    if _needs_python_interpreter(tool_path) and not _is_under_any(py_real, tool_read):
+        section.append(
+            f"read_file = {_toml_list([str(py_real)], f'tool.{tool_name}.read_file')}"
+        )
+    if tool_name == "git":
+        section.append(f"write = {_toml_list([str(ws)], f'tool.{tool_name}.write')}")
+    elif tool_name in ("pytest", "ruff", "uv"):
+        tool_write = _coalesce_dirs([ws, code_cache])
+        section.append(
+            f"write = {_toml_list([str(p) for p in tool_write], f'tool.{tool_name}.write')}"
+        )
+    return section
 
 
 def render_box_toml(
@@ -669,34 +836,31 @@ def render_box_toml(
             "",
             "[agent.filesystem]",
             f"read = {_toml_list([str(p) for p in fs['read']], 'filesystem.read')}",
-            f"read_file = {_toml_list([str(p) for p in fs['read_file']], 'filesystem.read_file')}",
             f"write = {_toml_list([str(p) for p in fs['write']], 'filesystem.write')}",
-            f"list = {_toml_list([str(p) for p in fs['list']], 'filesystem.list')}",
             f"exec = {_toml_list([str(p) for p in fs['exec']], 'filesystem.exec')}",
         ]
     )
     for tool_name, tool_path in runtime["tools"].items():
-        lines.extend(
-            ["", f"[tool.{tool_name}]", f"command = {_toml_list([str(tool_path)])}"]
-        )
+        lines.extend(_render_tool_section(tool_name, tool_path, runtime))
 
     for spec in egress_specs:
+        if spec.secret_ref is None:
+            continue
         lines.extend(
             [
                 "",
                 f"[egress.{spec.section}]",
                 f"destinations = {_toml_list(spec.destinations, f'egress.{spec.section}')}",
+                f"[egress.{spec.section}.secret]",
+                f"ref = {_toml_str(spec.secret_ref, 'secret.ref')}",
             ]
         )
-        if spec.secret_ref is not None:
-            lines.append(f"[egress.{spec.section}.secret]")
-            lines.append(f"ref = {_toml_str(spec.secret_ref, 'secret.ref')}")
-            if spec.placement is not None:
-                lines.append(f"placement = {_toml_str(spec.placement, 'placement')}")
-            if spec.header is not None:
-                lines.append(f"header = {_toml_str(spec.header, 'header')}")
-            if spec.prefix is not None:
-                lines.append(f"prefix = {_toml_str(spec.prefix, 'prefix')}")
+        if spec.placement is not None:
+            lines.append(f"placement = {_toml_str(spec.placement, 'placement')}")
+        if spec.header is not None:
+            lines.append(f"header = {_toml_str(spec.header, 'header')}")
+        if spec.prefix is not None:
+            lines.append(f"prefix = {_toml_str(spec.prefix, 'prefix')}")
 
     return "\n".join(lines) + "\n"
 
@@ -765,16 +929,22 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         '@id("allow_dev_tools")',
         'permit (principal, action == Box::Action::"shell:spawn", resource)',
         "when {",
-        '    context.input.command in ["pytest", "rg", "ruff", "uv", "python"]',
-        '    || (context.input.command == "git" && !(context.input.args like "push*"))',
+        '    ["pytest", "rg", "ruff", "uv", "python", "git"].contains(context.input.program)',
         "};",
         "",
         '@id("push_requires_recent_tests")',
-        'permit (principal, action == Box::Action::"shell:spawn", resource)',
-        'when { context.input.command == "git" && context.input.args like "push*" }',
-        "when temporal {",
+        'forbid (principal, action == Box::Action::"shell:spawn", resource)',
+        "when {",
+        '    context.input.program == "git"',
+        "    && context.input has arg1",
+        '    && context.input.arg1 == "push"',
+        "}",
+        "unless temporal {",
         "    formerly within 900s (",
-        '        action == Box::Action::"shell:spawn" && context.input.command == "pytest"',
+        '        Box::Action::"shell:spawn"::response {',
+        '            input.program: "pytest",',
+        "            output.status: 0",
+        "        }",
         "    )",
         "};",
         "",
@@ -907,10 +1077,14 @@ def init_box_config(
 
     cfg_dir = out_dir if out_dir is not None else default_box_config_dir(root)
     _refuse_symlink(cfg_dir, "box config dir")
-    data_dir = default_box_data_dir(root)
+    data_dir = default_box_data_dir(root, home=home)
+    _ensure_dir(data_dir.parent, "box data parent")
     runtime = resolve_runtime_paths(
         root, python_executable=python_executable, home=home, env=env_map
     )
+    _ensure_dir(runtime["code_cfg"], "strands-code config dir")
+    _ensure_dir(runtime["code_cache"], "strands-code cache dir")
+    _ensure_dir(runtime["tmp_dir"], "strands-code tmp dir")
     egress_specs = _egress_specs_for_providers(
         selected, aws_region=region, aws_profile=profile, env=env_map
     )
@@ -1165,6 +1339,14 @@ def launch_box_run(
         raise ValueError(
             f"Box config not found: {cfg_toml}. Run `strands-code box init` first."
         )
+    if tomllib is not None:
+        try:
+            parsed_cfg = tomllib.loads(cfg_toml.read_text(encoding="utf-8"))
+        except Exception:
+            parsed_cfg = {}
+        box_dir_val = parsed_cfg.get("box_dir")
+        if isinstance(box_dir_val, str) and box_dir_val.strip():
+            _ensure_dir(Path(box_dir_val).parent, "box data parent")
     resolved_box, missing = discover_box_binaries(box_bin, env=env_map)
     if resolved_box is None:
         raise ValueError(

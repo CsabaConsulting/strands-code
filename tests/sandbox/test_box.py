@@ -46,6 +46,14 @@ def _fake_box_dir(root: Path, *, include_all: bool = True) -> Path:
     return bdir
 
 
+def _assert_no_nested_dirs(entries: list[str]) -> None:
+    paths = [Path(p) for p in entries]
+    for idx, cand in enumerate(paths):
+        for jdx, other in enumerate(paths):
+            if idx != jdx:
+                assert other != cand and cand not in other.parents, (cand, other)
+
+
 class TestConftestAndBoxEnv:
     def test_conftest_scrubs_box_env_vars(self):
         from tests.conftest import _PROVIDER_ENV_VARS
@@ -69,11 +77,15 @@ class TestBoxConfigGenerationAndEgress:
     ):
         cfg_root = tmp_path / "cfg_root"
         data_root = tmp_path / "data_root"
+        cache_root = tmp_path / "cache_root"
         monkeypatch.setattr(
             "platformdirs.user_config_dir", lambda app: str(cfg_root / app)
         )
         monkeypatch.setattr(
             "platformdirs.user_data_dir", lambda app: str(data_root / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(cache_root / app)
         )
 
         repo_a = tmp_path / "a" / "service"
@@ -148,11 +160,15 @@ class TestBoxConfigGenerationAndEgress:
             home=home,
             env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
         )
-        read_strs = [str(p) for p in paths["read"]]
-        assert str(repo.resolve()) in read_strs
-        assert str((repo / ".venv").resolve()) in read_strs
-        assert str(uv_py.parent.parent.resolve()) in read_strs
-        assert str((home / ".local" / "share" / "uv" / "python").resolve()) in read_strs
+        for needed in (
+            repo.resolve(),
+            (repo / ".venv").resolve(),
+            uv_py.parent.parent.resolve(),
+            (home / ".local" / "share" / "uv" / "python").resolve(),
+        ):
+            assert any(needed == r or r in needed.parents for r in paths["read"]), (
+                needed
+            )
 
         res = init_box_config(
             repo,
@@ -172,12 +188,51 @@ class TestBoxConfigGenerationAndEgress:
         assert env_tbl["TERM"] == "xterm-256color"
         assert env_tbl["COLORTERM"] == "truecolor"
         assert env_tbl["AWS_REGION"] == "us-east-1"
-        assert env_tbl["HOME"] == str(home)
+        assert "HOME" not in env_tbl
+        assert env_tbl["TMPDIR"] == str(
+            (home / ".cache" / "strands-code" / "tmp").resolve()
+        )
         assert str((repo / ".venv" / "bin").resolve()) in env_tbl["PATH"]
-        assert parsed["agent"]["filesystem"]["read_file"] == [
-            "/etc/hosts",
-            "/etc/nsswitch.conf",
+        fs_tbl = parsed["agent"]["filesystem"]
+        assert "read_file" not in fs_tbl
+        assert "list" not in fs_tbl
+        assert str(uv_py.resolve()) in fs_tbl["exec"]
+        assert str(venv_py) not in fs_tbl["exec"]
+        assert "/usr" not in fs_tbl["read"]
+        assert "/tmp" not in fs_tbl["read"]
+        assert "/tmp" not in fs_tbl["write"]
+        _assert_no_nested_dirs(fs_tbl["read"])
+        _assert_no_nested_dirs(fs_tbl["write"])
+
+    def test_extension_exec_and_arch_lib_read_grants(self, tmp_path, monkeypatch):
+        import platform
+        import sysconfig
+
+        home = tmp_path / "home"
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir",
+            lambda app: str(home / ".local" / "share" / app),
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        res = init_box_config(repo, home=home, env={"HOME": str(home)})
+        fs_tbl = tomllib.loads(res.box_toml.read_text(encoding="utf-8"))["agent"][
+            "filesystem"
         ]
+        dyn = Path(sysconfig.get_paths()["stdlib"]).resolve() / "lib-dynload"
+        if dyn.is_dir():
+            assert str(dyn) in fs_tbl["exec"]
+        arch_lib = Path(f"/usr/lib/{platform.machine()}-linux-gnu")
+        if arch_lib.is_dir():
+            arch_real = str(arch_lib.resolve())
+            assert arch_real in fs_tbl["read"]
+            assert arch_real not in fs_tbl["exec"]
 
     def test_least_privilege_provider_detection(self, tmp_path):
         repo = tmp_path / "repo"
@@ -278,21 +333,44 @@ class TestBoxConfigGenerationAndEgress:
             "openrouter.ai/api/v1/chat/*",
             "openrouter.ai/api/alpha/decisions",
         ]
-        assert egress["openrouter_models"] == {
-            "destinations": ["openrouter.ai/api/v1/models*"]
-        }
-        assert "secret" not in egress["openrouter_models"]
+        assert "openrouter_models" not in egress
         assert egress["typesafe"]["destinations"] == ["api.typesafe.ai"]
         assert egress["decisions_api"]["destinations"] == ["decisionapi.net"]
         assert egress["github_api"]["destinations"] == ["api.github.com"]
         assert egress["github_api"]["secret"]["ref"] == "env://GITHUB_TOKEN"
-        assert egress["github_downloads"]["destinations"] == [
-            "codeload.github.com",
-            "objects.githubusercontent.com",
-        ]
-        assert "secret" not in egress["github_downloads"]
+        assert "github_downloads" not in egress
         dw_text = res.policy_dw.read_text(encoding="utf-8")
         assert 'context.input.path like "/api/v1/models*"' in dw_text
+        assert 'context.input.host == "codeload.github.com"' in dw_text
+        assert 'context.input.host == "objects.githubusercontent.com"' in dw_text
+
+    def test_secretless_egress_targets_stay_out_of_box_toml(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        # Secret-less github_skills stays out of box.toml while permitted in policy.dw.
+        res_no_gh = init_box_config(
+            repo,
+            out_dir=tmp_path / "cfg_no_gh",
+            providers=["github_skills"],
+            allow_github_skills=True,
+            env={"HOME": str(tmp_path)},
+        )
+        parsed_no_gh = tomllib.loads(res_no_gh.box_toml.read_text(encoding="utf-8"))
+        assert "egress" not in parsed_no_gh
+        dw_no_gh = res_no_gh.policy_dw.read_text(encoding="utf-8")
+        assert 'context.input.host == "api.github.com"' in dw_no_gh
+        assert 'context.input.host == "codeload.github.com"' in dw_no_gh
 
     def test_empty_order_cache_read_aws_profile_cli_cmd_and_mode_warnings(
         self, tmp_path, monkeypatch
@@ -333,18 +411,28 @@ class TestBoxConfigGenerationAndEgress:
         assert res_empty.providers == ("bedrock",)
         parsed_empty = tomllib.loads(res_empty.box_toml.read_text(encoding="utf-8"))
         assert parsed_empty["egress"]["bedrock"]["secret"]["ref"] == "aws://corp"
-        assert parsed_empty["agent"]["command"] == [str(cli_bin)]
-        assert str(cli_bin) in parsed_empty["agent"]["filesystem"]["exec"]
+        assert parsed_empty["agent"]["command"] == [str(cli_bin.resolve())]
+        assert str(cli_bin.resolve()) in parsed_empty["agent"]["filesystem"]["exec"]
         read_strs = parsed_empty["agent"]["filesystem"]["read"]
-        assert str((cache_root / "strands-code").resolve()) in read_strs
-        assert "/tmp" in read_strs
+        write_strs = parsed_empty["agent"]["filesystem"]["write"]
+        cache_resolved = str((cache_root / "strands-code").resolve())
+        assert cache_resolved in read_strs
+        assert cache_resolved in write_strs
+        assert "/tmp" not in read_strs
+        assert "/tmp" not in write_strs
+        assert parsed_empty["agent"]["env"]["TMPDIR"] == str(
+            (cache_root / "strands-code" / "tmp").resolve()
+        )
+        assert (data_root / "strands-box" / "repos").is_dir()
+        assert (cfg_root / "strands-code").is_dir()
+        assert (cache_root / "strands-code" / "tmp").is_dir()
 
         # Absent CLI binary uses executable -c fallback instead of non-existent __main__.py.
         cli_bin.unlink()
         paths_no_cli = resolve_runtime_paths(
             repo, python_executable=py_bin, env={"PATH": ""}
         )
-        assert paths_no_cli["agent_command"][:2] == [str(py_bin), "-c"]
+        assert paths_no_cli["agent_command"][:2] == [str(py_bin.resolve()), "-c"]
 
         # Mode warnings for Vertex AI, custom base_url, Ollama, and bedrock-mantle.
         res_warn = init_box_config(
@@ -369,7 +457,7 @@ class TestBoxConfigGenerationAndEgress:
         assert "Ollama" in joined
         assert "bedrock-mantle" in joined
 
-    def test_dogwood_policy_rules_and_tools(self, tmp_path, monkeypatch):
+    def test_tool_sections_use_valid_canonical_paths(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
         )
@@ -387,10 +475,48 @@ class TestBoxConfigGenerationAndEgress:
         )
         parsed = tomllib.loads(res.box_toml.read_text(encoding="utf-8"))
         tools = parsed["tool"]
-        for tool_name in ("git", "pytest", "rg", "ruff", "uv", "python"):
-            assert tool_name in tools
-            assert tools[tool_name]["command"]
+        assert tools and "python" not in tools
+        for tool_name, tool_tbl in tools.items():
+            cmd_path = Path(tool_tbl["command"][0])
+            assert cmd_path.is_file(), tool_name
+            t_fs = tool_tbl["filesystem"]
+            for w_dir in t_fs.get("write", []):
+                w_path = Path(w_dir)
+                assert any(
+                    w_path == r_dir or r_dir in w_path.parents
+                    for r_dir in map(Path, t_fs["read"])
+                )
+        if (
+            "pytest" in tools
+            and b"python"
+            in Path(tools["pytest"]["command"][0]).read_bytes().splitlines()[0].lower()
+        ):
+            import sys
 
+            py_real = str(Path(os.path.realpath(sys.executable)))
+            pytest_fs = tools["pytest"]["filesystem"]
+            covered = any(
+                py_real == r or Path(r) in Path(py_real).parents
+                for r in pytest_fs["read"]
+            )
+            assert covered or py_real in pytest_fs.get("read_file", [])
+
+    def test_dogwood_policy_rules_and_tools(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        res = init_box_config(
+            repo, providers=["openrouter"], env={"HOME": str(tmp_path)}
+        )
         dw = res.policy_dw.read_text(encoding="utf-8")
         assert 'action == Box::Action::"net:connect"' in dw
         assert 'action == Box::Action::"http:request"' in dw
@@ -399,10 +525,21 @@ class TestBoxConfigGenerationAndEgress:
         assert 'context.input.path like "*/.env.*"' in dw
         assert 'context.input.path like "*/.ssh/*"' in dw
         assert 'context.input.path like "*/.aws/*"' in dw
-        assert "when temporal {" in dw
+        assert (
+            '["pytest", "rg", "ruff", "uv", "python", "git"].contains(context.input.program)'
+            in dw
+        )
+        assert (
+            'forbid (principal, action == Box::Action::"shell:spawn", resource)' in dw
+        )
+        assert 'context.input.program == "git"' in dw
+        assert "context.input has arg1" in dw
+        assert 'context.input.arg1 == "push"' in dw
+        assert "unless temporal {" in dw
         assert "formerly within 900s" in dw
-        assert 'context.input.command == "pytest"' in dw
-        assert 'context.input.args like "push*"' in dw
+        assert 'Box::Action::"shell:spawn"::response' in dw
+        assert 'input.program: "pytest"' in dw
+        assert "output.status: 0" in dw
         assert "scoped revisit of v1.0 D-05" in dw
 
 
@@ -620,44 +757,102 @@ def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
     """Validate generated box.toml / policy.dw against host binaries when present."""
     import shutil
     import subprocess
+    import tempfile
 
     from strands_code_cli.sandbox.box import CORE_PROVIDERS
 
-    repo = tmp_path / "repo"
-    cfg_dir = tmp_path / "box-cfg"
-    fake_home = tmp_path / "home"
-    repo.mkdir()
-    fake_home.mkdir()
+    # Keep fake_home short so the box broker UNIX socket stays within Linux's 108-byte limit.
+    with tempfile.TemporaryDirectory(prefix="sbx-") as short_tmp:
+        base = Path(short_tmp)
+        repo = base / "r"
+        cfg_dir = base / "c"
+        fake_home = base / "h"
+        repo.mkdir()
+        fake_home.mkdir()
+        dummy_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(fake_home),
+            "EXPERIMENTAL_X86_SUPPORT": "TRUE",
+            "AWS_ACCESS_KEY_ID": "AKIADUMMYTEST0000001",
+            "AWS_SECRET_ACCESS_KEY": "dummy-secret",
+            "GOOGLE_API_KEY": "dummy-google",
+            "ANTHROPIC_API_KEY": "dummy-anthropic",
+            "OPENAI_API_KEY": "dummy-openai",
+            "MODEL_API_KEY": "dummy-meta",
+            "OPENROUTER_API_KEY": "dummy-openrouter",
+            "TYPESAFE_API_KEY": "dummy-typesafe",
+            "JEV_API_KEY": "dummy-jev",
+            "GITHUB_TOKEN": "ghp_dummy_token",
+        }
 
-    res = init_box_config(
-        repo_root=repo,
-        out_dir=cfg_dir,
-        providers=CORE_PROVIDERS,
-        home=fake_home,
-        env={},
-    )
-    dogwood_bin = shutil.which("dogwood")
-    box_bin, _ = discover_box_binaries()
-    if not dogwood_bin and box_bin is None:
-        pytest.skip("Host Strands Box / Dogwood binaries not installed")
+        res = init_box_config(
+            repo_root=repo,
+            out_dir=cfg_dir,
+            providers=CORE_PROVIDERS,
+            allow_github_skills=True,
+            home=fake_home,
+            env=dummy_env,
+        )
+        dogwood_bin = shutil.which("dogwood")
+        box_bin, _ = discover_box_binaries()
+        if not dogwood_bin and box_bin is None:
+            pytest.skip("Host Strands Box / Dogwood binaries not installed")
 
-    if dogwood_bin:
-        proc = subprocess.run(
-            [dogwood_bin, "validate", str(res.policy_dw)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert proc.returncode == 0, proc.stderr or proc.stdout
+        if dogwood_bin:
+            proc = subprocess.run(
+                [dogwood_bin, "validate", str(res.policy_dw)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert proc.returncode == 0, proc.stderr or proc.stdout
 
-    if box_bin is not None:
-        report = run_box_doctor(
-            repo_root=repo, config_path=res.box_toml, box_bin=box_bin
-        )
-        by_name = {c.name: c for c in report.checks}
-        if "apparmor_userns" in by_name and not by_name["apparmor_userns"].ok:
-            pytest.skip(by_name["apparmor_userns"].detail)
-        rc, _ = launch_box_run(
-            ["--help"], repo_root=repo, config_path=res.box_toml, box_bin=box_bin
-        )
-        assert rc == 0
+        if box_bin is not None:
+            report = run_box_doctor(
+                repo_root=repo, config_path=res.box_toml, box_bin=box_bin, env=dummy_env
+            )
+            by_name = {c.name: c for c in report.checks}
+            if "apparmor_userns" in by_name and not by_name["apparmor_userns"].ok:
+                pytest.skip(by_name["apparmor_userns"].detail)
+
+            schema_dir = tmp_path / "schema"
+            schema_dir.mkdir()
+            schema_proc = subprocess.run(
+                [
+                    str(box_bin),
+                    "policy",
+                    "generate-schema",
+                    "--config",
+                    str(res.box_toml),
+                    "--output-dir",
+                    str(schema_dir),
+                ],
+                env=dummy_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert schema_proc.returncode == 0, schema_proc.stderr or schema_proc.stdout
+
+            run_proc = subprocess.run(
+                [str(box_bin), "run", "--config", str(res.box_toml), "--", "--help"],
+                cwd=repo,
+                env=dummy_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            stderr = run_proc.stderr or ""
+            for bad in (
+                "invalid credential entry",
+                "will not load",
+                "is refused:",
+                "does not exist",
+                "No such file or directory",
+                "Monty answers it",
+            ):
+                assert bad not in stderr, stderr
+            if "this identity may not create a user namespace" in stderr:
+                pytest.skip(stderr.strip().splitlines()[-1])
+            assert run_proc.returncode == 0, stderr or run_proc.stdout
+            assert "Usage:" in run_proc.stdout

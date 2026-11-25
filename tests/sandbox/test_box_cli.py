@@ -37,6 +37,15 @@ class TestBoxCliSubcommands:
         self, tmp_path, monkeypatch
     ):
         self._forbid_preflight(monkeypatch)
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
         monkeypatch.chdir(tmp_path)
         out_dir = tmp_path / ".box-local"
         result = CliRunner().invoke(
@@ -65,9 +74,12 @@ class TestBoxCliSubcommands:
         assert "Warning:" in result.output
         assert "Warning: Warning:" not in result.output
         toml_text = (out_dir / "box.toml").read_text(encoding="utf-8")
+        dw_text = (out_dir / "policy.dw").read_text(encoding="utf-8")
         assert "bedrock-runtime.us-west-2.amazonaws.com" in toml_text
         assert "api.openai.com" in toml_text
-        assert "api.github.com" in toml_text
+        assert "api.github.com" not in toml_text
+        assert "api.github.com" in dw_text
+        assert "codeload.github.com" in dw_text
 
     def test_box_init_rejects_unknown_provider_with_exit_1(self, tmp_path, monkeypatch):
         self._forbid_preflight(monkeypatch)

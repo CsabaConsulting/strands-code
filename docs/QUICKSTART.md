@@ -360,9 +360,9 @@ Dogwood engine evaluates Cedar + MFOTL temporal rules externally.
 
 - **Linux binary installation (3 co-located binaries):** Install `box`,
   `strands-box-contain-trampoline`, and `strands-box-sock-alias` into the same
-  directory (for example `/usr/local/libexec/strands-box/` or via Strands Box's
-  `download.sh` / Cargo build) and ensure `box` is on `PATH` or pointed to by
-  `STRANDS_BOX_BIN` / `--box-bin`.
+  directory (for example `/usr/local/libexec/strands-box/` or `~/.local/bin/`,
+  via Strands Box's `install.sh`, `download.sh`, or Cargo build) and ensure `box`
+  is on `PATH` or pointed to by `STRANDS_BOX_BIN` / `--box-bin`.
 - **Linux `x86_64` requirement:** Set `EXPERIMENTAL_X86_SUPPORT=TRUE` on Linux
   `x86_64` hosts (`strands-code box run` exports this automatically for the child
   `box` process when running on `x86_64`).
@@ -395,6 +395,11 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
     (`0o700` dirs, `0o600` files, symlink-refused) — omitted from
     `[agent.filesystem].write` and downgraded to `Prompt` even under broad
     `allow` rules (`policy/core.py`).
+  - Temporary files inside the box use `TMPDIR=~/.cache/strands-code/tmp` (host
+    `/tmp` is never mounted). Secret-less egress targets
+    (`openrouter.ai/api/v1/models*`, `codeload.github.com`,
+    `objects.githubusercontent.com`) are permitted solely in `policy.dw` rather
+    than `[egress.*]` entries in `box.toml`.
   - `/policy` and `/policy show` display `Sandbox: Strands Box active (STRANDS_BOX=1)`
     when running boxed.
   - Under `STRANDS_BOX=1`, CodeAct's `codeact_shell` executes commands via
@@ -409,15 +414,16 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
 | `anthropic` | `api.anthropic.com` | `env://ANTHROPIC_API_KEY` via `x-api-key` | Auto-detected |
 | `openai` | `api.openai.com` | `env://OPENAI_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `meta` | `api.meta.ai` | `env://MODEL_API_KEY` or `META_API_KEY` via `Authorization: Bearer` | Auto-detected |
-| `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` (+ unauth `openrouter.ai/api/v1/models*`) | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` (none on `/api/v1/models*`) | Path-scoped; keeps `/cost` & `/route setup` catalog fetches working |
+| `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` (+ unauth `openrouter.ai/api/v1/models*`) | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` (policy-only on `/api/v1/models*`) | Path-scoped; keeps `/cost` & `/route setup` catalog fetches working |
 | `typesafe` | `api.typesafe.ai` | `env://TYPESAFE_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `decisions_api` | `decisionapi.net` | `env://JEV_API_KEY` via `Authorization: Bearer` | Auto-detected after `typesafe` from `routing.yaml` or `JEV_API_KEY` (`--allow-decisions-api` force-enables) |
-| `--allow-github-skills` | `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com` | Optional `GITHUB_TOKEN`/`GH_TOKEN` scoped strictly to `api.github.com` | Opt-in flag on `box init` |
+| `--allow-github-skills` | `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com` | Optional `GITHUB_TOKEN`/`GH_TOKEN` strictly on `api.github.com` | Opt-in flag on `box init` (download hosts authorized in `policy.dw`) |
 
 - **Dogwood policy & formal scoped revisit of `D-05`:** Generated `policy.dw`
   sets default-deny egress, forbids `fs:read` on `*/.env`, `*/.env.*`, `*/.ssh/*`,
   and `*/.aws/*`, and includes the canonical MFOTL temporal rule
-  `push_requires_recent_tests` (requiring `pytest` `shell:spawn` `formerly within 900s`
-  before `git push*`). Per `v2.0`'s scoped revisit of `D-05`, external host-side
+  `push_requires_recent_tests` (`forbid` on `git` `push` `unless temporal` a
+  passing `pytest` `shell:spawn::response` with `output.status: 0` ran
+  `formerly within 900s`). Per `v2.0`'s scoped revisit of `D-05`, external host-side
   deterministic `.dw` rules are scoped exclusively to Strands Box while in-process
   Python `interventions` remain deterministic TOML + Python only.
