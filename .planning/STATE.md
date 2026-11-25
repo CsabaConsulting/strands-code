@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: 18
 current_phase_name: Skills Marketplaces & Lockfile Installer
 current_plan: 0
-status: discussed
-stopped_at: Phase 18 context gathered (`18-CONTEXT.md` D-01..D-07, `18-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 18`
-last_updated: "2026-11-25T00:56:00Z"
+status: planned
+stopped_at: Phase 18 planned (`18-01..03-PLAN.md`, `18-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 18`
+last_updated: "2026-11-25T01:04:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Gathered Phase 18 context (`18-CONTEXT.md` D-01..D-07 & `18-DISCUSSION-LOG.md`: HTTPS + local-path catalogs, zero pre-registered catalogs, flat owner--repo ad-hoc slug, scripts/* warnings + fail-closed SHA-256 hash-drift skip, Prompt downgrade on protected .agent/skills* & ~/.config/strands-code/** paths, offline + live GitHub integration scope)
-state_head: 0a4456c
+last_activity_desc: Planned Phase 18 (`18-RESEARCH.md`, `18-PATTERNS.md`, `18-01..03-PLAN.md`, `18-VALIDATION.md`, `18-PLAN-CHECK.md` PASS across 3 waves for SKILL-03)
+state_head: d1025aa
 progress:
   total_phases: 9
   completed_phases: 5
-  total_plans: 14
+  total_plans: 17
   completed_plans: 14
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 18 Ready for Planning (`SKILL-03`, `18-CONTEXT.md` `D-01`–`D-07`) — Phase 17 Complete (`0a4456c`)
+**Current focus:** Milestone `v2.0` · Phase 18 Planned (`SKILL-03`, `18-01..03-PLAN.md`, `18-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 18`
 
 ## Current Position
 
-Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Context Gathered (`18-CONTEXT.md`)
-Plan: 0 of TBD in Phase 18 (ready for `/gsd-plan-phase 18`)
-Status: Discussed (`SKILL-03` decisions `D-01`–`D-07` locked; ready for `/gsd-plan-phase 18`)
-Last activity: 2026-11-24 — Gathered Phase 18 context (`18-CONTEXT.md` `D-01`–`D-07`, `18-DISCUSSION-LOG.md`)
+Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Planned (`18-01`..`18-03`)
+Plan: 0 of 3 complete in Phase 18 (Waves 1–3 planned)
+Status: Planned (`SKILL-03` ready for `/gsd-execute-phase 18`)
+Last activity: 2026-11-24 — Planned Phase 18 (`18-RESEARCH.md`, `18-PATTERNS.md`, `18-01..03-PLAN.md`, `18-VALIDATION.md`, `18-PLAN-CHECK.md` PASS)
 
 Progress: [█████░░░░░] 56%
 
@@ -70,10 +70,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 17 security audit (`17-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`, `9ec4e34`): remediated `T-17-03` HIGH (`valid_base_url()` creds/controls/query/fragment/port checks, `preflight_get()`/`local_engine_ready()` URL pre-check, full IPv4/IPv6 `_is_loopback_host()` loopback suppression), `T-17-06` HIGH (`follow_redirects=False` on `make_async_client`/`make_sync_client`, strict `parse_constant` rejection of `NaN`/`Infinity`), `T-17-07` MEDIUM (`valid_model_id()` whitespace/control-char rejection in `_assign_engine_string`/`_validate_engine_model_ids`/`run_*_decision`), `T-17-01` (`read_env_api_key()` whitespace/control-char filtering + `disable_cwd_dotenv()` verified for `TYPESAFE_API_KEY`/`JEV_API_KEY`), and `T-17-02` (`_sanitize_uncertain_reason()` control-char strip + canary-free OTel spans/errors + `scrub_credentials()`), verified across `1745 + 1` non-integration suite + `44/44` rig + all 6 CI gates (`_parse_engine` `16 -> 12`).
 - Phase 17 Nyquist validation (`17-VALIDATION.md` `validated`, `nyquist_compliant: true`, `0a4456c`): audited `transports.py`, `core.py`, `model_switch.py`, and `cost_context.py` via `sys.settrace` and closed remaining edge branches in `tests/routing/test_routing_transports.py`, `tests/routing/test_routing_strategy.py`, and `tests/cost/test_cost_context.py` (`0` runtime edits, `1752 + 1 = 1753/1753` default suite + `44/44` rig + all 6 CI gates green).
 - Phase 18 discussion (`18-CONTEXT.md` `D-01`–`D-07`, `18-DISCUSSION-LOG.md`): locked pure HTTPS `httpx` + `tarfile` + local-path catalogs (zero `git` subprocesses, redirect-safe `codeload`/`objects`, `GITHUB_TOKEN`/`GH_TOKEN` isolated inside `memory/marketplace.py`), zero pre-registered catalogs & flat `owner--repo` ad-hoc slugs, `.agent-plugin`/`.claude-plugin`/`owner/repo[@ref]` discovery with deny-first unpack (no symlinks/hardlinks/`..`/submodules, size/file caps, strict `Skill.from_file`), atomic `./.agent/skills-lock.json` (`commit_sha` + SHA-256 `computed_hash`), prominent `scripts/*` warnings + fail-closed hash-drift skip until `/skills sync`, `Prompt` downgrade on broad repo `[[allow]]` globs targeting `.agent/skills*`/`skills-lock.json`/`~/.config/strands-code/**`, dynamic `/<ns>:` `SlashCompleter`, provenance-framed skill dispatch & `print_plain` rendering, and offline + `@pytest.mark.integration` GitHub probe.
+- Phase 18 planning (`18-RESEARCH.md`, `18-PATTERNS.md`, `18-01..03-PLAN.md`, `18-VALIDATION.md`, `18-PLAN-CHECK.md` PASS): mapped Waves 1–3 (`tests/memory/test_marketplace.py` Wave 0 file, `.claude-plugin`/`.agent-plugin`/`owner/repo[@ref]`/local discovery, preserving `./.agent/skills/` `local:` precedence & `test_remove_symlinked_skill_dir_refused`, non-mutating `discover_plugin_sources()` preserving `test_failed_harness_refresh_leaves_index_stale`, `_setup_decision_entries` untouched at `CC 20`, `test_no_credential_persistence_sinks`, and `D-24` pristine `strands_code_agent/`).
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 18` to research & plan Phase 18 (`SKILL-03` Skills Marketplaces & Lockfile Installer).
+- Run `/gsd-execute-phase 18` to execute Phase 18 (`18-01`..`18-03`) for `SKILL-03`.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -86,6 +87,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:56:00Z
-Stopped at: Phase 18 context gathered (`18-CONTEXT.md` D-01..D-07, `18-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 18`
-Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-CONTEXT.md
+Last session: 2026-11-25T01:04:00Z
+Stopped at: Phase 18 planned (`18-01..03-PLAN.md`, `18-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 18`
+Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-01-PLAN.md
