@@ -883,3 +883,67 @@ class TestHitlFailClosedStaleContext:
         )
         assert prompts == ["ask"]
         assert isinstance(verdict, HitlDeny)
+
+    def test_protected_path_hitl_omits_always_dialog_blocks_dead_allow_and_keeps_never(
+        self, tmp_path, monkeypatch
+    ):
+        import sys
+
+        repo_policy = tmp_path / "policy.toml"
+        missing_home = tmp_path / "missing.toml"
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".agent").mkdir(parents=True)
+
+        allow_cfg = PolicyConfig(allow=[Rule(tool="write", path="*")])
+        classifier = PolicyClassifier(
+            policy_loader=lambda: allow_cfg,
+            append_path=repo_policy,
+        )
+        handler = PolicyHumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+
+        # TTY dialog omits "always" option on protected paths.
+        seen_choices: list[list[str]] = []
+
+        def _fake_radio(_title, options, default=1):
+            seen_choices.append([val for val, _ in options])
+            return "n"
+
+        monkeypatch.setattr("strands_code_cli.ui.choice.radio_choice", _fake_radio)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        res_tty = _run(
+            handler,
+            _event("write", {"path": ".agent/routing.yaml"}, uid="prot-tty"),
+        )
+        assert isinstance(res_tty, HitlDeny)
+        assert seen_choices == [["y", "n", "never"]]
+
+        # Typing "always" on non-TTY approves once without persisting a dead [[allow]] rule.
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        shown: list[str] = []
+        monkeypatch.setattr(
+            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+        )
+        monkeypatch.setattr("builtins.input", lambda *a: "always")
+        res_always = _run(
+            handler,
+            _event("write", {"path": ".agent/policy.toml"}, uid="prot-always"),
+        )
+        assert isinstance(res_always, Proceed)
+        assert not repo_policy.exists()
+        assert any("protected path" in line for line in shown)
+        assert any("standing allow rules are disabled" in line for line in shown)
+
+        # Typing "never" still writes a [[deny]] rule.
+        monkeypatch.setattr("builtins.input", lambda *a: "never")
+        res_never = _run(
+            handler,
+            _event("write", {"path": "STRANDS.md"}, uid="prot-never"),
+        )
+        assert isinstance(res_never, HitlDeny)
+        reloaded = PolicyConfig.load(home_path=missing_home, repo_path=repo_policy)
+        assert len(reloaded.deny) == 1
+        assert reloaded.deny[0].tool == "write"
+        assert reloaded.deny[0].path == str((tmp_path / "STRANDS.md").resolve())
+        assert len(reloaded.allow) == 0

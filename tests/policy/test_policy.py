@@ -382,3 +382,46 @@ class TestDecide:
             Prompt,
         )
         assert _is_protected_skills_or_config_path("escape_box/box.toml", repo) is True
+
+    def test_repo_policy_routing_memory_and_box_data_downgrade_to_prompt(
+        self, tmp_path, monkeypatch
+    ):
+        import platformdirs
+
+        data_root = tmp_path / "xdg_data"
+        monkeypatch.setattr(
+            platformdirs,
+            "user_data_dir",
+            lambda appname="strands-code", *a, **kw: str(data_root / str(appname)),
+        )
+        box_state = data_root / "strands-box" / "repos" / "demo" / "state"
+        box_state.parent.mkdir(parents=True)
+        repo = tmp_path / "repo"
+        (repo / ".agent").mkdir(parents=True)
+        cfg = self._cfg(allow=[Rule(tool="*", path="*")])
+        deny_cfg = self._cfg(
+            allow=[Rule(tool="*", path="*")],
+            deny=[Rule(tool="write", path=".agent/**")],
+        )
+
+        for target in (
+            ".agent/policy.toml",
+            ".agent/routing.yaml",
+            ".agent/MEMORY.md",
+            "STRANDS.md",
+            str(box_state),
+        ):
+            assert isinstance(
+                decide("write", {"path": target}, cfg, cwd=str(repo)), Prompt
+            )
+            assert isinstance(
+                decide("edit", {"path": target}, cfg, cwd=str(repo)), Prompt
+            )
+            assert isinstance(
+                decide("read", {"path": target}, cfg, cwd=str(repo)), Allow
+            )
+
+        assert isinstance(
+            decide("write", {"path": ".agent/policy.toml"}, deny_cfg, cwd=str(repo)),
+            Deny,
+        )

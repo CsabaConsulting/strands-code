@@ -50,6 +50,7 @@ from strands_code_cli.policy.core import (
     PolicyConfig,
     Prompt,
     Rule,
+    _is_protected_skills_or_config_path,
     decide,
     normalise_command,
 )
@@ -59,8 +60,19 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 _ASK_OPTIONS = "Approve? [y/n/always/never]"
+_PROTECTED_ASK_OPTIONS = (
+    "[y]es once / [n]o skip / [never] deny+remember (protected path)"
+)
 _ASK_SUFFIX = _ASK_OPTIONS + " "
 _ANSWER_PROMPT = "> "
+
+
+def _is_protected_prompt(ctx: dict[str, Any]) -> bool:
+    if ctx.get("tool_name") not in ("write", "edit"):
+        return False
+    tool_input = ctx.get("tool_input") or {}
+    return _is_protected_skills_or_config_path(tool_input.get("path", ""), Path.cwd())
+
 
 # ``gate_open`` is the shared reentrant stdin guard, defined in
 # steering (this module lazily imports choice, so the guard must not
@@ -593,6 +605,8 @@ class PolicyClassifier:
                     print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
                 print(f"  Risk: {verdict.reason}")
 
+                protected = _is_protected_prompt(ctx)
+
                 def read_answer() -> str:
                     if sys.stdin.isatty():
                         # Arrow-key dialog (choice.radio_choice): prompt_toolkit
@@ -600,7 +614,8 @@ class PolicyClassifier:
                         # pump thread (main), never the SDK worker thread.
                         # Ctrl-C re-raises (cancel path); ESC/failure denies.
                         return self._dialog_answer(
-                            _dialog_title(tag, tool_name, ctx["tool_input"])
+                            _dialog_title(tag, tool_name, ctx["tool_input"]),
+                            allow_always=not protected,
                         )
                     # Print the whole prompt block through the same stream:
                     # input()'s own prompt arg bypasses the output proxy and
@@ -609,7 +624,7 @@ class PolicyClassifier:
                     # The stdin fd mode is never touched here (nor by the
                     # steering reader): flipping the shared fd parked the
                     # reader in os.read and wedged the terminal.
-                    print(_ASK_OPTIONS)
+                    print(_PROTECTED_ASK_OPTIONS if protected else _ASK_OPTIONS)
                     print(_ANSWER_PROMPT, end="", flush=True)
                     return input().strip().lower()
 
@@ -629,18 +644,22 @@ class PolicyClassifier:
             logger.warning("Policy ask failed closed: %s", exc)
             return "n"
 
-    def _dialog_answer(self, title: str = "Approve?") -> str:
+    def _dialog_answer(
+        self, title: str = "Approve?", *, allow_always: bool = True
+    ) -> str:
         """Arrow-key approval choice; ESC/failure denies, Ctrl-C re-raises."""
         from strands_code_cli.ui.choice import radio_choice
 
+        options = [
+            ("y", "Yes — approve once"),
+            ("n", "No — skip (deny once)"),
+        ]
+        if allow_always:
+            options.append(("always", "Always — approve + remember rule"))
+        options.append(("never", "Never — deny + remember rule"))
         picked = radio_choice(
             title,
-            [
-                ("y", "Yes — approve once"),
-                ("n", "No — skip (deny once)"),
-                ("always", "Always — approve + remember rule"),
-                ("never", "Never — deny + remember rule"),
-            ],
+            options,
             default=1,  # fail-closed highlight
         )
         if picked is None:
@@ -655,6 +674,12 @@ class PolicyClassifier:
         if answer in ("y", "yes"):
             self._batch.mark(
                 signature, f"[{tag}] approved {tool_name}: {verdict.reason}", tag=tag
+            )
+            return "y"
+        if answer == "always" and _is_protected_prompt(ctx):
+            print("Protected path: standing allow rules are disabled; approving once.")
+            self._batch.mark(
+                signature, f"[{tag}] y-once {tool_name}: {verdict.reason}", tag=tag
             )
             return "y"
         if answer in ("always", "never"):

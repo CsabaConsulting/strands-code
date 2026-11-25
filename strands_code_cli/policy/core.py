@@ -557,12 +557,17 @@ def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
         Path(os.path.realpath(platformdirs.user_config_dir("strands-code"))),
         Path(os.path.realpath(platformdirs.user_cache_dir("strands-code"))),
         Path(os.path.realpath(platformdirs.user_config_dir("strands-box"))),
+        Path(os.path.realpath(platformdirs.user_data_dir("strands-box"))),
     ]
     protected_files: list[Path] = []
     for root in base_variants:
         protected_dirs.append(root / ".agent" / "skills")
         protected_dirs.append(root / ".agent" / "skills-marketplaces")
         protected_files.append(root / ".agent" / "skills-lock.json")
+        protected_files.append(root / ".agent" / "policy.toml")
+        protected_files.append(root / ".agent" / "routing.yaml")
+        protected_files.append(root / ".agent" / "MEMORY.md")
+        protected_files.append(root / "STRANDS.md")
 
     dirs_tuple = tuple(protected_dirs)
     files_tuple = tuple(protected_files)
