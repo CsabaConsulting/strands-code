@@ -1,15 +1,15 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: 18
-current_phase_name: Skills Marketplaces & Lockfile Installer
-current_plan: 3
-status: validated
-stopped_at: Phase 18 Nyquist validation complete (`18-VALIDATION.md` 99.3% coverage, 1798/1798 default suite, 44/44 rig, zero runtime edits) — ready for `/gsd-discuss-phase 19`
-last_updated: "2026-11-25T06:03:00Z"
-last_activity: 2026-11-24
-last_activity_desc: Validated Phase 18 Nyquist branch coverage (`18-VALIDATION.md` 2084/2099 = 99.3%, `1797+1` tests, 44/44 rig, 6/6 CI gates, zero runtime edits)
-state_head: b169716
+current_phase: 19
+current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
+current_plan: 0
+status: discussed
+stopped_at: Phase 19 context gathered (`19-CONTEXT.md` D-01–D-07, scoped D-05 revisit logged) — ready for `/gsd-plan-phase 19`
+last_updated: "2026-11-25T00:20:00Z"
+last_activity: 2026-11-25
+last_activity_desc: Discussed Phase 19 Strands Box & Dogwood policy (`19-CONTEXT.md` D-01–D-07, `19-DISCUSSION-LOG.md`)
+state_head: cebef4c
 progress:
   total_phases: 9
   completed_phases: 6
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 18 Validated, Hardened & UAT Passed (`SKILL-03`, `18-VALIDATION.md` `nyquist_compliant: true`, `18-SECURITY.md` `10/10 closed`, `18-UAT.md` `6/6 PASS`) — ready for `/gsd-discuss-phase 19`
+**Current focus:** Milestone `v2.0` · Phase 19 Discussed (`SANDBOX-01`, `19-CONTEXT.md` `D-01`–`D-07`) — ready for `/gsd-plan-phase 19`
 
 ## Current Position
 
-Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Verified, UAT, Security & Nyquist Validation Complete (`18-01`..`18-03`)
-Plan: 3 of 3 complete in Phase 18
-Status: Validated (`18-VALIDATION.md` `nyquist_compliant: true`, `18-SECURITY.md` `10/10 closed`, `18-UAT.md` `6/6 PASS`) — ready for `/gsd-discuss-phase 19`
-Last activity: 2026-11-24 — Completed Phase 18 Nyquist validation (`18-VALIDATION.md` 2084/2099 = 99.3%, `1797+1` tests, zero runtime edits)
+Phase: 19 of 21 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Context Gathered
+Plan: 0 of TBD in Phase 19
+Status: Discussed (`19-CONTEXT.md` `D-01`–`D-07`) — ready for `/gsd-plan-phase 19`
+Last activity: 2026-11-25 — Gathered Phase 19 context (`19-CONTEXT.md`, `19-DISCUSSION-LOG.md`)
 
 Progress: [███████░░░] 67%
 
@@ -79,10 +79,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 18 security audit (`18-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`, `b169716`): remediated `T-18-09` HIGH (strict `load_lockfile()` slug/key/SHA/hash/subdir validation via `valid_skill_name()`, `validate_skill_name()` pre-staging, `_validate_sync_source()` blocking unregistered local-path sync from crafted `skills-lock.json`, and staging hash verification before `_atomic_swap_skill_dir()`), `T-18-08` HIGH (explicit redirect port rejection, JSON `NaN`/`Infinity` rejection, `2 MiB` API JSON cap, `httpx.HTTPError` scrubbing, and direct-call segment validation), `T-18-10` MEDIUM (`update_marketplace` `ValueError` ordering, symlink-safe cache unlink & `.agent` parent checks, and `user_cache_dir("strands-code")` protected in `policy/core.py`), and `T-18-01` (`gh[pousr]_*`/`github_pat_*`/`GITHUB_TOKEN`/`GH_TOKEN` in `scrub_credentials()`), verified across `1784 + 1` non-integration suite + `1` live `anthropics/skills` probe + `44/44` rig + all 6 CI gates (`marketplace.py` max `C 17`).
 
 - Phase 18 Nyquist validation (`18-VALIDATION.md` `validated`, `nyquist_compliant: true`): audited all 8 Phase 18 changed modules via `sys.monitoring` (`2084/2099 = 99.3%` executable line coverage; `100.0%` on `cost_context.py`, `dispatch/core.py`, `entry/main.py`, `loop/core.py`, `policy/core.py`, `ui/completer.py`; `99.4%` on `marketplace.py`; `96.2%` on `skills.py`) and closed remaining edge branches in `tests/memory/test_marketplace.py`, `tests/memory/test_skills.py`, and `tests/policy/test_policy.py` (`0` runtime edits, `1797 + 1 = 1798/1798` default suite + `44/44` rig + all 6 CI gates green).
+- Phase 19 discussion (`19-CONTEXT.md` `D-01`–`D-07`, `19-DISCUSSION-LOG.md`): locked `strands-code box init|doctor|run` Typer subcommand group in isolated `sandbox/box.py` + read-only `/policy` Box indicator, host-only `~/.config/strands-box/repos/<slug>-<hash8>/` config storage (`0o700`/`0o600`, outside `[agent.filesystem].write`, protected in `policy/core.py`), auto-resolved `uv`/`.venv` Python realpaths, least-privilege auto-detected 7-provider egress profiles (`bedrock` no STS hole, `google`, `anthropic`, `openai`, `meta`, path-scoped `openrouter`, `typesafe` + `--allow-decisions-api`/`--allow-github-skills`), default-deny `policy.dw` with `.env`/secret read forbids + canonical MFOTL temporal `git push` rule (**formal scoped revisit of `v1.0` `D-05`**: external host-side deterministic Dogwood allowed while in-process Python `interventions` remain TOML+Python only), and `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment.
 
 ### Pending Todos
 
-- Run `/gsd-discuss-phase 19` to start planning Phase 19 (`SANDBOX-01`: Strands Box OS sandboxing + Dogwood policy).
+- Run `/gsd-plan-phase 19` to plan Phase 19 (`SANDBOX-01`: Strands Box Linux Sandbox Floor & Dogwood Policy).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -95,6 +96,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T06:03:00Z
-Stopped at: Phase 18 Nyquist validation complete (`18-VALIDATION.md` 99.3% coverage, 1798/1798 default suite, 44/44 rig, zero runtime edits) — ready for `/gsd-discuss-phase 19`
-Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-VALIDATION.md
+Last session: 2026-11-25T00:20:00Z
+Stopped at: Phase 19 context gathered (`19-CONTEXT.md` D-01–D-07, scoped D-05 revisit logged) — ready for `/gsd-plan-phase 19`
+Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-CONTEXT.md
