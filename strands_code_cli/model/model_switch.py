@@ -67,7 +67,6 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
     (None, "amazon", "nova", "nova-micro"),
     (None, "amazon", "nova", "nova-lite"),
     (None, None, None, "nemotron"),
-    (None, None, None, "llama"),
 )
 """Model ids without native media blocks (placeholder-text precedent)."""
 
@@ -165,18 +164,29 @@ def _override_verdict(model_id: str, field: str) -> bool | None:
 def supports_reasoning(model_id: str) -> bool:
     """True when the harness verifies thinking support (fail-closed).
 
-    User overrides win first; then bedrock, anthropic-direct, and google
-    ids defer to the harness ``supports_thinking`` (family-level thinking
-    tables). Every other provider strips, since adapter translation of
-    thinking blocks is unverified there. Without harness support, the
-    static allowlist is the fallback — still fail-closed.
+    User overrides win first; then bedrock, bedrock-mantle, anthropic,
+    google, openai, and meta ids evaluate reasoning support. Aggregators
+    strip, since adapter translation of thinking blocks is unverified there.
+    Without harness support, the static allowlist is the fallback — still
+    fail-closed.
     """
     hit = _override_verdict(model_id, "reasoning")
     if hit is not None:
         return hit
     provider = _provider_of(model_id)
-    if provider not in ("bedrock", "anthropic", "google"):
+    if provider not in (
+        "bedrock",
+        "bedrock-mantle",
+        "anthropic",
+        "google",
+        "openai",
+        "meta",
+    ):
         return False
+    if provider == "openai" and _is_openai_non_reasoning(_base_key(model_id).lower()):
+        return False
+    if provider == "meta" and not upstream_supports_meta():
+        return _is_meta_chat_model(_base_key(model_id))
     if _harness_supports_thinking is not None:
         query = (
             f"bedrock/{_base_key(model_id)}"
@@ -1370,6 +1380,28 @@ def _has_reasoning(messages: list[dict[str, Any]]) -> bool:
     )
 
 
+def _needs_bedrock_resume_conversion(messages: list[dict[str, Any]], rich: Any) -> bool:
+    """True when Bedrock resume must convert SummaryBlocks or foreign thinking."""
+    prior_id = getattr(rich, "model_id", None)
+    has_non_bedrock_source = (
+        isinstance(prior_id, str)
+        and prior_id != "__resumed__"
+        and _provider_of(normalize_model_ref(prior_id)) != "bedrock"
+    )
+    for msg in messages:
+        for block in msg.get("content", []):
+            if "summary" in block:
+                return True
+            if (
+                isinstance(block.get("toolUse"), dict)
+                and "reasoningSignature" in block["toolUse"]
+            ):
+                return True
+            if has_non_bedrock_source and "reasoningContent" in block:
+                return True
+    return False
+
+
 def prepare_resumed_history(
     agent: Any,
     current_model: str,
@@ -1378,11 +1410,13 @@ def prepare_resumed_history(
 ) -> bool:
     """Normalize persisted session history on launch for the opening model (D-04).
 
-    Media-capable Bedrock targets leave ``agent.messages`` untouched so
-    upstream ``#5166`` / ``drop_block`` strip foreign ``reasoningContent``
-    dynamically on the wire without losing snapshot traces. Non-Bedrock
-    and media-less models run :func:`convert_history` in place and preserve
-    any raw thinking traces into ``rich`` when empty.
+    Media-capable Bedrock targets leave ``agent.messages`` untouched when
+    history originates on Bedrock so upstream ``#5166`` / ``drop_block``
+    strip ``reasoningContent`` dynamically on the wire without losing
+    snapshot traces. Non-Bedrock targets, media-less Bedrock targets,
+    and histories carrying Anthropic ``SummaryBlock``s, Gemini signatures,
+    or known non-Bedrock thinking convert in place and preserve raw
+    traces into ``rich``.
 
     Returns:
         ``True`` if ``agent.messages`` was converted in place, else ``False``.
@@ -1391,7 +1425,11 @@ def prepare_resumed_history(
     if not messages:
         return False
     target = normalize_model_ref(current_model)
-    if _provider_of(target) == "bedrock" and supports_media(target):
+    if (
+        _provider_of(target) == "bedrock"
+        and supports_media(target)
+        and not _needs_bedrock_resume_conversion(messages, rich)
+    ):
         return False
     source = list(messages)
     prior_id = getattr(rich, "model_id", None)
@@ -1436,6 +1474,43 @@ def scoped_base_url(
     )
 
 
+def _configure_openai_or_meta_base_url(
+    provider: str, resolved: Any, cleaned: str
+) -> None:
+    if getattr(resolved, "_bedrock_mantle_config", None) is not None:
+        return
+    client_args = getattr(resolved, "client_args", None)
+    if not isinstance(client_args, dict):
+        return
+    if provider == "meta" or not client_args.get("base_url"):
+        client_args["base_url"] = cleaned
+    if provider == "openai":
+        from strands_code_cli.entry.first_run import has_openai_credentials
+
+        if not has_openai_credentials() and not client_args.get("api_key"):
+            client_args["api_key"] = "not-required"
+
+
+def _configure_anthropic_base_url(resolved: Any, cleaned: str) -> None:
+    client = getattr(resolved, "client", None)
+    cls_name = type(client).__name__ if client is not None else ""
+    if (
+        client is None
+        or not hasattr(client, "base_url")
+        or "Bedrock" in cls_name
+        or "Vertex" in cls_name
+    ):
+        return
+    from strands_code_cli.entry.first_run import has_anthropic_credentials
+
+    try:
+        client.base_url = cleaned
+        if not has_anthropic_credentials() and not getattr(client, "api_key", None):
+            client.api_key = "not-required"
+    except Exception:
+        pass
+
+
 def configure_base_url_for_model(
     model_id: str,
     resolved: Any,
@@ -1451,26 +1526,26 @@ def configure_base_url_for_model(
     cleaned = base_url.rstrip("/")
     provider = _provider_of(normalize_model_ref(model_id))
     if provider in ("openai", "meta"):
-        if getattr(resolved, "_bedrock_mantle_config", None) is not None:
-            return resolved
-        client_args = getattr(resolved, "client_args", None)
-        if isinstance(client_args, dict) and (
-            provider == "meta" or not client_args.get("base_url")
-        ):
-            client_args["base_url"] = cleaned
+        _configure_openai_or_meta_base_url(provider, resolved, cleaned)
     elif provider == "anthropic":
-        client = getattr(resolved, "client", None)
-        cls_name = type(client).__name__ if client is not None else ""
-        if (
-            client is not None
-            and hasattr(client, "base_url")
-            and "Bedrock" not in cls_name
-            and "Vertex" not in cls_name
-        ):
-            try:
-                client.base_url = cleaned
-            except Exception:
-                pass
+        _configure_anthropic_base_url(resolved, cleaned)
+    return resolved
+
+
+def _build_openai_chat_model(normalized: str, base_url: str) -> Any:
+    """Build legacy Chat Completions OpenAIModel when api_mode=='chat'."""
+    from strands.models.openai import OpenAIModel
+
+    from strands_code_cli.entry.first_run import has_openai_credentials
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    _validate_base_url(base_url)
+    client_args: dict[str, Any] = {"base_url": base_url.rstrip("/")}
+    if not has_openai_credentials():
+        client_args["api_key"] = "not-required"
+    chat_id = normalized.split("/", 1)[1]
+    resolved = OpenAIModel(model_id=chat_id, client_args=client_args)
+    resolved._strands_model_ref = normalized
     return resolved
 
 
@@ -1482,6 +1557,7 @@ def resolve_harness_model(
     base_url: str | None = None,
     web_search: bool = True,
     caching: bool = True,
+    api_mode: str | None = None,
 ) -> Any:
     """Resolve a model preserving harness caching, web_search, and post-applied base_url."""
     import strands_harness.models as harness_models
@@ -1496,6 +1572,8 @@ def resolve_harness_model(
             web_search=web_search,
             caching=caching,
         )
+    if base_url and _provider_of(normalized) == "openai" and api_mode == "chat":
+        return _build_openai_chat_model(normalized, base_url)
     target_default = default or normalized
     kwargs: dict[str, Any] = {
         "caching": bool(caching),
@@ -1528,6 +1606,7 @@ def apply_switch(
     *,
     effort: str | None = None,
     base_url: str | None = None,
+    api_mode: str | None = None,
 ) -> tuple[Any, str]:
     """Resolve and in-place swap the agent's model (tracer-winning seam).
 
@@ -1543,6 +1622,9 @@ def apply_switch(
             only when not None.
         base_url: Optional custom endpoint host override; defaults to
             ``getattr(agent, "_base_url", None)``.
+        api_mode: Optional OpenAI endpoint mode override (``responses|chat``);
+            defaults to ``getattr(agent, "_api_mode", None)`` when ``base_url``
+            applies.
 
     Returns:
         ``(model, resolved_id)`` for replies and persistence.
@@ -1557,11 +1639,21 @@ def apply_switch(
             normalized,
         )
     )
+    effective_api_mode = (
+        api_mode
+        if api_mode is not None
+        else (
+            getattr(agent, "_api_mode", None)
+            if effective_base_url is not None
+            else None
+        )
+    )
     model = resolve_harness_model(
         normalized,
         default,
         effort=effort,
         base_url=effective_base_url,
+        api_mode=effective_api_mode,
     )
     agent.model = model
     return (model, model_id_of(model, normalized))

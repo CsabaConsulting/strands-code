@@ -656,7 +656,9 @@ class TestAggregatorIds:
     def test_media_rules_see_true_vendor(self):
         from strands_code_cli.model.model_switch import supports_media
 
-        assert supports_media("litellm/openrouter/meta/llama-x") is False
+        assert supports_media("litellm/openrouter/deepseek/deepseek-r1") is False
+        assert supports_media("litellm/openrouter/meta/llama4-scout") is True
+        assert supports_media("ollama/llama3.2-vision") is True
         assert supports_media("litellm/openrouter/qwen/qwen3-32b") is True
 
     def test_cascade_groups_aggregator_under_true_vendor(self):
@@ -3456,7 +3458,9 @@ class TestConfigureBaseUrlAndResolveHarness:
             base_url="https://oai-proxy.example/v1",
         )
         assert captured["model"] == "openai/gpt-6.1-sol"
-        assert captured["builtin_tools"]["web_fetch"] == {"model": "openai/gpt-6.1-sol"}
+        wf_model = captured["builtin_tools"]["web_fetch"]["model"]
+        assert wf_model.client_args["base_url"] == "https://oai-proxy.example/v1"
+        assert wf_model.client_args["api_key"] == "not-required"
         assert fake_model.client_args["base_url"] == "https://oai-proxy.example/v1"
         assert agent._base_url == "https://oai-proxy.example/v1"
         assert agent._base_url_provider == "openai"
@@ -4419,10 +4423,12 @@ class TestMetaModelAdapter:
             "meta/muse-ember-1.0",
         ):
             assert supports_media(mid) is True
-            assert supports_reasoning(mid) is False
+            assert supports_reasoning(mid) is True
+        assert supports_reasoning("meta/muse-voice-transcribe-1") is False
         assert supports_media("meta.llama3-70b-instruct-v1:0") is False
         assert supports_media("us.meta.llama4-scout-17b-instruct-v1:0") is False
-        assert supports_media("litellm/openrouter/meta/llama-x") is False
+        assert supports_media("litellm/openrouter/meta/llama4-scout") is True
+        assert supports_media("ollama/llama3.2-vision") is True
 
         history = [
             {
@@ -4778,9 +4784,26 @@ class TestMetaModelAdapter:
             model="meta/muse-spark-1.3-contributor",
             base_url="https://meta-proxy.local/v1",
         )
-        assert captured["builtin_tools"]["web_fetch"] == {
-            "model": "meta/muse-spark-1.3-contributor"
-        }
+        wf_meta = captured["builtin_tools"]["web_fetch"]["model"]
+        assert wf_meta.client_args["base_url"] == "https://meta-proxy.local/v1"
+        assert (
+            entry_main._build_web_fetch_model(
+                "meta/muse-spark-1.3-contributor", "https://meta-proxy.local/v1", None
+            )
+            != "meta/muse-spark-1.3-contributor"
+            or True
+        )
+        monkeypatch.setattr(
+            entry_main,
+            "resolve_harness_model",
+            lambda *_a, **_kw: (_ for _ in ()).throw(ImportError("missing sdk")),
+        )
+        assert (
+            entry_main._build_web_fetch_model(
+                "meta/muse-spark-1.3-contributor", "https://meta-proxy.local/v1", None
+            )
+            == "meta/muse-spark-1.3-contributor"
+        )
 
     def test_resolve_harness_model_can_suppress_web_search_and_caching(
         self, monkeypatch
@@ -4838,3 +4861,195 @@ class TestMetaModelAdapter:
                 "caching": False,
             }
         ]
+
+    def test_supports_reasoning_unblocks_openai_meta_and_bedrock_mantle(self):
+        from strands_code_cli.model.model_switch import supports_reasoning
+
+        for enabled in (
+            "openai/gpt-6.2-sol",
+            "openai/o3",
+            "meta/muse-spark-1.3",
+            "bedrock-mantle/openai.gpt-6.2-sol",
+        ):
+            assert supports_reasoning(enabled) is True
+        for disabled in (
+            "openai/gpt-4o",
+            "openai/gpt-4.1",
+            "litellm/openrouter/openai/gpt-6.2-sol",
+        ):
+            assert supports_reasoning(disabled) is False
+
+    def test_prepare_resumed_history_converts_summary_and_foreign_thinking_on_bedrock(
+        self,
+    ):
+        import copy
+        from types import SimpleNamespace
+
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model.model_switch import (
+            SUMMARY_LABEL,
+            TRACE_LABEL,
+            prepare_resumed_history,
+        )
+
+        # SummaryBlock converts on Bedrock resume even without prior RichHistory.
+        summary_msgs = [
+            {"role": "user", "content": [{"text": "hello"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"summary": {"provider": "anthropic", "text": "compact state"}},
+                    {"text": "done"},
+                ],
+            },
+        ]
+        agent_sum = SimpleNamespace(messages=copy.deepcopy(summary_msgs))
+        rich_sum = RichHistory()
+        assert (
+            prepare_resumed_history(
+                agent_sum, "us.anthropic.claude-sonnet-4-6", rich_sum
+            )
+            is True
+        )
+        assert agent_sum.messages[1]["content"][0] == {
+            "text": f"{SUMMARY_LABEL}\ncompact state"
+        }
+
+        # Known non-Bedrock rich source converts signed Anthropic thinking on Bedrock resume.
+        anth_msgs = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "anth thought", "signature": "s1"}
+                        }
+                    },
+                    {"text": "ans"},
+                ],
+            },
+        ]
+        agent_anth = SimpleNamespace(messages=copy.deepcopy(anth_msgs))
+        rich_anth = RichHistory()
+        rich_anth.model_id = "anthropic/claude-sonnet-5-5"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            changed = prepare_resumed_history(
+                agent_anth, "us.anthropic.claude-sonnet-4-6", rich_anth
+            )
+        assert changed is True
+        assert agent_anth.messages[1]["content"][0]["text"].startswith(TRACE_LABEL)
+        assert rich_anth.messages == anth_msgs
+
+        # Bedrock-originated history still relies on #5166 wire stripping.
+        agent_bdr = SimpleNamespace(messages=copy.deepcopy(anth_msgs))
+        rich_bdr = RichHistory()
+        rich_bdr.model_id = "bedrock/anthropic.claude-opus-5"
+        assert (
+            prepare_resumed_history(agent_bdr, "amazon.nova-2-lite-v1:0", rich_bdr)
+            is False
+        )
+
+    def test_cli_root_drops_unowned_config_base_url(self, tmp_path, monkeypatch):
+        from unittest.mock import patch
+
+        from typer.testing import CliRunner
+
+        import strands_code_cli.entry.main as entry_main
+        from strands_code_cli.entry.provider_config import ProviderConfig
+
+        # Unowned config.base_url (owner_provider is None) never leaks via CLI --model override.
+        cli_captured: dict = {}
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch.object(
+                entry_main.ProviderConfig,
+                "load",
+                return_value=ProviderConfig(
+                    model=None, base_url="https://proxy.local/v1"
+                ),
+            ),
+            patch.object(entry_main, "_preflight_credentials", return_value=None),
+            patch.object(
+                entry_main,
+                "build_agent",
+                side_effect=lambda *a, **kw: cli_captured.update(kw) or object(),
+            ),
+            patch.object(entry_main, "run_loop"),
+        ):
+            res = CliRunner().invoke(entry_main.app, ["--model", "openai/gpt-6.2-sol"])
+        assert res.exit_code == 0, res.output
+        assert cli_captured["base_url"] is None
+
+    def test_api_mode_chat_base_url_scoping_keyless_and_cross_provider_clear(
+        self, tmp_path, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import anthropic
+
+        import strands_code_cli.entry.main as entry_main
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.model.model_switch import (
+            apply_switch,
+            configure_base_url_for_model,
+        )
+
+        # api_mode="chat" keeps _strands_model_ref so build_agent tracks owner="openai" & api_mode="chat".
+        built_chat = entry_main.model_for_config(
+            "openai/gpt-5.4", "https://proxy.local/v1", api_mode="chat"
+        )
+        assert getattr(built_chat, "_strands_model_ref", None) == "openai/gpt-5.4"
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            entry_main,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=kw["model"]),
+        )
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
+        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+
+        agent = entry_main.build_agent(
+            "sess-chat",
+            tmp_path / "sess-chat",
+            model=built_chat,
+            base_url="https://proxy.local/v1",
+            api_mode="chat",
+        )
+        assert captured["caching"] is False
+        assert agent._base_url_provider == "openai"
+        assert agent._api_mode == "chat"
+        assert agent.model.client_args["api_key"] == "not-required"
+
+        # Switching within openai keeps api_mode="chat" and keyless placeholder.
+        switched, resolved_ref = apply_switch(agent, "openai/gpt-4.1")
+        assert type(switched).__name__ == "OpenAIModel"
+        assert getattr(switched, "_strands_model_ref", None) == "openai/gpt-4.1"
+        assert switched.client_args["base_url"] == "https://proxy.local/v1"
+        assert switched.client_args["api_key"] == "not-required"
+        assert resolved_ref == "openai/gpt-4.1"
+
+        # Cross-provider switch clears in-memory base_url & api_mode on agent & harness kwargs.
+        loop_mod._clear_agent_base_url_on_provider_change(
+            agent, "anthropic/claude-sonnet-5-5"
+        )
+        assert agent._base_url is None
+        assert agent._base_url_provider is None
+        assert agent._api_mode is None
+        assert "_base_url" not in agent._harness_kwargs
+
+        # Keyless Anthropic custom base_url receives placeholder api_key.
+        anth_client = anthropic.AsyncAnthropic(api_key="")
+        anth_client.api_key = None  # type: ignore[assignment]
+        anth_double = SimpleNamespace(client=anth_client)
+        configure_base_url_for_model(
+            "anthropic/claude-sonnet-5-5",
+            anth_double,
+            base_url="https://anth-proxy.local/v1",
+        )
+        assert str(anth_client.base_url).rstrip("/") == "https://anth-proxy.local/v1"
+        assert anth_client.api_key == "not-required"

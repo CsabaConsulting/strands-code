@@ -41,6 +41,7 @@ from strands_code_cli.model.model_switch import (
     configure_streaming_for_model,
     model_id_of,
     normalize_model_ref,
+    resolve_harness_model,
     scoped_base_url,
     upstream_supports_meta,
 )
@@ -122,7 +123,10 @@ def model_for_config(
     """
     if model is None:
         return None
-    prefix, _, rest = model.partition("/") if "/" in model else ("bedrock", "", model)
+    raw_prefix, _, rest = (
+        model.partition("/") if "/" in model else ("bedrock", "", model)
+    )
+    prefix = raw_prefix.lower()
     if prefix == "meta" and not upstream_supports_meta():
         try:
             return build_meta_model(model, base_url=base_url)
@@ -136,10 +140,27 @@ def model_for_config(
             from strands.models.openai import OpenAIModel
 
             chat_id = rest if prefix == "openai" else model
-            return OpenAIModel(model_id=chat_id, client_args={"base_url": base_url})
+            resolved = OpenAIModel(model_id=chat_id, client_args={"base_url": base_url})
+            resolved._strands_model_ref = model
+            return resolved
         except ImportError:
             pass  # provider SDK missing: harness resolve reports it
     return model
+
+
+def _build_web_fetch_model(model: str, base_url: str, api_mode: str | None) -> Any:
+    """Resolve web_fetch summarizer with the custom base_url when possible."""
+    try:
+        return resolve_harness_model(
+            model,
+            effort="off",
+            base_url=base_url,
+            api_mode=api_mode,
+            web_search=False,
+            caching=False,
+        )
+    except Exception:
+        return model
 
 
 def build_agent(
@@ -148,6 +169,7 @@ def build_agent(
     model: Any = None,
     *,
     base_url: str | None = None,
+    api_mode: str | None = None,
 ):
     """Construct the session agent through the harness factory only.
 
@@ -218,21 +240,27 @@ def build_agent(
         and isinstance(model, str)
         and model.partition("/")[0].lower() in ("openai", "anthropic", "meta")
     ):
-        kwargs["builtin_tools"]["web_fetch"] = {"model": model}
+        kwargs["builtin_tools"]["web_fetch"] = {
+            "model": _build_web_fetch_model(model, base_url, api_mode)
+        }
     if model is not None:
         kwargs["model"] = model
         if isinstance(getattr(model, "_strands_model_ref", None), str):
-            # Pre-built Meta adapter already carries CacheConfig(); avoid harness warning.
+            # Pre-built adapter already carries config/CacheConfig; avoid harness warning.
             kwargs["caching"] = False
     agent = create_harness(**kwargs)
     resolved_model = getattr(agent, "model", None)
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     if base_url:
         owner = _provider_of(normalize_model_ref(target_id)) if target_id else None
-        kwargs["_base_url"] = base_url
-        kwargs["_base_url_provider"] = owner
-        agent._base_url = base_url
-        agent._base_url_provider = owner
+        if owner is not None:
+            kwargs["_base_url"] = base_url
+            kwargs["_base_url_provider"] = owner
+            agent._base_url = base_url
+            agent._base_url_provider = owner
+            if api_mode:
+                kwargs["_api_mode"] = api_mode
+                agent._api_mode = api_mode
     # Stash the factory kwargs for /btw side-agent rebuilds (LOOP-03):
     # the loop replays this dict through create_harness with the
     # delegate overrides, so the child is built the way the parent was.
@@ -310,8 +338,10 @@ def _root(
         if config.model is not None
         else None
     )
-    effective_base_url = scoped_base_url(
-        config.base_url, owner_provider, effective_model
+    effective_base_url = (
+        scoped_base_url(config.base_url, owner_provider, effective_model)
+        if owner_provider is not None
+        else None
     )
     effective_api_mode = config.api_mode if effective_base_url is not None else None
     # Gate runs before construction and before any session or index side
@@ -334,6 +364,7 @@ def _root(
         DEFAULT_SESSION_DIR,
         model=model_for_config(effective_model, effective_base_url, effective_api_mode),
         base_url=effective_base_url,
+        api_mode=effective_api_mode,
     )
     run_loop(
         agent,

@@ -564,14 +564,18 @@ def _route_side_spawn(
             )
             return
         try:
+            side_base_url = scoped_base_url(
+                kwargs.get("_base_url"),
+                kwargs.get("_base_url_provider"),
+                pick.model,
+            )
             routed = resolve_harness_model(
                 pick.model,
                 pick.model,
                 effort=pick.effort,
-                base_url=scoped_base_url(
-                    kwargs.get("_base_url"),
-                    kwargs.get("_base_url_provider"),
-                    pick.model,
+                base_url=side_base_url,
+                api_mode=(
+                    kwargs.get("_api_mode") if side_base_url is not None else None
                 ),
             )
         except Exception:  # noqa: BLE001 — resolve failure holds to the live model
@@ -2449,6 +2453,22 @@ def _close_loop_session(
     console.print("[dim]Session saved.[/dim]")
 
 
+def _clear_agent_base_url_on_provider_change(agent: Any, new_model: str) -> None:
+    """Drop in-memory custom base_url/api_mode when switching to another provider."""
+    owner = getattr(agent, "_base_url_provider", None)
+    if not owner or _provider_of(normalize_model_ref(new_model)) == owner:
+        return
+    agent._base_url = None
+    agent._base_url_provider = None
+    if hasattr(agent, "_api_mode"):
+        agent._api_mode = None
+    kwargs = getattr(agent, "_harness_kwargs", None)
+    if isinstance(kwargs, dict):
+        kwargs.pop("_base_url", None)
+        kwargs.pop("_base_url_provider", None)
+        kwargs.pop("_api_mode", None)
+
+
 def run_loop(
     agent: Any,
     *,
@@ -2672,6 +2692,7 @@ def run_loop(
             print_plain(console, reply)
             if resolved_id is not None:
                 current_model = message  # verbatim selection string persists
+                _clear_agent_base_url_on_provider_change(agent, message)
                 try:
                     ProviderConfig.load().save_model_choice(message)
                 except ValueError as exc:

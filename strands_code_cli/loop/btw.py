@@ -450,6 +450,7 @@ def build_btw_agent(
     kwargs = dict(parent_kwargs)
     base_url = kwargs.pop("_base_url", None)
     base_url_provider = kwargs.pop("_base_url_provider", None)
+    kwargs.pop("_api_mode", None)
     if "model" in kwargs:
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
