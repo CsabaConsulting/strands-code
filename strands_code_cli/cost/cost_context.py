@@ -851,6 +851,8 @@ _CRED_PATTERNS = (
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{8,}"),
     re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),
     re.compile(r"LLM[_|]\d+[_|][A-Za-z0-9\-._~+/=]{12,}"),
+    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+    re.compile(r"(?i)(github_token|gh_token)\s*[:=]\s*\S+"),
     re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/|]+=*"),
 )
 

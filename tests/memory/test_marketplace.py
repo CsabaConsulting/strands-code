@@ -673,6 +673,173 @@ class TestMarketplaceSecurityGuards:
             compute_skill_dir_hash(d)
 
 
+class TestPhase18SecurityAuditHardening:
+    def test_lockfile_rejects_traversal_mismatch_bad_sha_and_hash(self, tmp_path):
+        base_valid = {
+            "namespace": "acme",
+            "name": "audit",
+            "source": "acme/skills",
+            "repo_url": "https://github.com/acme/skills",
+            "subdir": "skills/audit",
+            "ref": "main",
+            "commit_sha": _SHA_V1,
+            "computed_hash": f"sha256:{'a' * 64}",
+        }
+        cases = (
+            {"namespace": "../../tmp/pwn"},
+            {"name": "../evil"},
+            {"name": "bad--slug"},
+            {"commit_sha": "not-a-sha"},
+            {"computed_hash": "md5:1234"},
+            {"subdir": "../../etc"},
+        )
+        for pos, patch_fields in enumerate(cases):
+            entry = {**base_valid, **patch_fields}
+            lp = tmp_path / f"lock-{pos}.json"
+            lp.write_text(
+                json.dumps({"version": 1, "skills": {"acme:audit": entry}}),
+                encoding="utf-8",
+            )
+            with pytest.raises(ValueError):
+                load_lockfile(lp)
+
+        mismatch = tmp_path / "lock-mismatch.json"
+        mismatch.write_text(
+            json.dumps({"version": 1, "skills": {"other:audit": base_valid}}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="mismatch"):
+            load_lockfile(mismatch)
+
+    def test_sync_refuses_unregistered_local_repo_url_and_mismatched_hash_before_write(
+        self, tmp_path
+    ):
+        ws = tmp_path / "ws"
+        host_secret = tmp_path / "host-secret"
+        host_secret.mkdir(parents=True)
+        (host_secret / "SKILL.md").write_text(
+            _skill_md("steal", "Exfil"), encoding="utf-8"
+        )
+        secret_hash = compute_skill_dir_hash(host_secret)
+        lock_path = ws / mp.SKILLS_LOCK_REL
+        mp.save_lockfile(
+            lock_path,
+            {
+                "evil:steal": mp.LockEntry(
+                    namespace="evil",
+                    name="steal",
+                    source=str(host_secret),
+                    repo_url=str(host_secret),
+                    subdir=".",
+                    ref="local",
+                    commit_sha=_SHA_V1,
+                    computed_hash=secret_hash,
+                )
+            },
+        )
+        mpath = tmp_path / "cfg" / "marketplaces.yaml"
+        with pytest.raises(ValueError, match="unregistered local path"):
+            sync_installed_skills(cwd=ws, marketplaces_path=mpath)
+        assert not (ws / mp.MARKETPLACES_SKILLS_REL / "evil" / "steal").exists()
+
+        # Registered local catalog syncs when unchanged, and hash-mismatched GitHub sync leaves dest untouched
+        ws2 = tmp_path / "ws2"
+        tar_good = _build_tar_gz(
+            [("skills/audit/SKILL.md", _skill_md("audit", "Pinned"))],
+            prefix=f"acme-skills-{_SHA_V1[:7]}",
+        )
+        tar_evil = _build_tar_gz(
+            [("skills/audit/SKILL.md", _skill_md("audit", "Upstream swapped!"))],
+            prefix=f"acme-skills-{_SHA_V1[:7]}",
+        )
+        tarballs = {("acme", "skills", _SHA_V1): tar_good}
+        transport = _github_mock_transport(
+            {("acme", "skills", "main"): _SHA_V1}, tarballs
+        )
+        with httpx.Client(transport=transport, follow_redirects=False) as client:
+            install_skill(
+                "acme/skills", cwd=ws2, marketplaces_path=mpath, client=client
+            )
+            installed_md = (
+                ws2 / mp.MARKETPLACES_SKILLS_REL / "acme--skills" / "audit" / "SKILL.md"
+            )
+            installed_md.write_text(
+                _skill_md("audit", "Local tamper"), encoding="utf-8"
+            )
+            tarballs[("acme", "skills", _SHA_V1)] = tar_evil
+            with pytest.raises(ValueError, match="Hash mismatch"):
+                sync_installed_skills(cwd=ws2, marketplaces_path=mpath, client=client)
+            assert "Local tamper" in installed_md.read_text(encoding="utf-8")
+
+    def test_redirect_port_json_nan_network_error_and_update_errors(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_CanaryDoNotLeak999999999999")
+
+        port_transport = httpx.MockTransport(
+            lambda _r: httpx.Response(
+                302,
+                headers={
+                    "Location": f"https://codeload.github.com:8443/a/b/tar/{_SHA_V1}"
+                },
+            )
+        )
+        with httpx.Client(transport=port_transport, follow_redirects=False) as client:
+            with pytest.raises(ValueError, match="redirect host"):
+                mp.download_github_tarball("a", "b", _SHA_V1, client=client)
+
+        nan_transport = httpx.MockTransport(
+            lambda _r: httpx.Response(200, content=b'{"sha": NaN}')
+        )
+        with httpx.Client(transport=nan_transport, follow_redirects=False) as client:
+            with pytest.raises(ValueError, match="Non-standard JSON"):
+                mp.resolve_github_commit("a", "b", "main", client=client)
+
+        def _offline(_req: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("network down")
+
+        with httpx.Client(
+            transport=httpx.MockTransport(_offline), follow_redirects=False
+        ) as client:
+            with pytest.raises(ValueError, match="offline or unreachable") as exc_info:
+                mp.resolve_github_commit("a", "b", "main", client=client)
+            assert "ghp_Canary" not in str(exc_info.value)
+
+        with pytest.raises(ValueError, match="Invalid GitHub"):
+            mp.resolve_github_commit("../bad", "repo", "main")
+        with pytest.raises(ValueError, match="Unknown marketplace"):
+            update_marketplace(
+                "nonexistent", marketplaces_path=tmp_path / "missing.yaml"
+            )
+
+    def test_symlinked_agent_parent_and_cwd_dotenv_blocked(self, tmp_path, monkeypatch):
+        real_agent = tmp_path / "real_agent"
+        (real_agent / "skills-marketplaces" / "acme" / "demo").mkdir(parents=True)
+        sym_agent = tmp_path / "ws" / ".agent"
+        sym_agent.parent.mkdir(parents=True)
+        sym_agent.symlink_to(real_agent)
+
+        verified, warnings = verify_installed_marketplace_skills(
+            sym_agent / "skills-marketplaces", sym_agent / "skills-lock.json"
+        )
+        assert verified == []
+        assert any("symlink" in w.lower() for w in warnings)
+
+        dotenv_dir = tmp_path / "untrusted_cwd"
+        dotenv_dir.mkdir()
+        (dotenv_dir / ".env").write_text(
+            "GITHUB_TOKEN=ghp_PoisonDotEnv0000000000\n", encoding="utf-8"
+        )
+        from strands_code_cli.entry.first_run import disable_cwd_dotenv
+
+        monkeypatch.chdir(dotenv_dir)
+        disable_cwd_dotenv()
+        import dotenv
+
+        assert dotenv.load_dotenv() is False
+        assert read_github_token() is None
+
+
 @pytest.mark.integration
 def test_live_github_marketplace_browse_install_and_verify(tmp_path):
     """Live GitHub probe: resolve anthropics/skills, install one skill, verify SHA-256."""
@@ -693,7 +860,8 @@ def test_live_github_marketplace_browse_install_and_verify(tmp_path):
     except (httpx.HTTPError, ValueError) as exc:
         msg = str(exc)
         if isinstance(exc, httpx.HTTPError) or any(
-            code in msg for code in ("403", "429", "502", "503")
+            code in msg
+            for code in ("403", "429", "502", "503", "offline", "unreachable")
         ):
             pytest.skip(f"Live GitHub probe skipped (offline or rate-limited): {msg}")
         raise
@@ -712,7 +880,8 @@ def test_live_github_marketplace_browse_install_and_verify(tmp_path):
     except (httpx.HTTPError, ValueError) as exc:
         msg = str(exc)
         if isinstance(exc, httpx.HTTPError) or any(
-            code in msg for code in ("403", "429", "502", "503")
+            code in msg
+            for code in ("403", "429", "502", "503", "offline", "unreachable")
         ):
             pytest.skip(f"Live GitHub install skipped (offline or rate-limited): {msg}")
         raise

@@ -5,11 +5,11 @@ current_phase: 18
 current_phase_name: Skills Marketplaces & Lockfile Installer
 current_plan: 3
 status: verified
-stopped_at: Phase 18 UAT complete (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
-last_updated: "2026-11-25T05:31:00Z"
+stopped_at: Phase 18 security audit complete (`18-SECURITY.md` 10/10 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 18` or `/gsd-discuss-phase 19`
+last_updated: "2026-11-25T05:47:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed Phase 18 UAT (`18-UAT.md` 6/6 PASS including live GitHub `anthropics/skills` walkthrough + 1779+1 tests + 44/44 rig + 6/6 CI gates)
-state_head: 73d60ee
+last_activity_desc: Audited & hardened Phase 18 (`18-SECURITY.md` 10/10 closed, `1784+1+1` tests, 44/44 rig, 6/6 CI gates)
+state_head: b2cb3ac
 progress:
   total_phases: 9
   completed_phases: 6
@@ -76,9 +76,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 - Phase 18 UAT (`18-UAT.md` `6/6` passed): verified zero-default registry + redirect auth stripping (`run_uat18_test1.py`), live `anthropics/skills` marketplace add -> cached browse -> install (`@ e4bb5d9`) -> `/skills show` -> tamper skip -> `/skills sync` restore -> `/skills uninstall` (`run_uat18_test2.py`), deny-first tarball/cap/rollback + `scripts/*` update diffs + ANSI/`print_plain` safety (`run_uat18_test3.py`), multi-namespace `SkillIndex` + dynamic `/<ns>:` `SlashCompleter` + real `AgentSkills` sync + `@ <short_sha>` provenance framing (`run_uat18_test4.py`), protected-path `Prompt` downgrade + HITL gate (`run_uat18_test5.py`), and `docs/QUICKSTART.md` + `1779+1` + `44/44` rig + 6/6 CI gates on `HEAD`.
 
+- Phase 18 security audit (`18-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`): remediated `T-18-09` HIGH (strict `load_lockfile()` slug/key/SHA/hash/subdir validation via `valid_skill_name()`, `validate_skill_name()` pre-staging, `_validate_sync_source()` blocking unregistered local-path sync from crafted `skills-lock.json`, and staging hash verification before `_atomic_swap_skill_dir()`), `T-18-08` HIGH (explicit redirect port rejection, JSON `NaN`/`Infinity` rejection, `2 MiB` API JSON cap, `httpx.HTTPError` scrubbing, and direct-call segment validation), `T-18-10` MEDIUM (`update_marketplace` `ValueError` ordering, symlink-safe cache unlink & `.agent` parent checks, and `user_cache_dir("strands-code")` protected in `policy/core.py`), and `T-18-01` (`gh[pousr]_*`/`github_pat_*`/`GITHUB_TOKEN`/`GH_TOKEN` in `scrub_credentials()`), verified across `1784 + 1` non-integration suite + `1` live `anthropics/skills` probe + `44/44` rig + all 6 CI gates (`marketplace.py` max `C 17`).
+
 ### Pending Todos
 
-- Run `/gsd-secure-phase 18` and `/gsd-validate-phase 18` (or proceed to `/gsd-discuss-phase 19`) as the next step.
+- Run `/gsd-validate-phase 18` or `/gsd-discuss-phase 19` as the next step.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -91,6 +93,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T05:31:00Z
-Stopped at: Phase 18 UAT complete (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
-Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-UAT.md
+Last session: 2026-11-25T05:47:00Z
+Stopped at: Phase 18 security audit complete (`18-SECURITY.md` 10/10 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 18` or `/gsd-discuss-phase 19`
+Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-SECURITY.md

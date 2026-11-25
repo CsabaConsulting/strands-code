@@ -1549,3 +1549,17 @@ class TestCacheAwareUsageAndCost:
         assert cost_context.cache_prices_for("meta/muse-spark-1.1") == pytest.approx(
             (1.25, 0.15, 1.25, 4.25)
         )
+
+    def test_scrub_credentials_redacts_github_tokens(self):
+        from strands_code_cli.cost.cost_context import scrub_credentials
+
+        raw = (
+            "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz123456 "
+            "github_pat_11ABCDEFG_0123456789abcdefghij "
+            "GITHUB_TOKEN=customsecret123 GH_TOKEN=othersecret456"
+        )
+        scrubbed = scrub_credentials(raw)
+        assert "ghp_AbCd" not in scrubbed
+        assert "github_pat_11" not in scrubbed
+        assert "customsecret123" not in scrubbed
+        assert "othersecret456" not in scrubbed

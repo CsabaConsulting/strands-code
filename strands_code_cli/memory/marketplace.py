@@ -29,6 +29,7 @@ SKILLS_LOCK_REL = Path(".agent") / "skills-lock.json"
 LOCKFILE_VERSION = 1
 
 MAX_TARBALL_BYTES = 25 * 1024 * 1024
+MAX_API_JSON_BYTES = 2 * 1024 * 1024
 MAX_SKILL_FILES = 256
 MAX_SKILL_BYTES = 5 * 1024 * 1024
 HTTP_TIMEOUT_SECONDS = 20.0
@@ -37,7 +38,9 @@ _ALLOWED_TARBALL_HOSTS = frozenset(
     {"codeload.github.com", "objects.githubusercontent.com"}
 )
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ALIAS_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_SKILL_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _GITHUB_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RESERVED_NAMESPACES = frozenset({"local", "all"})
 _ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -214,6 +217,22 @@ def validate_namespace(name: str) -> str:
         raise ValueError(
             f"Invalid marketplace namespace {name!r}: expected 1-64 lowercase "
             "alphanumeric/hyphen chars, not 'local' or 'all'."
+        )
+    return name
+
+
+def valid_skill_name(name: str) -> bool:
+    """Return True when name satisfies the strict AgentSkills slug grammar."""
+    return (
+        isinstance(name, str) and "--" not in name and bool(_SKILL_SLUG_RE.match(name))
+    )
+
+
+def validate_skill_name(name: str) -> str:
+    """Validate and return a strict skill directory/slug name or raise ValueError."""
+    if not valid_skill_name(name):
+        raise ValueError(
+            f"Invalid skill name {name!r}: expected 1-64 lowercase alphanumeric/single-hyphen chars."
         )
     return name
 
@@ -426,13 +445,18 @@ def load_cached_catalog(name: str, cache_dir: Path | None = None) -> list[Catalo
         if not isinstance(item, dict):
             continue
         sname = item.get("name")
-        if not isinstance(sname, str) or not sname:
+        mname = str(item.get("marketplace", name))
+        if (
+            not isinstance(sname, str)
+            or not valid_skill_name(sname)
+            or not valid_namespace(mname)
+        ):
             continue
         out.append(
             CatalogSkill(
                 name=sname,
                 description=sanitize_display(item.get("description", "")),
-                marketplace=str(item.get("marketplace", name)),
+                marketplace=mname,
                 source=str(item.get("source", "")),
                 repo_url=str(item.get("repo_url", "")),
                 subdir=str(item.get("subdir", ".")),
@@ -488,13 +512,24 @@ def _api_headers(token: str | None) -> dict[str, str]:
     return headers
 
 
+def _reject_json_constant(token: str) -> Any:
+    raise ValueError(f"Non-standard JSON constant rejected: {token}")
+
+
 def _github_get_json(client: httpx.Client, url: str) -> dict[str, Any]:
-    resp = client.get(url, headers=_api_headers(read_github_token()))
+    try:
+        resp = client.get(url, headers=_api_headers(read_github_token()))
+    except httpx.HTTPError:
+        raise ValueError("GitHub network error (offline or unreachable)") from None
     if 300 <= resp.status_code < 400:
         raise ValueError(f"Unexpected GitHub API redirect ({resp.status_code})")
     if resp.status_code >= 400:
         raise ValueError(f"GitHub API request failed ({resp.status_code}) for {url}")
-    data = resp.json()
+    if len(resp.content) > MAX_API_JSON_BYTES:
+        raise ValueError(
+            f"GitHub API JSON exceeds size limit ({MAX_API_JSON_BYTES} bytes)"
+        )
+    data = json.loads(resp.text, parse_constant=_reject_json_constant)
     if not isinstance(data, dict):
         raise ValueError(f"Unexpected JSON payload from GitHub API: {url}")
     return data
@@ -508,6 +543,8 @@ def resolve_github_commit(
     client: httpx.Client | None = None,
 ) -> tuple[str, str]:
     """Resolve ref (or repo default branch) to immutable 40-char lowercase hex SHA."""
+    _validate_github_segment(owner, "owner")
+    _validate_github_segment(repo, "repo")
     own_client = client is None
     active = client if client is not None else make_marketplace_client()
     try:
@@ -538,12 +575,17 @@ def resolve_github_commit(
 
 
 def _validate_tarball_redirect_url(location: str) -> str:
-    if not location or _has_control_chars(location):
+    if (
+        not location
+        or _has_control_chars(location)
+        or any(ch.isspace() for ch in location)
+    ):
         raise ValueError("Invalid redirect Location header")
     parsed = urlsplit(location)
     host = (parsed.hostname or "").lower()
     if (
         parsed.scheme.lower() != "https"
+        or parsed.port is not None
         or host not in _ALLOWED_TARBALL_HOSTS
         or parsed.username is not None
         or parsed.password is not None
@@ -575,6 +617,8 @@ def download_github_tarball(
     max_bytes: int = MAX_TARBALL_BYTES,
 ) -> bytes:
     """Download pinned tarball with single-hop redirect guard & no auth forwarding."""
+    _validate_github_segment(owner, "owner")
+    _validate_github_segment(repo, "repo")
     if not _SHA_RE.match(commit_sha):
         raise ValueError(f"Invalid commit SHA: {commit_sha!r}")
     url = f"https://api.github.com/repos/{owner}/{repo}/tarball/{commit_sha}"
@@ -596,6 +640,8 @@ def download_github_tarball(
             if 300 <= r2.status_code < 400:
                 raise ValueError("Nested redirects are rejected on tarball download")
             return _read_bounded_response(r2, max_bytes)
+    except httpx.HTTPError:
+        raise ValueError("GitHub network error (offline or unreachable)") from None
     finally:
         if own_client:
             active.close()
@@ -724,6 +770,7 @@ def _write_staged_files(
     max_files: int,
     max_bytes: int,
 ) -> tuple[Path, list[str]]:
+    validate_skill_name(skill_name)
     if len(items) > max_files:
         raise ValueError(f"Skill exceeds file count limit ({max_files})")
     total_bytes = sum(len(data) for _p, data in items)
@@ -874,8 +921,40 @@ def compute_skill_dir_hash(skill_dir: Path) -> str:
     return f"sha256:{hasher.hexdigest()}"
 
 
+def _parse_lock_entry(key: Any, val: Any) -> LockEntry:
+    if not isinstance(val, dict):
+        raise ValueError(f"Malformed lockfile entry for {key!r}")
+    ns = validate_namespace(str(val.get("namespace", "")))
+    name = validate_skill_name(str(val.get("name", "")))
+    if str(key) != f"{ns}:{name}":
+        raise ValueError(f"Lockfile key mismatch: {key!r} != '{ns}:{name}'")
+    commit_sha = str(val.get("commit_sha", ""))
+    if not _SHA_RE.match(commit_sha):
+        raise ValueError(f"Invalid lockfile commit_sha for '{key}'")
+    computed_hash = str(val.get("computed_hash", ""))
+    if not _HASH_RE.match(computed_hash):
+        raise ValueError(f"Invalid lockfile computed_hash for '{key}'")
+    subdir_raw = str(val.get("subdir", "."))
+    subdir = (
+        "." if subdir_raw in ("", ".", "./") else str(_normalize_rel_posix(subdir_raw))
+    )
+    return LockEntry(
+        namespace=ns,
+        name=name,
+        source=str(val.get("source", "")),
+        repo_url=str(val.get("repo_url", "")),
+        subdir=subdir,
+        ref=str(val.get("ref", "")),
+        commit_sha=commit_sha,
+        computed_hash=computed_hash,
+        has_scripts=bool(val.get("has_scripts", False)),
+        script_files=[str(p) for p in val.get("script_files", [])],
+        installed_at=str(val.get("installed_at", "")),
+    )
+
+
 def load_lockfile(lockfile_path: Path) -> dict[str, LockEntry]:
-    """Load ./.agent/skills-lock.json keyed by ``<namespace>:<name>``."""
+    """Load ./.agent/skills-lock.json keyed by ``<namespace>:<name>`` fail-closed."""
     _refuse_symlink(lockfile_path, "skills lockfile")
     if not lockfile_path.exists():
         return {}
@@ -885,28 +964,7 @@ def load_lockfile(lockfile_path: Path) -> dict[str, LockEntry]:
     skills_raw = raw.get("skills", {})
     if not isinstance(skills_raw, dict):
         raise ValueError(f"Malformed 'skills' map in {lockfile_path}")
-    entries: dict[str, LockEntry] = {}
-    for key, val in skills_raw.items():
-        if not isinstance(val, dict):
-            continue
-        ns = str(val.get("namespace", ""))
-        name = str(val.get("name", ""))
-        if not ns or not name:
-            continue
-        entries[str(key)] = LockEntry(
-            namespace=ns,
-            name=name,
-            source=str(val.get("source", "")),
-            repo_url=str(val.get("repo_url", "")),
-            subdir=str(val.get("subdir", ".")),
-            ref=str(val.get("ref", "")),
-            commit_sha=str(val.get("commit_sha", "")),
-            computed_hash=str(val.get("computed_hash", "")),
-            has_scripts=bool(val.get("has_scripts", False)),
-            script_files=[str(p) for p in val.get("script_files", [])],
-            installed_at=str(val.get("installed_at", "")),
-        )
-    return entries
+    return {str(key): _parse_lock_entry(key, val) for key, val in skills_raw.items()}
 
 
 def save_lockfile(lockfile_path: Path, entries: dict[str, LockEntry]) -> Path:
@@ -996,9 +1054,11 @@ def _resolve_external_source_dict(
     ref = _validate_git_ref(src_obj.get("ref") or url_ref or default_ref)
     sha = src_obj.get("sha")
     commit_sha = sha if isinstance(sha, str) and _SHA_RE.match(sha) else None
-    sname = PurePosixPath(subdir).name if subdir != "." else fallback_name
+    sname = validate_skill_name(
+        PurePosixPath(subdir).name if subdir != "." else fallback_name
+    )
     return CatalogSkill(
-        name=str(sname),
+        name=sname,
         description=sanitize_display(fallback_desc),
         marketplace=marketplace,
         source=f"{owner}/{repo}",
@@ -1414,9 +1474,13 @@ def update_marketplace(
 ) -> dict[str, list[CatalogSkill]]:
     """Refresh one or all registered marketplace catalogs into cache."""
     entries = load_marketplaces(marketplaces_path)
-    targets = [entries[validate_namespace(name)]] if name else list(entries.values())
-    if name and name not in entries:
-        raise ValueError(f"Unknown marketplace: {name!r}")
+    if name is not None:
+        alias = validate_namespace(name)
+        if alias not in entries:
+            raise ValueError(f"Unknown marketplace: {name!r}")
+        targets = [entries[alias]]
+    else:
+        targets = list(entries.values())
     refreshed: dict[str, list[CatalogSkill]] = {}
     for entry in targets:
         skills = _fetch_marketplace_catalog(entry, client=client)
@@ -1439,7 +1503,7 @@ def remove_marketplace(
     entries.pop(alias)
     save_marketplaces(entries, marketplaces_path)
     cpath = _cache_file(alias, cache_dir)
-    if not cpath.is_symlink():
+    if not cpath.parent.is_symlink() and not cpath.is_symlink():
         cpath.unlink(missing_ok=True)
     return True
 
@@ -1524,12 +1588,15 @@ def _install_catalog_skill(
     *,
     cwd: Path,
     client: httpx.Client | None,
+    expected_hash: str | None = None,
 ) -> tuple[LockEntry, dict[str, str], dict[str, str], str | None]:
-    dest_dir = cwd / MARKETPLACES_SKILLS_REL / cat_skill.marketplace / cat_skill.name
+    ns = validate_namespace(cat_skill.marketplace)
+    sname = validate_skill_name(cat_skill.name)
+    dest_dir = cwd / MARKETPLACES_SKILLS_REL / ns / sname
     old_scripts = _script_file_digests(dest_dir) if dest_dir.is_dir() else {}
     lockfile_path = cwd / SKILLS_LOCK_REL
     existing_lock = load_lockfile(lockfile_path)
-    key = f"{cat_skill.marketplace}:{cat_skill.name}"
+    key = f"{ns}:{sname}"
     old_sha = existing_lock[key].commit_sha if key in existing_lock else None
 
     with tempfile.TemporaryDirectory(prefix="sc_stage_") as tmp:
@@ -1542,7 +1609,7 @@ def _install_catalog_skill(
                 else repo_path / Path(*_normalize_rel_posix(cat_skill.subdir).parts)
             )
             staged_dir, script_files = copy_local_dir_safe(
-                src_dir, skill_name=cat_skill.name, staging_dir=staging_dir
+                src_dir, skill_name=sname, staging_dir=staging_dir
             )
             computed_hash = compute_skill_dir_hash(staged_dir)
             commit_sha = computed_hash.removeprefix("sha256:")[:40]
@@ -1560,11 +1627,13 @@ def _install_catalog_skill(
             staged_dir, script_files = extract_tarball_subdir_safe(
                 tar_bytes,
                 subdir=cat_skill.subdir,
-                skill_name=cat_skill.name,
+                skill_name=sname,
                 staging_dir=staging_dir,
             )
             computed_hash = compute_skill_dir_hash(staged_dir)
 
+        if expected_hash is not None and computed_hash != expected_hash:
+            raise ValueError(f"Hash mismatch restoring pinned {key} at {commit_sha}")
         new_scripts = _script_file_digests(staged_dir)
         _atomic_swap_skill_dir(staged_dir, dest_dir)
 
@@ -1799,8 +1868,29 @@ def update_installed_skills(
     return UpdateOutcome(updated=updated, unchanged=unchanged, warnings=warnings)
 
 
+def _validate_sync_source(
+    lock_entry: LockEntry, marketplaces_path: Path | None
+) -> None:
+    if lock_entry.repo_url.startswith("https://"):
+        parse_github_spec(lock_entry.repo_url)
+        return
+    entries = load_marketplaces(marketplaces_path)
+    reg = entries.get(lock_entry.namespace)
+    if (
+        reg is None
+        or reg.kind != "local"
+        or Path(reg.source).resolve() != Path(lock_entry.repo_url).resolve()
+    ):
+        raise ValueError(
+            f"Refusing to sync unregistered local path for '{lock_entry.namespaced}' from skills-lock.json."
+        )
+
+
 def sync_installed_skills(
-    *, cwd: Path | None = None, client: httpx.Client | None = None
+    *,
+    cwd: Path | None = None,
+    marketplaces_path: Path | None = None,
+    client: httpx.Client | None = None,
 ) -> SyncOutcome:
     """Verify and restore pinned skills from ./.agent/skills-lock.json."""
     root = cwd if cwd is not None else Path.cwd()
@@ -1824,6 +1914,7 @@ def sync_installed_skills(
                 needs_restore = True
         if not needs_restore:
             continue
+        _validate_sync_source(lock_entry, marketplaces_path)
         cat = CatalogSkill(
             name=lock_entry.name,
             description="",
@@ -1835,12 +1926,11 @@ def sync_installed_skills(
             commit_sha=lock_entry.commit_sha,
         )
         restored_entry, _old, _new, _old_sha = _install_catalog_skill(
-            cat, cwd=root, client=client
+            cat,
+            cwd=root,
+            client=client,
+            expected_hash=lock_entry.computed_hash,
         )
-        if restored_entry.computed_hash != lock_entry.computed_hash:
-            raise ValueError(
-                f"Hash mismatch restoring pinned {key} at {lock_entry.commit_sha}"
-            )
         restored.append(restored_entry)
         if restored_entry.has_scripts:
             warnings.append(_scripts_warning(restored_entry))
@@ -1899,7 +1989,7 @@ def verify_installed_marketplace_skills(
 ) -> tuple[list[VerifiedMarketplaceSkill], list[str]]:
     """Verify ./.agent/skills-marketplaces against skills-lock.json; warn-and-skip on drift."""
     warnings: list[str] = []
-    if lockfile_path.is_symlink():
+    if lockfile_path.parent.is_symlink() or lockfile_path.is_symlink():
         return [], [
             f"Skills lockfile {lockfile_path} is a symlink — skipping all marketplace skills."
         ]
@@ -1910,7 +2000,7 @@ def verify_installed_marketplace_skills(
             f"Unreadable skills lockfile {lockfile_path}: {sanitize_display(exc)}"
         ]
 
-    if marketplaces_dir.is_symlink():
+    if marketplaces_dir.parent.is_symlink() or marketplaces_dir.is_symlink():
         return [], [
             f"Marketplace skills dir {marketplaces_dir} is a symlink — skipping all marketplace skills."
         ]

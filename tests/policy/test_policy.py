@@ -271,6 +271,17 @@ class TestDecide:
                 decide("read", {"path": target}, cfg, cwd=str(repo)), Allow
             )
 
+        cache_home = tmp_path / "cache_home" / "strands-code"
+        cache_home.mkdir(parents=True)
+        monkeypatch.setattr("platformdirs.user_cache_dir", lambda _app: str(cache_home))
+        cache_target = str(cache_home / "marketplaces" / "acme.json")
+        assert isinstance(
+            decide("write", {"path": cache_target}, cfg, cwd=str(repo)), Prompt
+        )
+        assert isinstance(
+            decide("read", {"path": cache_target}, cfg, cwd=str(repo)), Allow
+        )
+
         assert isinstance(
             decide("write", {"path": "docs/a.md"}, cfg, cwd=str(repo)), Allow
         )

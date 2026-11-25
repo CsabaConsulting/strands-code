@@ -554,7 +554,8 @@ def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
         pass
 
     protected_dirs = [
-        Path(os.path.realpath(platformdirs.user_config_dir("strands-code")))
+        Path(os.path.realpath(platformdirs.user_config_dir("strands-code"))),
+        Path(os.path.realpath(platformdirs.user_cache_dir("strands-code"))),
     ]
     protected_files: list[Path] = []
     for root in base_variants:
