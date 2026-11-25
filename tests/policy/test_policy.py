@@ -241,3 +241,64 @@ class TestDecide:
         assert is_network_command("ssh host")
         assert is_network_command("gh pr list")
         assert not is_network_command("git status")
+
+    def test_protected_skills_and_config_paths_downgrade_broad_allow(
+        self, tmp_path, monkeypatch
+    ):
+        cfg_home = tmp_path / "cfg_home" / "strands-code"
+        cfg_home.mkdir(parents=True)
+        monkeypatch.setattr("platformdirs.user_config_dir", lambda _app: str(cfg_home))
+
+        repo = tmp_path / "repo"
+        (repo / ".agent" / "skills" / "demo").mkdir(parents=True)
+        (repo / ".agent" / "skills-marketplaces" / "acme" / "audit").mkdir(parents=True)
+        cfg = self._cfg(allow=[Rule(tool="*", path="*")])
+
+        protected_targets = (
+            ".agent/skills/demo/SKILL.md",
+            ".agent/skills-marketplaces/acme/audit/SKILL.md",
+            ".agent/skills-lock.json",
+            str(cfg_home / "marketplaces.yaml"),
+        )
+        for target in protected_targets:
+            assert isinstance(
+                decide("write", {"path": target}, cfg, cwd=str(repo)), Prompt
+            )
+            assert isinstance(
+                decide("edit", {"path": target}, cfg, cwd=str(repo)), Prompt
+            )
+            assert isinstance(
+                decide("read", {"path": target}, cfg, cwd=str(repo)), Allow
+            )
+
+        assert isinstance(
+            decide("write", {"path": "docs/a.md"}, cfg, cwd=str(repo)), Allow
+        )
+
+    def test_protected_symlink_into_config_and_explicit_deny_preserve_priority(
+        self, tmp_path, monkeypatch
+    ):
+        cfg_home = tmp_path / "cfg_home" / "strands-code"
+        cfg_home.mkdir(parents=True)
+        monkeypatch.setattr("platformdirs.user_config_dir", lambda _app: str(cfg_home))
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        sym = repo / "escape.yaml"
+        sym.symlink_to(cfg_home / "marketplaces.yaml")
+
+        cfg = self._cfg(allow=[Rule(tool="write", path="**")])
+        assert isinstance(
+            decide("write", {"path": "escape.yaml"}, cfg, cwd=str(repo)), Prompt
+        )
+
+        deny_cfg = self._cfg(
+            allow=[Rule(tool="write", path="*")],
+            deny=[Rule(tool="write", path=".agent/**")],
+        )
+        assert isinstance(
+            decide(
+                "write", {"path": ".agent/skills-lock.json"}, deny_cfg, cwd=str(repo)
+            ),
+            Deny,
+        )

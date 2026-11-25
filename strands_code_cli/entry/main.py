@@ -31,6 +31,7 @@ from strands_code_cli.loop.btw import LockedHandler
 from strands_code_cli.loop.core import run_loop
 from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
+from strands_code_cli.memory.skills import discover_plugin_sources
 from strands_code_cli.model.model_switch import (
     _provider_of,
     build_meta_model,
@@ -164,7 +165,9 @@ def build_agent(
     # leaving it stale behind the CLI index. Always constructed (even
     # when the dir is missing — the tool then reports no skills, and a
     # later reload picks up the created dir).
-    skills_plugin = AgentSkills(skills=[DEFAULT_SKILLS_DIR])
+    skills_plugin = AgentSkills(
+        skills=discover_plugin_sources(Path(DEFAULT_SKILLS_DIR))
+    )
     # Deferred: search_tool imports strands_code_cli at module level, so a
     # top-level import here would cycle (cli root -> main -> search_tool).
     from strands_code_agent.search_tool import search as search_tool

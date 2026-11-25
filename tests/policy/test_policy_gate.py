@@ -863,3 +863,23 @@ class TestHitlFailClosedStaleContext:
         )
         second = _run(handler, _event("shell", {"command": "rm -rf /"}, uid="err-2"))
         assert isinstance(second, HitlDeny)
+
+    def test_protected_skills_path_prompts_through_hitl_gate(
+        self, tmp_path, monkeypatch
+    ):
+        prompts: list[str] = []
+        monkeypatch.chdir(tmp_path)
+        policy = PolicyConfig(allow=[Rule(tool="write", path="*")])
+        classifier = PolicyClassifier(policy_loader=lambda: policy)
+        handler = PolicyHumanInTheLoop(
+            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
+        )
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": (prompts.append("ask"), "n")[1]
+        )
+        verdict = _run(
+            handler,
+            _event("write", {"path": ".agent/skills/evil/SKILL.md"}, uid="prot-1"),
+        )
+        assert prompts == ["ask"]
+        assert isinstance(verdict, HitlDeny)

@@ -524,6 +524,51 @@ def _decide_file_tool(
     return Prompt(reason=f"File {tool_name}: {raw}")
 
 
+def _path_matches_protected(
+    candidate: Path, dirs: tuple[Path, ...], files: tuple[Path, ...]
+) -> bool:
+    return any(candidate == f for f in files) or any(
+        candidate == d or d in candidate.parents for d in dirs
+    )
+
+
+def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
+    """True when a write/edit target resolves into .agent/skills* or user config (D-05)."""
+    if not isinstance(raw, str) or not raw:
+        return False
+    from strands_code_cli.policy.scope import resolve
+
+    target = resolve(raw, base)
+    candidates = [Path(os.path.normpath(str(target)))]
+    try:
+        candidates.append(Path(os.path.realpath(target)))
+    except OSError:
+        pass
+
+    base_variants = [base]
+    try:
+        real_base = Path(os.path.realpath(base))
+        if real_base != base:
+            base_variants.append(real_base)
+    except OSError:
+        pass
+
+    protected_dirs = [
+        Path(os.path.realpath(platformdirs.user_config_dir("strands-code")))
+    ]
+    protected_files: list[Path] = []
+    for root in base_variants:
+        protected_dirs.append(root / ".agent" / "skills")
+        protected_dirs.append(root / ".agent" / "skills-marketplaces")
+        protected_files.append(root / ".agent" / "skills-lock.json")
+
+    dirs_tuple = tuple(protected_dirs)
+    files_tuple = tuple(protected_files)
+    return any(
+        _path_matches_protected(cand, dirs_tuple, files_tuple) for cand in candidates
+    )
+
+
 def decide(
     tool_name: str,
     tool_input: dict[str, Any],
@@ -532,11 +577,10 @@ def decide(
 ) -> Allow | Prompt | Deny:
     """Deny-first verdict across the rule union (D-06/D-07/D-13/D-15).
 
-    Order: deny match (hard-deny) → allow match → built-in
-    read/search/fetch allows → Prompt. Outside-scope file paths with no
-    covering allow rule deny naming the allowed roots. Policy match runs
-    BEFORE scope confinement (risk 6): an allow rule for an outside path
-    grants roots the confiner then admits.
+    Order: deny match (hard-deny) → allow match (downgraded to Prompt for
+    write/edit targeting .agent/skills*, .agent/skills-lock.json, or user
+    config per D-05) → built-in read/search/fetch allows → Prompt. Outside-scope
+    file paths with no covering allow rule deny naming the allowed roots.
     """
     base = Path(cwd) if cwd is not None else Path(os.getcwd())
     if not isinstance(tool_input, dict):
@@ -548,6 +592,13 @@ def decide(
             )
     for rule in policy.allow:
         if match_rule(rule, tool_name, tool_input, base):
+            if tool_name in ("write", "edit") and _is_protected_skills_or_config_path(
+                tool_input.get("path", ""), base
+            ):
+                raw_path = tool_input.get("path", "")
+                return Prompt(
+                    reason=f"Protected path ({raw_path}): approve explicit {tool_name}"
+                )
             return Allow()
     if tool_name in BUILTIN_ALLOWED_TOOLS:
         return Allow()

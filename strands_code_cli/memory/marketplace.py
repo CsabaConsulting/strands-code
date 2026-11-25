@@ -1309,7 +1309,10 @@ def discover_catalog_from_tarball(
                     continue
                 dest = root / Path(*rel.parts)
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(handle.read(MAX_SKILL_BYTES + 1))
+                data = handle.read(MAX_SKILL_BYTES + 1)
+                if len(data) > MAX_SKILL_BYTES:
+                    raise ValueError(f"Catalog metadata file exceeds limit: {rel}")
+                dest.write_bytes(data)
             return discover_catalog_from_tree(
                 root,
                 marketplace=marketplace,
@@ -1870,7 +1873,11 @@ def remove_installed_skill(
     skill_dir = marketplaces_dir / ns / sname
     lock_map = load_lockfile(lockfile_path) if not lockfile_path.is_symlink() else {}
     removed_fs = False
-    if skill_dir.is_symlink():
+    if (
+        marketplaces_dir.is_symlink()
+        or (marketplaces_dir / ns).is_symlink()
+        or skill_dir.is_symlink()
+    ):
         return RemoveOutcome(False, f"Refused to remove symlinked skill '{target}'.")
     if skill_dir.is_dir():
         resolved = skill_dir.resolve()

@@ -378,10 +378,16 @@ class TestSkillsCommand:
         assert action == "reply"
         assert message is not None
         assert "Unknown /skills verb 'frobnicate'." in message
-        assert "Usage: /skills [show <name>|remove <name>|reload]" in message
+        assert (
+            "Usage: /skills [marketplace|browse|install|update|sync|show|remove|reload]"
+            in message
+        )
 
     def test_usage_hint_advertises_skills(self):
-        assert "/skills|/skill [show <name>|remove <name>|reload]" in USAGE_HINT
+        assert (
+            "/skills|/skill [marketplace|browse|install|update|sync|show|remove|reload]"
+            in USAGE_HINT
+        )
 
 
 def _loop_style_words(index: SkillIndex) -> list[tuple[str, str]]:
@@ -743,3 +749,445 @@ class TestSkillGapRound:
         note = loop_module.skill_match_note(index, "/markup")
         assert note is not None and note.endswith("test [/] markup")
         print_plain(console, note)
+
+
+# ----------------------------------------------------------------------
+# Multi-namespace SkillIndex, lockfile drift, dynamic completer (SKILL-03)
+# ----------------------------------------------------------------------
+
+
+def _write_locked_marketplace_skill(
+    root: Path,
+    namespace: str,
+    name: str,
+    *,
+    description: str = "Remote skill.",
+    body: str = "# Remote\nUse carefully.",
+    commit_sha: str = "a" * 40,
+    source_url: str = "https://github.com/acme/skills",
+    script_files: dict[str, str] | None = None,
+) -> Path:
+    from strands_code_cli.memory.marketplace import (
+        MARKETPLACES_SKILLS_REL,
+        SKILLS_LOCK_REL,
+        LockEntry,
+        compute_skill_dir_hash,
+        load_lockfile,
+        save_lockfile,
+    )
+
+    skill_dir = root / MARKETPLACES_SKILLS_REL / namespace / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}\n",
+        encoding="utf-8",
+    )
+    scripts_list: list[str] = []
+    if script_files:
+        for rel, content in script_files.items():
+            target = skill_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            scripts_list.append(rel)
+    lock_path = root / SKILLS_LOCK_REL
+    existing = load_lockfile(lock_path) if lock_path.exists() else {}
+    existing[f"{namespace}:{name}"] = LockEntry(
+        namespace=namespace,
+        name=name,
+        source=namespace,
+        repo_url=source_url,
+        subdir=f"skills/{name}",
+        ref="main",
+        commit_sha=commit_sha,
+        computed_hash=compute_skill_dir_hash(skill_dir),
+        has_scripts=bool(scripts_list),
+        script_files=sorted(scripts_list),
+        installed_at="2026-11-24T00:00:00Z",
+    )
+    save_lockfile(lock_path, existing)
+    return skill_dir
+
+
+class TestMultiNamespaceSkillIndex:
+    def test_verified_marketplace_loads_with_local_precedence_and_provenance(
+        self, tmp_path
+    ):
+        from strands_code_cli.memory.skills import discover_plugin_sources
+
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_skill(local_dir, "shared", description="Local wins.")
+        _write_locked_marketplace_skill(
+            tmp_path, "acme", "shared", description="Remote shared."
+        )
+        remote_only = _write_locked_marketplace_skill(
+            tmp_path, "acme", "audit", description="Remote audit."
+        )
+        index = SkillIndex(skills_dir=local_dir)
+        assert index.resolve("shared").source == "local"  # type: ignore[union-attr]
+        assert index.resolve("acme:shared").source == "acme"  # type: ignore[union-attr]
+        assert index.resolve("audit").namespaced == "acme:audit"  # type: ignore[union-attr]
+        assert index.resolve("audit").commit_sha == "a" * 40  # type: ignore[union-attr]
+
+        sources = discover_plugin_sources(local_dir)
+        assert sources[-1] == str(local_dir)
+        assert str(remote_only) in sources
+
+    def test_ambiguous_bare_name_returns_none_and_exposes_matches(self, tmp_path):
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_locked_marketplace_skill(tmp_path, "alpha", "lint")
+        _write_locked_marketplace_skill(tmp_path, "beta", "lint")
+        index = SkillIndex(skills_dir=local_dir)
+        assert index.resolve("lint") is None
+        assert [e.namespaced for e in index.ambiguous_matches("lint")] == [
+            "alpha:lint",
+            "beta:lint",
+        ]
+        assert index.resolve("alpha:lint").namespaced == "alpha:lint"  # type: ignore[union-attr]
+        assert index.resolve("beta:lint").namespaced == "beta:lint"  # type: ignore[union-attr]
+
+    def test_tampered_marketplace_skill_excluded_and_warned_without_mutating_cache(
+        self, tmp_path
+    ):
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_skill(local_dir, "keep")
+        index = SkillIndex(skills_dir=local_dir)
+        assert index.resolve("keep") is not None
+
+        bad_dir = _write_locked_marketplace_skill(tmp_path, "acme", "tampered")
+        (bad_dir / "SKILL.md").write_text(
+            "---\nname: tampered\ndescription: Altered!\n---\nBody\n",
+            encoding="utf-8",
+        )
+        # discover_plugin_sources reads disk without mutating cached _entries
+        sources = index.discover_plugin_sources()
+        assert str(bad_dir) not in sources
+        assert index.resolve("tampered") is None
+
+        index.reload()
+        assert index.resolve("acme:tampered") is None
+        assert any("hash-drifted" in w for w in index.warnings)
+
+    def test_dynamic_namespace_slash_completer_and_remove(self, tmp_path):
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_skill(local_dir, "local-one")
+        remote_dir = _write_locked_marketplace_skill(tmp_path, "acme", "remote-one")
+        index = SkillIndex(skills_dir=local_dir)
+        completer = SlashCompleter(lambda: _loop_style_words(index))
+
+        acme_hits = [
+            c.text
+            for c in completer.get_completions(Document("/acme:"), CompleteEvent())
+        ]
+        assert acme_hits == ["/acme:remote-one"]
+        local_hits = [
+            c.text
+            for c in completer.get_completions(Document("/local:"), CompleteEvent())
+        ]
+        assert local_hits == ["/local:local-one"]
+        assert (
+            list(completer.get_completions(Document("/unknown:"), CompleteEvent()))
+            == []
+        )
+
+        assert index.remove("acme:remote-one") is True
+        assert not remote_dir.exists()
+        assert index.resolve("acme:remote-one") is None
+
+
+def _mock_github_bundle(monkeypatch, tmp_path):
+    import json
+
+    import httpx
+
+    from tests.memory.test_marketplace import (
+        _SHA_V1,
+        _SHA_V2,
+        _build_tar_gz,
+        _github_mock_transport,
+        _skill_md,
+    )
+
+    mpath = tmp_path / "cfg" / "marketplaces.yaml"
+    cdir = tmp_path / "cache"
+    monkeypatch.setattr(
+        "platformdirs.user_config_dir", lambda _app: str(tmp_path / "cfg")
+    )
+    monkeypatch.setattr(
+        "platformdirs.user_cache_dir", lambda _app: str(tmp_path / "cache_root")
+    )
+    monkeypatch.setattr(
+        "strands_code_cli.memory.marketplace.default_marketplaces_path", lambda: mpath
+    )
+    monkeypatch.setattr(
+        "strands_code_cli.memory.marketplace.default_cache_dir", lambda: cdir
+    )
+
+    manifest = {
+        "name": "acme-cat",
+        "plugins": [{"name": "pack", "source": "./skills", "skills": ["./audit"]}],
+    }
+    tar_v1 = _build_tar_gz(
+        [
+            (".claude-plugin/marketplace.json", json.dumps(manifest)),
+            (
+                "skills/audit/SKILL.md",
+                _skill_md(
+                    "audit",
+                    '"\\u001b[31mAudit\\u001b[0m [red]code[/red]"',
+                    allowed_tools="Read Bash",
+                ),
+            ),
+            ("skills/audit/scripts/check.py", "print('v1')\n"),
+        ],
+        prefix=f"acme-skills-{_SHA_V1[:7]}",
+    )
+    tar_v2 = _build_tar_gz(
+        [
+            (".claude-plugin/marketplace.json", json.dumps(manifest)),
+            ("skills/audit/SKILL.md", _skill_md("audit", "Audit code v2")),
+            ("skills/audit/scripts/check.py", "print('v2')\n"),
+            ("skills/audit/scripts/new.sh", "echo ok\n"),
+        ],
+        prefix=f"acme-skills-{_SHA_V2[:7]}",
+    )
+    commits = {("acme", "skills", "main"): _SHA_V1}
+    tarballs = {("acme", "skills", _SHA_V1): tar_v1}
+    calls: list[str] = []
+
+    transport = _github_mock_transport(commits, tarballs)
+
+    def _client(**_kw):
+        calls.append("http")
+        return httpx.Client(transport=transport, follow_redirects=False)
+
+    monkeypatch.setattr(
+        "strands_code_cli.memory.marketplace.make_marketplace_client", _client
+    )
+    return commits, tarballs, tar_v2, calls, _SHA_V1, _SHA_V2
+
+
+class TestSkillsMarketplaceEndToEnd:
+    def test_dispatch_marketplace_add_list_browse_no_auto_network(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.ui.output import print_plain
+
+        _commits, _tarballs, _tar_v2, calls, _s1, _s2 = _mock_github_bundle(
+            monkeypatch, tmp_path
+        )
+        index = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        s_idx = _session_index(tmp_path)
+
+        _, empty_list = dispatch(
+            "/skills marketplace list", session_id="s1", index=s_idx, skills=index
+        )
+        assert "No marketplaces configured." in empty_list and calls == []
+
+        _, added = dispatch(
+            "/skills marketplace add acme/skills --name acme",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+        )
+        assert "Added marketplace 'acme'" in added
+        http_count_after_add = len(calls)
+
+        _, browsed = dispatch(
+            "/skills browse", session_id="s1", index=s_idx, skills=index
+        )
+        assert len(calls) == http_count_after_add  # zero auto-network on browse
+        assert "acme:audit" in browsed and "[red]code[/red]" in browsed
+        assert "\x1b" not in browsed
+        print_plain(Console(width=120), browsed)
+
+        _, updated_cat = dispatch(
+            "/skills marketplace update acme",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+        )
+        assert "Updated marketplace 'acme': 1 skill." in updated_cat
+
+    def test_dispatch_install_show_update_sync_and_uninstall(
+        self, tmp_path, monkeypatch
+    ):
+        commits, tarballs, tar_v2, _calls, sha_v1, sha_v2 = _mock_github_bundle(
+            monkeypatch, tmp_path
+        )
+        index = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        s_idx = _session_index(tmp_path)
+        dispatch(
+            "/skills marketplace add acme/skills --name acme",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+        )
+        _, installed = dispatch(
+            "/skills install audit@acme", session_id="s1", index=s_idx, skills=index
+        )
+        assert "Installed acme:audit." in installed
+        assert "scripts/check.py" in installed
+
+        _, shown = dispatch(
+            "/skills show acme:audit", session_id="s1", index=s_idx, skills=index
+        )
+        assert sha_v1[:7] in shown and "verified (skills-lock.json)" in shown
+        assert "Allowed tools: Read Bash" in shown and "informational only" in shown
+
+        commits[("acme", "skills", "main")] = sha_v2
+        tarballs[("acme", "skills", sha_v2)] = tar_v2
+        _, upd = dispatch(
+            "/skills update acme:audit", session_id="s1", index=s_idx, skills=index
+        )
+        assert f"{sha_v1[:7]} -> {sha_v2[:7]}" in upd
+        assert "scripts/new.sh" in upd and "scripts/check.py" in upd
+
+        skill_md = (
+            tmp_path / ".agent" / "skills-marketplaces" / "acme" / "audit" / "SKILL.md"
+        )
+        skill_md.write_text(
+            "---\nname: audit\ndescription: Hacked\n---\n", encoding="utf-8"
+        )
+        _, synced = dispatch("/skills sync", session_id="s1", index=s_idx, skills=index)
+        assert "Restored acme:audit." in synced
+
+        _, uninst = dispatch(
+            "/skills uninstall acme:audit", session_id="s1", index=s_idx, skills=index
+        )
+        assert "Removed skill 'acme:audit'." in uninst
+        assert index.resolve("acme:audit") is None
+
+    def test_agent_skills_sync_tamper_eviction_and_local_tie_break(
+        self, tmp_path, monkeypatch
+    ):
+        import asyncio
+
+        from strands.sandbox.not_a_sandbox_local_environment import (
+            NotASandboxLocalEnvironment,
+        )
+        from strands.vended_plugins.skills import AgentSkills
+
+        _mock_github_bundle(monkeypatch, tmp_path)
+        local_dir = tmp_path / ".agent" / "skills"
+        index = SkillIndex(skills_dir=local_dir)
+        plugin = AgentSkills(skills=index.discover_plugin_sources())
+
+        def _refresh() -> None:
+            plugin.set_available_skills(index.discover_plugin_sources())
+
+        class _FakeAgent:
+            sandbox = NotASandboxLocalEnvironment()
+
+        fake_agent = _FakeAgent()
+        s_idx = _session_index(tmp_path)
+        dispatch(
+            "/skills marketplace add acme/skills --name acme",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+        )
+        dispatch(
+            "/skills install acme:audit",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+            harness_skills_refresh=_refresh,
+        )
+        asyncio.run(plugin._load_skill_paths(fake_agent))
+        loaded = {s.name: s for s in plugin.get_available_skills(fake_agent)}
+        assert "audit" in loaded and "Audit" in loaded["audit"].description
+
+        # Tampering excludes the marketplace skill from AgentSkills on reload
+        (
+            tmp_path / ".agent" / "skills-marketplaces" / "acme" / "audit" / "SKILL.md"
+        ).write_text(
+            "---\nname: audit\ndescription: Tampered\n---\nBody\n",
+            encoding="utf-8",
+        )
+        dispatch(
+            "/skills reload",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+            harness_skills_refresh=_refresh,
+        )
+        asyncio.run(plugin._load_skill_paths(fake_agent))
+        after_tamper = {s.name: s for s in plugin.get_available_skills(fake_agent)}
+        assert "audit" not in after_tamper
+
+        # Sync restores it, and local: wins bare-name tie in AgentSkills
+        dispatch(
+            "/skills sync",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+            harness_skills_refresh=_refresh,
+        )
+        _write_skill(local_dir, "audit", description="Local override wins.")
+        dispatch(
+            "/skills reload",
+            session_id="s1",
+            index=s_idx,
+            skills=index,
+            harness_skills_refresh=_refresh,
+        )
+        asyncio.run(plugin._load_skill_paths(fake_agent))
+        final_map = {s.name: s for s in plugin.get_available_skills(fake_agent)}
+        assert final_map["audit"].description == "Local override wins."
+
+    def test_third_party_provenance_framing_and_ambiguous_bare_invocation(
+        self, tmp_path
+    ):
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_locked_marketplace_skill(
+            tmp_path,
+            "acme",
+            "audit",
+            commit_sha="b" * 40,
+            source_url="https://github.com/acme/skills",
+            body="# Audit\nInspect.",
+        )
+        index = SkillIndex(skills_dir=local_dir)
+        s_idx = _session_index(tmp_path)
+        action, prompt = dispatch(
+            "/acme:audit check src/", session_id="s1", index=s_idx, skills=index
+        )
+        assert action == "agent" and prompt is not None
+        assert "third-party marketplace skill 'acme:audit'" in prompt
+        assert f"https://github.com/acme/skills @ {'b' * 7}" in prompt
+        assert "Untrusted third-party skill instructions" in prompt
+
+        _write_locked_marketplace_skill(tmp_path, "other", "audit")
+        index.reload()
+        act2, msg2 = dispatch("/audit hi", session_id="s1", index=s_idx, skills=index)
+        assert act2 == "reply" and msg2 is not None
+        assert "/acme:audit" in msg2 and "/other:audit" in msg2
+
+    def test_startup_prints_tampered_marketplace_warning(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        skill_dir = _write_locked_marketplace_skill(tmp_path, "acme", "drift")
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: drift\ndescription: Altered!\n---\nBody\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(loop_module, "_history", lambda: InMemoryHistory())
+
+        class _FakeSession:
+            def __init__(self, history=None, completer=None):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                raise EOFError
+
+        monkeypatch.setattr(loop_module, "PromptSession", _FakeSession)
+        agent = SimpleNamespace(messages=[], add_hook=lambda *a, **k: None)
+        loop_module.run_loop(
+            agent,
+            session_id="drift-warn",
+            index=SessionIndex(tmp_path / "index"),
+            model_id="test-model",
+        )
+        out = capsys.readouterr().out
+        assert "Skipped hash-drifted skill 'acme:drift'" in out

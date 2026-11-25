@@ -2535,7 +2535,7 @@ def run_loop(
             return None
         if btw_session.has_live:
             return "model registry refresh deferred — side answer running"
-        plugin.set_available_skills([str(skills.skills_dir)])
+        plugin.set_available_skills(skills.discover_plugin_sources())
         return None
 
     session: PromptSession = PromptSession(
