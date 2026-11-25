@@ -4,12 +4,12 @@ milestone: v2.0
 current_phase: 18
 current_phase_name: Skills Marketplaces & Lockfile Installer
 current_plan: 3
-status: verified
-stopped_at: Phase 18 security audit complete (`18-SECURITY.md` 10/10 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 18` or `/gsd-discuss-phase 19`
-last_updated: "2026-11-25T05:47:00Z"
+status: validated
+stopped_at: Phase 18 Nyquist validation complete (`18-VALIDATION.md` 99.3% coverage, 1798/1798 default suite, 44/44 rig, zero runtime edits) — ready for `/gsd-discuss-phase 19`
+last_updated: "2026-11-25T06:03:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Audited & hardened Phase 18 (`18-SECURITY.md` 10/10 closed, `1784+1+1` tests, 44/44 rig, 6/6 CI gates)
-state_head: b2cb3ac
+last_activity_desc: Validated Phase 18 Nyquist branch coverage (`18-VALIDATION.md` 2084/2099 = 99.3%, `1797+1` tests, 44/44 rig, 6/6 CI gates, zero runtime edits)
+state_head: b169716
 progress:
   total_phases: 9
   completed_phases: 6
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 18 Verified + UAT Passed (`SKILL-03`, `18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18` or `/gsd-discuss-phase 19`
+**Current focus:** Milestone `v2.0` · Phase 18 Validated, Hardened & UAT Passed (`SKILL-03`, `18-VALIDATION.md` `nyquist_compliant: true`, `18-SECURITY.md` `10/10 closed`, `18-UAT.md` `6/6 PASS`) — ready for `/gsd-discuss-phase 19`
 
 ## Current Position
 
-Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Verified & UAT Complete (`18-01`..`18-03`)
+Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Verified, UAT, Security & Nyquist Validation Complete (`18-01`..`18-03`)
 Plan: 3 of 3 complete in Phase 18
-Status: Verified (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
-Last activity: 2026-11-24 — Completed Phase 18 UAT (`18-UAT.md` 6/6 PASS)
+Status: Validated (`18-VALIDATION.md` `nyquist_compliant: true`, `18-SECURITY.md` `10/10 closed`, `18-UAT.md` `6/6 PASS`) — ready for `/gsd-discuss-phase 19`
+Last activity: 2026-11-24 — Completed Phase 18 Nyquist validation (`18-VALIDATION.md` 2084/2099 = 99.3%, `1797+1` tests, zero runtime edits)
 
 Progress: [███████░░░] 67%
 
@@ -76,11 +76,13 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 - Phase 18 UAT (`18-UAT.md` `6/6` passed): verified zero-default registry + redirect auth stripping (`run_uat18_test1.py`), live `anthropics/skills` marketplace add -> cached browse -> install (`@ e4bb5d9`) -> `/skills show` -> tamper skip -> `/skills sync` restore -> `/skills uninstall` (`run_uat18_test2.py`), deny-first tarball/cap/rollback + `scripts/*` update diffs + ANSI/`print_plain` safety (`run_uat18_test3.py`), multi-namespace `SkillIndex` + dynamic `/<ns>:` `SlashCompleter` + real `AgentSkills` sync + `@ <short_sha>` provenance framing (`run_uat18_test4.py`), protected-path `Prompt` downgrade + HITL gate (`run_uat18_test5.py`), and `docs/QUICKSTART.md` + `1779+1` + `44/44` rig + 6/6 CI gates on `HEAD`.
 
-- Phase 18 security audit (`18-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`): remediated `T-18-09` HIGH (strict `load_lockfile()` slug/key/SHA/hash/subdir validation via `valid_skill_name()`, `validate_skill_name()` pre-staging, `_validate_sync_source()` blocking unregistered local-path sync from crafted `skills-lock.json`, and staging hash verification before `_atomic_swap_skill_dir()`), `T-18-08` HIGH (explicit redirect port rejection, JSON `NaN`/`Infinity` rejection, `2 MiB` API JSON cap, `httpx.HTTPError` scrubbing, and direct-call segment validation), `T-18-10` MEDIUM (`update_marketplace` `ValueError` ordering, symlink-safe cache unlink & `.agent` parent checks, and `user_cache_dir("strands-code")` protected in `policy/core.py`), and `T-18-01` (`gh[pousr]_*`/`github_pat_*`/`GITHUB_TOKEN`/`GH_TOKEN` in `scrub_credentials()`), verified across `1784 + 1` non-integration suite + `1` live `anthropics/skills` probe + `44/44` rig + all 6 CI gates (`marketplace.py` max `C 17`).
+- Phase 18 security audit (`18-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`, `b169716`): remediated `T-18-09` HIGH (strict `load_lockfile()` slug/key/SHA/hash/subdir validation via `valid_skill_name()`, `validate_skill_name()` pre-staging, `_validate_sync_source()` blocking unregistered local-path sync from crafted `skills-lock.json`, and staging hash verification before `_atomic_swap_skill_dir()`), `T-18-08` HIGH (explicit redirect port rejection, JSON `NaN`/`Infinity` rejection, `2 MiB` API JSON cap, `httpx.HTTPError` scrubbing, and direct-call segment validation), `T-18-10` MEDIUM (`update_marketplace` `ValueError` ordering, symlink-safe cache unlink & `.agent` parent checks, and `user_cache_dir("strands-code")` protected in `policy/core.py`), and `T-18-01` (`gh[pousr]_*`/`github_pat_*`/`GITHUB_TOKEN`/`GH_TOKEN` in `scrub_credentials()`), verified across `1784 + 1` non-integration suite + `1` live `anthropics/skills` probe + `44/44` rig + all 6 CI gates (`marketplace.py` max `C 17`).
+
+- Phase 18 Nyquist validation (`18-VALIDATION.md` `validated`, `nyquist_compliant: true`): audited all 8 Phase 18 changed modules via `sys.monitoring` (`2084/2099 = 99.3%` executable line coverage; `100.0%` on `cost_context.py`, `dispatch/core.py`, `entry/main.py`, `loop/core.py`, `policy/core.py`, `ui/completer.py`; `99.4%` on `marketplace.py`; `96.2%` on `skills.py`) and closed remaining edge branches in `tests/memory/test_marketplace.py`, `tests/memory/test_skills.py`, and `tests/policy/test_policy.py` (`0` runtime edits, `1797 + 1 = 1798/1798` default suite + `44/44` rig + all 6 CI gates green).
 
 ### Pending Todos
 
-- Run `/gsd-validate-phase 18` or `/gsd-discuss-phase 19` as the next step.
+- Run `/gsd-discuss-phase 19` to start planning Phase 19 (`SANDBOX-01`: Strands Box OS sandboxing + Dogwood policy).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -93,6 +95,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T05:47:00Z
-Stopped at: Phase 18 security audit complete (`18-SECURITY.md` 10/10 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 18` or `/gsd-discuss-phase 19`
-Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-SECURITY.md
+Last session: 2026-11-25T06:03:00Z
+Stopped at: Phase 18 Nyquist validation complete (`18-VALIDATION.md` 99.3% coverage, 1798/1798 default suite, 44/44 rig, zero runtime edits) — ready for `/gsd-discuss-phase 19`
+Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-VALIDATION.md

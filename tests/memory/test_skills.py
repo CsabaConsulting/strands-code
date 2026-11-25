@@ -9,6 +9,7 @@ network is touched here; fixtures are tmp_path-built skill trees.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1191,3 +1192,298 @@ class TestSkillsMarketplaceEndToEnd:
         )
         out = capsys.readouterr().out
         assert "Skipped hash-drifted skill 'acme:drift'" in out
+
+
+class TestPhase18NyquistSkillsAndDispatch:
+    def test_run_loop_skills_reload_calls_plugin_set_available_skills(
+        self, tmp_path, monkeypatch
+    ):
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_skill(local_dir, "local-demo", description="Local.")
+        remote_dir = _write_locked_marketplace_skill(tmp_path, "acme", "remote-demo")
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(loop_module, "_history", lambda: InMemoryHistory())
+        prompts = iter(["/skills reload"])
+
+        class _FakeSession:
+            def __init__(self, history=None, completer=None):
+                pass
+
+            def prompt(self, *args, **kwargs):
+                try:
+                    return next(prompts)
+                except StopIteration as exc:
+                    raise EOFError from exc
+
+        monkeypatch.setattr(loop_module, "PromptSession", _FakeSession)
+        recorded: list[list[str]] = []
+        agent = SimpleNamespace(
+            messages=[],
+            add_hook=lambda *a, **k: None,
+            _skills_plugin=SimpleNamespace(
+                set_available_skills=lambda srcs: recorded.append(list(srcs))
+            ),
+        )
+        loop_module.run_loop(
+            agent,
+            session_id="reload-loop",
+            index=_session_index(tmp_path),
+            model_id="test-model",
+        )
+        assert recorded == [[str(remote_dir.relative_to(tmp_path)), ".agent/skills"]]
+
+    def test_skill_index_invalid_verified_ambiguous_and_remove_fallbacks(
+        self, tmp_path, monkeypatch
+    ):
+        from strands.vended_plugins.skills import Skill
+
+        local_dir = tmp_path / ".agent" / "skills"
+        _write_skill(local_dir, "shared")
+        _write_locked_marketplace_skill(tmp_path, "alpha", "shared")
+        _write_locked_marketplace_skill(tmp_path, "beta", "shared")
+        ok_dir = _write_locked_marketplace_skill(tmp_path, "acme", "ok")
+        live_dir = _write_locked_marketplace_skill(tmp_path, "acme", "live")
+
+        index = SkillIndex(skills_dir=local_dir)
+        assert index.ambiguous_matches("") == []
+        assert index.ambiguous_matches("acme:ok") == []
+        assert index.ambiguous_matches("shared") == []
+
+        def _boom_from_file(*_a, **_k):
+            raise ValueError("corrupt")
+
+        with monkeypatch.context() as mctx:
+            mctx.setattr(Skill, "from_file", _boom_from_file)
+            index.reload()
+            assert any("Skipped invalid marketplace skill" in w for w in index.warnings)
+
+        index.reload()
+        (ok_dir / "SKILL.md").write_text(
+            "---\nname: ok\ndescription: x\n---\n", encoding="utf-8"
+        )
+        index.reload()
+        assert index.resolve("acme:ok") is None
+        assert index.remove("acme:ok") is True
+        assert index.remove("acme:ghost") is False
+
+        shutil.rmtree(live_dir)
+        live_dir.symlink_to(tmp_path)
+        assert index.remove("acme:live") is False
+
+    def test_dispatch_skills_list_marketplace_and_browse_branches(
+        self, tmp_path, monkeypatch
+    ):
+        drift_ws = tmp_path / "drift_ws"
+        drift_dir = _write_locked_marketplace_skill(drift_ws, "acme", "drift")
+        (drift_dir / "SKILL.md").write_text(
+            "---\nname: drift\ndescription: Altered\n---\n", encoding="utf-8"
+        )
+        drift_idx = SkillIndex(skills_dir=drift_ws / ".agent" / "skills")
+        _, empty_warn_list = dispatch(
+            "/skills",
+            session_id="s1",
+            index=_session_index(drift_ws),
+            skills=drift_idx,
+        )
+        assert "No skills loaded" in empty_warn_list
+        assert "Skipped hash-drifted skill 'acme:drift'" in empty_warn_list
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        _mock_github_bundle(monkeypatch, ws)
+        s_idx = _session_index(ws)
+        skills = SkillIndex(skills_dir=ws / ".agent" / "skills")
+
+        _commits_ok = _write_locked_marketplace_skill(
+            ws, "acme", "pinned", commit_sha="b" * 40
+        )
+        skills.reload()
+        _, pop_list = dispatch("/skills", session_id="s1", index=s_idx, skills=skills)
+        assert "acme:pinned (@ bbbbbbb)" in pop_list
+
+        for bad_cmd, needle in (
+            ("/skills marketplace", "Usage:"),
+            ("/skills marketplace bogus", "Usage:"),
+            ("/skills marketplace update", "No marketplaces configured."),
+            ("/skills browse", "No marketplaces configured."),
+            ("/skills marketplace add", "Usage:"),
+            (
+                "/skills marketplace add acme/skills --name",
+                "Missing value after --name",
+            ),
+            ("/skills marketplace remove", "Usage:"),
+            ("/skills marketplace remove nope", "Unknown marketplace 'nope'."),
+            ("/skills marketplace remove local", "Invalid marketplace namespace"),
+        ):
+            _, reply = dispatch(bad_cmd, session_id="s1", index=s_idx, skills=skills)
+            assert needle in reply
+
+        local_cat = ws / "local_cat"
+        (local_cat / "skills" / "two").mkdir(parents=True)
+        (local_cat / "skills" / "two" / "SKILL.md").write_text(
+            "---\nname: two\ndescription: Two\n---\nBody\n", encoding="utf-8"
+        )
+        dispatch(
+            "/skills marketplace add acme/skills --name acme --ref main",
+            session_id="s1",
+            index=s_idx,
+            skills=skills,
+        )
+        dispatch(
+            f"/skills marketplace add {local_cat} --name localcat",
+            session_id="s1",
+            index=s_idx,
+            skills=skills,
+        )
+        _, mp_list = dispatch(
+            "/skills marketplace list", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "acme (github: acme/skills@main)" in mp_list
+        assert f"localcat (local: {local_cat.resolve()})" in mp_list
+
+        _, unknown_browse = dispatch(
+            "/skills browse nope", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "Unknown marketplace" in unknown_browse
+        (ws / "cache" / "acme.json").unlink()
+        _, no_cache = dispatch(
+            "/skills browse acme", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "No cached skills found." in no_cache
+        _, refreshed = dispatch(
+            "/skills browse acme --refresh", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "acme:audit" in refreshed
+        _, removed = dispatch(
+            "/skills marketplace remove acme",
+            session_id="s1",
+            index=s_idx,
+            skills=skills,
+        )
+        assert removed == "Removed marketplace 'acme'."
+
+    def test_dispatch_install_update_sync_show_and_remove_branches(
+        self, tmp_path, monkeypatch
+    ):
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        monkeypatch.chdir(ws)
+        s_idx = _session_index(ws)
+
+        assert (
+            "No marketplace skills installed."
+            in dispatch("/skills update", session_id="s1", index=s_idx, skills=None)[1]
+        )
+        assert (
+            "No marketplace skills locked"
+            in dispatch("/skills sync", session_id="s1", index=s_idx, skills=None)[1]
+        )
+        assert (
+            "Unknown skill ''."
+            == dispatch("/skills show", session_id="s1", index=s_idx, skills=None)[1]
+        )
+        assert (
+            "Unknown skill ''."
+            == dispatch("/skills remove", session_id="s1", index=s_idx, skills=None)[1]
+        )
+
+        _mock_github_bundle(monkeypatch, ws)
+        skills = SkillIndex(skills_dir=ws / ".agent" / "skills")
+        assert (
+            "Usage:"
+            in dispatch("/skills install", session_id="s1", index=s_idx, skills=skills)[
+                1
+            ]
+        )
+        assert (
+            "Unknown marketplace"
+            in dispatch(
+                "/skills install bad:target",
+                session_id="s1",
+                index=s_idx,
+                skills=skills,
+            )[1]
+        )
+
+        dispatch(
+            "/skills marketplace add acme/skills --name acme",
+            session_id="s1",
+            index=s_idx,
+            skills=skills,
+        )
+        dispatch(
+            "/skills install acme:audit", session_id="s1", index=s_idx, skills=skills
+        )
+        _, up_to_date = dispatch(
+            "/skills update acme:audit", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "Up to date: acme:audit" in up_to_date
+        _, upd_missing = dispatch(
+            "/skills update nope", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "not found" in upd_missing
+        _, synced_ok = dispatch(
+            "/skills sync", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "Verified acme:audit." in synced_ok
+
+        (ws / ".agent" / "skills-lock.json").write_text("{corrupt", encoding="utf-8")
+        _, sync_err = dispatch(
+            "/skills sync", session_id="s1", index=s_idx, skills=skills
+        )
+        assert "Expecting" in sync_err
+
+        ws2 = tmp_path / "ws2"
+        _write_locked_marketplace_skill(ws2, "alpha", "lint")
+        _write_locked_marketplace_skill(ws2, "beta", "lint")
+        drifted_dir = _write_locked_marketplace_skill(ws2, "acme", "drifted")
+        (drifted_dir / "SKILL.md").write_text(
+            "---\nname: drifted\ndescription: Altered\n---\n", encoding="utf-8"
+        )
+        sym_parent = ws2 / ".agent" / "skills-marketplaces" / "acme"
+        (sym_parent / "sym").symlink_to(ws2)
+
+        idx2 = SkillIndex(skills_dir=ws2 / ".agent" / "skills")
+        s_idx2 = _session_index(ws2)
+        assert (
+            "Ambiguous skill 'lint'"
+            in dispatch(
+                "/skills show lint", session_id="s1", index=s_idx2, skills=idx2
+            )[1]
+        )
+        assert (
+            "Ambiguous skill 'lint'"
+            in dispatch(
+                "/skills remove lint", session_id="s1", index=s_idx2, skills=idx2
+            )[1]
+        )
+        refreshes: list[str] = []
+        assert (
+            dispatch(
+                "/skills remove alpha:lint",
+                session_id="s1",
+                index=s_idx2,
+                skills=idx2,
+                harness_skills_refresh=lambda: refreshes.append("ok"),
+            )[1]
+            == "Removed skill 'alpha:lint'."
+        )
+        assert refreshes == ["ok"]
+        assert (
+            "Refused to remove symlinked skill 'acme:sym'."
+            == dispatch(
+                "/skills remove acme:sym", session_id="s1", index=s_idx2, skills=idx2
+            )[1]
+        )
+        assert (
+            "Removed skill 'acme:drifted'."
+            == dispatch(
+                "/skills remove acme:drifted",
+                session_id="s1",
+                index=s_idx2,
+                skills=idx2,
+                harness_skills_refresh=lambda: None,
+            )[1]
+        )
+        assert not drifted_dir.exists()

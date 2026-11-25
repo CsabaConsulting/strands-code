@@ -12,6 +12,7 @@ from strands_code_cli.policy.core import (
     PolicyConfig,
     Prompt,
     Rule,
+    _is_protected_skills_or_config_path,
     decide,
     is_fetch_get,
     is_network_command,
@@ -312,4 +313,42 @@ class TestDecide:
                 "write", {"path": ".agent/skills-lock.json"}, deny_cfg, cwd=str(repo)
             ),
             Deny,
+        )
+
+    def test_protected_path_edge_branches_and_symlinked_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+
+        real_repo = tmp_path / "real_repo"
+        (real_repo / ".agent" / "skills" / "demo").mkdir(parents=True)
+        cwd_link = tmp_path / "cwd_link"
+        cwd_link.symlink_to(real_repo)
+
+        assert _is_protected_skills_or_config_path("", real_repo) is False
+        assert _is_protected_skills_or_config_path(None, real_repo) is False
+
+        cfg = self._cfg(allow=[Rule(tool="*", path="*")])
+        assert isinstance(
+            decide(
+                "write",
+                {"path": ".agent/skills/demo/SKILL.md"},
+                cfg,
+                cwd=str(cwd_link),
+            ),
+            Prompt,
+        )
+
+        orig_realpath = os.path.realpath
+
+        def _flaky_realpath(p):
+            s = os.fspath(p)
+            if s.endswith("skills-lock.json") or s == str(real_repo):
+                raise OSError("stat failed")
+            return orig_realpath(p)
+
+        monkeypatch.setattr(os.path, "realpath", _flaky_realpath)
+        assert (
+            _is_protected_skills_or_config_path(".agent/skills-lock.json", real_repo)
+            is True
         )
