@@ -21,6 +21,8 @@ _PROVIDER_ENV_VARS = (
     "JEV_API_KEY",
     "STRANDS_BOX",
     "AWS_BEARER_TOKEN_BEDROCK",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
 )
 
 
