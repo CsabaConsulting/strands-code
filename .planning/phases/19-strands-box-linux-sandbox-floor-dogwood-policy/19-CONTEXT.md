@@ -12,7 +12,7 @@ Deliver `SANDBOX-01` — an OS-enforced defense-in-depth containment floor using
 - Containment, 7-provider egress & Dogwood policy: `uv`/`.venv` Python symlink realpaths resolved, `TERM`/`HOME`/`PATH`/`STRANDS_BOX=1`, auto-detected least-privilege egress profiles across all 7 core providers (`bedrock`, `google`, `anthropic`, `openai`, `meta`, `openrouter`, `typesafe`) plus opt-in Phase 17/18 flags (`--allow-decisions-api`, `--allow-github-skills`), default-deny `policy.dw` with `.env`/secret-file read forbids and the canonical MFOTL temporal rule (`git push` requires `formerly within 900s` `pytest`), formally logging a scoped revisit of `v1.0` `D-05`.
 - CodeAct & Linux diagnostics/docs: `STRANDS_BOX=1` `codeact_shell` routing via `["sh", "-c", shlex.join(argv)]`, `box doctor` Linux `x86_64` (`EXPERIMENTAL_X86_SUPPORT=TRUE`) + Ubuntu 24.04 `apparmor_restrict_unprivileged_userns` / `/etc/apparmor.d/strands-box` + 3-binary co-location checks, `box run` wrapper, and setup documentation.
 
-Out of scope: bundling or forking Rust Strands Box binaries, adding `strands-agents[cedar]` or LLM/NL-string policies inside `strands-code`'s Python `interventions`, running Strands Box as an in-process Python sandbox binding, macOS Seatbelt automation, MCP broker policies (`SKILL-04`), `/help`/`@file`/`/review` (**Phase 20**), `strands-agents-evals` (**Phase 21**), and any edits to `strands_code_agent/` (`D-24`).
+Out of scope: bundling or forking Rust Strands Box binaries, adding `strands-agents[cedar]` or LLM/NL-string policies inside `strands-code`'s Python `interventions`, running Strands Box as an in-process Python sandbox binding, macOS Seatbelt automation, MCP broker policies (`SKILL-04`), Monty Rust Python VM (**Phase 20**, `SANDBOX-02`), `/help`/`@file`/`/review` (**Phase 21**), `strands-agents-evals` (**Phase 22**), and any edits to `strands_code_agent/` (`D-24`).
 
 </domain>
 
@@ -150,8 +150,9 @@ Out of scope: bundling or forking Rust Strands Box binaries, adding `strands-age
 - Automating installation of `box` Rust binaries or mutating host `/etc/apparmor.d/` with `sudo`.
 - Non-LLM HTTP exfil-correlation temporal rules or full MCP broker `.cedarschema` policy rules (`SKILL-04`, `v2.1+`).
 - macOS Apple Silicon Seatbelt diagnostics/profiles.
-- `/help`, `@file` / `/file`, `/review` — **Phase 20 (`LOOP-06`, `TOOL-05`, `REVIEW-01`)**.
-- `strands-agents-evals` & red-team suite — **Phase 21 (`EVAL-01`)**.
+- Monty Rust Python VM (`pydantic-monty` / Strands Box Monty) for `python_repl` & CodeAct — **Phase 20 (`SANDBOX-02`)**.
+- `/help`, `@file` / `/file`, `/review` — **Phase 21 (`LOOP-06`, `TOOL-05`, `REVIEW-01`)**.
+- `strands-agents-evals` & red-team suite — **Phase 22 (`EVAL-01`)**.
 
 </deferred>
 

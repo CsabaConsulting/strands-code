@@ -11,7 +11,7 @@ last_activity: 2026-11-25
 last_activity_desc: Planned Phase 19 Strands Box Linux Sandbox Floor & Dogwood Policy (`19-01`..`19-03`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS)
 state_head: 44e56a9
 progress:
-  total_phases: 9
+  total_phases: 10
   completed_phases: 6
   total_plans: 20
   completed_plans: 17
@@ -28,17 +28,17 @@ See: .planning/PROJECT.md (updated 2026-11-21)
 
 ## Current Position
 
-Phase: 19 of 21 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Planned (`19-01`..`19-03`)
+Phase: 19 of 22 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Planned (`19-01`..`19-03`)
 Plan: 0 of 3 complete in Phase 19
 Status: Planned (`19-01`..`19-03` across Waves 1–3, `19-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19`
-Last activity: 2026-11-25 — Planned Phase 19 (`19-RESEARCH.md`, `19-PATTERNS.md`, `19-01..03-PLAN.md`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS)
+Last activity: 2026-11-25 — Inserted Phase 20 (`SANDBOX-02` Monty Python VM) & renumbered Phases 21–22
 
-Progress: [███████░░░] 67%
+Progress: [██████░░░░] 60%
 
 ## Performance Metrics
 
 - `v1.0` shipped 2026-10-16: 12 phases, 41 plans, 129 tasks ([v1.0 Archive](.planning/MILESTONES.md))
-- `v2.0` active: 6/9 phases complete (Phases 13–18 done; Phases 19–21 queued)
+- `v2.0` active: 6/10 phases complete (Phases 13–18 done; Phases 19–22 queued)
 
 ## Accumulated Context
 
@@ -81,6 +81,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 18 Nyquist validation (`18-VALIDATION.md` `validated`, `nyquist_compliant: true`): audited all 8 Phase 18 changed modules via `sys.monitoring` (`2084/2099 = 99.3%` executable line coverage; `100.0%` on `cost_context.py`, `dispatch/core.py`, `entry/main.py`, `loop/core.py`, `policy/core.py`, `ui/completer.py`; `99.4%` on `marketplace.py`; `96.2%` on `skills.py`) and closed remaining edge branches in `tests/memory/test_marketplace.py`, `tests/memory/test_skills.py`, and `tests/policy/test_policy.py` (`0` runtime edits, `1797 + 1 = 1798/1798` default suite + `44/44` rig + all 6 CI gates green).
 - Phase 19 discussion (`19-CONTEXT.md` `D-01`–`D-07`, `19-DISCUSSION-LOG.md`): locked `strands-code box init|doctor|run` Typer subcommand group in isolated `sandbox/box.py` + read-only `/policy` Box indicator, host-only `~/.config/strands-box/repos/<slug>-<hash8>/` config storage (`0o700`/`0o600`, outside `[agent.filesystem].write`, protected in `policy/core.py`), auto-resolved `uv`/`.venv` Python realpaths, least-privilege auto-detected 7-provider egress profiles (`bedrock` no STS hole, `google`, `anthropic`, `openai`, `meta`, path-scoped `openrouter`, `typesafe` + `--allow-decisions-api`/`--allow-github-skills`), default-deny `policy.dw` with `.env`/secret read forbids + canonical MFOTL temporal `git push` rule (**formal scoped revisit of `v1.0` `D-05`**: external host-side deterministic Dogwood allowed while in-process Python `interventions` remain TOML+Python only), and `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment.
 - Phase 19 planning (`19-RESEARCH.md`, `19-PATTERNS.md`, `19-01..03-PLAN.md`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS): mapped Waves 1–3 (`tests/sandbox/test_box.py` Wave 0 file with `tomllib` TOML validation & `T-19-01`..`T-19-08` threat coverage, `conftest.py` `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs, `codeact_shell` `shlex.join` `sh -c` routing, `user_config_dir("strands-box")` policy protection, Typer `ctx.invoked_subcommand` early return, `test_no_credential_persistence_sinks` + `test_no_budgets_or_enforcement_vocabulary` compliance, `lint-imports`, `xenon <= C (20)`, and `D-24` pristine `strands_code_agent/`).
+- Roadmap expansion (2026-11-25): inserted Phase 20 (`SANDBOX-02` Monty Rust Python VM via `pydantic-monty` for `python_repl` & `CodeactStint`, closing in-process `smolagents` CLI memory tampering even unboxed while aligning cleanly with Strands Box) right after Phase 19, and cleanly renumbered unstarted Phases 20–21 -> 21–22.
 
 ### Pending Todos
 
@@ -91,8 +92,8 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 - ✅ ~~[Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models~~ — **Closed in Phase 13** (`strands-agents==1.65.0` `#5166` `BedrockModel._rejects_reasoning_block` + `drop_block` wire strip + `model_switch.prepare_resumed_history()` hybrid restore on non-Bedrock / media-less launches; pinned offline in `TestUpstreamReasoningWireStrip` and `TestPrepareResumedHistory`).
 - ✅ ~~[v2.0 Coordination] Phase 14 (`MODEL-06` `first_run.py` preflight) must check non-empty key presence only (no vendor prefix checks) and skip `sts.get_caller_identity()` when `STRANDS_BOX=1`~~ — **Closed in Phase 14** (`first_run.py` checks non-empty env presence only, skips STS for non-AWS providers and `STRANDS_BOX=1`).
-- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`) and `_setup_decision_entries` (`C 20`) sit near the `xenon --max-absolute C` ceiling (`CC <= 20`) — Phase 18 & Phase 20 features MUST live in isolated helper modules (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `memory/marketplace.py`).
-- ⚠️ [Phase 20 / Future LOOP-05 Security] CVE-2026-18830 / CoreBreak boundary — `strands-agents` `event_loop_cycle` executes trailing `toolUse` blocks without model mediation; Phase 20 (`TOOL-05` `@file`/`document`) MUST build `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` dicts, and any future JSON/headless input (`LOOP-05`) or untrusted snapshot loader must reject/strip caller-supplied `toolUse` blocks.
+- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`) and `_setup_decision_entries` (`C 20`) sit near the `xenon --max-absolute C` ceiling (`CC <= 20`) — Phase 18, Phase 20 & Phase 21 features MUST live in isolated helper modules (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `memory/marketplace.py`, `sandbox/monty.py`).
+- ⚠️ [Phase 21 / Future LOOP-05 Security] CVE-2026-18830 / CoreBreak boundary — `strands-agents` `event_loop_cycle` executes trailing `toolUse` blocks without model mediation; Phase 21 (`TOOL-05` `@file`/`document`) MUST build `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` dicts, and any future JSON/headless input (`LOOP-05`) or untrusted snapshot loader must reject/strip caller-supplied `toolUse` blocks.
 - ⚠️ [v1.0 Carryover] Silent memory mode can memorialize model rationalizations; `PendingStore` dual-stream lock safety relies on turn discipline (`Phase 6/7` residual notes).
 
 ## Session Continuity

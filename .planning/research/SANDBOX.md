@@ -54,3 +54,15 @@ Defense in depth: HITL approval UX on top, Box + Dogwood as the deterministic fl
 below. First step when Box supports Linux: spike `box run strands-code` with a
 policy mirroring our allowlist and compare Box verdicts against gate decisions.
 No MXC/Dogwood-standalone work scheduled.
+
+## Monty Python VM (`pydantic-monty` / Strands Box Monty) — Phase 20 (`SANDBOX-02`)
+
+Because `strands_code_cli` binds `python_repl` with `authorized_imports=set()` and
+`CodeactStint` with `CODEACT_AUTHORIZED_IMPORTS = frozenset({"math"})` (funneling
+file/shell capabilities exclusively through explicit host callbacks `read`, `write`,
+`edit`, and `shell`), executing generated Python in Rust-backed **Monty**
+(`pydantic-monty`, <1 ms cold start, worker-subprocess crash isolation, memory/timeout
+caps, explicit `external_lookup` bridge) eliminates in-process `smolagents` memory
+tampering (`sys.modules`, `PolicyClassifier`, `PendingStore`) even when running unboxed,
+while Strands Box's embedded Monty tool informs optional unified Dogwood temporal
+event alignment (`D-24` keeps `strands_code_agent/` untouched).

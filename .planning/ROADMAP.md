@@ -3,13 +3,13 @@
 ## Milestones
 
 - ✅ **v1.0 Conversational Coding CLI** — Phases 1–12 (shipped 2026-10-16) — [Archive](milestones/v1.0-ROADMAP.md)
-- 🚧 **v2.0 Ecosystem Alignment, Marketplaces, Sandbox & Evals** — Phases 13–21 (in progress)
+- 🚧 **v2.0 Ecosystem Alignment, Marketplaces, Sandbox & Evals** — Phases 13–22 (in progress)
 
 ---
 
 ## Overview (`v2.0`)
 
-`v2.0` brings `strands-code` into alignment with the evolved Strands ecosystem (`strands-py >=1.65`, `harness-py >=0.4.0`, `strands-agents/box` Linux, `strands-agents-evals >=1.10`), adds first-class Google AI Gemini support (compatible with personal Google AI Ultra Developer Program credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) API support, and provider-aware startup, introduces deny-first remote skills marketplaces with SHA/hash lockfiles, layers Strands Box OS containment beneath HITL approvals, delivers `/help` + `@file` + `/review`, and closes with an automated `strands-evals` regression & red-team suite.
+`v2.0` brings `strands-code` into alignment with the evolved Strands ecosystem (`strands-py >=1.65`, `harness-py >=0.4.0`, `strands-agents/box` Linux, `pydantic-monty`, `strands-agents-evals >=1.10`), adds first-class Google AI Gemini support (compatible with personal Google AI Ultra Developer Program credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) API support, and provider-aware startup, introduces deny-first remote skills marketplaces with SHA/hash lockfiles, layers Strands Box OS containment beneath HITL approvals alongside a crash-isolated Monty Rust Python VM for `python_repl` & CodeAct, delivers `/help` + `@file` + `/review`, and closes with an automated `strands-evals` regression & red-team suite.
 
 ## Phases
 
@@ -20,8 +20,9 @@
 - [x] **Phase 17: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [x] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards (completed 2026-11-24)
 - [ ] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 7-provider egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs
-- [ ] **Phase 20: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
-- [ ] **Phase 21: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
+- [ ] **Phase 20: Monty Python VM for `python_repl` & CodeAct** — Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli`, explicit host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, worker teardown, `box.toml` compatibility & optional Strands Box Monty alignment
+- [ ] **Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
+- [ ] **Phase 22: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
 
 ---
 
@@ -198,7 +199,19 @@ Plans:
 
 - [ ] `19-03-PLAN.md` — `@pytest.mark.integration` host `box`/`dogwood` validation probe, `docs/QUICKSTART.md` Linux & AppArmor guide, `tests/rig/` & all 6 CI gates
 
-### Phase 20: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)
+### Phase 20: Monty Python VM for `python_repl` & CodeAct
+
+**Goal**: Replace in-process `smolagents` AST execution in `strands_code_cli`'s `python_repl` and `CodeactStint` with a crash-isolated, memory-bounded Rust Python VM (`pydantic-monty`), eliminating in-process CLI tampering risk even when running unboxed while aligning cleanly with Strands Box
+**Depends on**: Phase 19
+**Requirements**: `SANDBOX-02`
+**Success Criteria** (what must be TRUE):
+  1. `strands_code_cli/sandbox/monty.py` provides a stateful `MontyPythonInterpreter` (`PythonInterpreter` interface via `pydantic-monty` `Monty` pool + `feed_run`) supporting `read`/`write`/`edit`/`shell` `external_lookup` host callbacks, `import math`, `print()` capture + error stdout salvage, memory/CPU/timeout caps, and clean `MontyCrashedError` pool recovery without crashing the CLI
+  2. `entry/main.py` (`python_repl`) and `policy/codeact.py` (`CodeactStint`) run on the Monty backend (with documented packaging/optional-extra fallback posture and deterministic worker subprocess teardown on reset/exit) while passing existing CodeAct/scope/HITL/diff contracts and leaving `strands_code_agent/` untouched (`D-24`)
+  3. `sandbox/box.py` grants `[agent.filesystem].exec` / containment compatibility for `pydantic-monty-runtime` (and documents/evaluates Strands Box embedded Monty Dogwood event-log alignment) with full offline unit/adversarial tests and all 6 CI gates green
+
+**Plans**: TBD
+
+### Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)
 
 **Goal**: Ship everyday interactive productivity ergonomics (`/help`, `@file` / `/file` picker, read-only `/review`) in cleanly factored modules within CI cyclomatic complexity bounds
 **Depends on**: Phases 14, 15, 16 (for `supports_media` & `"document"` model switching alignment across providers)
@@ -210,10 +223,10 @@ Plans:
 
 **Plans**: TBD
 
-### Phase 21: Strands Evals & Red-Team Suite
+### Phase 22: Strands Evals & Red-Team Suite
 
 **Goal**: Establish continuous agent behavioral evaluation and adversarial prompt-injection red-teaming on `strands-agents-evals` covering Plan/Act, CodeAct, `/review`, `/route`, and skills/memory defenses
-**Depends on**: Phases 17, 18, 20
+**Depends on**: Phases 17, 18, 19, 20, 21
 **Requirements**: `EVAL-01`
 **Success Criteria** (what must be TRUE):
   1. `strands-agents-evals >=1.10` lives strictly in `[dependency-groups] dev` with eval suites organized under `scripts/evals/` and `tests/evals/`, passing `pytest tests/ -q`, `ruff`, `xenon --max-absolute C`, and `import-linter` with zero AWS credentials
@@ -236,5 +249,6 @@ Plans:
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/3 | Planned | - |
-| 20. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
-| 21. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
+| 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
+| 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
+| 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
