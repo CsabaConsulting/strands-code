@@ -18,7 +18,7 @@
 - [x] **Phase 15: First-Class Native OpenAI & Anthropic APIs** (`#17`, `#22`) — `openai` & `anthropic` extras, cache-aware `/cost` & context `%`, `caching`/`web_search` switch preservation, live `/v1/models` discovery & Anthropic metadata cache, API mannerisms, UAT & docs
 - [x] **Phase 16: First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement** (`#21`) — Live `/v1/responses` vs `/v1/messages` probe, upstream `strands-agents/harness-sdk` `meta/` proposal, thin `meta/` adapter, `MODEL_API_KEY` preflight, `/model` discovery, multimodal `_MEDIA_LESS` fix & contributor cache `/cost`
 - [x] **Phase 17: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
-- [ ] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards
+- [x] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards (completed 2026-11-24)
 - [ ] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 7-provider egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs
 - [ ] **Phase 20: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
 - [ ] **Phase 21: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
@@ -163,15 +163,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `18-01-PLAN.md` — Tracer: `memory/marketplace.py` catalog registry, pure-HTTPS GitHub/tarball fetcher (`MockTransport`), deny-first unpack, SHA-256 `./.agent/skills-lock.json` verifier, `conftest.py` token scrub & Wave 0 security suite (`tests/memory/test_marketplace.py`)
+- [x] `18-01-PLAN.md` — Tracer: `memory/marketplace.py` catalog registry, pure-HTTPS GitHub/tarball fetcher (`MockTransport`), deny-first unpack, SHA-256 `./.agent/skills-lock.json` verifier, `conftest.py` token scrub & Wave 0 security suite (`e8db593`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `18-02-PLAN.md` — Multi-namespace `SkillIndex` + hash-drift exclusion, dynamic `/<ns>:` `SlashCompleter`, protected-path `Prompt` policy downgrade (`policy/core.py`), `/skills marketplace|browse|install|update|sync|remove` dispatch, provenance framing & `AgentSkills` startup/reload sync
+- [x] `18-02-PLAN.md` — Multi-namespace `SkillIndex` + hash-drift exclusion, dynamic `/<ns>:` `SlashCompleter`, protected-path `Prompt` policy downgrade (`policy/core.py`), `/skills marketplace|browse|install|update|sync|remove` dispatch, provenance framing & `AgentSkills` startup/reload sync (`f160706`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `18-03-PLAN.md` — `@pytest.mark.integration` live GitHub marketplace probe, `docs/QUICKSTART.md` guide, `tests/rig/` & all 6 CI gates
+- [x] `18-03-PLAN.md` — `@pytest.mark.integration` live GitHub marketplace probe, `docs/QUICKSTART.md` guide, `tests/rig/` & all 6 CI gates (`d0562be`)
 
 ### Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy
 
@@ -221,7 +221,7 @@ Plans:
 | 15. First-Class Native OpenAI & Anthropic APIs | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 0/3 | Planned | - |
+| 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/0 | Not started | - |
 | 20. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 21. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |

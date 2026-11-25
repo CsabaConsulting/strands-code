@@ -22,7 +22,7 @@
 
 ### Skills & Extensibility
 
-- [ ] **SKILL-03**: Remote skills marketplace management and lockfile installer (`/skills marketplace add|list|update|remove`, `/skills browse|install|update|sync|remove`), supporting `.agent-plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and direct GitHub `owner/repo[@ref]` sources into `./.agent/skills-marketplaces/<ns>/<skill>/` with `./.agent/skills-lock.json` 40-char `commit_sha` + SHA-256 `computed_hash` pinning, dynamic `/<ns>:` tab completion, and deny-first symlink/zip-slip/protected-path/`allowed-tools` safeguards
+- [x] **SKILL-03**: Remote skills marketplace management and lockfile installer (`/skills marketplace add|list|update|remove`, `/skills browse|install|update|sync|remove`), supporting `.agent-plugin/marketplace.json`, `.claude-plugin/marketplace.json`, and direct GitHub `owner/repo[@ref]` sources into `./.agent/skills-marketplaces/<ns>/<skill>/` with `./.agent/skills-lock.json` 40-char `commit_sha` + SHA-256 `computed_hash` pinning, dynamic `/<ns>:` tab completion, and deny-first symlink/zip-slip/protected-path/`allowed-tools` safeguards
 
 ### Sandbox & Policy
 
@@ -75,7 +75,7 @@
 | MODEL-08 | Phase 15 | Complete |
 | MODEL-09 | Phase 16 | Complete |
 | UPSTREAM-02 | Phase 17 | Complete |
-| SKILL-03 | Phase 18 | Pending |
+| SKILL-03 | Phase 18 | Complete |
 | SANDBOX-01 | Phase 19 | Pending |
 | LOOP-06 | Phase 20 | Pending |
 | TOOL-05 | Phase 20 | Pending |
