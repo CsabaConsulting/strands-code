@@ -63,6 +63,7 @@ class TestBoxCliSubcommands:
         assert (out_dir / "policy.dw").is_file()
         assert "bedrock, openai" in result.output
         assert "Warning:" in result.output
+        assert "Warning: Warning:" not in result.output
         toml_text = (out_dir / "box.toml").read_text(encoding="utf-8")
         assert "bedrock-runtime.us-west-2.amazonaws.com" in toml_text
         assert "api.openai.com" in toml_text
@@ -196,3 +197,11 @@ class TestBoxCliSubcommands:
         assert len(seen_loop) == 1
         assert seen_loop[0]["codeact"] == "code"
         assert seen_loop[0]["model_id"] == "openai/gpt-4o"
+
+    def test_box_init_help_describes_decisions_api_and_github_skills(self):
+        result = CliRunner().invoke(entry_main.app, ["box", "init", "--help"])
+        assert result.exit_code == 0, result.output
+        normalized = " ".join(result.output.split())
+        assert "decisionapi.net" in normalized
+        assert "OpenRouter /api/alpha/decisions" not in normalized
+        assert "codeload/objects" in normalized

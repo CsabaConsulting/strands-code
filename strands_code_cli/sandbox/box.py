@@ -170,7 +170,7 @@ def _refuse_symlink(path: Path, label: str = "path") -> None:
 
 
 def _atomic_write_text(path: Path, content: str) -> Path:
-    _refuse_symlink(path, str(path))
+    _refuse_symlink(path, path.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(path.parent, 0o700)
     fd, tmp_name = tempfile.mkstemp(
@@ -1124,12 +1124,12 @@ def _cmd_box_init(
     allow_decisions_api: bool = typer.Option(
         False,
         "--allow-decisions-api",
-        help="Allow OpenRouter /api/alpha/decisions egress.",
+        help="Allow decisionapi.net egress (JEV_API_KEY) for decisions_api routing.",
     ),
     allow_github_skills: bool = typer.Option(
         False,
         "--allow-github-skills",
-        help="Allow api.github.com skill lookup egress.",
+        help="Allow GitHub skills marketplace egress (api.github.com + codeload/objects).",
     ),
 ) -> None:
     """Generate box.toml and policy.dw for the current repository."""
@@ -1150,7 +1150,10 @@ def _cmd_box_init(
         f"Wrote Dogwood policy:     {res.policy_dw}",
         f"Providers ({len(res.providers)}):        {', '.join(res.providers) or 'none'}",
     ]
-    lines.extend(f"Warning: {warn}" for warn in res.warnings)
+    lines.extend(
+        warn if warn.startswith(("Warning:", "Note:")) else f"Warning: {warn}"
+        for warn in res.warnings
+    )
     _emit_lines(lines)
 
 

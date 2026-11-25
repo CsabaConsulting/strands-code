@@ -348,7 +348,7 @@ class TestSandboxSecurityAndDiagnostics:
         sym_toml_dir = tmp_path / "sym_toml_dir"
         sym_toml_dir.mkdir()
         (sym_toml_dir / "box.toml").symlink_to(res_warn.box_toml)
-        with pytest.raises(ValueError, match="symlink"):
+        with pytest.raises(ValueError, match=r"Refusing symlink box\.toml: "):
             init_box_config(repo, out_dir=sym_toml_dir, env={"HOME": str(tmp_path)})
 
         bdir = _fake_box_dir(tmp_path)
