@@ -42,12 +42,14 @@ from strands_code_cli.routing.transports import (
     ollama_base,
     ollama_headers,
     preflight_get,
+    read_env_api_key,
     run_decisions_api_decision,
     run_llm_decision,
     run_ollama_decision,
     run_openrouter_decision,
     run_typesafe_decision,
     valid_base_url,
+    valid_model_id,
 )
 
 DECISION_BODY_MAX_BYTES = _transports.DECISION_BODY_MAX_BYTES
@@ -134,6 +136,13 @@ _ENGINE_STRING_KEYS = (
     "decision_model",
     "local_model",
     "local_base_url",
+    "native_model",
+    "decisions_api_model",
+    "llm_model",
+)
+_ENGINE_MODEL_ID_KEYS = (
+    "decision_model",
+    "local_model",
     "native_model",
     "decisions_api_model",
     "llm_model",
@@ -298,6 +307,26 @@ def _parse_engine_order(raw: dict[str, Any], engine: RoutingEngine) -> None:
             engine.order = names
 
 
+def _assign_engine_string(engine: RoutingEngine, key: str, value: object) -> None:
+    if key == "primary" and isinstance(value, bool):
+        engine.primary = "openrouter" if value else "off"
+        return
+    if not isinstance(value, str):
+        logger.warning("Ignoring routing engine %r (not a string)", key)
+        return
+    if key in _ENGINE_MODEL_ID_KEYS:
+        if not value.strip():
+            setattr(engine, key, None)
+            return
+        if not valid_model_id(value):
+            logger.warning(
+                "Ignoring routing engine %r (contains whitespace or control characters)",
+                key,
+            )
+            return
+    setattr(engine, key, value)
+
+
 def _parse_engine(raw: object) -> RoutingEngine:
     """Normalize the engine mapping; unknown keys warn and fall to defaults."""
     engine = RoutingEngine()
@@ -311,15 +340,8 @@ def _parse_engine(raw: object) -> RoutingEngine:
         logger.warning("Ignoring unknown routing engine keys: %s", sorted(unknown))
     for key in _ENGINE_STRING_KEYS:
         value = raw.get(key)
-        if value is None:
-            continue
-        if key == "primary" and isinstance(value, bool):
-            engine.primary = "openrouter" if value else "off"
-            continue
-        if not isinstance(value, str):
-            logger.warning("Ignoring routing engine %r (not a string)", key)
-            continue
-        setattr(engine, key, value)
+        if value is not None:
+            _assign_engine_string(engine, key, value)
     if engine.primary not in _VALID_PRIMARY_ENGINES:
         logger.warning(
             "Ignoring routing engine primary %r "
@@ -955,6 +977,23 @@ def _select_strategy_source(
     return ValidationReport(valid=False, source=None, lines=lines)
 
 
+def _validate_engine_model_ids(raw_engine: object, lines: list[str]) -> bool:
+    if not isinstance(raw_engine, dict):
+        return True
+    ok = True
+    for key in _ENGINE_MODEL_ID_KEYS:
+        raw_val = raw_engine.get(key)
+        if isinstance(raw_val, str) and raw_val.strip() and not valid_model_id(raw_val):
+            ok = False
+            lines.append(
+                f"engine: INVALID — {key} contains whitespace or control characters"
+            )
+            lines.append(
+                f"fix: remove whitespace and control characters from engine.{key}"
+            )
+    return ok
+
+
 def _validate_engine_head(
     raw_engine: object,
     raw_primary: object,
@@ -962,7 +1001,7 @@ def _validate_engine_head(
     lines: list[str],
 ) -> bool:
     """Judge the raw primary value plus the local base URL (strict)."""
-    ok = True
+    ok = _validate_engine_model_ids(raw_engine, lines)
     if (
         isinstance(raw_primary, str)
         and raw_primary not in _VALID_PRIMARY_ENGINES
@@ -1253,12 +1292,12 @@ def native_engine_ready() -> bool:
     gate read this; env reads stay in the engine layer, never the
     presentation layer.
     """
-    return bool(os.environ.get("TYPESAFE_API_KEY"))
+    return read_env_api_key("TYPESAFE_API_KEY") is not None
 
 
 def decisions_api_engine_ready() -> bool:
     """True when a decisionapi.net call is worth attempting: JEV_API_KEY present."""
-    return bool(os.environ.get("JEV_API_KEY"))
+    return read_env_api_key("JEV_API_KEY") is not None
 
 
 def local_engine_ready(base: str | None, tag: str) -> bool:
@@ -1274,7 +1313,7 @@ def local_engine_ready(base: str | None, tag: str) -> bool:
     """
     if base is None:
         base = _ollama_base(None)
-    if not base or not tag:
+    if not base or not tag or not _valid_base_url(base):
         return False
     root = base.rstrip("/")
     version = _preflight_get(f"{root}/api/version", _ollama_headers(base))
@@ -1490,7 +1529,7 @@ def _typesafe_attempt(
     native_model = strategy.engine.native_model
     if not native_model:
         return None
-    if not os.environ.get("TYPESAFE_API_KEY"):
+    if not read_env_api_key("TYPESAFE_API_KEY"):
         return None
     return decide_via_typesafe(
         native_model=native_model, state=state, questions=questions
@@ -1514,7 +1553,7 @@ def _decisions_api_attempt(
     strategy: RoutingStrategy, state: dict[str, Any], questions: dict[str, Any]
 ) -> EngineResult | None:
     """Decisions API chain link: None without JEV_API_KEY."""
-    if not os.environ.get("JEV_API_KEY"):
+    if not read_env_api_key("JEV_API_KEY"):
         return None
     return decide_via_decisions_api(
         model_id=strategy.engine.decisions_api_model,
@@ -1552,10 +1591,10 @@ def chain_skip_notes(strategy: RoutingStrategy) -> list[str]:
     if (
         "native" in order
         and engine.native_model
-        and not os.environ.get("TYPESAFE_API_KEY")
+        and not read_env_api_key("TYPESAFE_API_KEY")
     ):
         notes.append("native engine skipped: TYPESAFE_API_KEY not set")
-    if "decisions_api" in order and not os.environ.get("JEV_API_KEY"):
+    if "decisions_api" in order and not read_env_api_key("JEV_API_KEY"):
         notes.append("decisions_api engine skipped: JEV_API_KEY not set")
     return notes
 

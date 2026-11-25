@@ -1647,3 +1647,78 @@ class TestOptInDecisionsAPIAndLLMStrategy:
         assert saved["engine"]["order"] == ["decisions_api"]
         assert "jev-secret" not in path.read_text(encoding="utf-8")
         assert "secret-shaped" in caplog.text
+
+    def test_security_preflight_invalid_urls_model_id_controls_and_dotenv_guard(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        import logging
+        import os
+        import subprocess
+        import sys
+
+        monkeypatch.setattr(
+            routing_mod,
+            "_preflight_get",
+            lambda *_a, **_kw: (_ for _ in ()).throw(
+                AssertionError("invalid URL must skip preflight")
+            ),
+        )
+        assert (
+            routing_mod.local_engine_ready("gopher://daemon.local/", "nimble") is False
+        )
+        assert (
+            routing_mod.local_engine_ready("http://user:pass@127.0.0.1:11434", "nimble")
+            is False
+        )
+
+        monkeypatch.setenv("TYPESAFE_API_KEY", "   ")
+        monkeypatch.setenv("JEV_API_KEY", "\t\n")
+        assert routing_mod.native_engine_ready() is False
+        assert routing_mod.decisions_api_engine_ready() is False
+
+        bad_yaml = _write(
+            tmp_path / "bad_models.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            'engine: {order: [decisions_api, llm], decisions_api_model: "bad\\r\\nid", llm_model: "openai/gpt-4o-mini\\u001b[31m"}\n',
+        )
+        with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
+            loaded = load_strategy(
+                global_path=tmp_path / "absent.yaml", repo_path=bad_yaml
+            )
+        assert loaded is not None
+        assert loaded.engine.decisions_api_model is None
+        assert loaded.engine.llm_model is None
+        assert "contains whitespace or control characters" in caplog.text
+        notes = routing_mod.chain_skip_notes(loaded)
+        assert "decisions_api engine skipped: JEV_API_KEY not set" in notes
+
+        report = validate_strategy(
+            global_path=tmp_path / "absent.yaml", repo_path=bad_yaml
+        )
+        assert report.valid is False
+        text = report.format()
+        assert "contains whitespace or control characters" in text
+        assert "fix:" in text
+
+        (tmp_path / ".env").write_text(
+            "TYPESAFE_API_KEY=canary-ts-dotenv\nJEV_API_KEY=canary-jev-dotenv\n",
+            encoding="utf-8",
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("TYPESAFE_API_KEY", "JEV_API_KEY")
+        }
+        out = subprocess.check_output(
+            [
+                sys.executable,
+                "-c",
+                "import os, strands_code_cli, strands_code_cli.routing.transports, strands.decisions; "
+                "print(os.environ.get('TYPESAFE_API_KEY'), os.environ.get('JEV_API_KEY'))",
+            ],
+            cwd=tmp_path,
+            env=clean_env,
+            text=True,
+        ).strip()
+        assert out == "None None"

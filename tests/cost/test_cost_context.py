@@ -1359,13 +1359,17 @@ class TestCacheAwareUsageAndCost:
             "keys sk-proj-abcdefghijklmnopqrstuvwxyz123456 "
             "sk-svcacct-abcdefghijklmnopqrstuvwxyz123456 "
             "sk-ant-api03-abcdefghijklmnop "
-            "AKIAIOSFODNN7EXAMPLE"
+            "AKIAIOSFODNN7EXAMPLE "
+            "TYPESAFE_API_KEY=ts-canary-abc12345 "
+            "JEV_API_KEY=jev-canary-xyz98765"
         )
         scrubbed = scrub_credentials(raw)
         assert "sk-proj-" not in scrubbed
         assert "sk-svcacct-" not in scrubbed
         assert "sk-ant-" not in scrubbed
         assert "AKIA" not in scrubbed
+        assert "ts-canary-abc12345" not in scrubbed
+        assert "jev-canary-xyz98765" not in scrubbed
 
     def test_nyquist_cache_rates_write_only_suffix_and_invalid_anthropic_window(
         self, monkeypatch, tmp_path

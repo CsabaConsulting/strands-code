@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import errno
+import ipaddress
 import json
 import logging
 import math
@@ -77,37 +78,86 @@ class EngineResult:
     uncertain: bool = False
 
 
+def _has_unsafe_chars(value: str) -> bool:
+    return any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def valid_model_id(value: object) -> bool:
+    """True when a model id is a non-empty string without whitespace/controls."""
+    return isinstance(value, str) and bool(value) and not _has_unsafe_chars(value)
+
+
+def read_env_api_key(name: str) -> str | None:
+    """Read an env API key cleanly, rejecting empty or control-containing values."""
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    cleaned = raw.strip()
+    if not cleaned or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cleaned):
+        return None
+    return cleaned
+
+
+def _reject_json_constant(value: str) -> Any:
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _sanitize_uncertain_reason(reason: str | None) -> str:
+    """Strip control characters and bound length on untrusted Uncertain.reason."""
+    if not isinstance(reason, str):
+        return "uncertain"
+    cleaned = "".join(ch for ch in reason if ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return "uncertain"
+    return cleaned[:200]
+
+
 def valid_base_url(value: str) -> bool:
-    """True when the daemon address is an http(s) URL with a non-empty host."""
-    if not isinstance(value, str) or any(ch.isspace() for ch in value):
+    """True for http(s) URLs with host and no credentials, query, or fragment."""
+    if not isinstance(value, str) or not value or _has_unsafe_chars(value):
         return False
     try:
         parts = urlsplit(value)
+        _ = parts.port
     except ValueError:
         return False
-    return parts.scheme.lower() in ("http", "https") and bool(parts.hostname)
+    return (
+        parts.scheme.lower() in ("http", "https")
+        and bool(parts.hostname)
+        and parts.username is None
+        and parts.password is None
+        and not parts.query
+        and not parts.fragment
+    )
 
 
 def make_async_client(
     timeout: float, headers: dict[str, str] | None = None
 ) -> httpx.AsyncClient:
     """Create a per-call AsyncClient so closed event loops never leak across asks."""
-    return httpx.AsyncClient(timeout=httpx.Timeout(timeout), headers=headers or {})
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(timeout),
+        headers=headers or {},
+        follow_redirects=False,
+    )
 
 
 def make_sync_client(timeout: float) -> httpx.Client:
     """Create a short-lived sync httpx Client for Ollama preflight GETs."""
-    return httpx.Client(timeout=httpx.Timeout(timeout))
+    return httpx.Client(timeout=httpx.Timeout(timeout), follow_redirects=False)
 
 
 def preflight_get(url: str, headers: dict[str, str]) -> dict[str, Any] | None:
     """One daemon preflight GET: parsed mapping or None on any failure."""
+    if not valid_base_url(url):
+        return None
     try:
         with make_sync_client(OLLAMA_PREFLIGHT_TIMEOUT_SECONDS) as client:
             response = client.get(url, headers=headers)
         if not response.is_success:
             return None
-        data = response.json()
+        data = json.loads(response.text, parse_constant=_reject_json_constant)
     except Exception:  # noqa: BLE001 — every preflight failure reads unready
         return None
     return data if isinstance(data, dict) else None
@@ -118,15 +168,34 @@ def ollama_base(local_base_url: str | None) -> str:
     return local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
 
 
+def _is_loopback_host(base: str) -> bool:
+    """True when URL resolves to loopback (fail-closed on malformed URL)."""
+    try:
+        host = urlsplit(base).hostname
+    except ValueError:
+        return True
+    if not host:
+        return True
+    folded = host.rstrip(".").lower()
+    if folded == "localhost" or folded.endswith(".localhost"):
+        return True
+    try:
+        addr = ipaddress.ip_address(folded)
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return bool(mapped is not None and mapped.is_loopback)
+
+
 def ollama_headers(base: str) -> dict[str, str]:
     """Local daemon headers; bearer key attaches on non-loopback proxies only."""
     headers = {"Content-Type": "application/json", "User-Agent": "strands-code"}
-    try:
-        loopback = urlsplit(base).hostname in _OLLAMA_LOOPBACK_HOSTS
-    except ValueError:
-        loopback = False
-    api_key = os.environ.get("OLLAMA_API_KEY")
-    if api_key and not loopback:
+    if not valid_base_url(base):
+        return headers
+    api_key = read_env_api_key("OLLAMA_API_KEY")
+    if api_key and not _is_loopback_host(base):
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
@@ -464,7 +533,7 @@ def _parse_system_one_payload(
             raise ModelThrottledException(str(http_err)) from http_err
         raise http_err
     try:
-        payload = json.loads(response.text)
+        payload = json.loads(response.text, parse_constant=_reject_json_constant)
     except ValueError as exc:
         raise StructuredOutputException("invalid body: non-JSON response") from exc
     if not isinstance(payload, dict):
@@ -660,7 +729,7 @@ def decision_result_to_engine_result(
                 output_tokens=out_tok,
                 cost=cost,
                 model=model_name,
-                error=answer.reason or "uncertain",
+                error=_sanitize_uncertain_reason(answer.reason),
                 truncated=truncated,
                 uncertain=True,
             )
@@ -745,9 +814,11 @@ def run_openrouter_decision(
     timeout: float = DECISION_TIMEOUT_SECONDS,
 ) -> EngineResult:
     """Execute one OpenRouter routing decision via ``OpenRouterDecisionModel``."""
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key or not decision_model:
+    api_key = read_env_api_key("OPENROUTER_API_KEY")
+    if not api_key or not isinstance(decision_model, str) or not decision_model.strip():
         return EngineResult(answers=None)
+    if not valid_model_id(decision_model):
+        return EngineResult(answers=None, error="invalid body")
     dm = OpenRouterDecisionModel(
         api_key=api_key, model_id=decision_model, timeout=timeout
     )
@@ -765,8 +836,10 @@ def run_ollama_decision(
     timeout: float = OLLAMA_TIMEOUT_SECONDS,
 ) -> EngineResult:
     """Execute one local Ollama routing decision via ``OllamaDecisionModel``."""
-    if not local_model:
+    if not isinstance(local_model, str) or not local_model.strip():
         return EngineResult(answers=None)
+    if not valid_model_id(local_model):
+        return EngineResult(answers=None, error="invalid body")
     base = ollama_base(local_base_url)
     if not valid_base_url(base):
         return EngineResult(answers=None)
@@ -826,9 +899,11 @@ def run_typesafe_decision(
     """Execute one native TypeSafe decision via upstream ``TypeSafeDecisionModel``."""
     from strands.decisions import TypeSafeDecisionModel
 
-    api_key = os.environ.get("TYPESAFE_API_KEY")
-    if not api_key or not native_model:
+    api_key = read_env_api_key("TYPESAFE_API_KEY")
+    if not api_key or not isinstance(native_model, str) or not native_model.strip():
         return EngineResult(answers=None)
+    if not valid_model_id(native_model):
+        return EngineResult(answers=None, error="invalid body")
     return _run_folded_system_one(
         dm_cls=TypeSafeDecisionModel,
         api_key=api_key,
@@ -854,14 +929,15 @@ def run_decisions_api_decision(
     """Execute one decisionapi.net request via ``DecisionsAPIDecisionModel``."""
     from strands.decisions import DecisionsAPIDecisionModel
 
-    api_key = os.environ.get("JEV_API_KEY")
+    api_key = read_env_api_key("JEV_API_KEY")
     if not api_key:
         return EngineResult(answers=None)
-    resolved_model = (
-        model_id.strip()
-        if isinstance(model_id, str) and model_id.strip()
-        else DECISIONS_API_DEFAULT_MODEL
-    )
+    if isinstance(model_id, str) and model_id.strip():
+        if not valid_model_id(model_id):
+            return EngineResult(answers=None, error="invalid body")
+        resolved_model = model_id
+    else:
+        resolved_model = DECISIONS_API_DEFAULT_MODEL
     return _run_folded_system_one(
         dm_cls=DecisionsAPIDecisionModel,
         api_key=api_key,
@@ -898,7 +974,9 @@ def run_llm_decision(
 
     if not isinstance(llm_model, str) or not llm_model.strip():
         return EngineResult(answers=None)
-    target_model = llm_model.strip()
+    if not valid_model_id(llm_model):
+        return EngineResult(answers=None, error="invalid body")
+    target_model = llm_model
     try:
         resolved_model = resolve_harness_model(
             target_model,

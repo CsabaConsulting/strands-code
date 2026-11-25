@@ -784,3 +784,255 @@ class TestDecisionsAPIAndLLMDecisionModels:
         )
         assert bad_resolve.answers is None
         assert bad_resolve.error == "invalid body"
+
+
+class TestPhase17SecurityHardening:
+    def test_valid_base_url_rejects_creds_controls_query_fragment_and_bad_ports(self):
+        assert transports.valid_base_url("http://127.0.0.1:11434") is True
+        assert transports.valid_base_url("https://ollama.internal:11434/prefix") is True
+        bad_urls = (
+            "http://user:pass@127.0.0.1:11434",
+            "http://user@127.0.0.1:11434",
+            "http://127.0.0.1:11434\x1b[31m",
+            "http://127.0.0.1:11434\x00",
+            "http://127.0.0.1:11434?x=1",
+            "http://127.0.0.1:11434#frag",
+            "http://127.0.0.1:99999",
+            "gopher://127.0.0.1:11434",
+        )
+        for bad in bad_urls:
+            assert transports.valid_base_url(bad) is False, bad
+
+    def test_ollama_headers_suppresses_bearer_on_all_loopback_forms_and_invalid_urls(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("OLLAMA_API_KEY", "canary-ollama-key")
+        suppressed = (
+            "http://127.0.0.1:11434",
+            "http://127.0.0.2:11434",
+            "http://[::1]:11434",
+            "http://[0:0:0:0:0:0:0:1]:11434",
+            "http://[::ffff:127.0.0.1]:11434",
+            "http://localhost.:11434",
+            "http://sub.localhost:11434",
+            "http://user:pass@remote.example:11434",
+            "gopher://remote.example:11434",
+        )
+        for base in suppressed:
+            headers = transports.ollama_headers(base)
+            assert "Authorization" not in headers, base
+        proxied = transports.ollama_headers("https://ollama.internal:11434")
+        assert proxied["Authorization"] == "Bearer " + "canary-ollama-key"
+
+    def test_clients_disable_redirects_and_302_never_leaks_bearer(self, monkeypatch):
+        async_client = transports.make_async_client(5.0)
+        sync_client = transports.make_sync_client(5.0)
+        assert async_client.follow_redirects is False
+        assert sync_client.follow_redirects is False
+        asyncio.run(async_client.aclose())
+        sync_client.close()
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-canary-302")
+        seen_urls: list[str] = []
+
+        def _redirect_handler(request: httpx.Request) -> httpx.Response:
+            seen_urls.append(str(request.url))
+            return httpx.Response(
+                302, headers={"Location": "https://attacker.invalid/steal"}
+            )
+
+        _patch_httpx(monkeypatch, _redirect_handler)
+        res = run_openrouter_decision(
+            decision_model="cheap/decider",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        assert res.answers is None
+        assert res.error == "HTTP 302"
+        assert seen_urls == [OPENROUTER_DECISIONS_URL]
+
+    def test_nonstandard_json_constants_fail_closed(self, monkeypatch):
+        def _nan_handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b'{"answers": {"x": NaN}}',
+                headers={"Content-Type": "application/json"},
+            )
+
+        _patch_httpx(monkeypatch, _nan_handler)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-canary-nan")
+        res = run_openrouter_decision(
+            decision_model="cheap/decider",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        assert res.answers is None
+        assert res.error == "invalid body"
+        assert (
+            transports.preflight_get("http://127.0.0.1:11434/api/version", {}) is None
+        )
+
+    def test_env_api_keys_reject_whitespace_and_crlf_and_never_leak_canaries(
+        self, monkeypatch
+    ):
+        for bad_val in ("   ", "\t\n", "bad\r\nX-Inject: 1", "bad\x1bkey"):
+            monkeypatch.setenv("OPENROUTER_API_KEY", bad_val)
+            assert transports.read_env_api_key("OPENROUTER_API_KEY") is None
+
+        def _boom(_request: httpx.Request) -> httpx.Response:
+            raise AssertionError("unsafe or whitespace env key must skip cleanly")
+
+        _patch_httpx(monkeypatch, _boom)
+        for env_name in ("OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "JEV_API_KEY"):
+            monkeypatch.setenv(env_name, "bad\r\nX-Inject: 1")
+        assert (
+            run_openrouter_decision(
+                decision_model="cheap/decider",
+                state={"ask": "hi"},
+                questions=_model_raw_questions(),
+            ).answers
+            is None
+        )
+        assert (
+            run_typesafe_decision(
+                native_model="jev-1.13.0",
+                state={"ask": "hi"},
+                questions=_model_raw_questions(),
+            ).answers
+            is None
+        )
+        assert (
+            run_decisions_api_decision(
+                model_id=None,
+                state={"ask": "hi"},
+                questions=_model_raw_questions(),
+            ).answers
+            is None
+        )
+
+    def test_canary_keys_absent_from_http_errors_and_otel_spans(self, monkeypatch):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+        class _FakeTracer:
+            def __init__(self, inner) -> None:
+                self.tracer = inner
+
+        import strands.decisions.decision_model as dm_mod
+
+        monkeypatch.setattr(
+            dm_mod, "get_tracer", lambda: _FakeTracer(provider.get_tracer(__name__))
+        )
+
+        def _fail_401(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"error": "unauthorized"})
+
+        _patch_httpx(monkeypatch, _fail_401)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-canary-999")
+        monkeypatch.setenv("TYPESAFE_API_KEY", "ts-canary-999")
+        monkeypatch.setenv("JEV_API_KEY", "jev-canary-999")
+        r1 = run_openrouter_decision(
+            decision_model="cheap/decider",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        r2 = run_typesafe_decision(
+            native_model="jev-1.13.0",
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        r3 = run_decisions_api_decision(
+            model_id=None,
+            state={"ask": "hi"},
+            questions=_model_raw_questions(),
+        )
+        for res, canary in (
+            (r1, "or-canary-999"),
+            (r2, "ts-canary-999"),
+            (r3, "jev-canary-999"),
+        ):
+            assert res.error == "HTTP 401"
+            assert canary not in (res.error or "")
+
+        span_blob = json.dumps(
+            [
+                {
+                    "attrs": dict(s.attributes or {}),
+                    "events": [(e.name, dict(e.attributes or {})) for e in s.events],
+                }
+                for s in exporter.get_finished_spans()
+            ],
+            default=str,
+        )
+        for canary in ("or-canary-999", "ts-canary-999", "jev-canary-999"):
+            assert canary not in span_blob
+
+    def test_unsafe_model_ids_and_uncertain_reason_control_chars(self, monkeypatch):
+        def _boom(_request: httpx.Request) -> httpx.Response:
+            raise AssertionError("unsafe model id must fail before HTTP send")
+
+        _patch_httpx(monkeypatch, _boom)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-canary-safe")
+        monkeypatch.setenv("TYPESAFE_API_KEY", "ts-canary-safe")
+        monkeypatch.setenv("JEV_API_KEY", "jev-canary-safe")
+        for bad_id in ("model\x1b[31m", "model\r\ninject", "model\x00", "bad model"):
+            assert (
+                run_openrouter_decision(
+                    decision_model=bad_id,
+                    state={"ask": "hi"},
+                    questions=_model_raw_questions(),
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_ollama_decision(
+                    local_model=bad_id,
+                    local_base_url="http://127.0.0.1:11434",
+                    state={"ask": "hi"},
+                    questions=_model_raw_questions(),
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_typesafe_decision(
+                    native_model=bad_id,
+                    state={"ask": "hi"},
+                    questions=_model_raw_questions(),
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_decisions_api_decision(
+                    model_id=bad_id,
+                    state={"ask": "hi"},
+                    questions=_model_raw_questions(),
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_llm_decision(
+                    llm_model=bad_id,
+                    state={"ask": "hi"},
+                    questions=_model_raw_questions(),
+                ).error
+                == "invalid body"
+            )
+
+        res = decision_result_to_engine_result(
+            DecisionResult(
+                answers={"pick_model": Uncertain("ambiguous\x1b[31m\r\n" + "x" * 300)},
+                metadata=DecisionMetadata(latency_ms=5),
+            ),
+            raw_questions=_model_raw_questions(),
+            cost=None,
+            truncated=False,
+            llm_mode=True,
+            reported_model="openai/gpt-4o-mini",
+        )
+        assert res.uncertain is True
+        assert res.error is not None
+        assert (
+            "\x1b" not in res.error and "\r" not in res.error and "\n" not in res.error
+        )
+        assert len(res.error) <= 200
