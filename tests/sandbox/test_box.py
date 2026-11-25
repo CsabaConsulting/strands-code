@@ -517,3 +517,51 @@ class TestSandboxSecurityAndDiagnostics:
         ]
         assert captured["env"]["EXPERIMENTAL_X86_SUPPORT"] == "TRUE"
         assert any("EXPERIMENTAL_X86_SUPPORT=TRUE" in n for n in notices)
+
+
+@pytest.mark.integration
+def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
+    """Validate generated box.toml / policy.dw against host binaries when present."""
+    import shutil
+    import subprocess
+
+    from strands_code_cli.sandbox.box import CORE_PROVIDERS
+
+    repo = tmp_path / "repo"
+    cfg_dir = tmp_path / "box-cfg"
+    fake_home = tmp_path / "home"
+    repo.mkdir()
+    fake_home.mkdir()
+
+    res = init_box_config(
+        repo_root=repo,
+        out_dir=cfg_dir,
+        providers=CORE_PROVIDERS,
+        home=fake_home,
+        env={},
+    )
+    dogwood_bin = shutil.which("dogwood")
+    box_bin, _ = discover_box_binaries()
+    if not dogwood_bin and box_bin is None:
+        pytest.skip("Host Strands Box / Dogwood binaries not installed")
+
+    if dogwood_bin:
+        proc = subprocess.run(
+            [dogwood_bin, "validate", str(res.policy_dw)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr or proc.stdout
+
+    if box_bin is not None:
+        report = run_box_doctor(
+            repo_root=repo, config_path=res.box_toml, box_bin=box_bin
+        )
+        by_name = {c.name: c for c in report.checks}
+        if "apparmor_userns" in by_name and not by_name["apparmor_userns"].ok:
+            pytest.skip(by_name["apparmor_userns"].detail)
+        rc, _ = launch_box_run(
+            ["--help"], repo_root=repo, config_path=res.box_toml, box_bin=box_bin
+        )
+        assert rc == 0

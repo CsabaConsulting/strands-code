@@ -348,3 +348,76 @@ zero pre-registered remote marketplaces):
     shell/Python HITL approval; `allowed-tools` stays informational only; and
     broad `[[allow]]` rules on `write`/`edit` targeting `.agent/skills*`,
     `.agent/skills-lock.json`, or `~/.config/strands-code/**` downgrade to a prompt.
+
+## Strands Box Linux sandbox floor
+
+Strands Box (`strands-agents/box`) provides an OS-enforced Linux containment
+floor underneath `strands-code`'s interactive HITL prompts. Inside the box
+(`STRANDS_BOX=1`), host API keys never enter `[agent.env]` (instead, the
+host proxy injects credentials out-of-band per egress rule), filesystem mounts
+restrict writes to the workspace and isolated session state, and the embedded
+Dogwood engine evaluates Cedar + MFOTL temporal rules externally.
+
+- **Linux binary installation (3 co-located binaries):** Install `box`,
+  `strands-box-contain-trampoline`, and `strands-box-sock-alias` into the same
+  directory (for example `/usr/local/libexec/strands-box/` or via Strands Box's
+  `download.sh` / Cargo build) and ensure `box` is on `PATH` or pointed to by
+  `STRANDS_BOX_BIN` / `--box-bin`.
+- **Linux `x86_64` requirement:** Set `EXPERIMENTAL_X86_SUPPORT=TRUE` on Linux
+  `x86_64` hosts (`strands-code box run` exports this automatically for the child
+  `box` process when running on `x86_64`).
+- **Ubuntu 24.04+ AppArmor userns profile:** When
+  `kernel.apparmor_restrict_unprivileged_userns=1` is active, Bubblewrap's
+  `/etc/apparmor.d/bwrap` does **not** cover Strands Box. Install
+  `/etc/apparmor.d/strands-box` (adjust the binary glob path if installed
+  elsewhere, then run `sudo apparmor_parser -r /etc/apparmor.d/strands-box`):
+
+```text
+abi <abi/4.0>,
+include <tunables/global>
+
+profile strands-box /usr/local/libexec/strands-box/{box,strands-box-contain-trampoline} flags=(unconfined) {
+  userns,
+  include if exists <local/strands-box>
+}
+```
+
+- **CLI workflow:**
+
+```bash
+strands-code box init        # writes ~/.config/strands-box/repos/<slug>-<hash8>/{box.toml,policy.dw}
+strands-code box doctor      # checks x86_64 flag, 3-binary layout, AppArmor userns, config & uv realpath
+strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
+```
+
+- **Host-only config storage & runtime alignment:**
+  - Repo configs live host-only under `~/.config/strands-box/repos/<slug>-<hash8>/`
+    (`0o700` dirs, `0o600` files, symlink-refused) — omitted from
+    `[agent.filesystem].write` and downgraded to `Prompt` even under broad
+    `allow` rules (`policy/core.py`).
+  - `/policy` and `/policy show` display `Sandbox: Strands Box active (STRANDS_BOX=1)`
+    when running boxed.
+  - Under `STRANDS_BOX=1`, CodeAct's `codeact_shell` executes commands via
+    `["sh", "-c", shlex.join(argv)]` so `shell([...])` calls feed Dogwood's
+    `shell:spawn` audit log with shell metacharacter quoting intact.
+- **Auto-detected 7-provider egress profiles + opt-ins (`--allow-decisions-api`, `--allow-github-skills`):**
+
+| Profile | Destination host / path scope | Out-of-band secret / header injection | Notes |
+| :--- | :--- | :--- | :--- |
+| `bedrock` | `bedrock-runtime.<region>.amazonaws.com` | `aws://<profile>` or `aws://` SigV4 (or `env://AWS_BEARER_TOKEN_BEDROCK` Bearer) | Never opens `sts.amazonaws.com` |
+| `google` | `generativelanguage.googleapis.com` | `env://GOOGLE_API_KEY` or `GEMINI_API_KEY` via `x-goog-api-key` | Auto-detected from config / routing / env |
+| `anthropic` | `api.anthropic.com` | `env://ANTHROPIC_API_KEY` via `x-api-key` | Auto-detected |
+| `openai` | `api.openai.com` | `env://OPENAI_API_KEY` via `Authorization: Bearer` | Auto-detected |
+| `meta` | `api.meta.ai` | `env://MODEL_API_KEY` or `META_API_KEY` via `Authorization: Bearer` | Auto-detected |
+| `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` | Path-scoped |
+| `typesafe` | `api.typesafe.ai` | `env://TYPESAFE_API_KEY` via `Authorization: Bearer` | Auto-detected |
+| `--allow-decisions-api` | `decisionapi.net` | `env://JEV_API_KEY` via `Authorization: Bearer` | Opt-in flag on `box init` |
+| `--allow-github-skills` | `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com` | Optional `GITHUB_TOKEN`/`GH_TOKEN` scoped strictly to `api.github.com` | Opt-in flag on `box init` |
+
+- **Dogwood policy & formal scoped revisit of `D-05`:** Generated `policy.dw`
+  sets default-deny egress, forbids `fs:read` on `*/.env`, `*/.env.*`, `*/.ssh/*`,
+  and `*/.aws/*`, and includes the canonical MFOTL temporal rule
+  `push_requires_recent_tests` (requiring `pytest` `shell:spawn` `formerly within 900s`
+  before `git push*`). Per `v2.0`'s scoped revisit of `D-05`, external host-side
+  deterministic `.dw` rules are scoped exclusively to Strands Box while in-process
+  Python `interventions` remain deterministic TOML + Python only.
