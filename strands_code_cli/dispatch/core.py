@@ -2320,6 +2320,10 @@ def _policy_message(rest: str) -> str:
             lines.append(f"  deny {rule.describe()}")
         if config.options.trust_delegated:
             lines.append("  options: trust_delegated = true")
+        from strands_code_cli.sandbox.box import is_in_strands_box
+
+        if is_in_strands_box():
+            lines.append("Sandbox: Strands Box active (STRANDS_BOX=1)")
         return "\n".join(lines)
     if verb == "last":
         covered = last_covered()

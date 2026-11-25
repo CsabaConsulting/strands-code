@@ -56,12 +56,18 @@ from strands_code_cli.policy.policy_gate import (
     build_interventions,
     set_mode,
 )
+from strands_code_cli.sandbox.box import box_app
 from strands_code_cli.session.session_index import SessionIndex
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
     help="Conversational coding CLI. Runs the REPL immediately; resumes with --session-id.",
+)
+app.add_typer(
+    box_app,
+    name="box",
+    help="Strands Box Linux sandbox config, diagnostics, and execution.",
 )
 
 Bedrock_SETUP_POINTER = BEDROCK_SETUP_POINTER
@@ -270,7 +276,7 @@ def build_agent(
 
 @app.callback(invoke_without_command=True)
 def _root(
-    ctx: typer.Context,  # noqa: F841 - callback signature requires the context slot
+    ctx: typer.Context,
     session_id: str | None = typer.Option(
         None, "--session-id", help="Resume the session with this id."
     ),
@@ -286,6 +292,8 @@ def _root(
     ),
 ) -> None:
     """Open the REPL immediately (D-01); --session-id resumes directly (D-02)."""
+    if ctx.invoked_subcommand is not None:
+        return
     if session_id is not None:
         try:
             _validate_session_id(session_id)

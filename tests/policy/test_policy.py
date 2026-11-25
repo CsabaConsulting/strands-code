@@ -352,3 +352,33 @@ class TestDecide:
             _is_protected_skills_or_config_path(".agent/skills-lock.json", real_repo)
             is True
         )
+
+    def test_strands_box_config_downgrades_to_prompt_even_with_allow_star(
+        self, tmp_path, monkeypatch
+    ):
+        import platformdirs
+
+        cfg_root = tmp_path / "xdg"
+        monkeypatch.setattr(
+            platformdirs,
+            "user_config_dir",
+            lambda appname="strands-code", *a, **kw: str(cfg_root / str(appname)),
+        )
+        box_dir = cfg_root / "strands-box" / "repos" / "demo"
+        box_dir.mkdir(parents=True)
+        (box_dir / "box.toml").write_text("", encoding="utf-8")
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "escape_box").symlink_to(box_dir)
+
+        cfg = self._cfg(allow=[Rule(tool="*", path="*")])
+        assert isinstance(
+            decide("write", {"path": str(box_dir / "box.toml")}, cfg, cwd=str(repo)),
+            Prompt,
+        )
+        assert isinstance(
+            decide("write", {"path": "escape_box/policy.dw"}, cfg, cwd=str(repo)),
+            Prompt,
+        )
+        assert _is_protected_skills_or_config_path("escape_box/box.toml", repo) is True

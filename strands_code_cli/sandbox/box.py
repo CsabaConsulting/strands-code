@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import platformdirs
+import typer
+from rich.console import Console
 
 try:
     import tomllib
@@ -25,6 +27,7 @@ except ModuleNotFoundError:  # Python 3.10 compatibility
 
 from strands_code_cli.entry.provider_config import ProviderConfig
 from strands_code_cli.routing.core import RoutingStrategy, load_strategy
+from strands_code_cli.ui.output import print_plain
 
 _BOX_APP_NAME = "strands-box"
 _CODE_APP_NAME = "strands-code"
@@ -1092,3 +1095,120 @@ def launch_box_run(
     exec_fn = runner if runner is not None else subprocess.run
     proc = exec_fn(cmd, env=child_env, check=False)
     return int(proc.returncode), notices
+
+
+def _emit_lines(lines: Sequence[str], *, err: bool = False) -> None:
+    """Print plain text lines without Rich markup interpretation."""
+    console = Console(stderr=err)
+    for line in lines:
+        print_plain(console, line)
+
+
+def _cmd_box_init(
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Write box.toml and policy.dw here (defaults to ~/.config/strands-box/repos/<id>/).",
+    ),
+    provider: list[str] | None = typer.Option(
+        None,
+        "--provider",
+        help="Enable an egress profile for this provider (repeatable).",
+    ),
+    region: str | None = typer.Option(
+        None, "--region", help="AWS region for Bedrock egress host."
+    ),
+    aws_profile: str | None = typer.Option(
+        None, "--aws-profile", help="AWS profile passed into Strands Box."
+    ),
+    allow_decisions_api: bool = typer.Option(
+        False,
+        "--allow-decisions-api",
+        help="Allow OpenRouter /api/alpha/decisions egress.",
+    ),
+    allow_github_skills: bool = typer.Option(
+        False,
+        "--allow-github-skills",
+        help="Allow api.github.com skill lookup egress.",
+    ),
+) -> None:
+    """Generate box.toml and policy.dw for the current repository."""
+    try:
+        res = init_box_config(
+            out_dir=out,
+            providers=provider,
+            aws_region=region,
+            aws_profile=aws_profile,
+            allow_decisions_api=allow_decisions_api,
+            allow_github_skills=allow_github_skills,
+        )
+    except ValueError as exc:
+        _emit_lines([f"Error: {exc}"], err=True)
+        raise typer.Exit(code=1) from exc
+    lines = [
+        f"Wrote Strands Box config: {res.box_toml}",
+        f"Wrote Dogwood policy:     {res.policy_dw}",
+        f"Providers ({len(res.providers)}):        {', '.join(res.providers) or 'none'}",
+    ]
+    lines.extend(f"Warning: {warn}" for warn in res.warnings)
+    _emit_lines(lines)
+
+
+def _cmd_box_doctor(
+    config: Path | None = typer.Option(
+        None, "--config", help="Path to box.toml (defaults to repo config)."
+    ),
+    box_bin: str | None = typer.Option(
+        None, "--box-bin", help="Explicit path to the `box` binary."
+    ),
+) -> None:
+    """Check Linux host requirements for Strands Box (x86_64, AppArmor, binaries)."""
+    report = run_box_doctor(config_path=config, box_bin=box_bin)
+    _emit_lines([format_doctor_report(report)])
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
+def _cmd_box_run(
+    ctx: typer.Context,
+    config: Path | None = typer.Option(
+        None, "--config", help="Path to box.toml (defaults to repo config)."
+    ),
+    box_bin: str | None = typer.Option(
+        None, "--box-bin", help="Explicit path to the `box` binary."
+    ),
+) -> None:
+    """Launch ``strands-code`` inside Strands Box containment."""
+    extra = list(ctx.args)
+    if extra and extra[0] == "--":
+        extra = extra[1:]
+    try:
+        rc, notices = launch_box_run(extra, config_path=config, box_bin=box_bin)
+    except ValueError as exc:
+        _emit_lines([f"Error: {exc}"], err=True)
+        raise typer.Exit(code=1) from exc
+    if notices:
+        _emit_lines(notices, err=True)
+    if rc != 0:
+        raise typer.Exit(code=rc)
+
+
+def build_box_app() -> typer.Typer:
+    """Construct the ``strands-code box`` Typer subcommand group."""
+    sub_app = typer.Typer(
+        no_args_is_help=True,
+        help="Manage Strands Box Linux containment configs, diagnostics, and runs.",
+    )
+    sub_app.command("init")(_cmd_box_init)
+    sub_app.command("doctor")(_cmd_box_doctor)
+    sub_app.command(
+        "run",
+        context_settings={
+            "allow_extra_args": True,
+            "ignore_unknown_options": True,
+        },
+    )(_cmd_box_run)
+    return sub_app
+
+
+box_app = build_box_app()

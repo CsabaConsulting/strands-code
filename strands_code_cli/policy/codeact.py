@@ -16,6 +16,7 @@ never policy-rule words, never ``/diff`` mode terms.
 from __future__ import annotations
 
 import functools
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -231,6 +232,16 @@ def codeact_edit(cwd: str | Path, path: str, old: str, new: str) -> str:
     return f"Edited {target}"
 
 
+def _codeact_shell_cmd(argv: list[str] | tuple[str, ...]) -> list[str]:
+    """Build subprocess argv, wrapping via ``sh -c`` inside Strands Box for Dogwood."""
+    from strands_code_cli.sandbox.box import is_in_strands_box
+
+    cmd = [str(part) for part in argv]
+    if is_in_strands_box():
+        return ["sh", "-c", shlex.join(cmd)]
+    return cmd
+
+
 def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
     """Run one argv command under ``cwd``; no shell, labeled output.
 
@@ -248,7 +259,7 @@ def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
         return "shell expects a non-empty argv list"
     try:
         proc = subprocess.run(
-            list(argv),
+            _codeact_shell_cmd(argv),
             cwd=str(cwd),
             capture_output=True,
             text=True,

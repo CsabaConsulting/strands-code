@@ -863,6 +863,56 @@ class TestCodeactInteriorFunctions:
         result = codeact_shell(tmp_path, ["ls", "marker.txt"])
         assert "marker.txt" in result
 
+    def test_shell_wraps_via_sh_c_inside_strands_box(self, tmp_path, monkeypatch):
+        import subprocess
+        import types
+
+        from strands_code_cli.policy.codeact import codeact_shell
+
+        monkeypatch.setenv("STRANDS_BOX", "1")
+        captured: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            captured.append(list(cmd))
+            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        codeact_shell(tmp_path, ["git", "status"])
+        codeact_shell(tmp_path, ["ls", "a; echo pwned"])
+
+        assert captured[0] == ["sh", "-c", "git status"]
+        assert captured[1] == ["sh", "-c", "ls 'a; echo pwned'"]
+
+    def test_shell_inside_strands_box_preserves_metacharacter_quoting(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.policy.codeact import codeact_shell
+
+        monkeypatch.setenv("STRANDS_BOX", "1")
+        escaped = tmp_path / "escaped"
+        payload = f"literal; touch {escaped}"
+        result = codeact_shell(tmp_path, ["printf", "%s", payload])
+
+        assert payload in result
+        assert not escaped.exists()
+
+    def test_shell_uses_direct_argv_when_unboxed(self, tmp_path, monkeypatch):
+        import subprocess
+        import types
+
+        from strands_code_cli.policy.codeact import codeact_shell
+
+        monkeypatch.delenv("STRANDS_BOX", raising=False)
+        captured: list[list[str]] = []
+
+        def _fake_run(cmd, **kwargs):
+            captured.append(list(cmd))
+            return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+        codeact_shell(tmp_path, ["git", "status"])
+        assert captured[0] == ["git", "status"]
+
 
 class _FakeRegistry:
     """ToolRegistry double exposing replace plus a registry mapping."""
