@@ -311,3 +311,40 @@ warn-and-skip — they never break startup. Restart the CLI to reload.
 - `/resume`, `/rename`, `/exit` work; unknown `/slash` shows a usage hint.
 - Ctrl-C cancels the current line; Ctrl-D exits with state saved.
 - `kill -9` mid-idle is survivable: relaunch with the same session id.
+
+## Skills marketplaces
+
+Add opt-in remote (GitHub HTTPS) or local-directory skill catalogs and pin
+third-party skills by commit SHA and directory hash (`strands-code` ships with
+zero pre-registered remote marketplaces):
+
+- **Manage catalogs** (persisted in `~/.config/strands-code/marketplaces.yaml`
+  with cached indexes in `~/.cache/strands-code/marketplaces/`):
+  - `/skills marketplace add <owner/repo|local-path> [--name <alias>] [--ref <ref>]`
+  - `/skills marketplace list`
+  - `/skills marketplace update [name]`
+  - `/skills marketplace remove <name>`
+- **Browse, install, update, sync & inspect:**
+  - `/skills browse [marketplace] [--refresh]` (reads local cache by default; no unprompted network traffic)
+  - `/skills install <ns:skill|skill@ns|owner/repo[@ref]|local-path> [--skill <name>]`
+  - `/skills update [name|ns:name]`
+  - `/skills sync` (restores drifted or missing marketplace skills to pinned lockfile commits)
+  - `/skills show <name|ns:name>` & `/skills remove <name|ns:name>` (alias `uninstall`)
+  - Tab completion supports `/<ns>:<skill>` prefixes dynamically alongside `/local:<skill>`.
+- **Project layout & precedence:**
+  - Project-local skills live under `./.agent/skills/` (`local:<name>`) and
+    always win bare-name ties over marketplace skills.
+  - Marketplace skills install under `./.agent/skills-marketplaces/<ns>/<skill>/`
+    and pin `commit_sha` + deterministic SHA-256 hashes in `./.agent/skills-lock.json`.
+  - Any marketplace skill lacking a lock entry, containing a symlink, or failing
+    hash verification is warn-and-skipped until `/skills sync` or `/skills remove`.
+- **Rate limits & supply-chain safety:**
+  - Set optional `GITHUB_TOKEN` or `GH_TOKEN` in your shell environment for higher
+    GitHub API rate limits (sent strictly to `api.github.com` over HTTPS, never
+    forwarded on redirects or written to disk; zero `git` subprocesses).
+  - Unpacking enforces deny-first checks (no symlinks, hardlinks, FIFOs/devices,
+    `.gitmodules`, or `..` traversal; 25 MiB tarball / 256 files / 5 MiB unpacked
+    caps). Bundled `scripts/*` trigger prominent warnings and remain gated by
+    shell/Python HITL approval; `allowed-tools` stays informational only; and
+    broad `[[allow]]` rules on `write`/`edit` targeting `.agent/skills*`,
+    `.agent/skills-lock.json`, or `~/.config/strands-code/**` downgrade to a prompt.

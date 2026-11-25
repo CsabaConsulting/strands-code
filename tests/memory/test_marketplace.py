@@ -671,3 +671,74 @@ class TestMarketplaceSecurityGuards:
         (d / "bad").symlink_to(d / "SKILL.md")
         with pytest.raises(ValueError, match="symlink"):
             compute_skill_dir_hash(d)
+
+
+@pytest.mark.integration
+def test_live_github_marketplace_browse_install_and_verify(tmp_path):
+    """Live GitHub probe: resolve anthropics/skills, install one skill, verify SHA-256."""
+    from strands_code_cli.memory.skills import SkillIndex
+
+    mpath = tmp_path / "cfg" / "marketplaces.yaml"
+    cdir = tmp_path / "cache"
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+
+    try:
+        entry, catalog = add_marketplace(
+            "anthropics/skills",
+            name="anthropic-skills",
+            marketplaces_path=mpath,
+            cache_dir=cdir,
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        msg = str(exc)
+        if isinstance(exc, httpx.HTTPError) or any(
+            code in msg for code in ("403", "429", "502", "503")
+        ):
+            pytest.skip(f"Live GitHub probe skipped (offline or rate-limited): {msg}")
+        raise
+
+    assert entry.name == "anthropic-skills"
+    assert catalog, "Expected anthropics/skills catalog to yield at least one skill"
+
+    chosen = catalog[0]
+    try:
+        outcome = install_skill(
+            f"anthropic-skills:{chosen.name}",
+            cwd=workdir,
+            marketplaces_path=mpath,
+            cache_dir=cdir,
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        msg = str(exc)
+        if isinstance(exc, httpx.HTTPError) or any(
+            code in msg for code in ("403", "429", "502", "503")
+        ):
+            pytest.skip(f"Live GitHub install skipped (offline or rate-limited): {msg}")
+        raise
+
+    assert len(outcome.installed) == 1
+    locked = outcome.installed[0]
+    assert len(locked.commit_sha) == 40
+    assert locked.computed_hash.startswith("sha256:")
+
+    index = SkillIndex(skills_dir=workdir / ".agent" / "skills")
+    resolved = index.resolve(f"anthropic-skills:{chosen.name}")
+    assert resolved is not None and resolved.commit_sha == locked.commit_sha
+
+    installed_md = (
+        workdir
+        / mp.MARKETPLACES_SKILLS_REL
+        / "anthropic-skills"
+        / chosen.name
+        / "SKILL.md"
+    )
+    installed_md.write_text(
+        installed_md.read_text(encoding="utf-8") + "\n<!-- drift -->\n",
+        encoding="utf-8",
+    )
+    verified, warnings = verify_installed_marketplace_skills(
+        workdir / mp.MARKETPLACES_SKILLS_REL, workdir / mp.SKILLS_LOCK_REL
+    )
+    assert all(v.name != chosen.name for v in verified)
+    assert any("hash-drifted" in w for w in warnings)
