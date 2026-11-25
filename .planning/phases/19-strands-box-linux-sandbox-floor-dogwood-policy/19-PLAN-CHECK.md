@@ -1,0 +1,19 @@
+# Phase 19 Plan Verification (`gsd-plan-checker`)
+
+**Checked:** 2026-11-25
+**Plans Checked:** `19-01-PLAN.md` (Wave 1), `19-02-PLAN.md` (Wave 2), `19-03-PLAN.md` (Wave 3)
+**Status:** Verified
+
+---
+
+## Verification Checklist
+
+| Dimension | Check | Result | Notes |
+| :--- | :--- | :--- | :--- |
+| **Requirement Coverage** | `SANDBOX-01` 100% mapped across Plans `19-01`, `19-02`, `19-03` | PASS | Core `sandbox/box.py` `box.toml` + `policy.dw` generator, host-only `~/.config/strands-box/` storage, `uv`/`.venv` realpath resolution, 7+2 egress profiles, canonical MFOTL temporal `git push*` rule, `conftest.py` env scrubs, Linux 3-binary co-location, `x86_64` `EXPERIMENTAL_X86_SUPPORT=TRUE`, Ubuntu AppArmor `userns` diagnostics, and `launch_box_run()` (`19-01-T1`, `19-01-T2`); `codeact_shell` `STRANDS_BOX=1` `sh -c` alignment, `user_config_dir("strands-box")` protected-path `Prompt` downgrade in `policy/core.py`, read-only `/policy` Box indicator, and `strands-code box init|doctor|run` Typer subcommand group (`19-02-T1`, `19-02-T2`); `@pytest.mark.integration` host `dogwood`/`box` probe, `docs/QUICKSTART.md` guide, `tests/rig/`, and all 6 CI gates (`19-03-T1`, `19-03-T2`). |
+| **Locked Decisions (`19-CONTEXT.md`)** | `D-01`..`D-07` honored verbatim | PASS | Typer `strands-code box init|doctor|run` preserving bare REPL + read-only `/policy` indicator (`D-01`); host-only `~/.config/strands-box/repos/<slug>-<hash8>/` excluded from `[agent.filesystem].write` + protected in `policy/core.py` + `--out` warning (`D-02`); `uv`/`.venv` Python realpaths, explicit `HOME`/`PATH`/`TERM`/`AWS_REGION`/`STRANDS_BOX=1`, and zero secret persistence (`D-03`); least-privilege auto-detected 7 core profiles + `--allow-decisions-api`/`--allow-github-skills` (`D-04`); default-deny `policy.dw` with `.env`/`.ssh`/`.aws` read forbids, dev `[tool.*]`, canonical `formerly within 900s` `pytest` rule, and logged scoped `D-05` revisit (`D-05`); `codeact_shell` `["sh", "-c", shlex.join(argv)]` under `STRANDS_BOX=1` (`D-06`); `box doctor`/`box run`, `docs/QUICKSTART.md`, hermetic `tomllib` tests + opportunistic host probe (`D-07`). |
+| **Wave & Dependency Ordering** | Strict topological DAG across Waves 1–3 | PASS | `19-01` (`wave: 1`, `depends_on: []`) establishes `sandbox/box.py`, config/egress/Dogwood renderers, Linux checks, and `conftest.py` scrubbing before `19-02` (`wave: 2`, `depends_on: ["19-01"]`) wires `codeact.py`, `policy/core.py`, `dispatch/core.py`, and `entry/main.py`, and `19-03` (`wave: 3`, `depends_on: ["19-01", "19-02"]`) runs the host integration probe, `docs/QUICKSTART.md` updates, `tests/rig/`, and all 6 CI gates. |
+| **Structural & Security Constraints** | `T-19-01`..`T-19-08`, `xenon C <= 20`, `import-linter`, `test_no_credential_persistence_sinks`, `test_no_budgets_or_enforcement_vocabulary`, `D-24` | PASS | Explicitly preserves `strands_code_agent/` (`D-24`), keeps `_setup_decision_entries` (`CC 20`) and `run_loop` (`C 18`) untouched, isolates all `os.environ` reads inside `sandbox/box.py` (`first_run.py` / `codeact.py`), uses zero banned words (`"Sandbox: Strands Box active (STRANDS_BOX=1)"` in `_policy_message`), avoids importing `entry.main` from `sandbox/`, guards TOML/Dogwood strings against control-char injection, keeps `codeact_shell` injection-safe via `shlex.join`, and checks Typer routing without breaking REPL startup or `--codeact --` forwarding. |
+| **Test & Nyquist Compliance** | Every task has fast `<automated>` verify & TDD contract | PASS | Wave 0 file `tests/sandbox/test_box.py` created TDD-first in `19-01-T1`; every plan task leads with failing TDD assertions, validates generated `box.toml` with `tomllib.loads()`, tests `CliRunner` subcommand routing + REPL preservation, and keeps default CI 100% offline. |
+
+**VERDICT:** **PASS**

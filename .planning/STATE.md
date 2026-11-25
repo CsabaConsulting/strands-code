@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: 19
 current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
 current_plan: 0
-status: discussed
-stopped_at: Phase 19 context gathered (`19-CONTEXT.md` D-01–D-07, scoped D-05 revisit logged) — ready for `/gsd-plan-phase 19`
-last_updated: "2026-11-25T00:20:00Z"
+status: planned
+stopped_at: Phase 19 planned (3 plans, 3 waves, `19-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19`
+last_updated: "2026-11-25T00:30:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Discussed Phase 19 Strands Box & Dogwood policy (`19-CONTEXT.md` D-01–D-07, `19-DISCUSSION-LOG.md`)
-state_head: cebef4c
+last_activity_desc: Planned Phase 19 Strands Box Linux Sandbox Floor & Dogwood Policy (`19-01`..`19-03`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS)
+state_head: 44e56a9
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 17
+  total_plans: 20
   completed_plans: 17
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19 Discussed (`SANDBOX-01`, `19-CONTEXT.md` `D-01`–`D-07`) — ready for `/gsd-plan-phase 19`
+**Current focus:** Milestone `v2.0` · Phase 19 Planned (`SANDBOX-01`, `19-01`..`19-03`, `19-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19`
 
 ## Current Position
 
-Phase: 19 of 21 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Context Gathered
-Plan: 0 of TBD in Phase 19
-Status: Discussed (`19-CONTEXT.md` `D-01`–`D-07`) — ready for `/gsd-plan-phase 19`
-Last activity: 2026-11-25 — Gathered Phase 19 context (`19-CONTEXT.md`, `19-DISCUSSION-LOG.md`)
+Phase: 19 of 21 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Planned (`19-01`..`19-03`)
+Plan: 0 of 3 complete in Phase 19
+Status: Planned (`19-01`..`19-03` across Waves 1–3, `19-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19`
+Last activity: 2026-11-25 — Planned Phase 19 (`19-RESEARCH.md`, `19-PATTERNS.md`, `19-01..03-PLAN.md`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS)
 
 Progress: [███████░░░] 67%
 
@@ -80,10 +80,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 - Phase 18 Nyquist validation (`18-VALIDATION.md` `validated`, `nyquist_compliant: true`): audited all 8 Phase 18 changed modules via `sys.monitoring` (`2084/2099 = 99.3%` executable line coverage; `100.0%` on `cost_context.py`, `dispatch/core.py`, `entry/main.py`, `loop/core.py`, `policy/core.py`, `ui/completer.py`; `99.4%` on `marketplace.py`; `96.2%` on `skills.py`) and closed remaining edge branches in `tests/memory/test_marketplace.py`, `tests/memory/test_skills.py`, and `tests/policy/test_policy.py` (`0` runtime edits, `1797 + 1 = 1798/1798` default suite + `44/44` rig + all 6 CI gates green).
 - Phase 19 discussion (`19-CONTEXT.md` `D-01`–`D-07`, `19-DISCUSSION-LOG.md`): locked `strands-code box init|doctor|run` Typer subcommand group in isolated `sandbox/box.py` + read-only `/policy` Box indicator, host-only `~/.config/strands-box/repos/<slug>-<hash8>/` config storage (`0o700`/`0o600`, outside `[agent.filesystem].write`, protected in `policy/core.py`), auto-resolved `uv`/`.venv` Python realpaths, least-privilege auto-detected 7-provider egress profiles (`bedrock` no STS hole, `google`, `anthropic`, `openai`, `meta`, path-scoped `openrouter`, `typesafe` + `--allow-decisions-api`/`--allow-github-skills`), default-deny `policy.dw` with `.env`/secret read forbids + canonical MFOTL temporal `git push` rule (**formal scoped revisit of `v1.0` `D-05`**: external host-side deterministic Dogwood allowed while in-process Python `interventions` remain TOML+Python only), and `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment.
+- Phase 19 planning (`19-RESEARCH.md`, `19-PATTERNS.md`, `19-01..03-PLAN.md`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS): mapped Waves 1–3 (`tests/sandbox/test_box.py` Wave 0 file with `tomllib` TOML validation & `T-19-01`..`T-19-08` threat coverage, `conftest.py` `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs, `codeact_shell` `shlex.join` `sh -c` routing, `user_config_dir("strands-box")` policy protection, Typer `ctx.invoked_subcommand` early return, `test_no_credential_persistence_sinks` + `test_no_budgets_or_enforcement_vocabulary` compliance, `lint-imports`, `xenon <= C (20)`, and `D-24` pristine `strands_code_agent/`).
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 19` to plan Phase 19 (`SANDBOX-01`: Strands Box Linux Sandbox Floor & Dogwood Policy).
+- Run `/gsd-execute-phase 19` to execute Plans `19-01`..`19-03` (`SANDBOX-01`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -96,6 +97,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:20:00Z
-Stopped at: Phase 19 context gathered (`19-CONTEXT.md` D-01–D-07, scoped D-05 revisit logged) — ready for `/gsd-plan-phase 19`
-Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-CONTEXT.md
+Last session: 2026-11-25T00:30:00Z
+Stopped at: Phase 19 planned (3 plans, 3 waves, `19-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19`
+Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-01-PLAN.md
