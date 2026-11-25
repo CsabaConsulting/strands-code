@@ -5,11 +5,11 @@ current_phase: 18
 current_phase_name: Skills Marketplaces & Lockfile Installer
 current_plan: 3
 status: verified
-stopped_at: Phase 18 complete (`e8db593`, `f160706`, `d0562be`, `18-VERIFICATION.md` 12/12 PASS) — ready for `/gsd-verify-work 18`
-last_updated: "2026-11-25T01:34:00Z"
+stopped_at: Phase 18 UAT complete (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
+last_updated: "2026-11-25T05:31:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Executed & verified Phase 18 (`18-01..03`, live GitHub `anthropics/skills` probe PASS, 1779+1+1 tests, 44/44 rig, 6/6 CI gates)
-state_head: d0562be
+last_activity_desc: Completed Phase 18 UAT (`18-UAT.md` 6/6 PASS including live GitHub `anthropics/skills` walkthrough + 1779+1 tests + 44/44 rig + 6/6 CI gates)
+state_head: 73d60ee
 progress:
   total_phases: 9
   completed_phases: 6
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 18 Complete (`SKILL-03`, `18-VERIFICATION.md` PASS) — ready for `/gsd-verify-work 18`
+**Current focus:** Milestone `v2.0` · Phase 18 Verified + UAT Passed (`SKILL-03`, `18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18` or `/gsd-discuss-phase 19`
 
 ## Current Position
 
-Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Complete (`18-01`..`18-03`)
+Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Verified & UAT Complete (`18-01`..`18-03`)
 Plan: 3 of 3 complete in Phase 18
-Status: Verified (`SKILL-03` complete; ready for `/gsd-verify-work 18` or `/gsd-discuss-phase 19`)
-Last activity: 2026-11-24 — Executed & verified Phase 18 (`e8db593`, `f160706`, `d0562be`, live `anthropics/skills` probe + 6/6 CI gates)
+Status: Verified (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
+Last activity: 2026-11-24 — Completed Phase 18 UAT (`18-UAT.md` 6/6 PASS)
 
 Progress: [███████░░░] 67%
 
@@ -74,9 +74,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 - Phase 18 (`e8db593`, `f160706`, `d0562be`, `18-VERIFICATION.md` `12/12` PASS, `18-VALIDATION.md` validated): delivered `SKILL-03` in `strands_code_cli/memory/marketplace.py` (pure-HTTPS GitHub `/commits/<ref>` + redirect-guarded `/tarball/<sha>` without auth forwarding, local catalogs, zero pre-registered remote catalogs, deny-first archive unpack rejecting symlinks/hardlinks/FIFOs/devices/`.gitmodules`/`..` under 25 MiB / 256 files / 5 MiB caps + strict `Skill.from_file`, deterministic SHA-256 `./.agent/skills-lock.json`, `scripts/*` warnings + update diffs, fail-closed `verify_installed_marketplace_skills()`), extended `SkillIndex` (`local:` wins ties + non-mutating `discover_plugin_sources()`), generalized `SlashCompleter` for dynamic `/<ns>:`, added protected-path `Prompt` downgrade in `policy/core.py:decide()`, wired `/skills marketplace|browse|install|update|sync|show|remove|uninstall|reload|refresh` + `@ <short_sha>` third-party provenance framing in `dispatch/core.py` + `AgentSkills` sync in `entry/main.py` & `loop/core.py`, added `GITHUB_TOKEN`/`GH_TOKEN` scrubbing in `tests/conftest.py`, updated `docs/QUICKSTART.md`, and verified live `anthropics/skills` integration probe (`1 passed` in 4.55s) + `1779+1` suite + `44/44` rig + all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
 
+- Phase 18 UAT (`18-UAT.md` `6/6` passed): verified zero-default registry + redirect auth stripping (`run_uat18_test1.py`), live `anthropics/skills` marketplace add -> cached browse -> install (`@ e4bb5d9`) -> `/skills show` -> tamper skip -> `/skills sync` restore -> `/skills uninstall` (`run_uat18_test2.py`), deny-first tarball/cap/rollback + `scripts/*` update diffs + ANSI/`print_plain` safety (`run_uat18_test3.py`), multi-namespace `SkillIndex` + dynamic `/<ns>:` `SlashCompleter` + real `AgentSkills` sync + `@ <short_sha>` provenance framing (`run_uat18_test4.py`), protected-path `Prompt` downgrade + HITL gate (`run_uat18_test5.py`), and `docs/QUICKSTART.md` + `1779+1` + `44/44` rig + 6/6 CI gates on `HEAD`.
+
 ### Pending Todos
 
-- Run `/gsd-verify-work 18` (or `/gsd-secure-phase 18` / `/gsd-discuss-phase 19`) as the next step.
+- Run `/gsd-secure-phase 18` and `/gsd-validate-phase 18` (or proceed to `/gsd-discuss-phase 19`) as the next step.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -89,6 +91,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:34:00Z
-Stopped at: Phase 18 complete (`e8db593`, `f160706`, `d0562be`, `18-VERIFICATION.md` 12/12 PASS) — ready for `/gsd-verify-work 18`
-Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-VERIFICATION.md
+Last session: 2026-11-25T05:31:00Z
+Stopped at: Phase 18 UAT complete (`18-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 18`, `/gsd-validate-phase 18`, or `/gsd-discuss-phase 19`
+Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-UAT.md
