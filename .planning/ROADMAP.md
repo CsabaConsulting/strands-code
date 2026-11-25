@@ -189,15 +189,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `19-01-PLAN.md` — Tracer: `sandbox/box.py` `box.toml`/`policy.dw` generator (host-only storage, `uv` realpaths, 7+2 egress profiles, canonical MFOTL temporal rule), Linux 3-binary/`x86_64`/AppArmor diagnostics, `conftest.py` env scrubs & Wave 0 security suite (`tests/sandbox/test_box.py`)
+- [x] `19-01-PLAN.md` — Tracer: `sandbox/box.py` `box.toml`/`policy.dw` generator (host-only storage, `uv` realpaths, 7+2 egress profiles, canonical MFOTL temporal rule), Linux 3-binary/`x86_64`/AppArmor diagnostics, `conftest.py` env scrubs & Wave 0 security suite (`tests/sandbox/test_box.py`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `19-02-PLAN.md` — `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, `~/.config/strands-box` protected-path `Prompt` downgrade (`policy/core.py`), `/policy` read-only Box indicator (`dispatch/core.py`), and `strands-code box init|doctor|run` Typer subcommand group (`entry/main.py`)
+- [x] `19-02-PLAN.md` — `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, `~/.config/strands-box` protected-path `Prompt` downgrade (`policy/core.py`), `/policy` read-only Box indicator (`dispatch/core.py`), and `strands-code box init|doctor|run` Typer subcommand group (`entry/main.py`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `19-03-PLAN.md` — `@pytest.mark.integration` host `box`/`dogwood` validation probe, `docs/QUICKSTART.md` Linux & AppArmor guide, `tests/rig/` & all 6 CI gates
+- [x] `19-03-PLAN.md` — `@pytest.mark.integration` host `box`/`dogwood` validation probe, `docs/QUICKSTART.md` Linux & AppArmor guide, `tests/rig/` & all 6 CI gates
 
 ### Phase 20: Monty Python VM for `python_repl` & CodeAct
 
@@ -248,7 +248,7 @@ Plans:
 | 16. First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
-| 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 0/3 | Planned | - |
+| 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
 | 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |

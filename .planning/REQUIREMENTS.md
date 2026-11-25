@@ -26,7 +26,7 @@
 
 ### Sandbox & Policy
 
-- [ ] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.2.3+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 7-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
+- [x] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.2.3+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 7-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
 - [ ] **SANDBOX-02**: Crash-isolated Rust Python VM (`pydantic-monty`) for `strands_code_cli`'s `python_repl` and `CodeactStint` (`sandbox/monty.py`) with stateful multi-turn `feed_run`, explicit narrow host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, `MontyCrashedError` recovery, deterministic worker-pool teardown, `box.toml` runtime compatibility (plus Strands Box embedded Monty evaluation), and clean packaging/fallback while keeping `strands_code_agent/` pristine (`D-24`)
 
 ### Interaction & Review
@@ -77,7 +77,7 @@
 | MODEL-09 | Phase 16 | Complete |
 | UPSTREAM-02 | Phase 17 | Complete |
 | SKILL-03 | Phase 18 | Complete |
-| SANDBOX-01 | Phase 19 | Pending |
+| SANDBOX-01 | Phase 19 | Complete |
 | SANDBOX-02 | Phase 20 | Pending |
 | LOOP-06 | Phase 21 | Pending |
 | TOOL-05 | Phase 21 | Pending |
