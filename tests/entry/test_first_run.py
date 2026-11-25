@@ -269,8 +269,18 @@ class TestPreflightGate:
         self, monkeypatch, capsys
     ):
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+        # Bedrock/Box users who export OPENROUTER_API_KEY for /route still launch cleanly.
+        assert preflight_credentials(probe=_creds_ok) is None
+        monkeypatch.setenv("STRANDS_BOX", "1")
+        assert preflight_credentials(probe=_no_creds) is None
+        monkeypatch.delenv("STRANDS_BOX")
+        monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "br-tok")
+        assert preflight_credentials(probe=_no_creds) is None
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK")
+
+        # Only when AWS/Box credentials are absent does it stop with the explicit --model pointer.
         with pytest.raises(typer.Exit) as exc_info:
-            preflight_credentials(probe=_creds_ok)
+            preflight_credentials(probe=_no_creds)
         assert exc_info.value.exit_code == 2
         err = capsys.readouterr().err
         assert "--model" in err
@@ -281,6 +291,55 @@ class TestPreflightGate:
             )
             is None
         )
+
+    def test_litellm_ambient_pointer_google_scope_base_url_openrouter_and_unknown_provider(
+        self, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("LITELLM_API_KEY", "litellm-only-key")
+        with pytest.raises(typer.Exit) as exc_info:
+            preflight_credentials(probe=_no_creds)
+        assert exc_info.value.exit_code == 2
+        assert "--model" in capsys.readouterr().err
+        monkeypatch.delenv("LITELLM_API_KEY")
+
+        # Stale conflicting Vertex + Gemini env does NOT block non-Google --model launches.
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+        monkeypatch.setenv("GEMINI_API_KEY", "stale-gemini-key")
+        monkeypatch.setenv("OPENAI_API_KEY", "oai-key")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
+        assert (
+            preflight_credentials(model="openai/gpt-6.2-sol", probe=_no_creds) is None
+        )
+        assert (
+            preflight_credentials(model="anthropic/claude-sonnet-5-5", probe=_no_creds)
+            is None
+        )
+        # Still fails fast when targeting google/ directly.
+        with pytest.raises(typer.Exit) as exc_google:
+            preflight_credentials(model="google/gemini-2.5-flash", probe=_creds_ok)
+        assert exc_google.value.exit_code == 2
+        assert "mutually exclusive" in capsys.readouterr().err.lower()
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI")
+        monkeypatch.delenv("GEMINI_API_KEY")
+
+        # Explicit litellm/openrouter with custom base_url passes without OPENROUTER_API_KEY.
+        assert (
+            preflight_credentials(
+                model="litellm/openrouter/anthropic/claude-sonnet-4.6",
+                base_url="https://proxy.local/v1",
+                probe=_no_creds,
+            )
+            is None
+        )
+
+        # Typo / unknown provider prefix fails explicitly rather than probing STS.
+        with pytest.raises(typer.Exit) as exc_unk:
+            preflight_credentials(
+                model="anthropi/claude-sonnet-5-5",
+                probe=lambda: pytest.fail("Unknown provider must not probe STS"),
+            )
+        assert exc_unk.value.exit_code == 2
+        assert "Unknown model provider 'anthropi'" in capsys.readouterr().err
 
     def test_ollama_passes_without_keys_or_sts(self):
         sts_fail = lambda: pytest.fail("Ollama must not probe STS")  # noqa: E731

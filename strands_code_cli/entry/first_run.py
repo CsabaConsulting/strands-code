@@ -197,12 +197,47 @@ def _run_bedrock_probe(probe: Callable[[], None] | None) -> None:
         _fail_preflight(BEDROCK_SETUP_POINTER)
 
 
+_KNOWN_EXPLICIT_PROVIDERS = frozenset(
+    {
+        "bedrock",
+        "bedrock-mantle",
+        "google",
+        "anthropic",
+        "openai",
+        "meta",
+        "openrouter",
+        "litellm",
+        "ollama",
+    }
+)
+
+
 def _validate_meta_env() -> None:
     """Fail fast with exit code 2 when META_BASE_URL is malformed."""
     try:
         meta_base_url()
     except ValueError as exc:
         _fail_preflight(f"Invalid META_BASE_URL: {exc}")
+
+
+def _probe_bedrock_or_openrouter_pointer(probe: Callable[[], None] | None) -> None:
+    """Allow Bedrock/Box launches when an OpenRouter/LiteLLM key is only for routing."""
+    if _is_truthy("STRANDS_BOX") or _nonempty("AWS_BEARER_TOKEN_BEDROCK"):
+        return
+    check = probe if probe is not None else _default_probe
+    try:
+        check()
+        return
+    except typer.Exit:
+        raise
+    except Exception:
+        pass
+    _fail_preflight(
+        "OPENROUTER_API_KEY / LITELLM_API_KEY is set, but OpenRouter/LiteLLM "
+        "requires an explicit model id.\n"
+        "Pass --model litellm/openrouter/<vendor>/<model> "
+        "(for example: --model litellm/openrouter/anthropic/claude-sonnet-4.6)."
+    )
 
 
 def _check_explicit_provider(
@@ -213,6 +248,7 @@ def _check_explicit_provider(
     if provider == "ollama":
         return
     if provider == "google":
+        _validate_google_env()
         if not has_google_credentials():
             _fail_preflight(
                 "Missing Google Gemini credentials. Set GOOGLE_API_KEY / "
@@ -223,7 +259,9 @@ def _check_explicit_provider(
     if provider in _PROVIDER_ENV_KEYS:
         if provider == "meta" and base_url is None:
             _validate_meta_env()
-        if provider in ("openai", "anthropic", "meta") and base_url:
+        if provider in ("openai", "anthropic", "meta", "openrouter") and base_url:
+            return
+        if provider == "openrouter" and _is_truthy("STRANDS_BOX"):
             return
         keys = _PROVIDER_ENV_KEYS[provider]
         if not any(_nonempty(name) for name in keys):
@@ -241,7 +279,15 @@ def _check_explicit_provider(
             "Missing credentials for litellm model. Set OPENROUTER_API_KEY, "
             "LITELLM_API_KEY, or the target provider's API key."
         )
-    _run_bedrock_probe(probe)
+    if provider in ("bedrock", "bedrock-mantle"):
+        _run_bedrock_probe(probe)
+        return
+    if provider not in _KNOWN_EXPLICIT_PROVIDERS:
+        _fail_preflight(
+            f"Unknown model provider '{provider}'. Supported providers: "
+            "bedrock, bedrock-mantle, google, anthropic, openai, meta, "
+            "litellm/openrouter, ollama."
+        )
 
 
 def preflight_credentials(
@@ -266,10 +312,10 @@ def preflight_credentials(
         An auto-selected ``provider/model`` string inferred from ambient
         credentials when ``model`` is ``None``, else ``None``.
     """
-    _validate_google_env()
     if model is not None:
         _check_explicit_provider(_provider_of(model), base_url, probe)
         return None
+    _validate_google_env()
     if has_google_credentials():
         return "google/gemini-3.8-flash"
     for candidate, keys in _AMBIENT_DEFAULT_MODELS:
@@ -277,11 +323,8 @@ def preflight_credentials(
             if candidate.startswith("meta/"):
                 _validate_meta_env()
             return candidate
-    if _nonempty("OPENROUTER_API_KEY"):
-        _fail_preflight(
-            "OPENROUTER_API_KEY is set, but OpenRouter requires an explicit model id.\n"
-            "Pass --model litellm/openrouter/<vendor>/<model> "
-            "(for example: --model litellm/openrouter/anthropic/claude-sonnet-4.6)."
-        )
+    if _nonempty("OPENROUTER_API_KEY") or _nonempty("LITELLM_API_KEY"):
+        _probe_bedrock_or_openrouter_pointer(probe)
+        return None
     _run_bedrock_probe(probe)
     return None
