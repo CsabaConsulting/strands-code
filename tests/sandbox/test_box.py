@@ -200,11 +200,26 @@ class TestBoxConfigGenerationAndEgress:
                     llm_model="openai/gpt-6.2-sol",
                 ),
             ),
-            env={"MODEL_API_KEY": "x"},
+            env={"MODEL_API_KEY": "x", "GITHUB_TOKEN": "ghp_unrelated"},
         )
-        assert set(detected) == {"google", "anthropic", "openai", "meta", "typesafe"}
-        assert "decisions_api" not in detected
+        assert set(detected) == {
+            "google",
+            "anthropic",
+            "openai",
+            "meta",
+            "typesafe",
+            "decisions_api",
+        }
+        assert detected.index("decisions_api") == detected.index("typesafe") + 1
         assert "github_skills" not in detected
+
+        env_detected = detect_active_providers(
+            repo,
+            config=ProviderConfig(model=None),
+            routing_strategy=None,
+            env={"TYPESAFE_API_KEY": "ts", "JEV_API_KEY": "jev"},
+        )
+        assert env_detected == ["typesafe", "decisions_api"]
 
         with_opt = detect_active_providers(
             repo,
@@ -263,6 +278,10 @@ class TestBoxConfigGenerationAndEgress:
             "openrouter.ai/api/v1/chat/*",
             "openrouter.ai/api/alpha/decisions",
         ]
+        assert egress["openrouter_models"] == {
+            "destinations": ["openrouter.ai/api/v1/models*"]
+        }
+        assert "secret" not in egress["openrouter_models"]
         assert egress["typesafe"]["destinations"] == ["api.typesafe.ai"]
         assert egress["decisions_api"]["destinations"] == ["decisionapi.net"]
         assert egress["github_api"]["destinations"] == ["api.github.com"]
@@ -272,6 +291,83 @@ class TestBoxConfigGenerationAndEgress:
             "objects.githubusercontent.com",
         ]
         assert "secret" not in egress["github_downloads"]
+        dw_text = res.policy_dw.read_text(encoding="utf-8")
+        assert 'context.input.path like "/api/v1/models*"' in dw_text
+
+    def test_empty_order_cache_read_aws_profile_cli_cmd_and_mode_warnings(
+        self, tmp_path, monkeypatch
+    ):
+        cfg_root = tmp_path / "cfg"
+        data_root = tmp_path / "data"
+        cache_root = tmp_path / "cache"
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(cfg_root / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(data_root / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(cache_root / app)
+        )
+
+        repo = tmp_path / "repo"
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        cli_bin = venv_bin / "strands-code"
+        cli_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        py_bin = venv_bin / "python"
+        py_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        # Empty routing order disables routing instead of falling back to openrouter.
+        disabled = RoutingStrategy(
+            candidates=[RoutingCandidate(id="anthropic/claude-sonnet-5-5")],
+            engine=RoutingEngine(primary="openrouter", order=[]),
+        )
+        res_empty = init_box_config(
+            repo,
+            config=ProviderConfig(model=None),
+            routing_strategy=disabled,
+            python_executable=py_bin,
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "AWS_PROFILE": "corp"},
+        )
+        assert res_empty.providers == ("bedrock",)
+        parsed_empty = tomllib.loads(res_empty.box_toml.read_text(encoding="utf-8"))
+        assert parsed_empty["egress"]["bedrock"]["secret"]["ref"] == "aws://corp"
+        assert parsed_empty["agent"]["command"] == [str(cli_bin)]
+        assert str(cli_bin) in parsed_empty["agent"]["filesystem"]["exec"]
+        read_strs = parsed_empty["agent"]["filesystem"]["read"]
+        assert str((cache_root / "strands-code").resolve()) in read_strs
+        assert "/tmp" in read_strs
+
+        # Absent CLI binary uses executable -c fallback instead of non-existent __main__.py.
+        cli_bin.unlink()
+        paths_no_cli = resolve_runtime_paths(
+            repo, python_executable=py_bin, env={"PATH": ""}
+        )
+        assert paths_no_cli["agent_command"][:2] == [str(py_bin), "-c"]
+
+        # Mode warnings for Vertex AI, custom base_url, Ollama, and bedrock-mantle.
+        res_warn = init_box_config(
+            repo,
+            config=ProviderConfig(
+                model="bedrock-mantle/openai.gpt-6.2-sol",
+                base_url="https://proxy.example/v1",
+            ),
+            routing_strategy=RoutingStrategy(
+                candidates=[RoutingCandidate(id="ollama/llama3.2")],
+                engine=RoutingEngine(primary="local"),
+            ),
+            env={
+                "HOME": str(tmp_path),
+                "PATH": "/usr/bin:/bin",
+                "GOOGLE_GENAI_USE_VERTEXAI": "1",
+            },
+        )
+        joined = "\n".join(res_warn.warnings)
+        assert "GOOGLE_GENAI_USE_VERTEXAI" in joined
+        assert "custom base_url" in joined
+        assert "Ollama" in joined
+        assert "bedrock-mantle" in joined
 
     def test_dogwood_policy_rules_and_tools(self, tmp_path, monkeypatch):
         monkeypatch.setattr(

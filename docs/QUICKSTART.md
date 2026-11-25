@@ -400,7 +400,7 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
   - Under `STRANDS_BOX=1`, CodeAct's `codeact_shell` executes commands via
     `["sh", "-c", shlex.join(argv)]` so `shell([...])` calls feed Dogwood's
     `shell:spawn` audit log with shell metacharacter quoting intact.
-- **Auto-detected 7-provider egress profiles + opt-ins (`--allow-decisions-api`, `--allow-github-skills`):**
+- **Auto-detected 8-provider egress profiles + `--allow-github-skills` opt-in:**
 
 | Profile | Destination host / path scope | Out-of-band secret / header injection | Notes |
 | :--- | :--- | :--- | :--- |
@@ -409,9 +409,9 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
 | `anthropic` | `api.anthropic.com` | `env://ANTHROPIC_API_KEY` via `x-api-key` | Auto-detected |
 | `openai` | `api.openai.com` | `env://OPENAI_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `meta` | `api.meta.ai` | `env://MODEL_API_KEY` or `META_API_KEY` via `Authorization: Bearer` | Auto-detected |
-| `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` | Path-scoped |
+| `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` (+ unauth `openrouter.ai/api/v1/models*`) | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` (none on `/api/v1/models*`) | Path-scoped; keeps `/cost` & `/route setup` catalog fetches working |
 | `typesafe` | `api.typesafe.ai` | `env://TYPESAFE_API_KEY` via `Authorization: Bearer` | Auto-detected |
-| `--allow-decisions-api` | `decisionapi.net` | `env://JEV_API_KEY` via `Authorization: Bearer` | Opt-in flag on `box init` |
+| `decisions_api` | `decisionapi.net` | `env://JEV_API_KEY` via `Authorization: Bearer` | Auto-detected after `typesafe` from `routing.yaml` or `JEV_API_KEY` (`--allow-decisions-api` force-enables) |
 | `--allow-github-skills` | `api.github.com`, `codeload.github.com`, `objects.githubusercontent.com` | Optional `GITHUB_TOKEN`/`GH_TOKEN` scoped strictly to `api.github.com` | Opt-in flag on `box init` |
 
 - **Dogwood policy & formal scoped revisit of `D-05`:** Generated `policy.dw`

@@ -42,8 +42,9 @@ CORE_PROVIDERS: tuple[str, ...] = (
     "meta",
     "openrouter",
     "typesafe",
+    "decisions_api",
 )
-OPTIONAL_PROFILES: tuple[str, ...] = ("decisions_api", "github_skills")
+OPTIONAL_PROFILES: tuple[str, ...] = ("github_skills",)
 _ALL_PROFILES = frozenset((*CORE_PROVIDERS, *OPTIONAL_PROFILES))
 _BOX_BINARIES: tuple[str, ...] = (
     "box",
@@ -226,16 +227,26 @@ def _provider_from_model_id(model_id: str | None) -> str | None:
     return None
 
 
-def _providers_from_routing(
-    strategy: RoutingStrategy | None,
-) -> tuple[set[str], bool]:
+def _strategy_engines(strategy: RoutingStrategy | None) -> list[str]:
     if strategy is None:
-        return set(), False
+        return []
+    raw = (
+        strategy.engine.order
+        if strategy.engine.order is not None
+        else [strategy.engine.primary]
+    )
+    return [engine for engine in raw if engine != "off"]
+
+
+def _providers_from_routing(strategy: RoutingStrategy | None) -> set[str]:
+    engines = _strategy_engines(strategy)
+    if strategy is None or not engines:
+        return set()
     found: set[str] = set()
-    engines = strategy.engine.order or [strategy.engine.primary]
-    needs_decisions_api = "decisions_api" in engines
     if "native" in engines:
         found.add("typesafe")
+    if "decisions_api" in engines:
+        found.add("decisions_api")
     if "openrouter" in engines:
         found.add("openrouter")
     if "llm" in engines:
@@ -246,7 +257,7 @@ def _providers_from_routing(
         prov = _provider_from_model_id(cand.id)
         if prov:
             found.add(prov)
-    return found, needs_decisions_api
+    return found
 
 
 def _providers_from_env(env: Mapping[str, str]) -> set[str]:
@@ -258,6 +269,7 @@ def _providers_from_env(env: Mapping[str, str]) -> set[str]:
         ("meta", ("MODEL_API_KEY", "META_API_KEY")),
         ("openrouter", ("OPENROUTER_API_KEY",)),
         ("typesafe", ("TYPESAFE_API_KEY",)),
+        ("decisions_api", ("JEV_API_KEY",)),
     )
     return {name for name, keys in checks if any(_nonempty(key, env) for key in keys)}
 
@@ -297,15 +309,14 @@ def detect_active_providers(
     cfg_prov = _provider_from_model_id(cfg.model)
     if cfg_prov:
         detected.add(cfg_prov)
-    route_provs, _ = _providers_from_routing(strategy)
-    detected.update(route_provs)
+    detected.update(_providers_from_routing(strategy))
     detected.update(_providers_from_env(env_map))
     if not detected:
         detected.add("bedrock")
+    if allow_decisions_api:
+        detected.add("decisions_api")
 
     ordered = [p for p in CORE_PROVIDERS if p in detected]
-    if allow_decisions_api:
-        ordered.append("decisions_api")
     if allow_github_skills:
         ordered.append("github_skills")
     return ordered
@@ -359,6 +370,31 @@ def _resolve_tool_commands(venv_bin: Path | None, env_path: str) -> dict[str, Pa
     return resolved
 
 
+def _resolve_cli_command(
+    venv_bin: Path | None,
+    py_bin: Path,
+    env_path: str,
+    exec_paths: list[Path],
+) -> list[str]:
+    """Resolve strands-code launcher command and record its executable paths."""
+    cand = venv_bin / "strands-code" if venv_bin is not None else None
+    cli_bin = (
+        str(cand)
+        if cand is not None and cand.is_file()
+        else shutil.which("strands-code", path=env_path)
+    )
+    if cli_bin:
+        cli_path = Path(cli_bin)
+        _append_unique(exec_paths, cli_path)
+        _append_unique(exec_paths, Path(os.path.realpath(cli_path)))
+        return [cli_bin]
+    return [
+        str(py_bin),
+        "-c",
+        "from strands_code_cli.entry.main import main; main()",
+    ]
+
+
 def resolve_runtime_paths(
     repo_root: Path,
     *,
@@ -394,6 +430,8 @@ def resolve_runtime_paths(
         py_real.parent.parent,
         uv_python_dir.resolve() if uv_python_dir.exists() else None,
         code_cfg,
+        code_cache,
+        Path("/tmp"),
     ):
         if cand is not None:
             _append_unique(read_paths, cand)
@@ -409,8 +447,7 @@ def resolve_runtime_paths(
     for cand in (*tools.values(), py_real):
         _append_unique(exec_paths, cand)
 
-    cli_bin = shutil.which("strands-code", path=env_path)
-    agent_cmd = [cli_bin] if cli_bin else [str(py_bin), "-m", "strands_code_cli"]
+    agent_cmd = _resolve_cli_command(venv_bin, py_bin, env_path, exec_paths)
     return {
         "home": home_dir,
         "workspace": ws,
@@ -524,6 +561,10 @@ def _egress_specs_for_providers(
     for name in providers:
         if name in _STATIC_EGRESS_SPECS:
             specs.append(_STATIC_EGRESS_SPECS[name])
+            if name == "openrouter":
+                specs.append(
+                    EgressSpec("openrouter_models", ("openrouter.ai/api/v1/models*",))
+                )
         elif name == "bedrock":
             specs.append(_bedrock_egress_spec(aws_region, aws_profile, env))
         elif name == "google":
@@ -752,6 +793,67 @@ def _is_writable_target(target_dir: Path, runtime: dict[str, Any]) -> bool:
     return False
 
 
+def _configured_model_refs(
+    config: ProviderConfig, strategy: RoutingStrategy | None
+) -> list[str]:
+    refs = [config.model] if config.model else []
+    if strategy is not None:
+        if strategy.engine.llm_model:
+            refs.append(strategy.engine.llm_model)
+        refs.extend(c.id for c in strategy.candidates if c.id)
+    return refs
+
+
+def _collect_box_warnings(
+    cfg_dir: Path,
+    out_dir: Path | None,
+    runtime: dict[str, Any],
+    config: ProviderConfig,
+    strategy: RoutingStrategy | None,
+    env_map: Mapping[str, str],
+) -> tuple[list[str], bool]:
+    warnings: list[str] = []
+    self_tamper_risk = False
+    if out_dir is not None and _is_writable_target(cfg_dir, runtime):
+        self_tamper_risk = True
+        warnings.append(
+            f"Warning: '{cfg_dir}' lies inside writable sandbox paths — "
+            "an in-session write could tamper with next-launch containment. "
+            "Prefer default host-only ~/.config/strands-box/ storage."
+        )
+    if env_map.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in _TRUTHY:
+        warnings.append(
+            "Note: GOOGLE_GENAI_USE_VERTEXAI is set — Vertex AI ADC/endpoints are not "
+            "pre-configured in Strands Box; use GOOGLE_API_KEY / GEMINI_API_KEY or add "
+            "custom Vertex egress."
+        )
+    base_env_vars = (
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "META_BASE_URL",
+        "LITELLM_BASE_URL",
+    )
+    if config.base_url or any(_nonempty(k, env_map) for k in base_env_vars):
+        warnings.append(
+            "Note: custom base_url detected — generated box.toml permits only standard "
+            "vendor endpoints; add your proxy host to box.toml and policy.dw if needed."
+        )
+    refs = _configured_model_refs(config, strategy)
+    if any(
+        r.lower().startswith(("ollama/", "litellm/ollama")) for r in refs
+    ) or "local" in _strategy_engines(strategy):
+        warnings.append(
+            "Note: local Ollama model/engine detected — loopback 127.0.0.1:11434 is "
+            "unreachable inside Strands Box's isolated network namespace."
+        )
+    if any(r.lower().startswith("bedrock-mantle/") for r in refs):
+        warnings.append(
+            "Note: bedrock-mantle model detected — default bedrock profile permits "
+            "bedrock-runtime.<region>.amazonaws.com only, not bedrock-mantle endpoints."
+        )
+    return warnings, self_tamper_risk
+
+
 def init_box_config(
     repo_root: Path | None = None,
     *,
@@ -776,8 +878,14 @@ def init_box_config(
         or env_map.get("AWS_DEFAULT_REGION")
         or "us-west-2"
     )
-    profile = _validate_aws_profile(aws_profile) if aws_profile else None
+    raw_profile = aws_profile if aws_profile else env_map.get("AWS_PROFILE")
+    profile = (
+        _validate_aws_profile(raw_profile)
+        if raw_profile and raw_profile.strip()
+        else None
+    )
 
+    cfg = config if config is not None else _safe_load_provider_config()
     strategy = (
         routing_strategy if routing_strategy is not None else _safe_load_strategy(root)
     )
@@ -790,7 +898,7 @@ def init_box_config(
     else:
         selected = detect_active_providers(
             root,
-            config=config,
+            config=cfg,
             routing_strategy=strategy,
             env=env_map,
             allow_decisions_api=allow_decisions_api,
@@ -824,21 +932,9 @@ def init_box_config(
     box_toml = _atomic_write_text(cfg_dir / "box.toml", toml_text)
     policy_dw = _atomic_write_text(cfg_dir / "policy.dw", dw_text)
 
-    warnings: list[str] = []
-    self_tamper_risk = False
-    if out_dir is not None and _is_writable_target(cfg_dir, runtime):
-        self_tamper_risk = True
-        warnings.append(
-            f"Warning: '{cfg_dir}' lies inside writable sandbox paths — "
-            "an in-session write could tamper with next-launch containment. "
-            "Prefer default host-only ~/.config/strands-box/ storage."
-        )
-    _, route_decisions_api = _providers_from_routing(strategy)
-    if route_decisions_api and "decisions_api" not in selected:
-        warnings.append(
-            "Note: routing.yaml enables 'decisions_api' — re-run with "
-            "--allow-decisions-api to include decisionapi.net egress."
-        )
+    warnings, self_tamper_risk = _collect_box_warnings(
+        cfg_dir, out_dir, runtime, cfg, strategy, env_map
+    )
 
     return BoxInitResult(
         config_dir=cfg_dir,
@@ -1124,7 +1220,7 @@ def _cmd_box_init(
     allow_decisions_api: bool = typer.Option(
         False,
         "--allow-decisions-api",
-        help="Allow decisionapi.net egress (JEV_API_KEY) for decisions_api routing.",
+        help="Force-enable decisionapi.net egress (auto-detected from routing.yaml or JEV_API_KEY).",
     ),
     allow_github_skills: bool = typer.Option(
         False,
