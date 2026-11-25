@@ -1,15 +1,15 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: 17
-current_phase_name: Decision Routing Convergence (DecisionModel)
-current_plan: 3
-status: completed
-stopped_at: Phase 17 UAT, security audit & Nyquist validation complete (`17-UAT.md` 6/6 pass, `17-SECURITY.md` 10/10 closed / threats_open 0, `17-VALIDATION.md` validated, `1752 + 1` suite + `44` rig green) — ready for `/gsd-discuss-phase 18`
-last_updated: "2026-11-25T00:46:00Z"
+current_phase: 18
+current_phase_name: Skills Marketplaces & Lockfile Installer
+current_plan: 0
+status: discussed
+stopped_at: Phase 18 context gathered (`18-CONTEXT.md` D-01..D-07, `18-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 18`
+last_updated: "2026-11-25T00:56:00Z"
 last_activity: 2026-11-24
-last_activity_desc: Completed Phase 17 Nyquist validation audit (`17-VALIDATION.md` `nyquist_compliant: true`, zero runtime edits, closed edge branches in `tests/routing/` & `tests/cost/`, all 6 CI gates + 1752+1 suite + 44 rig green)
-state_head: c05f89e
+last_activity_desc: Gathered Phase 18 context (`18-CONTEXT.md` D-01..D-07 & `18-DISCUSSION-LOG.md`: HTTPS + local-path catalogs, zero pre-registered catalogs, flat owner--repo ad-hoc slug, scripts/* warnings + fail-closed SHA-256 hash-drift skip, Prompt downgrade on protected .agent/skills* & ~/.config/strands-code/** paths, offline + live GitHub integration scope)
+state_head: 0a4456c
 progress:
   total_phases: 9
   completed_phases: 5
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 17 Complete (`DecisionModel`, `UPSTREAM-02`) — queued: Phase 18 (`SKILL-03`)
+**Current focus:** Milestone `v2.0` · Phase 18 Ready for Planning (`SKILL-03`, `18-CONTEXT.md` `D-01`–`D-07`) — Phase 17 Complete (`0a4456c`)
 
 ## Current Position
 
-Phase: 17 of 21 (Decision Routing Convergence (`DecisionModel`)) — Complete (`17-VERIFICATION.md` PASS)
-Plan: 3 of 3 complete in Phase 17 (`17-01`, `17-02`, `17-03`)
-Status: Complete (`UPSTREAM-02` verified; ready for Phase 18)
-Last activity: 2026-11-24 — Completed Phase 17 (`f6d8651`, `a8e9993`, `b474041`, `17-VERIFICATION.md`, `17-VALIDATION.md`)
+Phase: 18 of 21 (Skills Marketplaces & Lockfile Installer) — Context Gathered (`18-CONTEXT.md`)
+Plan: 0 of TBD in Phase 18 (ready for `/gsd-plan-phase 18`)
+Status: Discussed (`SKILL-03` decisions `D-01`–`D-07` locked; ready for `/gsd-plan-phase 18`)
+Last activity: 2026-11-24 — Gathered Phase 18 context (`18-CONTEXT.md` `D-01`–`D-07`, `18-DISCUSSION-LOG.md`)
 
 Progress: [█████░░░░░] 56%
 
@@ -68,11 +68,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 17 planning (`17-RESEARCH.md`, `17-PATTERNS.md`, `17-01..03-PLAN.md`, `17-VALIDATION.md`, `17-PLAN-CHECK.md` PASS): mapped Waves 1–3 with `tests/routing/test_routing_transports.py` as Wave 0 file, 4-decimal grid tolerance alignment, `ConnectError` zero-retry preservation, `resolve_harness_model(..., web_search=False, caching=False)`, `cost_context` estimated lane for `llm` routing spend, `conftest.py` key scrubbing (`TYPESAFE_API_KEY`/`JEV_API_KEY` + `@pytest.mark.integration` exemption), and `TYPESAFE_API_KEY` vs `JEV_API_KEY` docs.
 - Phase 17 (`f6d8651`, `a8e9993`, `b474041`, `c05f89e`, `1ea2872`): converged `routing/transports.py` onto `strands.decisions.DecisionModel` (`OpenRouterDecisionModel`, `OllamaDecisionModel`, `TypeSafeDecisionModel` bridge, config-only `decisions_api`/`DecisionsAPIDecisionModel` + `JEV_API_KEY` defaulting to `~typesafe/jev-latest`, config-only `llm`/`LLMDecisionModel` with `uncertainty=True` hold on `Uncertain`, `effort="off"`, `web_search=False`, `caching=False`, and `cost_for()` estimated `/cost` lane); preserved `0.62`/`0.04` gating, two-call routing, `apply_model_action`/`convert_history()`/`RichHistory`, `save_strategy` (`CC 20`), `_setup_decision_entries` (`CC 20`), `price_table` (`CC 20`), and pristine `strands_code_agent/`; verified live `-m integration` (`5 passed, 1 skipped` across OpenRouter, TypeSafe x2, `decisionapi.net`, and Gemini), `44/44` rig contract tests, `1737 + 1` full suite, all 6 CI gates (`17-VERIFICATION.md` 7/7 PASS, `17-VALIDATION.md` validated), and interactive UAT (`17-UAT.md` `6/6` passed, observing upstream `GeminiModel.structured_output` omits usage while `AnthropicModel.structured_output` emits live tokens for `/cost`).
 - Phase 17 security audit (`17-SECURITY.md` `10/10 closed`, `threats_open: 0`, `status: verified`, `9ec4e34`): remediated `T-17-03` HIGH (`valid_base_url()` creds/controls/query/fragment/port checks, `preflight_get()`/`local_engine_ready()` URL pre-check, full IPv4/IPv6 `_is_loopback_host()` loopback suppression), `T-17-06` HIGH (`follow_redirects=False` on `make_async_client`/`make_sync_client`, strict `parse_constant` rejection of `NaN`/`Infinity`), `T-17-07` MEDIUM (`valid_model_id()` whitespace/control-char rejection in `_assign_engine_string`/`_validate_engine_model_ids`/`run_*_decision`), `T-17-01` (`read_env_api_key()` whitespace/control-char filtering + `disable_cwd_dotenv()` verified for `TYPESAFE_API_KEY`/`JEV_API_KEY`), and `T-17-02` (`_sanitize_uncertain_reason()` control-char strip + canary-free OTel spans/errors + `scrub_credentials()`), verified across `1745 + 1` non-integration suite + `44/44` rig + all 6 CI gates (`_parse_engine` `16 -> 12`).
-- Phase 17 Nyquist validation (`17-VALIDATION.md` `validated`, `nyquist_compliant: true`): audited `transports.py`, `core.py`, `model_switch.py`, and `cost_context.py` via `sys.settrace` and closed remaining edge branches in `tests/routing/test_routing_transports.py`, `tests/routing/test_routing_strategy.py`, and `tests/cost/test_cost_context.py` (`0` runtime edits, `1752 + 1 = 1753/1753` default suite + `44/44` rig + all 6 CI gates green).
+- Phase 17 Nyquist validation (`17-VALIDATION.md` `validated`, `nyquist_compliant: true`, `0a4456c`): audited `transports.py`, `core.py`, `model_switch.py`, and `cost_context.py` via `sys.settrace` and closed remaining edge branches in `tests/routing/test_routing_transports.py`, `tests/routing/test_routing_strategy.py`, and `tests/cost/test_cost_context.py` (`0` runtime edits, `1752 + 1 = 1753/1753` default suite + `44/44` rig + all 6 CI gates green).
+- Phase 18 discussion (`18-CONTEXT.md` `D-01`–`D-07`, `18-DISCUSSION-LOG.md`): locked pure HTTPS `httpx` + `tarfile` + local-path catalogs (zero `git` subprocesses, redirect-safe `codeload`/`objects`, `GITHUB_TOKEN`/`GH_TOKEN` isolated inside `memory/marketplace.py`), zero pre-registered catalogs & flat `owner--repo` ad-hoc slugs, `.agent-plugin`/`.claude-plugin`/`owner/repo[@ref]` discovery with deny-first unpack (no symlinks/hardlinks/`..`/submodules, size/file caps, strict `Skill.from_file`), atomic `./.agent/skills-lock.json` (`commit_sha` + SHA-256 `computed_hash`), prominent `scripts/*` warnings + fail-closed hash-drift skip until `/skills sync`, `Prompt` downgrade on broad repo `[[allow]]` globs targeting `.agent/skills*`/`skills-lock.json`/`~/.config/strands-code/**`, dynamic `/<ns>:` `SlashCompleter`, provenance-framed skill dispatch & `print_plain` rendering, and offline + `@pytest.mark.integration` GitHub probe.
 
 ### Pending Todos
 
-- Run `/gsd-discuss-phase 18` to start Phase 18 (`SKILL-03` Remote skills marketplace management and lockfile installer).
+- Run `/gsd-plan-phase 18` to research & plan Phase 18 (`SKILL-03` Skills Marketplaces & Lockfile Installer).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -85,6 +86,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T00:46:00Z
-Stopped at: Phase 17 UAT, security audit & Nyquist validation complete (`17-UAT.md` 6/6 pass, `17-SECURITY.md` 10/10 closed, `threats_open: 0`, `17-VALIDATION.md` validated) — ready for `/gsd-discuss-phase 18`
-Resume file: .planning/phases/17-decision-routing-convergence-decisionmodel/17-VALIDATION.md
+Last session: 2026-11-25T00:56:00Z
+Stopped at: Phase 18 context gathered (`18-CONTEXT.md` D-01..D-07, `18-DISCUSSION-LOG.md`) — ready for `/gsd-plan-phase 18`
+Resume file: .planning/phases/18-skills-marketplaces-lockfile-installer/18-CONTEXT.md
