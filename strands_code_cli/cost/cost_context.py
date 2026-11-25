@@ -147,7 +147,10 @@ def _best_hit(table: dict, model_id: str):
 
 def _is_bedrock_model(model_id: str) -> bool:
     """True when ``model_id`` routes through Amazon Bedrock directly."""
-    return model_id.startswith(("arn:", "bedrock/")) or "/" not in model_id
+    return (
+        model_id.startswith(("arn:", "bedrock/", "bedrock-mantle/"))
+        or "/" not in model_id
+    )
 
 
 def _live_price(model_id: str, region: str | None) -> tuple[float, float, str] | None:
@@ -289,12 +292,12 @@ def window_for(model_id: str, *, model: Any = None) -> int | None:
         if litellm_win is not None:
             return litellm_win
     else:
-        sdk_win = _sdk_window(model_id, model=model)
-        if sdk_win is not None:
-            return sdk_win
         anthropic_win = _anthropic_cached_window(model_id)
         if anthropic_win is not None:
             return anthropic_win
+        sdk_win = _sdk_window(model_id, model=model)
+        if sdk_win is not None:
+            return sdk_win
         live = _live_window(model_id)
         if live is not None:
             return live[0]
@@ -847,13 +850,17 @@ def context_report(
 
 _CRED_PATTERNS = (
     re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"(?i)(aws_secret_access_key|api_key|bearer)\s*[:=]\s*\S+"),
+    re.compile(r"ASIA[0-9A-Z]{16}"),
+    re.compile(r"AIza[0-9A-Za-z\-_]{35}"),
+    re.compile(
+        r"(?i)(aws_secret_access_key|aws_session_token|aws_bearer_token_bedrock|api_key|bearer)\s*[:=]\s*\S+"
+    ),
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{8,}"),
     re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),
     re.compile(r"LLM[_|]\d+[_|][A-Za-z0-9\-._~+/=]{12,}"),
     re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
     re.compile(r"(?i)(github_token|gh_token)\s*[:=]\s*\S+"),
-    re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/|]+=*"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9\-._~+/|]+=*"),
 )
 
 

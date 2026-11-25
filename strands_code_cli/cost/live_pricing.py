@@ -26,6 +26,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import platformdirs
+
 CACHE_TTL_SECONDS = 24 * 3600
 """Disk-cache freshness for both live sources."""
 
@@ -74,7 +76,7 @@ def _cache_dir() -> Path:
     override = os.environ.get("STRANDS_CODE_CACHE_DIR")
     if override:
         return Path(override)
-    return Path.home() / ".cache" / "strands-code"
+    return Path(platformdirs.user_cache_dir("strands-code"))
 
 
 _cooldown_until: dict[str, float] = {}
@@ -510,7 +512,9 @@ def _litellm_keys(model_id: str) -> list[str]:
     elif lowered.startswith("meta/"):
         keys = [model_id, f"meta/{tail}", tail]
     else:
-        keys = [model_id, f"bedrock/{model_id}", f"bedrock_mantle/{tail}"]
+        keys = [model_id, tail, f"bedrock/{tail}", f"bedrock_mantle/{tail}"]
+        if not lowered.startswith("bedrock/"):
+            keys.append(f"bedrock/{model_id}")
     target = _openrouter_id(model_id)
     if target is not None:
         keys.extend([target, f"openrouter/{target}", f"litellm/openrouter/{target}"])

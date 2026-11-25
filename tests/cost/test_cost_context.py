@@ -1563,3 +1563,43 @@ class TestCacheAwareUsageAndCost:
         assert "github_pat_11" not in scrubbed
         assert "customsecret123" not in scrubbed
         assert "othersecret456" not in scrubbed
+
+
+class TestCostContextAuditParity:
+    def test_anthropic_cached_window_beats_sdk_window_on_prefixed_id(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.cost import live_pricing
+
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+        live_pricing.store_anthropic_models(
+            [{"id": "claude-sonnet-5-5", "max_input_tokens": 1_048_576}]
+        )
+        monkeypatch.setattr(cost_context, "_sdk_window", lambda *_a, **_kw: 200_000)
+
+        assert cost_context.window_for("anthropic/claude-sonnet-5-5") == 1_048_576
+
+    def test_is_bedrock_model_includes_bedrock_mantle(self):
+        assert (
+            cost_context._is_bedrock_model("bedrock-mantle/anthropic.claude-sonnet-4-6")
+            is True
+        )
+
+    def test_scrub_credentials_redacts_aiza_asia_session_bedrock_and_lowercase_bearer(
+        self,
+    ):
+        aiza = "AIzaSyTestDummyKey0123456789abcdefghijk"
+        asia = "ASIATESTEXAMPLE01234"
+        sess_tok = "FwoGZXIvYXdzSecretSessionToken999"
+        bdr_tok = "bedrock_api_key_secret_xyz"
+        bearer_tok = "lowercase-bearer-secret-42"
+        raw = (
+            f"g={aiza} aws={asia} "
+            f"AWS_SESSION_TOKEN={sess_tok} "
+            f"AWS_BEARER_TOKEN_BEDROCK={bdr_tok} "
+            f"Authorization: bearer {bearer_tok}"
+        )
+        scrubbed = cost_context.scrub_credentials(raw)
+        for secret in (aiza, asia, sess_tok, bdr_tok, bearer_tok):
+            assert secret not in scrubbed

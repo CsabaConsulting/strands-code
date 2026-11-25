@@ -949,3 +949,52 @@ class TestOpenAIAnthropicLivePricing:
         assert wonder is not None
         assert wonder["cache_read"] == pytest.approx(0.20)
         assert wonder["window"] == 1_048_576.0
+
+
+class TestLivePricingAuditParity:
+    def test_cache_dir_uses_platformdirs_without_override(self, monkeypatch):
+        from pathlib import Path
+
+        import platformdirs
+
+        monkeypatch.delenv("STRANDS_CODE_CACHE_DIR", raising=False)
+        monkeypatch.setattr(
+            platformdirs,
+            "user_cache_dir",
+            lambda app: f"/tmp/xdg-cache/{app}",
+        )
+        assert live_pricing._cache_dir() == Path("/tmp/xdg-cache/strands-code")
+
+    def test_bedrock_prefix_and_arn_litellm_tail_lookup(self, monkeypatch):
+        keys_bedrock = live_pricing._litellm_keys(
+            "bedrock/global.anthropic.claude-sonnet-4-6"
+        )
+        assert "global.anthropic.claude-sonnet-4-6" in keys_bedrock
+        assert "bedrock/global.anthropic.claude-sonnet-4-6" in keys_bedrock
+
+        arn = "arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/claude-sonnet-4-6"
+        keys_arn = live_pricing._litellm_keys(arn)
+        assert "claude-sonnet-4-6" in keys_arn
+        assert "bedrock/claude-sonnet-4-6" in keys_arn
+
+        _fake_litellm(
+            monkeypatch,
+            {
+                "global.anthropic.claude-sonnet-4-6": {
+                    "input_cost_per_token": 3.0e-6,
+                    "output_cost_per_token": 15.0e-6,
+                    "max_input_tokens": 200000,
+                },
+                "bedrock/claude-sonnet-4-6": {
+                    "input_cost_per_token": 3.0e-6,
+                    "output_cost_per_token": 15.0e-6,
+                    "max_input_tokens": 200000,
+                },
+            },
+        )
+        hit_prefix = live_pricing.litellm_entry(
+            "bedrock/global.anthropic.claude-sonnet-4-6"
+        )
+        assert hit_prefix is not None and hit_prefix["in"] == pytest.approx(3.0)
+        hit_arn = live_pricing.litellm_entry(arn)
+        assert hit_arn is not None and hit_arn["in"] == pytest.approx(3.0)
