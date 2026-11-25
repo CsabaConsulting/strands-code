@@ -723,6 +723,22 @@ class TestRoutingEntries:
         assert "Total: in 2.00K, out 700, $0.3000" in report
         assert "(actual $0.2500 + estimated $0.0500)" in report
 
+    def test_nyquist_llm_routing_event_without_decision_model_skips_provenance(self):
+        event = _routed_event(
+            engine="llm",
+            model_confidence=None,
+            effort_confidence=None,
+            input_tokens=500,
+            output_tokens=50,
+            decision_cost=0.0012,
+            decision_model=None,
+        )
+        report = cost_report([], "a/routed", routing=[event])
+        assert "via llm $0.0012" in report
+        assert " actual" not in report
+        assert "Total: in 500, out 50, $0.0012" in report
+        assert "Prices: unknown." in report
+
 
 # ----------------------------------------------------------------------
 # /context + compact + clear spike on the replay model

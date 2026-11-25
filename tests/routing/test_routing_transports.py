@@ -1036,3 +1036,182 @@ class TestPhase17SecurityHardening:
             "\x1b" not in res.error and "\r" not in res.error and "\n" not in res.error
         )
         assert len(res.error) <= 200
+
+
+class TestPhase17NyquistBranches:
+    def test_nyquist_sanitization_preflight_and_loopback_fallbacks(self, monkeypatch):
+        assert transports._sanitize_uncertain_reason(None) == "uncertain"
+        assert transports._sanitize_uncertain_reason("\x1b\r\n   ") == "uncertain"
+
+        assert transports.preflight_get("gopher://bad", {}) is None
+        _patch_httpx(monkeypatch, lambda _req: httpx.Response(500, text="boom"))
+        assert (
+            transports.preflight_get("http://127.0.0.1:11434/api/version", {}) is None
+        )
+
+        assert transports._is_loopback_host("http://[::1") is True
+        assert transports._is_loopback_host("relative/path") is True
+        monkeypatch.setenv("OLLAMA_API_KEY", "nyquist-key")
+        assert (
+            transports.ollama_headers("https://[::ffff:192.0.2.1]:11434")[
+                "Authorization"
+            ]
+            == "Bearer " + "nyquist-key"
+        )
+        assert (
+            transports.ollama_headers("https://203.0.113.5:11434")["Authorization"]
+            == "Bearer " + "nyquist-key"
+        )
+        assert transports._count(True) == 0
+
+    def test_nyquist_error_classification_and_retry_branches(self):
+        import urllib.error
+
+        assert failure_reason(ConnectionRefusedError("refused")) == "refused"
+        assert failure_reason(OSError(errno.ECONNREFUSED, "e")) == "refused"
+        assert failure_reason(OSError("net down")) == "unreachable"
+        assert failure_reason(ContextWindowOverflowException("big")) == "HTTP 413"
+        assert failure_reason(ModelThrottledException("slow")) == "HTTP 429"
+
+        http_503 = urllib.error.HTTPError("https://x", 503, "busy", {}, None)  # type: ignore[arg-type]
+        http_401 = urllib.error.HTTPError("https://x", 401, "nope", {}, None)  # type: ignore[arg-type]
+        url_to = urllib.error.URLError(TimeoutError("t"))
+        assert is_retryable_decision_error(http_503) is True
+        assert failure_reason(http_503) == "HTTP 503"
+        assert is_retryable_decision_error(http_401) is False
+        assert failure_reason(http_401) == "HTTP 401"
+        assert is_retryable_decision_error(url_to) is True
+        assert failure_reason(url_to) == "timeout"
+        assert (
+            failure_reason(
+                urllib.error.URLError(
+                    ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
+                )
+            )
+            == "refused"
+        )
+        assert failure_reason(urllib.error.URLError("dns fail")) == "unreachable"
+        assert failure_reason(RuntimeError("unexpected")) == "error"
+
+    def test_nyquist_body_fit_halving_malformed_questions_and_noul_wire(
+        self, monkeypatch
+    ):
+        import strands_code_cli.model.model_switch as switch_mod
+
+        multi_byte_ask = "é" * 35_000
+        fitted, trunc = transports.fit_decision_payload(
+            {
+                "model": "m",
+                "state": {"ask": multi_byte_ask},
+                "questions": _model_raw_questions(),
+            }
+        )
+        assert trunc is True
+        assert len(json.dumps(fitted).encode("utf-8")) <= DECISION_BODY_MAX_BYTES
+
+        state_str, _, trunc_folded = build_folded_state_and_questions(
+            {"ask": multi_byte_ask, "directives": "d", "side": False},
+            _model_raw_questions(),
+            model_id="jev-1.13.0",
+        )
+        assert trunc_folded is True
+        assert len(state_str.encode("utf-8")) <= DECISION_BODY_MAX_BYTES
+
+        _, _, trunc_empty = build_folded_state_and_questions(
+            {"ask": "", "directives": "d" * 200},
+            _model_raw_questions(),
+            max_bytes=32,
+        )
+        assert trunc_empty is False
+
+        _patch_httpx(
+            monkeypatch,
+            lambda _req: (_ for _ in ()).throw(
+                AssertionError("malformed question must fail before HTTP send")
+            ),
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-nyquist")
+        monkeypatch.setenv("TYPESAFE_API_KEY", "ts-nyquist")
+        monkeypatch.setattr(
+            switch_mod,
+            "resolve_harness_model",
+            lambda *_a, **_kw: _FakeLLMModel(lambda *_args: {}),
+        )
+        for bad_q in ({"pick_model": "not-a-dict"}, {"pick_model": {"criteria": {}}}):
+            assert (
+                run_openrouter_decision(
+                    decision_model="cheap/decider",
+                    state={"ask": "hi"},
+                    questions=bad_q,
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_typesafe_decision(
+                    native_model="jev-1.13.0",
+                    state={"ask": "hi"},
+                    questions=bad_q,
+                ).error
+                == "invalid body"
+            )
+            assert (
+                run_llm_decision(
+                    llm_model="openai/gpt-4o-mini",
+                    state={"ask": "hi"},
+                    questions=bad_q,
+                ).error
+                == "invalid body"
+            )
+
+        wire = transports._sdk_to_wire_questions(
+            {"urgent": {"question": "Urgent?", "choices": "boolean"}}
+        )
+        assert wire == {"urgent": {"type": "noul", "instructions": "Urgent?"}}
+
+    def test_nyquist_custom_parser_rejections_and_llm_cost_fallbacks(self, monkeypatch):
+        import strands_code_cli.cost.cost_context as cost_ctx
+
+        with pytest.raises(StructuredOutputException):
+            transports._parse_probabilities_table({}, "pick_model")
+        with pytest.raises(StructuredOutputException):
+            transports._parse_probabilities_table({"a": True}, "pick_model")
+        with pytest.raises(StructuredOutputException):
+            transports._parse_custom_choice_answer(
+                {"type": "noul"},
+                ["a"],
+                "pick_model",
+                allow_unlisted_choices=False,
+            )
+        with pytest.raises(StructuredOutputException):
+            transports._parse_custom_choice_answer(
+                {"type": "choice", "choice": "missing", "probabilities": {"a": 1.0}},
+                ["a"],
+                "pick_model",
+                allow_unlisted_choices=False,
+            )
+        with pytest.raises(StructuredOutputException):
+            transports._parse_custom_choice_answer(
+                {
+                    "type": "choice",
+                    "choice": "b",
+                    "probabilities": {"a": 0.2, "b": 0.8},
+                },
+                ["a"],
+                "pick_model",
+                allow_unlisted_choices=False,
+            )
+
+        assert run_ollama_decision(
+            local_model="   ", state={"ask": "hi"}, questions=_model_raw_questions()
+        ) == transports.EngineResult(answers=None)
+        assert run_llm_decision(
+            llm_model="   ", state={"ask": "hi"}, questions=_model_raw_questions()
+        ) == transports.EngineResult(answers=None)
+
+        assert transports._estimate_llm_cost("openai/gpt-4o-mini", 0, 0) is None
+        monkeypatch.setattr(
+            cost_ctx,
+            "cost_for",
+            lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        assert transports._estimate_llm_cost("openai/gpt-4o-mini", 100, 20) is None

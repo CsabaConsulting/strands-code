@@ -1722,3 +1722,135 @@ class TestOptInDecisionsAPIAndLLMStrategy:
             text=True,
         ).strip()
         assert out == "None None"
+
+
+class TestPhase17NyquistStrategyAndCoreBranches:
+    def test_nyquist_blank_model_ids_and_route_status_empty_order(self, tmp_path):
+        path = _write(
+            tmp_path / "blanks.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            'engine: {order: [decisions_api], decisions_api_model: "   ", llm_model: ""}\n',
+        )
+        loaded = load_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
+        assert loaded is not None
+        assert loaded.engine.decisions_api_model is None
+        assert loaded.engine.llm_model is None
+
+        state = routing_mod.RoutingState()
+        assert "Strategy: none configured" in routing_mod.route_status_text(state, None)
+        off_strategy = routing_mod.RoutingStrategy(
+            candidates=[RoutingCandidate(id="a/1")],
+            engine=routing_mod.RoutingEngine(order=[]),
+        )
+        assert "Engine: off" in routing_mod.route_status_text(state, off_strategy)
+
+    def test_nyquist_llm_effort_uncertain_stale_choice_and_effort_faults(
+        self, monkeypatch
+    ):
+        strategy = routing_mod.RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id="a/1", levels=["low", "high"]),
+                RoutingCandidate(id="b/2", levels=["low"]),
+            ],
+            directives="d",
+            engine=routing_mod.RoutingEngine(
+                order=["llm"], llm_model="openai/gpt-4o-mini"
+            ),
+        )
+
+        def _fake_llm(*, llm_model, state, questions, timeout=10):
+            if "pick_model" in questions:
+                return routing_mod.EngineResult(
+                    answers={"pick_model": {"type": "llm_choice", "choice": "a/1"}},
+                    model=llm_model,
+                )
+            return routing_mod.EngineResult(
+                answers=None, uncertain=True, error="uncertain", model=llm_model
+            )
+
+        monkeypatch.setattr(routing_mod, "decide_via_llm", _fake_llm)
+        pick, engine, usage, detail = routing_mod.decide(
+            strategy, current_model="b/2", side=False, ask="hi"
+        )
+        assert pick is None
+        assert engine == "llm"
+        assert usage == (0, 0, None)
+        assert detail == "llm uncertain"
+
+        assert (
+            routing_mod._select_model_from_result(
+                "llm",
+                routing_mod.EngineResult(
+                    answers={
+                        "pick_model": {"type": "llm_choice", "choice": "stale/model"}
+                    }
+                ),
+                strategy,
+            )
+            is None
+        )
+        assert routing_mod._evaluate_effort_answer(
+            "llm",
+            routing_mod.EngineResult(
+                answers={"pick_effort": {"type": "llm_choice", "choice": "   "}}
+            ),
+        ) == (None, None, None)
+        assert routing_mod._evaluate_effort_answer(
+            "openrouter",
+            routing_mod.EngineResult(
+                answers={
+                    "pick_effort": {
+                        "type": "choice",
+                        "choice": "low",
+                        "probabilities": {"low": 0.2},
+                    }
+                }
+            ),
+        ) == (None, None, None)
+
+        res = routing_mod._decide_effort(
+            strategy,
+            strategy.candidates[0],
+            {"ask": "hi", "directives": "d", "side": False},
+            [
+                (
+                    "bad",
+                    lambda *_a: (_ for _ in ()).throw(RuntimeError("boom")),
+                ),
+                (
+                    "openrouter",
+                    lambda *_a: routing_mod.EngineResult(
+                        answers={"pick_effort": {"type": "bogus"}}
+                    ),
+                ),
+            ],
+        )
+        assert res == (
+            None,
+            None,
+            (0, 0, None),
+            "openrouter",
+            "openrouter invalid table",
+            False,
+        )
+
+        paused = routing_mod._decide_effort(
+            strategy,
+            strategy.candidates[0],
+            {"ask": "hi", "directives": "d", "side": False},
+            [
+                (
+                    "openrouter",
+                    lambda *_a: routing_mod.EngineResult(answers=None, error="refused"),
+                )
+            ],
+        )
+        assert paused == (
+            None,
+            None,
+            (0, 0, None),
+            "openrouter",
+            "paused: all engines unreachable (openrouter)",
+            False,
+        )
