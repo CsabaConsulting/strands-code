@@ -267,3 +267,10 @@ Do not make direct repo edits outside a GSD workflow unless the user explicitly 
 > Profile not yet configured. Run `$gsd-profile-user` to generate your developer profile.
 > This section is managed by `generate-claude-profile` -- do not edit manually.
 <!-- GSD:profile-end -->
+
+## Cross-Cutting Invariants & Discussion Hygiene
+
+Before running `/gsd-discuss-phase` or `/gsd-plan-phase`, consult [.planning/INVARIANTS.md](.planning/INVARIANTS.md):
+- Present a Peer Parity Matrix before asking questions on any recurring cross-cutting axis (providers, routing engines, protected paths, persistence, `/cost`, CLI surface).
+- Ask atomic, single-axis questions and justify any parity break explicitly.
+- Apply the Horizontal Backport Rule when hardening shared patterns, and respect all static repo invariants (`strands_code_agent/` immutability, no `os.environ` in restricted modules, `xenon <= C`, `lint-imports`).
