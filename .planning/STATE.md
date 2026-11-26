@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: "19.1"
 current_phase_name: Policy Gate, Persistence & Concurrency Hardening
 current_plan: 0
-status: discussed
-stopped_at: Phase 19.1 discussion complete (`19.1-CONTEXT.md` locked, `D-01`–`D-08`) — ready for `/gsd-plan-phase 19.1`
-last_updated: "2026-11-26T03:23:00Z"
+status: planned
+stopped_at: Phase 19.1 planning complete (`19.1-01`..`04-PLAN.md` verified PASS) — ready for `/gsd-execute-phase 19.1`
+last_updated: "2026-11-26T04:04:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Completed Phase 19.1 discussion (`19.1-CONTEXT.md` `D-01`–`D-08` & `19.1-DISCUSSION-LOG.md`)
-state_head: ef292b4
+last_activity_desc: Planned Phase 19.1 (`HARDEN-01` across Waves 1–4: `19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01`..`04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS)
+state_head: 7015c11
 progress:
   total_phases: 13
   completed_phases: 7
-  total_plans: 20
+  total_plans: 24
   completed_plans: 20
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.1 Discussed (`HARDEN-01`, `19.1-CONTEXT.md` `D-01`–`D-08` locked) — ready for `/gsd-plan-phase 19.1`
+**Current focus:** Milestone `v2.0` · Phase 19.1 Planned (`HARDEN-01` — Waves 1–4 verified PASS in `19.1-PLAN-CHECK.md`) — ready for `/gsd-execute-phase 19.1`
 
 ## Current Position
 
-Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Discussed (`19.1-CONTEXT.md` locked)
-Plan: 0 of TBD in Phase 19.1
-Status: Discussed (`19.1-CONTEXT.md` `D-01`–`D-08` locked after 3 Peer Parity Matrices & 6 atomic questions) — ready for `/gsd-plan-phase 19.1`
-Last activity: 2026-11-25 — Completed Phase 19.1 discussion (`19.1-CONTEXT.md` & `19.1-DISCUSSION-LOG.md`)
+Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Planned (`19.1-01`..`19.1-04`)
+Plan: 0 of 4 in Phase 19.1
+Status: Planned (`19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01`..`04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19.1`
+Last activity: 2026-11-25 — Planned Phase 19.1 (`19.1-01`..`04-PLAN.md` verified PASS)
 
 Progress: [█████░░░░░] 54%
 
@@ -88,11 +88,12 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19 security audit (`19-SECURITY.md` `11/11 closed`, `threats_open: 0`, `status: verified`, `2026-11-25`): remediated `T-19-09` HIGH (ancestor `max_ancestors=2` + pre-`realpath` `_resolve_code_dirs()` symlink refusal + fail-closed `_validate_launch_config()`/`_validate_launch_box_dir()` checks), `T-19-10` HIGH (`git` flag-before-`push` MFOTL coverage + Dogwood `forbid_box_config_write`/`delete`/`move` rules + `os.X_OK`/control-char checks in `discover_box_binaries()`), and `T-19-11` MEDIUM (`XDG_*` absolute/non-root validation in `_render_agent_env()`), verified across live `strands-box 0.3.1` integration (`1 passed`, `7.46s`), `1843 + 1 = 1844` unit suite, `44/44` rig, and all 6 CI gates (`box.py` max `radon C 16`).
 - Phase 19 Nyquist validation (`19-VALIDATION.md` `validated`, `nyquist_compliant: true`, `2026-11-25`): audited Phase 19 modules via `sys.monitoring` (`box.py` `1178/1180 = 99.8%` [100.0% reachable on Python 3.12], `sandbox/__init__.py` `1/1 = 100.0%`, `100.0%` on Phase 19 integration seams in `codeact.py`/`policy/core.py`/`dispatch/core.py`/`entry/main.py`) and closed all `58` reachable edge-branch gaps across `5` new tests in `tests/sandbox/test_box.py` & `tests/sandbox/test_box_cli.py` (`0` runtime edits, `1848 + 1 = 1849` default suite + `1` live `strands-box 0.3.1` integration + `44/44` rig + all 6 CI gates green).
 - Phase 19.1 discussion (`19.1-CONTEXT.md` `D-01`–`D-08`, `19.1-DISCUSSION-LOG.md`, `2026-11-25`): locked direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` with per-agent `read_only_agents` and `event.cancel_tool`, outside-scope `read` `Prompt` + sensitive secret-file `read` downgrade (matching Dogwood floor), expanded `write`/`edit` protected paths (`.agent/**`, `.git/**`, `.env*`), home-only `trust_delegated` (warn+ignore in repo), `KNOWN_TOOLS` + `BUILTIN_ALLOWED_TOOLS` for all 4 live harness plugin tools + tool-only rules + `search` path rules, shared `platform_io.py` (`0o600` private / standard readable git-tracked `STRANDS.md` & `skills-lock.json`), shared `ui/console.py` + strict `[A-Za-z0-9][A-Za-z0-9._-]*` `_validate_session_id` + main-thread HITL prompts + `sanitize_display`, `silent` mode keeping `init-*` interactive + content-fingerprinted `CurateQueue` dedup, `/btw` live-model/routed-billing/fresh-REPL fixes, custom `make_subagent`, and `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()` teardown.
+- Phase 19.1 planning (`19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01..04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS): verified upstream `HookOrder.SDK_FIRST < INTERVENTION_INPUT` and `on_error="throw"` (`TurnCancelled` preservation), `is_fetch_get()` `-T`/`-I`/`-X` case-lowering bug, thread-safe `/proc/self/status` umask-masked `mode=None` for repo files, `save_strategy` (`C 20 -> ~B 6`) and `_setup_decision_entries` (`C 20 -> ~C 15`) complexity decompositions, isolated `entry/subagent.py`, and exact legacy test migration/preservation inventory across Waves 1–4.
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 19.1`, execute `HARDEN-01`, then run `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
-- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
+- Run `/gsd-execute-phase 19.1` (`HARDEN-01`), then `/gsd-discuss-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM).
+- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (plus optional `harness-sdk` enhancement note for dynamic parent-model inheritance in `build_default_subagent`).
 
 ### Blockers/Concerns
 
@@ -104,6 +105,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:23:00Z
-Stopped at: Phase 19.1 discussion complete (`19.1-CONTEXT.md` locked, `D-01`–`D-08`) — ready for `/gsd-plan-phase 19.1`
-Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-CONTEXT.md
+Last session: 2026-11-26T04:04:00Z
+Stopped at: Phase 19.1 planning complete (`19.1-01`..`04-PLAN.md` verified PASS) — ready for `/gsd-execute-phase 19.1`
+Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-01-PLAN.md

@@ -212,7 +212,24 @@ Plans:
   2. Shared atomic `mkstemp` `0o600` + parent/target symlink-refusing helper replaces all non-compliant writers across `strands_code_cli/` (incl. `RichHistory.save`, `PendingStore`, `repl_history`, `memory_file` read parent check, `PolicyConfig`, `routing/core`, `live_pricing`); shared `ui/console.py` eliminates Rich markup injection (`session_id`), worker-thread `output_context()` nesting, and unlocked `steering.py` prints
   3. `CurateQueue` silent-mode `/init` auto-write & sweep/dedup bugs and `/btw`/`subagent` stale-model/billing/tag-collision/background-task-cancel bugs are closed
 
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+**Wave 1**
+
+- [ ] `19.1-01-PLAN.md` — Tracer: `platform_io.py` & `ui/console.py` leaves + Wave 0 suites (`tests/test_platform_io.py`, `tests/ui/test_console.py`), plus `policy/core.py`/`scope.py`/`diff_gate.py` hardening (`is_fetch_get`, `_serialise_rule`, shell/symlink `[[allow]]`, tool-scoped canonical `effective_roots`, unboxed `read` + sensitive secret floor, expanded `.agent/**`/`.git/**`/`.env*` protection, home-only `trust_delegated`, 4 plugin tools + tool-only/`search` path rules)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `19.1-02-PLAN.md` — Direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` with `read_only_agents`, `event.cancel_tool` check, SHA-256 `BatchState`, main-thread HITL prompt rendering inside `ApprovalBroker.request`, simplified locked `steering.py`, and migrated policy/loop/ui/model test suites
+
+**Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
+
+- [ ] `19.1-03-PLAN.md` — 15-module horizontal persistence sweep via `platform_io.py` (`RichHistory`, `repl_history`, `PendingStore` + `apply_stashed` rechecks, `live_pricing` region validation, `save_strategy` decomposition `CC 20 -> <= 10`, same-FS marketplace staging/readable lockfile) + 6-console `ui/console.py` unification, strict `_validate_session_id`, and sanitized memory/`/route setup` output (`_setup_decision_entries` `CC 20 -> ~15`)
+
+**Wave 4** *(blocked on Wave 1, Wave 2 & Wave 3 completion)*
+
+- [ ] `19.1-04-PLAN.md` — `CurateQueue` silent `/init` guard + content-fingerprint dedup, `/btw` live-model sync + 5-tuple routed-model `/cost` billing + `fresh_tools_for_delegate`, custom `entry/subagent.py` `make_subagent` wrapper (`builtin_tools["subagent"] = False`), guarded `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()` teardown, and full CI/unit/rig/host Box verification
 
 ### Phase 19.2: CLI, Routing/Cost, Provider & Packaging Parity *(INSERTED)*
 
@@ -288,7 +305,7 @@ Plans:
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
-| 19.1. Policy Gate, Persistence & Concurrency Hardening | `v2.0` | 0/0 | Not started | - |
+| 19.1. Policy Gate, Persistence & Concurrency Hardening | `v2.0` | 0/4 | Planned | - |
 | 19.2. CLI, Routing/Cost, Provider & Packaging Parity | `v2.0` | 0/0 | Not started | - |
 | 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
