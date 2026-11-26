@@ -74,7 +74,7 @@ sweep **all existing peer functions** across `strands_code_cli/` in the same pha
 
 ## 4. Static Repo Invariants (CI-Enforced)
 
-- `strands_code_agent/` remains byte-pristine (`git diff ee42ea2 -- strands_code_agent/` empty).
+- `strands_code_agent/` remains unmodified on `main` (`git diff ee42ea2 -- strands_code_agent/` empty) so upstream resyncs stay conflict-free; put CLI code and temporary upstream-PR workarounds in `strands_code_cli/` as isolated, auto-retiring bridges, editing `strands_code_agent/` only on a dedicated upstream-PR branch or with explicit user approval when wrapping from `strands_code_cli/` is impossible.
 - Zero `os.environ` / `os.getenv` tokens in `model/model_switch.py`, `cost/cost_context.py`, `dispatch/core.py`, `loop/core.py`, `loop/pump.py`, or `entry/main.py`.
 - Zero unnegated `"budget"`, `"enforce"`, `"quota"`, or `"halt"` substrings in those modules.
 - `xenon --max-absolute C strands_code_cli tests scripts` (`CC <= 20`) and `lint-imports` pass.

@@ -26,7 +26,7 @@ Apply these rules in every `/gsd-discuss-phase`, `/gsd-plan-phase`, design revie
 
 ## 2. Non-Negotiable Repository Invariants
 
-- **Upstream fork boundary (`D-24`):** Never modify files under `strands_code_agent/` (`git diff ee42ea2 -- strands_code_agent/` must stay empty).
+- **Upstream fork boundary (`D-24`):** Keep `strands_code_agent/` unmodified on `main` (`git diff ee42ea2 -- strands_code_agent/` empty) so upstream resyncs stay conflict-free. Put CLI-specific code and temporary upstream-PR workarounds in `strands_code_cli/` as isolated, auto-retiring bridges; only edit `strands_code_agent/` on a dedicated upstream-PR branch or with explicit user approval when wrapping from `strands_code_cli/` is impossible.
 - **Restricted-module hygiene:** Zero `os.environ`/`os.getenv` tokens and zero unnegated `"budget"`, `"enforce"`, `"quota"`, or `"halt"` substrings in `entry/main.py`, `dispatch/core.py`, `loop/core.py`, `loop/pump.py`, `model/model_switch.py`, or `cost/cost_context.py`.
 - **Static CI gates:** Every code change must pass `ruff format --check`, `ruff check`, `xenon --max-absolute C` (`CC <= 20`), `lint-imports`, and `uv lock --check`.
 - **No unilateral shifts in pre-decided anchors:** Never bury parity breaks or cross-phase overrides inside "pre-decided / not re-asked" preambles; surface them explicitly.
