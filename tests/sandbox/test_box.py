@@ -806,6 +806,144 @@ class TestSandboxSecurityAndDiagnostics:
         assert captured["env"]["EXPERIMENTAL_X86_SUPPORT"] == "TRUE"
         assert any("EXPERIMENTAL_X86_SUPPORT=TRUE" in n for n in notices)
 
+    def test_grandparent_and_pre_realpath_code_dir_symlinks_refused(
+        self, tmp_path, monkeypatch
+    ):
+        cfg_root = tmp_path / "cfg_root"
+        data_root = tmp_path / "data_root"
+        cache_root = tmp_path / "cache_root"
+        for d in (cfg_root, data_root, cache_root):
+            d.mkdir()
+        target = tmp_path / "real_target"
+        target.mkdir()
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(cfg_root / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(data_root / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(cache_root / app)
+        )
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        box_cfg_root = cfg_root / "strands-box"
+        box_cfg_root.symlink_to(target)
+        with pytest.raises(ValueError, match="Refusing symlink parent"):
+            init_box_config(repo, env={"HOME": str(tmp_path)})
+        box_cfg_root.unlink()
+
+        code_cfg = cfg_root / "strands-code"
+        code_cfg.symlink_to(target)
+        with pytest.raises(ValueError, match="Refusing symlink"):
+            init_box_config(repo, env={"HOME": str(tmp_path)})
+        code_cfg.unlink()
+
+        code_cache = cache_root / "strands-code"
+        code_cache.symlink_to(target)
+        with pytest.raises(ValueError, match="Refusing symlink"):
+            init_box_config(repo, env={"HOME": str(tmp_path)})
+
+    def test_launch_box_run_fails_closed_on_corrupt_or_unsafe_box_dir(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        bdir = _fake_box_dir(tmp_path)
+
+        bad_toml = tmp_path / "bad" / "box.toml"
+        bad_toml.parent.mkdir()
+        bad_toml.write_text("name = [broken", encoding="utf-8")
+        with pytest.raises(ValueError, match="Invalid box.toml"):
+            launch_box_run(
+                [], repo_root=repo, config_path=bad_toml, box_bin=bdir / "box"
+            )
+
+        real_pol = tmp_path / "real.dw"
+        real_pol.write_text("", encoding="utf-8")
+        sym_pol = bad_toml.parent / "custom.dw"
+        sym_pol.symlink_to(real_pol)
+        bad_toml.write_text('policy = "custom.dw"\n', encoding="utf-8")
+        with pytest.raises(ValueError, match="Refusing symlink policy"):
+            launch_box_run(
+                [], repo_root=repo, config_path=bad_toml, box_bin=bdir / "box"
+            )
+
+        for unsafe_dir in ("relative/box", str(Path.home() / "box_data"), "/tmp/x"):
+            bad_toml.write_text(f'box_dir = "{unsafe_dir}"\n', encoding="utf-8")
+            with pytest.raises(ValueError, match="box_dir"):
+                launch_box_run(
+                    [], repo_root=repo, config_path=bad_toml, box_bin=bdir / "box"
+                )
+
+    def test_discover_box_binaries_requires_executable_and_safe_path(self, tmp_path):
+        bdir = _fake_box_dir(tmp_path)
+        os.chmod(bdir / "strands-box-contain-trampoline", 0o644)
+        found, missing = discover_box_binaries(bdir / "box")
+        assert found is None
+        assert "strands-box-contain-trampoline" in missing
+
+        os.chmod(bdir / "strands-box-contain-trampoline", 0o755)
+        os.chmod(bdir / "box", 0o644)
+        found2, missing2 = discover_box_binaries(bdir / "box")
+        assert found2 is None and missing2
+
+        found3, _ = discover_box_binaries(env={"STRANDS_BOX_BIN": "/bin/box\nevil"})
+        assert found3 is None
+
+    def test_policy_dw_hardens_git_flag_push_and_box_dir_mutations(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        res = init_box_config(repo, providers=["bedrock"], env={"HOME": str(tmp_path)})
+        dw = res.policy_dw.read_text(encoding="utf-8")
+        assert 'context.input.arg2 == "push"' in dw
+        assert 'context.input.command like "* push"' in dw
+        for rid in (
+            "forbid_box_config_write",
+            "forbid_box_config_delete",
+            "forbid_box_config_move",
+        ):
+            assert f'@id("{rid}")' in dw
+        assert 'context.input.path like "*/.config/strands-box/*"' in dw
+        assert 'context.input.path like "*/.local/share/strands-box/*"' in dw
+
+    def test_render_agent_env_filters_unsafe_xdg_paths(self, tmp_path):
+        from strands_code_cli.sandbox.box import _render_agent_env
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        rt = resolve_runtime_paths(repo, home=tmp_path)
+        valid_xdg = str(tmp_path / "xdg_cfg")
+        env_rel = _render_agent_env(
+            runtime=rt,
+            providers=["bedrock"],
+            aws_region="us-west-2",
+            env={
+                "PATH": "/usr/bin:/bin",
+                "XDG_CONFIG_HOME": "relative/cfg",
+                "XDG_CACHE_HOME": "/tmp",
+            },
+        )
+        assert "XDG_CONFIG_HOME" not in env_rel
+        assert "XDG_CACHE_HOME" not in env_rel
+        env_ok = _render_agent_env(
+            runtime=rt,
+            providers=["bedrock"],
+            aws_region="us-west-2",
+            env={"PATH": "/usr/bin:/bin", "XDG_CONFIG_HOME": valid_xdg},
+        )
+        assert env_ok["XDG_CONFIG_HOME"] == valid_xdg
+
 
 def _assert_box_run_clean(
     box_bin: Path, box_toml: Path, cwd: Path, env: dict[str, str]

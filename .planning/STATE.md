@@ -5,11 +5,11 @@ current_phase: 19
 current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
 current_plan: 3
 status: verified
-stopped_at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) + v1/v2 parity audit saved — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
-last_updated: "2026-11-26T02:32:00Z"
+stopped_at: Phase 19 security audit complete (`19-SECURITY.md` 11/11 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 19`, then `/gsd-discuss-phase 19.1`
+last_updated: "2026-11-26T02:45:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Split parity & hardening into Phases 19.1 (HARDEN-01) and 19.2 (PARITY-01) in roadmap
-state_head: 7c4673e
+last_activity_desc: Completed Phase 19 security audit (`19-SECURITY.md` 11/11 closed, 0 open; closed T-19-09..11; 1844+1 tests + live strands-box 0.3.1 + 44/44 rig + 6/6 CI gates)
+state_head: b2604e6
 progress:
   total_phases: 13
   completed_phases: 7
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19 Verified + UAT Passed (`SANDBOX-01`, `19-UAT.md` `6/6 PASS`) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
+**Current focus:** Milestone `v2.0` · Phase 19 Verified + UAT + Security Audited (`SANDBOX-01`, `19-SECURITY.md` `11/11` closed) — ready for `/gsd-validate-phase 19` or `/gsd-discuss-phase 19.1`
 
 ## Current Position
 
-Phase: 19 of 23 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Verified & UAT Complete (`19-01`..`19-03`)
+Phase: 19 of 23 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Verified, UAT & Security Complete (`19-01`..`19-03`)
 Plan: 3 of 3 complete in Phase 19
-Status: Verified (`19-UAT.md` `6/6 PASS`, `1839` unit suite + live `strands-box 0.3.1` host check + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
-Last activity: 2026-11-25 — Split parity & hardening into Phases 19.1 (HARDEN-01) and 19.2 (PARITY-01)
+Status: Verified (`19-UAT.md` `6/6 PASS`, `19-SECURITY.md` `11/11 closed`, `1844` unit suite + live `strands-box 0.3.1` host check + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-validate-phase 19`, then `/gsd-discuss-phase 19.1`
+Last activity: 2026-11-25 — Completed Phase 19 security audit (`19-SECURITY.md` `11/11 closed`)
 
 Progress: [█████░░░░░] 54%
 
@@ -85,10 +85,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19 (`f5a8ac6`, `10ef216`, `dbddce8`, `19-VERIFICATION.md` `12/12 PASS`, `19-VALIDATION.md` verified): delivered `SANDBOX-01` in `strands_code_cli/sandbox/box.py` (host-only `~/.config/strands-box/repos/<slug>-<hash8>/` storage with `0o700`/`0o600` atomic symlink-refused writes, `uv`/`.venv` realpath resolution, `tomllib`-validated `box.toml`, 7 core + `--allow-decisions-api`/`--allow-github-skills` egress profiles, default-deny `policy.dw` with `.env`/`.ssh`/`.aws` read forbids and canonical MFOTL rule `push_requires_recent_tests` under scoped `v2.0` `D-05` revisit, plus Linux 3-binary/`x86_64` `EXPERIMENTAL_X86_SUPPORT=TRUE`/Ubuntu AppArmor `userns` diagnostics & `strands-code box init|doctor|run`), aligned `codeact_shell` (`["sh", "-c", shlex.join(argv)]` under `STRANDS_BOX=1`), added `~/.config/strands-box` `Prompt` downgrade in `policy/core.py` & `/policy` Box indicator in `dispatch/core.py`, wired `box_app` cleanly in `entry/main.py`, added `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs in `conftest.py` + opt-in `@pytest.mark.integration` host `dogwood`/`box` probe + `docs/QUICKSTART.md` guide, and passed `1820 + 1 = 1821` default suite + `44/44` rig + all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
 - Phase 19 UAT (`19-UAT.md` `6/6` passed; mid-UAT fixes `8219c20`, `3d514e9`..`edbe4ce`, `679c874`, `87c1564`): added `.planning/INVARIANTS.md` cross-cutting peer-parity & invariants rules, resolved cross-phase consistency items (8-provider Box auto-detect with `decisions_api` + policy-only secret-less targets, protected-path `Prompt` downgrades across `~/.local/share/strands-box/**` / `.agent/policy.toml` / `.agent/routing.yaml` / `.agent/MEMORY.md` / `STRANDS.md` + HITL dead-`Always` guard, Google preflight / OpenRouter / Bedrock cost & model parity), aligned `box.toml` + `policy.dw` with live `strands-box 0.3.1` (32-byte `sc-<slug[:20]>-<hash8>` box name, `TMPDIR=~/.cache/strands-code/tmp`, multiarch lib read + `lib-dynload`/`site-packages` exec, shebang interpreter resolution, writable in-workspace tool skip, `[tool.python]` omitted deferring Monty alignment to Phase 20, `forbid ... unless temporal` `output.status: 0` MFOTL rule), and verified live `strands-box 0.3.1` host run + `1838 + 1 = 1839` unit tests + `44/44` rig + all 6 CI gates.
 - Full `v1.0`/`v2.0` parity & architecture audit (`.planning/research/V1_V2_PARITY_AUDIT.md`, `2026-11-25`): audited Phases 1–19 across CLI/toggles, persistence/paths/Py3.10/packaging, gates/loops/CodeAct/`/btw`/`subagent`/memory, and routing/`/cost`/models/import-graph; user approved breaking cleanups (`requires-python >=3.11`, removing `engine.primary`, removing `/diff approve-each`, session-sticky `/memory mode` & `/codeact` + collapsing `diff.yaml`/`memory.yaml`, pruning redundant aliases, `PolicyGateHandler(InterventionHandler)`), inserted **Phase 19.1** (`HARDEN-01`) and **Phase 19.2** (`PARITY-01`) before Phase 20, and appended **Phase 23** (`STRUCT-02`, `CLEANUP-02`) after Phase 22.
+- Phase 19 security audit (`19-SECURITY.md` `11/11 closed`, `threats_open: 0`, `status: verified`, `2026-11-25`): remediated `T-19-09` HIGH (ancestor `max_ancestors=2` + pre-`realpath` `_resolve_code_dirs()` symlink refusal + fail-closed `_validate_launch_config()`/`_validate_launch_box_dir()` checks), `T-19-10` HIGH (`git` flag-before-`push` MFOTL coverage + Dogwood `forbid_box_config_write`/`delete`/`move` rules + `os.X_OK`/control-char checks in `discover_box_binaries()`), and `T-19-11` MEDIUM (`XDG_*` absolute/non-root validation in `_render_agent_env()`), verified across live `strands-box 0.3.1` integration (`1 passed`, `7.46s`), `1843 + 1 = 1844` unit suite, `44/44` rig, and all 6 CI gates (`box.py` max `radon C 16`).
 
 ### Pending Todos
 
-- Complete Phase 19 GSD sign-off (`/gsd-secure-phase 19` + `/gsd-validate-phase 19`), then start `/gsd-discuss-phase 19.1` and `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
+- Run `/gsd-validate-phase 19` to complete Phase 19 sign-off, then start `/gsd-discuss-phase 19.1` and `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -101,6 +102,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-26T02:32:00Z
-Stopped at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) + v1/v2 parity audit saved — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
-Resume file: .planning/research/V1_V2_PARITY_AUDIT.md
+Last session: 2026-11-26T02:45:00Z
+Stopped at: Phase 19 security audit complete (`19-SECURITY.md` 11/11 closed, `threats_open: 0`) — ready for `/gsd-validate-phase 19`, then `/gsd-discuss-phase 19.1`
+Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-SECURITY.md

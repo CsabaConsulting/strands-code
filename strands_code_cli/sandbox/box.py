@@ -172,11 +172,16 @@ def _validate_aws_profile(profile: str) -> str:
     return cleaned
 
 
-def _refuse_symlink(path: Path, label: str = "path") -> None:
-    if path.is_symlink():
-        raise ValueError(f"Refusing symlink {label}: {path}")
-    if path.parent.is_symlink():
-        raise ValueError(f"Refusing symlink parent for {label}: {path.parent}")
+def _refuse_symlink(path: Path, label: str = "path", *, max_ancestors: int = 2) -> None:
+    cur = path
+    for step in range(max_ancestors + 1):
+        if step > 0 and (cur == cur.parent or cur in _REFUSED_ROOTS):
+            break
+        if cur.is_symlink():
+            if step == 0:
+                raise ValueError(f"Refusing symlink {label}: {cur}")
+            raise ValueError(f"Refusing symlink parent for {label}: {cur}")
+        cur = cur.parent
 
 
 def _is_refused_root(path: Path) -> bool:
@@ -519,8 +524,13 @@ def _resolve_code_dirs(
         if explicit_home is not None
         else platformdirs.user_cache_dir(_CODE_APP_NAME)
     )
-    code_cfg = Path(os.path.realpath(cfg_raw))
-    code_cache = Path(os.path.realpath(cache_raw))
+    raw_cfg = Path(cfg_raw)
+    raw_cache = Path(cache_raw)
+    _refuse_symlink(raw_cfg, "strands-code config dir", max_ancestors=1)
+    _refuse_symlink(raw_cache, "strands-code cache dir", max_ancestors=1)
+    _refuse_symlink(raw_cache / "tmp", "strands-code tmp dir", max_ancestors=1)
+    code_cfg = Path(os.path.realpath(raw_cfg))
+    code_cache = Path(os.path.realpath(raw_cache))
     return code_cfg, code_cache, code_cache / "tmp"
 
 
@@ -800,10 +810,21 @@ def _render_agent_env(
         "TMPDIR": str(runtime["tmp_dir"]),
         "STRANDS_BOX": "1",
     }
-    for key in ("COLORTERM", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+    raw_ct = env.get("COLORTERM")
+    if isinstance(raw_ct, str) and raw_ct.strip():
+        out["COLORTERM"] = _reject_control_chars(raw_ct.strip(), "COLORTERM")
+    for key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
         val = env.get(key)
-        if isinstance(val, str) and val.strip():
-            out[key] = _reject_control_chars(val.strip(), key)
+        if not isinstance(val, str) or not val.strip():
+            continue
+        cleaned = _reject_control_chars(val.strip(), key)
+        cand = Path(cleaned)
+        if (
+            cand.is_absolute()
+            and cand not in _REFUSED_ROOTS
+            and not _is_refused_root(cand)
+        ):
+            out[key] = cleaned
     if "bedrock" in providers:
         out["AWS_REGION"] = aws_region
     return out
@@ -979,6 +1000,27 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         '    || context.input.path like "*/.aws/*"',
         "};",
         "",
+        '@id("forbid_box_config_write")',
+        'forbid (principal, action == Box::Action::"fs:write", resource)',
+        "when {",
+        '    context.input.path like "*/.config/strands-box/*"',
+        '    || context.input.path like "*/.local/share/strands-box/*"',
+        "};",
+        "",
+        '@id("forbid_box_config_delete")',
+        'forbid (principal, action == Box::Action::"fs:delete", resource)',
+        "when {",
+        '    context.input.path like "*/.config/strands-box/*"',
+        '    || context.input.path like "*/.local/share/strands-box/*"',
+        "};",
+        "",
+        '@id("forbid_box_config_move")',
+        'forbid (principal, action == Box::Action::"fs:move", resource)',
+        "when {",
+        '    context.input.path like "*/.config/strands-box/*"',
+        '    || context.input.path like "*/.local/share/strands-box/*"',
+        "};",
+        "",
         '@id("allow_dev_tools")',
         'permit (principal, action == Box::Action::"shell:spawn", resource)',
         "when {",
@@ -989,8 +1031,12 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         'forbid (principal, action == Box::Action::"shell:spawn", resource)',
         "when {",
         '    context.input.program == "git"',
-        "    && context.input has arg1",
-        '    && context.input.arg1 == "push"',
+        "    && (",
+        '        (context.input has arg1 && context.input.arg1 == "push")',
+        '        || (context.input has arg2 && context.input.arg2 == "push")',
+        '        || context.input.command like "* push"',
+        '        || context.input.command like "* push *"',
+        "    )",
         "}",
         "unless temporal {",
         "    formerly within 900s (",
@@ -1173,12 +1219,16 @@ def init_box_config(
     )
 
 
+def _is_exec_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
 def discover_box_binaries(
     box_bin: str | Path | None = None,
     *,
     env: Mapping[str, str] | None = None,
 ) -> tuple[Path | None, list[str]]:
-    """Locate ``box`` and verify all 3 co-located Linux helpers exist."""
+    """Locate ``box`` and verify all 3 co-located Linux helpers exist and execute."""
     env_map = os.environ if env is None else env
     raw = (
         str(box_bin)
@@ -1186,14 +1236,14 @@ def discover_box_binaries(
         else env_map.get("STRANDS_BOX_BIN")
         or shutil.which("box", path=env_map.get("PATH"))
     )
-    if not raw:
+    if not raw or any(ord(ch) < 32 or ord(ch) == 127 for ch in raw):
         return None, list(_BOX_BINARIES)
     cand = Path(raw).expanduser()
     if cand.is_dir():
         cand = cand / "box"
-    if not cand.is_file():
+    if not _is_exec_file(cand):
         return None, list(_BOX_BINARIES)
-    missing = [name for name in _BOX_BINARIES if not (cand.parent / name).is_file()]
+    missing = [name for name in _BOX_BINARIES if not _is_exec_file(cand.parent / name)]
     return (cand if not missing else None), missing
 
 
@@ -1368,6 +1418,51 @@ def format_doctor_report(report: BoxDoctorReport) -> str:
     return "\n".join(lines)
 
 
+def _validate_launch_box_dir(raw_box_dir: str) -> None:
+    cleaned = _reject_control_chars(raw_box_dir, "box_dir")
+    box_dir = Path(cleaned)
+    if not box_dir.is_absolute():
+        raise ValueError("Invalid box_dir: must be an absolute path")
+    _refuse_symlink(box_dir, "box_dir", max_ancestors=2)
+    parent = box_dir.parent
+    real_parent = Path(os.path.realpath(parent))
+    home_real = Path(os.path.realpath(Path.home()))
+    if (
+        parent in _REFUSED_ROOTS
+        or real_parent in _REFUSED_ROOTS
+        or real_parent == home_real
+    ):
+        raise ValueError(f"Refusing unsafe box_dir parent: {parent}")
+    _ensure_dir(parent, "box data parent")
+
+
+def _validate_launch_config(cfg_toml: Path) -> None:
+    _refuse_symlink(cfg_toml, "box.toml")
+    _refuse_symlink(cfg_toml.parent / "policy.dw", "policy.dw")
+    if not cfg_toml.is_file():
+        raise ValueError(
+            f"Box config not found: {cfg_toml}. Run `strands-code box init` first."
+        )
+    if tomllib is None:
+        return
+    try:
+        parsed_cfg = tomllib.loads(cfg_toml.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Invalid {cfg_toml.name}: {exc}") from exc
+    pol_val = parsed_cfg.get("policy")
+    if isinstance(pol_val, str) and pol_val.strip():
+        cleaned_pol = _reject_control_chars(pol_val, "policy")
+        pol_path = (
+            Path(cleaned_pol)
+            if Path(cleaned_pol).is_absolute()
+            else cfg_toml.parent / cleaned_pol
+        )
+        _refuse_symlink(pol_path, "policy")
+    box_dir_val = parsed_cfg.get("box_dir")
+    if isinstance(box_dir_val, str) and box_dir_val.strip():
+        _validate_launch_box_dir(box_dir_val)
+
+
 def launch_box_run(
     extra_args: Sequence[str] = (),
     *,
@@ -1386,20 +1481,7 @@ def launch_box_run(
         if config_path is not None
         else default_box_config_dir(root) / "box.toml"
     )
-    _refuse_symlink(cfg_toml, "box.toml")
-    _refuse_symlink(cfg_toml.parent / "policy.dw", "policy.dw")
-    if not cfg_toml.is_file():
-        raise ValueError(
-            f"Box config not found: {cfg_toml}. Run `strands-code box init` first."
-        )
-    if tomllib is not None:
-        try:
-            parsed_cfg = tomllib.loads(cfg_toml.read_text(encoding="utf-8"))
-        except Exception:
-            parsed_cfg = {}
-        box_dir_val = parsed_cfg.get("box_dir")
-        if isinstance(box_dir_val, str) and box_dir_val.strip():
-            _ensure_dir(Path(box_dir_val).parent, "box data parent")
+    _validate_launch_config(cfg_toml)
     resolved_box, missing = discover_box_binaries(box_bin, env=env_map)
     if resolved_box is None:
         raise ValueError(
