@@ -501,6 +501,61 @@ class TestBoxConfigGenerationAndEgress:
             )
             assert covered or py_real in pytest_fs.get("read_file", [])
 
+    def test_box_name_cap_and_in_workspace_tools_skipped(self, tmp_path, monkeypatch):
+        import re
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+        repo = (
+            tmp_path / "a-very-long-repository-name-exceeding-thirty-two-bytes-easily"
+        )
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        for name in ("pytest", "ruff"):
+            p = venv_bin / name
+            p.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            os.chmod(p, 0o755)
+
+        res = init_box_config(
+            repo,
+            providers=["bedrock"],
+            env={"HOME": str(tmp_path), "PATH": str(venv_bin)},
+        )
+        parsed = tomllib.loads(res.box_toml.read_text(encoding="utf-8"))
+        box_name = parsed["name"]
+        assert len(box_name.encode("utf-8")) <= 32
+        assert re.fullmatch(r"[A-Za-z0-9._-]+", box_name)
+        write_paths = [Path(w) for w in parsed["agent"]["filesystem"]["write"]]
+        for tool_tbl in parsed.get("tool", {}).values():
+            cmd = Path(tool_tbl["command"][0])
+            assert not any(cmd == w or w in cmd.parents for w in write_paths)
+        assert "pytest" not in parsed.get("tool", {})
+        assert "ruff" not in parsed.get("tool", {})
+
+        # Non-writable git on PATH still resolves while repo .venv pytest/ruff do not fall back to global binaries.
+        res_sys = init_box_config(
+            repo,
+            out_dir=tmp_path / "cfg_sys",
+            providers=["bedrock"],
+            env={"HOME": str(tmp_path), "PATH": f"{venv_bin}:/usr/bin:/bin"},
+        )
+        tools_sys = tomllib.loads(res_sys.box_toml.read_text(encoding="utf-8")).get(
+            "tool", {}
+        )
+        assert "pytest" not in tools_sys
+        assert "ruff" not in tools_sys
+        assert "git" in tools_sys
+        for tool_tbl in tools_sys.values():
+            cmd = Path(tool_tbl["command"][0])
+            assert not any(cmd == w or w in cmd.parents for w in write_paths)
+
     def test_dogwood_policy_rules_and_tools(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
             "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
@@ -752,6 +807,36 @@ class TestSandboxSecurityAndDiagnostics:
         assert any("EXPERIMENTAL_X86_SUPPORT=TRUE" in n for n in notices)
 
 
+def _assert_box_run_clean(
+    box_bin: Path, box_toml: Path, cwd: Path, env: dict[str, str]
+) -> None:
+    import subprocess
+
+    run_proc = subprocess.run(
+        [str(box_bin), "run", "--config", str(box_toml), "--", "--help"],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stderr = run_proc.stderr or ""
+    for bad in (
+        "invalid credential entry",
+        "will not load",
+        "is refused:",
+        "does not exist",
+        "No such file or directory",
+        "Monty answers it",
+        "is invalid:",
+    ):
+        assert bad not in stderr, stderr
+    if "this identity may not create a user namespace" in stderr:
+        pytest.skip(stderr.strip().splitlines()[-1])
+    assert run_proc.returncode == 0, stderr or run_proc.stdout
+    assert "Usage:" in run_proc.stdout
+
+
 @pytest.mark.integration
 def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
     """Validate generated box.toml / policy.dw against host binaries when present."""
@@ -764,7 +849,7 @@ def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
     # Keep fake_home short so the box broker UNIX socket stays within Linux's 108-byte limit.
     with tempfile.TemporaryDirectory(prefix="sbx-") as short_tmp:
         base = Path(short_tmp)
-        repo = base / "r"
+        repo = base / "strands-code"
         cfg_dir = base / "c"
         fake_home = base / "h"
         repo.mkdir()
@@ -833,26 +918,18 @@ def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
                 check=False,
             )
             assert schema_proc.returncode == 0, schema_proc.stderr or schema_proc.stdout
+            _assert_box_run_clean(box_bin, res.box_toml, repo, dummy_env)
 
-            run_proc = subprocess.run(
-                [str(box_bin), "run", "--config", str(res.box_toml), "--", "--help"],
-                cwd=repo,
-                env=dummy_env,
-                capture_output=True,
-                text=True,
-                check=False,
+            # Also verify self-hosting on the actual strands-code repository itself.
+            self_repo = Path(__file__).resolve().parents[2]
+            self_home = base / "hs"
+            self_home.mkdir()
+            self_env = {**dummy_env, "HOME": str(self_home)}
+            self_res = init_box_config(
+                repo_root=self_repo,
+                out_dir=base / "cs",
+                providers=("bedrock",),
+                home=self_home,
+                env=self_env,
             )
-            stderr = run_proc.stderr or ""
-            for bad in (
-                "invalid credential entry",
-                "will not load",
-                "is refused:",
-                "does not exist",
-                "No such file or directory",
-                "Monty answers it",
-            ):
-                assert bad not in stderr, stderr
-            if "this identity may not create a user namespace" in stderr:
-                pytest.skip(stderr.strip().splitlines()[-1])
-            assert run_proc.returncode == 0, stderr or run_proc.stdout
-            assert "Usage:" in run_proc.stdout
+            _assert_box_run_clean(box_bin, self_res.box_toml, self_repo, self_env)

@@ -190,14 +190,19 @@ def _ensure_dir(path: Path, label: str) -> Path:
     return Path(os.path.realpath(path))
 
 
-def _needs_python_interpreter(tool_path: Path) -> bool:
+def _shebang_interpreter(tool_path: Path) -> Path | None:
     try:
         with tool_path.open("rb") as handle:
             head = handle.read(256)
     except OSError:
-        return False
-    first_line = head.splitlines()[0] if head else b""
-    return first_line.startswith(b"#!") and b"python" in first_line.lower()
+        return None
+    if not head.startswith(b"#!"):
+        return None
+    first_line = head.splitlines()[0][2:].decode("utf-8", errors="ignore").strip()
+    tokens = first_line.split()
+    if not tokens:
+        return None
+    return Path(os.path.realpath(tokens[0]))
 
 
 def _atomic_write_text(path: Path, content: str) -> Path:
@@ -226,6 +231,15 @@ def repo_config_id(repo_root: Path) -> str:
     slug = slug[:32].rstrip("-") or "repo"
     digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
     return f"{slug}-{digest}"
+
+
+def _box_name(repo_root: Path) -> str:
+    """Return Strands Box ``name`` capped to 32 ASCII bytes (``sc-<slug>-<hash8>``)."""
+    resolved = Path(os.path.realpath(repo_root))
+    slug = re.sub(r"[^a-z0-9]+", "-", resolved.name.lower()).strip("-") or "repo"
+    slug = slug[:20].rstrip("-") or "repo"
+    digest = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:8]
+    return f"sc-{slug}-{digest}"
 
 
 def default_box_config_dir(repo_root: Path) -> Path:
@@ -398,16 +412,56 @@ def _coalesce_dirs(paths: Sequence[Path]) -> list[Path]:
     return [p for p in unique if p in kept]
 
 
-def _resolve_tool_commands(venv_bin: Path | None, env_path: str) -> dict[str, Path]:
+def _valid_shebang(real: Path, write_paths: Sequence[Path]) -> bool:
+    interp = _shebang_interpreter(real)
+    if interp is None:
+        return True
+    return interp.is_file() and not _is_under_any(interp, write_paths)
+
+
+def _first_non_writable_tool(
+    name: str,
+    venv_bin: Path | None,
+    env_path: str,
+    write_paths: Sequence[Path],
+) -> Path | None:
+    if venv_bin is not None:
+        cand = venv_bin / name
+        if cand.is_file():
+            real = Path(os.path.realpath(cand))
+            if _is_under_any(real, write_paths):
+                return None
+            if (
+                os.access(cand, os.X_OK)
+                and real.is_file()
+                and _valid_shebang(real, write_paths)
+            ):
+                return real
+
+    for raw_dir in env_path.split(os.pathsep):
+        if not raw_dir:
+            continue
+        cand = Path(raw_dir) / name
+        if not cand.is_file() or not os.access(cand, os.X_OK):
+            continue
+        real = Path(os.path.realpath(cand))
+        if (
+            real.is_file()
+            and not _is_under_any(real, write_paths)
+            and _valid_shebang(real, write_paths)
+        ):
+            return real
+    return None
+
+
+def _resolve_tool_commands(
+    venv_bin: Path | None, env_path: str, write_paths: Sequence[Path]
+) -> dict[str, Path]:
     resolved: dict[str, Path] = {}
     for name in ("git", "pytest", "rg", "ruff", "uv"):
-        cand = venv_bin / name if venv_bin else None
-        if cand is not None and cand.is_file():
-            resolved[name] = Path(os.path.realpath(cand))
-            continue
-        hit = shutil.which(name, path=env_path)
-        if hit and Path(hit).is_file():
-            resolved[name] = Path(os.path.realpath(hit))
+        hit = _first_non_writable_tool(name, venv_bin, env_path, write_paths)
+        if hit is not None:
+            resolved[name] = hit
     return resolved
 
 
@@ -552,7 +606,7 @@ def resolve_runtime_paths(
             _append_unique(write_paths, cand)
     write_paths = _coalesce_dirs(write_paths)
 
-    tools = _resolve_tool_commands(venv_bin, env_path)
+    tools = _resolve_tool_commands(venv_bin, env_path, write_paths)
     exec_paths: list[Path] = [py_real]
     agent_cmd = _resolve_cli_command(venv_bin, py_real, env_path, exec_paths)
     exec_paths.extend(_python_extension_exec_dirs(stdlib_dir, venv_dir))
@@ -790,10 +844,10 @@ def _render_tool_section(
         f"[tool.{tool_name}.filesystem]",
         f"read = {_toml_list([str(p) for p in tool_read], f'tool.{tool_name}.read')}",
     ]
-    py_real: Path = runtime["py_real"]
-    if _needs_python_interpreter(tool_path) and not _is_under_any(py_real, tool_read):
+    interp = _shebang_interpreter(tool_path)
+    if interp is not None and interp.is_file() and not _is_under_any(interp, tool_read):
         section.append(
-            f"read_file = {_toml_list([str(py_real)], f'tool.{tool_name}.read_file')}"
+            f"read_file = {_toml_list([str(interp)], f'tool.{tool_name}.read_file')}"
         )
     if tool_name == "git":
         section.append(f"write = {_toml_list([str(ws)], f'tool.{tool_name}.write')}")
@@ -814,10 +868,9 @@ def render_box_toml(
     agent_env: Mapping[str, str],
 ) -> str:
     """Render validated ``box.toml`` string (no host secrets embedded)."""
-    repo_name = repo_config_id(repo_root)
     lines = [
         "# Strands Box configuration generated by strands-code (SANDBOX-01)",
-        f"name = {_toml_str(f'strands-code-{repo_name}', 'name')}",
+        f"name = {_toml_str(_box_name(repo_root), 'name')}",
         f"box_dir = {_toml_str(str(box_dir), 'box_dir')}",
         'policy = "policy.dw"',
         "",
