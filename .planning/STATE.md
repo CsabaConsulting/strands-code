@@ -6,12 +6,12 @@ current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
 current_plan: 3
 status: verified
 stopped_at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) + v1/v2 parity audit saved — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
-last_updated: "2026-11-26T02:25:00Z"
+last_updated: "2026-11-26T02:32:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Recorded full v1/v2 parity audit (.planning/research/V1_V2_PARITY_AUDIT.md) and scheduled Phases 19.1 & 23
-state_head: 1db18e8
+last_activity_desc: Split parity & hardening into Phases 19.1 (HARDEN-01) and 19.2 (PARITY-01) in roadmap
+state_head: 7c4673e
 progress:
-  total_phases: 12
+  total_phases: 13
   completed_phases: 7
   total_plans: 20
   completed_plans: 20
@@ -31,14 +31,14 @@ See: .planning/PROJECT.md (updated 2026-11-25)
 Phase: 19 of 23 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Verified & UAT Complete (`19-01`..`19-03`)
 Plan: 3 of 3 complete in Phase 19
 Status: Verified (`19-UAT.md` `6/6 PASS`, `1839` unit suite + live `strands-box 0.3.1` host check + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
-Last activity: 2026-11-25 — Recorded full v1/v2 parity audit (`.planning/research/V1_V2_PARITY_AUDIT.md`) and added Phases 19.1 & 23
+Last activity: 2026-11-25 — Split parity & hardening into Phases 19.1 (HARDEN-01) and 19.2 (PARITY-01)
 
-Progress: [██████░░░░] 58%
+Progress: [█████░░░░░] 54%
 
 ## Performance Metrics
 
 - `v1.0` shipped 2026-10-16: 12 phases, 41 plans, 129 tasks ([v1.0 Archive](.planning/MILESTONES.md))
-- `v2.0` active: 7/12 phases complete (Phases 13–19 done; Phases 19.1, 20–23 queued)
+- `v2.0` active: 7/13 phases complete (Phases 13–19 done; Phases 19.1, 19.2, 20–23 queued)
 
 ## Accumulated Context
 
@@ -84,23 +84,23 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Roadmap expansion (2026-11-25): inserted Phase 20 (`SANDBOX-02` Monty Rust Python VM via `pydantic-monty` for `python_repl` & `CodeactStint`, closing in-process `smolagents` CLI memory tampering even unboxed while aligning cleanly with Strands Box) right after Phase 19, and cleanly renumbered unstarted Phases 20–21 -> 21–22.
 - Phase 19 (`f5a8ac6`, `10ef216`, `dbddce8`, `19-VERIFICATION.md` `12/12 PASS`, `19-VALIDATION.md` verified): delivered `SANDBOX-01` in `strands_code_cli/sandbox/box.py` (host-only `~/.config/strands-box/repos/<slug>-<hash8>/` storage with `0o700`/`0o600` atomic symlink-refused writes, `uv`/`.venv` realpath resolution, `tomllib`-validated `box.toml`, 7 core + `--allow-decisions-api`/`--allow-github-skills` egress profiles, default-deny `policy.dw` with `.env`/`.ssh`/`.aws` read forbids and canonical MFOTL rule `push_requires_recent_tests` under scoped `v2.0` `D-05` revisit, plus Linux 3-binary/`x86_64` `EXPERIMENTAL_X86_SUPPORT=TRUE`/Ubuntu AppArmor `userns` diagnostics & `strands-code box init|doctor|run`), aligned `codeact_shell` (`["sh", "-c", shlex.join(argv)]` under `STRANDS_BOX=1`), added `~/.config/strands-box` `Prompt` downgrade in `policy/core.py` & `/policy` Box indicator in `dispatch/core.py`, wired `box_app` cleanly in `entry/main.py`, added `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs in `conftest.py` + opt-in `@pytest.mark.integration` host `dogwood`/`box` probe + `docs/QUICKSTART.md` guide, and passed `1820 + 1 = 1821` default suite + `44/44` rig + all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
 - Phase 19 UAT (`19-UAT.md` `6/6` passed; mid-UAT fixes `8219c20`, `3d514e9`..`edbe4ce`, `679c874`, `87c1564`): added `.planning/INVARIANTS.md` cross-cutting peer-parity & invariants rules, resolved cross-phase consistency items (8-provider Box auto-detect with `decisions_api` + policy-only secret-less targets, protected-path `Prompt` downgrades across `~/.local/share/strands-box/**` / `.agent/policy.toml` / `.agent/routing.yaml` / `.agent/MEMORY.md` / `STRANDS.md` + HITL dead-`Always` guard, Google preflight / OpenRouter / Bedrock cost & model parity), aligned `box.toml` + `policy.dw` with live `strands-box 0.3.1` (32-byte `sc-<slug[:20]>-<hash8>` box name, `TMPDIR=~/.cache/strands-code/tmp`, multiarch lib read + `lib-dynload`/`site-packages` exec, shebang interpreter resolution, writable in-workspace tool skip, `[tool.python]` omitted deferring Monty alignment to Phase 20, `forbid ... unless temporal` `output.status: 0` MFOTL rule), and verified live `strands-box 0.3.1` host run + `1838 + 1 = 1839` unit tests + `44/44` rig + all 6 CI gates.
-- Full `v1.0`/`v2.0` parity & architecture audit (`.planning/research/V1_V2_PARITY_AUDIT.md`, `2026-11-25`): audited Phases 1–19 across CLI/toggles, persistence/paths/Py3.10/packaging, gates/loops/CodeAct/`/btw`/`subagent`/memory, and routing/`/cost`/models/import-graph; user approved breaking cleanups (`requires-python >=3.11`, removing `engine.primary`, removing `/diff approve-each`, session-sticky `/memory mode` & `/codeact` + collapsing `diff.yaml`/`memory.yaml`, pruning redundant aliases, `PolicyGateHandler(InterventionHandler)`), inserted **Phase 19.1** (`HARDEN-01`, `PARITY-01`) before Phase 20, and appended **Phase 23** (`STRUCT-02`, `CLEANUP-02`) after Phase 22.
+- Full `v1.0`/`v2.0` parity & architecture audit (`.planning/research/V1_V2_PARITY_AUDIT.md`, `2026-11-25`): audited Phases 1–19 across CLI/toggles, persistence/paths/Py3.10/packaging, gates/loops/CodeAct/`/btw`/`subagent`/memory, and routing/`/cost`/models/import-graph; user approved breaking cleanups (`requires-python >=3.11`, removing `engine.primary`, removing `/diff approve-each`, session-sticky `/memory mode` & `/codeact` + collapsing `diff.yaml`/`memory.yaml`, pruning redundant aliases, `PolicyGateHandler(InterventionHandler)`), inserted **Phase 19.1** (`HARDEN-01`) and **Phase 19.2** (`PARITY-01`) before Phase 20, and appended **Phase 23** (`STRUCT-02`, `CLEANUP-02`) after Phase 22.
 
 ### Pending Todos
 
-- Complete Phase 19 GSD sign-off (`/gsd-secure-phase 19` + `/gsd-validate-phase 19`), then start `/gsd-discuss-phase 19.1` before Phase 20 (`SANDBOX-02` Monty Python VM).
+- Complete Phase 19 GSD sign-off (`/gsd-secure-phase 19` + `/gsd-validate-phase 19`), then start `/gsd-discuss-phase 19.1` and `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
 
 - ✅ ~~[Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models~~ — **Closed in Phase 13** (`strands-agents==1.65.0` `#5166` `BedrockModel._rejects_reasoning_block` + `drop_block` wire strip + `model_switch.prepare_resumed_history()` hybrid restore on non-Bedrock / media-less launches; pinned offline in `TestUpstreamReasoningWireStrip` and `TestPrepareResumedHistory`).
 - ✅ ~~[v2.0 Coordination] Phase 14 (`MODEL-06` `first_run.py` preflight) must check non-empty key presence only (no vendor prefix checks) and skip `sts.get_caller_identity()` when `STRANDS_BOX=1`~~ — **Closed in Phase 14** (`first_run.py` checks non-empty env presence only, skips STS for non-AWS providers and `STRANDS_BOX=1`).
-- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`) and `_setup_decision_entries` (`C 20`), plus `_check_explicit_provider` (`C 20`), `price_table` (`C 20`), and `save_strategy` (`C 20`), sit near/at the `xenon --max-absolute C` ceiling (`CC <= 20`) — Phases 19.1, 20 & 21 MUST keep helpers isolated (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `sandbox/monty.py`) until Phase 23's full breakup.
+- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`) and `_setup_decision_entries` (`C 20`), plus `_check_explicit_provider` (`C 20`), `price_table` (`C 20`), and `save_strategy` (`C 20`), sit near/at the `xenon --max-absolute C` ceiling (`CC <= 20`) — Phases 19.1, 19.2, 20 & 21 MUST keep helpers isolated (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `sandbox/monty.py`) until Phase 23's full breakup.
 - ⚠️ [Phase 21 / Future LOOP-05 Security] CVE-2026-18830 / CoreBreak boundary — `strands-agents` `event_loop_cycle` executes trailing `toolUse` blocks without model mediation; Phase 19.1/21 MUST attach `RejectCallerToolUseHook` in `entry/main.py` and build `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` dicts, and any future JSON/headless input (`LOOP-05`) or untrusted snapshot loader must reject/strip caller-supplied `toolUse` blocks.
 - ⚠️ [v1.0 Carryover] Silent memory mode can memorialize model rationalizations; `PendingStore` dual-stream lock safety relies on turn discipline — scoped for remediation in **Phase 19.1** (`HARDEN-01`, `.planning/research/V1_V2_PARITY_AUDIT.md` Part III §E).
 
 ## Session Continuity
 
-Last session: 2026-11-26T02:25:00Z
+Last session: 2026-11-26T02:32:00Z
 Stopped at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) + v1/v2 parity audit saved — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 19.1`
 Resume file: .planning/research/V1_V2_PARITY_AUDIT.md

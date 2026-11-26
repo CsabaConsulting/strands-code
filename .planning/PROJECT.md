@@ -12,7 +12,7 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 
 **Shipped `v1.0` (2026-10-16, archived 2026-11-21):** All 12 planned phases (41 plans, 129 tasks) shipped end-to-end under GSD Spec-Driven Development (`strands-harness 0.1.2` + `strands-agents 1.58.1`, gated 10-package CLI architecture, 1,549 tests in [RETROSPECTIVE.md](../docs/initial_build/RETROSPECTIVE.md)).
 
-**Active `v2.0` (initialized 2026-11-21 — Phases 13–23):** Aligning with `strands-py >=1.66`, `harness-py >=0.5.0`, Google AI Gemini (including Google AI Ultra credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) APIs, `DecisionModel` routing, deny-first remote skills marketplaces (`SKILL-03`), `strands-agents/box` Linux OS sandboxing, cross-phase policy/parity hardening (`19.1`), a crash-isolated Monty Rust Python VM (`20`), interactive UX (`/help`, `@file`, `/review`, `21`), `strands-agents-evals` (`22`), and closing `v2.0` structural review + hygiene (`23`). See `.planning/ROADMAP.md`, `.planning/research/SUMMARY.md`, and `.planning/research/V1_V2_PARITY_AUDIT.md`.
+**Active `v2.0` (initialized 2026-11-21 — Phases 13–23):** Aligning with `strands-py >=1.66`, `harness-py >=0.5.0`, Google AI Gemini (including Google AI Ultra credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) APIs, `DecisionModel` routing, deny-first remote skills marketplaces (`SKILL-03`), `strands-agents/box` Linux OS sandboxing, policy/concurrency hardening (`19.1`), CLI/routing/provider/packaging parity (`19.2`), a crash-isolated Monty Rust Python VM (`20`), interactive UX (`/help`, `@file`, `/review`, `21`), `strands-agents-evals` (`22`), and closing `v2.0` structural review + hygiene (`23`). See `.planning/ROADMAP.md`, `.planning/research/SUMMARY.md`, and `.planning/research/V1_V2_PARITY_AUDIT.md`.
 
 ## Requirements
 
@@ -50,7 +50,8 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - [x] **UPSTREAM-02** (Phase 17): Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [x] **SKILL-03** (Phase 18): Remote skills marketplaces + `./.agent/skills-lock.json` SHA/hash installer into `./.agent/skills-marketplaces/` under deny-first safeguards
 - [x] **SANDBOX-01** (Phase 19): Strands Box (`v0.3.1+`) Linux wrapper workflow (`box.toml` + Dogwood `policy.dw`, 8-provider + `--allow-github-skills` egress profiles, temporal rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment)
-- [ ] **HARDEN-01 / PARITY-01** (Phase 19.1): `PolicyGateHandler(InterventionHandler)` & `policy/core.py` security hardening, shared atomic `0o600` persistence & `ui/console.py`, session-sticky toggle unification, `/resume` prefix parity, `CurateQueue`/`/btw`/`subagent` fixes, 5-engine `/route` & `/cost` parity, 8-provider `bedrock-mantle`/`base_url`/discovery parity, `requires-python >=3.11`, hermetic `conftest.py` & CI extras
+- [ ] **HARDEN-01** (Phase 19.1): `PolicyGateHandler(InterventionHandler)` & `policy/core.py` P0 security hardening, shared atomic `mkstemp`/`0o600`/symlink helper across all writers, `ui/console.py` markup/lock hardening, and `CurateQueue`/`/btw`/`subagent` fixes
+- [ ] **PARITY-01** (Phase 19.2): Session-sticky toggle unification + `config.yaml` consolidation, `/diff`/`/resume` UX parity, retiring `engine.primary` + 5-engine `/route` & `/cost` symmetry, 8-provider `bedrock-mantle`/`base_url`/discovery parity, `requires-python >=3.11`, `httpx`/`ollama`/`_SDK_EXTRA_HINTS`, hermetic `conftest.py` & CI extras
 - [ ] **SANDBOX-02** (Phase 20): Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli` with `read`/`write`/`edit`/`shell` callbacks & Strands Box alignment
 - [ ] **LOOP-06 / TOOL-05 / REVIEW-01** (Phase 21): Isolated UX modules (`/help`, gitignore-confined `@file` / `/file` attachment picker + `"document"` switch conversion, Python-collected read-only `/review`)
 - [ ] **EVAL-01** (Phase 22): `strands-agents-evals >=1.10` regression & Crescendo/GOAT/PAIR red-team suite under `scripts/evals/` + `tests/evals/`
@@ -77,11 +78,11 @@ A single ask — spec it, build it, test it, open the PR — completes end to en
 - Direction and competitive analysis: `docs/competitive-gap-analysis.md`. Ecosystem v2 brief: `.planning/research/V2-ALIGNMENT.md`. Codebase map: `.planning/codebase/`.
 - `v1.0` shipped on `strands-harness 0.1.2` and `strands-agents 1.58.1` (`strands-agents>=0.1.0`, `strands-harness>=0.1`); `v2.0` targets `strands-agents >=1.66.0` & `strands-harness >=0.5.0` (package `0.6.0`). Both remain flagged Experimental upstream — keep wrappers thin.
 - Harness `context_manager` (`auto`/`agentic`/off) and presets cover context handling; `memory={"stores": [...]}` seam covers memory tiers, with local markdown the only backend (Hindsight and OpenViking evaluated and rejected in Phase 12).
-- `pyproject.toml` moved to package version `0.6.0` during `v2.0` convergence (retaining `requires-python >=3.10` until Phase 19.1 bumps to `>=3.11`).
+- `pyproject.toml` moved to package version `0.6.0` during `v2.0` convergence (retaining `requires-python >=3.10` until Phase 19.2 bumps to `>=3.11`).
 
 ## Constraints
 
-- **Tech stack**: Python >=3.10 (bumping to >=3.11 in Phase 19.1), `uv` toolchain, Strands SDK + harness — pad the CLI, don't fork the platform (no TypeScript dependency)
+- **Tech stack**: Python >=3.10 (bumping to >=3.11 in Phase 19.2), `uv` toolchain, Strands SDK + harness — pad the CLI, don't fork the platform (no TypeScript dependency)
 - **AWS posture**: AWS-optional, never AWS-required; `agentcore` stays an optional extra with lazy imports
 - **Compatibility**: no upper pins during the experimental phase; resync upstream deliberately, not continuously
 
@@ -129,4 +130,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-11-25 — Phase 19 complete (`SANDBOX-01` UAT 6/6 PASS); v1/v2 parity audit saved & Phases 19.1 + 23 scheduled*
+*Last updated: 2026-11-25 — Phase 19 complete (`SANDBOX-01` UAT 6/6 PASS); v1/v2 parity audit saved & Phases 19.1, 19.2 & 23 scheduled*

@@ -86,7 +86,7 @@
 | SKILL-03 | Phase 18 | Complete |
 | SANDBOX-01 | Phase 19 | Complete |
 | HARDEN-01 | Phase 19.1 | Pending |
-| PARITY-01 | Phase 19.1 | Pending |
+| PARITY-01 | Phase 19.2 | Pending |
 | SANDBOX-02 | Phase 20 | Pending |
 | LOOP-06 | Phase 21 | Pending |
 | TOOL-05 | Phase 21 | Pending |
