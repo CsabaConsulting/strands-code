@@ -464,8 +464,12 @@ def _finish_btw_turn(
             return
         render_btw_error(question, exc)
         return
-    reported = _drain_reported_cost(getattr(btw_agent, "model", None))
-    btw.pending.append((question, _result_text(btw_agent, result), result, reported))
+    side_model = getattr(btw_agent, "model", None)
+    reported = _drain_reported_cost(side_model)
+    side_model_id = model_id_of(side_model, "")
+    btw.pending.append(
+        (question, _result_text(btw_agent, result), result, reported, side_model_id)
+    )
     btw.done = True
 
 
@@ -668,10 +672,19 @@ def _btw_context_for(
     def _build(question: str) -> tuple[Any, list]:
         history = getattr(agent, "messages", None) or []
         kwargs = dict(parent_kwargs)
+        live = getattr(agent, "model", None)
+        if live is not None:
+            kwargs["model"] = live
+        for attr in ("_base_url", "_base_url_provider", "_api_mode"):
+            val = getattr(agent, attr, None)
+            if val is None:
+                kwargs.pop(attr, None)
+            else:
+                kwargs[attr] = val
+        kwargs["_parent_agent"] = agent
         btw = holder.get("btw")
         if btw is not None and btw.has_live:
             return build_btw_agent(kwargs, list(history), question)
-        live = getattr(agent, "model", None)
         if live is not None:
             _route_side_spawn(
                 question, kwargs, live, model_id_of(live, "?"), routing, routing_events
@@ -905,11 +918,14 @@ def _drain_idle_btw(
         delivered = btw.pending[before:]
         del btw.pending[before:]
         history = getattr(agent, "messages", None)
-        for answered, body, result, reported in delivered:
+        for answered, body, result, reported, side_model_id in delivered:
             if isinstance(history, list):
                 append_btw_turn(history, answered, body)
             usage = record_turn_metrics(
-                result, current_model, session_turns, reported_cost=reported
+                result,
+                side_model_id or current_model,
+                session_turns,
+                reported_cost=reported,
             )
             if usage is not None:
                 print_plain(console, usage, style="dim")
@@ -934,6 +950,28 @@ def _note_dropped_side(btw: BtwContext, broker: Any) -> None:
         return
     waiting = broker is not None and broker.has_pending
     render_btw_dropped(btw.live_question or "", waiting)
+
+
+def _cancel_agent_background_tasks(agent: Any) -> None:
+    """Cancel outstanding background tasks on ``agent`` when supported."""
+    cancel = getattr(agent, "cancel", None)
+    if not callable(cancel):
+        return
+    try:
+        cancel(cancel_background_tasks=True)
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+        logger.warning("Agent background cancel failed: %s", exc)
+
+
+def _shutdown_agent(agent: Any) -> None:
+    """Run ``agent.shutdown()`` at session exit when supported."""
+    shutdown = getattr(agent, "shutdown", None)
+    if not callable(shutdown):
+        return
+    try:
+        shutdown()
+    except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+        logger.warning("Agent shutdown failed: %s", exc)
 
 
 def _handle_turn_cancel(
@@ -962,6 +1000,8 @@ def _handle_turn_cancel(
         The updated arm timestamp (None when disarmed by confirm).
     """
     cancel_event.set()
+    if target == "main":
+        _cancel_agent_background_tasks(agent)
     now = monotonic()
     confirmed = armed_at is not None and (now - armed_at) <= CANCEL_WINDOW_S
     if confirmed:
@@ -1620,6 +1660,17 @@ def _review_answer() -> str:
     return "deny"  # empty and unknown fail closed
 
 
+def _review_silent(queue: CurateQueue, pending: list[Any], apply_fn: Any) -> list[str]:
+    """Auto-apply promoted proposals in silent mode; keep init-* pending."""
+    lines: list[str] = []
+    for proposal in pending:
+        if proposal.source != "promoted":
+            continue
+        queue.approve(proposal.id, apply_fn)
+        lines.append(silent_note(proposal.section, proposal.source))
+    return lines
+
+
 def review_memory_queue(
     queue: CurateQueue,
     mode_state: MemoryModeState,
@@ -1628,8 +1679,9 @@ def review_memory_queue(
 ) -> list[str]:
     """Turn-boundary curate review; returns transcript lines to print.
 
-    Silent mode applies every pending proposal with one
-    :func:`silent_note` line each. Curate mode prompts per proposal
+    Silent mode auto-applies ``"promoted"`` proposals with one
+    :func:`silent_note` line each (leaving ``init-*`` drafts pending for
+    explicit ``/memory`` review). Curate mode prompts per proposal
     with the full body quoted plus the source line, then an
     approve/deny/revise-in-words choice (fail-closed default on deny;
     typed path when stdin is not a tty). The revise choice reads one
@@ -1642,10 +1694,7 @@ def review_memory_queue(
     lines: list[str] = []
     pending = queue.list_pending()
     if mode_state.mode == "silent":
-        for proposal in pending:
-            queue.approve(proposal.id, apply_fn)
-            lines.append(silent_note(proposal.section, proposal.source))
-        return lines
+        return _review_silent(queue, pending, apply_fn)
     for proposal in pending:
         try:
             with output_context():
@@ -1911,9 +1960,9 @@ def consume_init_turn(
         body = match.group("body")
         if body.endswith("\n"):
             body = body[:-1]
-        queue.propose(label, f"init-{depth}", body)
         queued_sections.add(label)
-        count += 1
+        if queue.propose(label, f"init-{depth}", body) is not None:
+            count += 1
     init_state.disarm()
     return f"Drafted {count} sections from {depth} scan — review with /memory."
 
@@ -2149,10 +2198,10 @@ def _announce_turn_usage(
     no btw-specific field, tag, or report branch. Consumed so an
     empty-retry never re-records.
     """
-    for _, _, btw_result, btw_reported in btw.pending:
+    for _, _, btw_result, btw_reported, side_model_id in btw.pending:
         btw_usage = record_turn_metrics(
             btw_result,
-            current_model,
+            side_model_id or current_model,
             session_turns,
             reported_cost=btw_reported,
         )
@@ -2486,8 +2535,10 @@ def _close_loop_session(
         raise
     if session_pump is not None:
         session_pump.__exit__(None, None, None)
+    _cancel_agent_background_tasks(agent)
     explicit_save(agent)
     flush_memory(agent)
+    _shutdown_agent(agent)
     index.ensure(session_id)
     print_plain(console, "Session saved.", style="dim")
 

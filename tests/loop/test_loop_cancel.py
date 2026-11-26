@@ -66,3 +66,106 @@ class TestAckBeforeJoin:
             _invoke_agent(main_agent, "do the thing", threading.Event(), btw=btw)
         assert order == ["ack", "worker-done"]
         assert CANCEL_FIRST_PRESS in capsys.readouterr().out
+
+
+class TestBackgroundCancelAndShutdown:
+    """D-08: Ctrl-C and session exit cancel background tasks and shut down agent."""
+
+    def test_handle_turn_cancel_cancels_background_only_for_main_target(self, tmp_path):
+        from strands_code_cli.loop.core import _handle_turn_cancel
+        from strands_code_cli.session.session_index import SessionIndex
+
+        calls: list[bool] = []
+
+        class _Agent:
+            messages: list = []
+
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                calls.append(cancel_background_tasks)
+
+        agent = _Agent()
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        _handle_turn_cancel(agent, sid, index, threading.Event(), None, target="btw")
+        assert calls == []
+        _handle_turn_cancel(agent, sid, index, threading.Event(), None, target="main")
+        assert calls == [True]
+
+    def test_pump_interrupt_cancels_background_tasks(self, monkeypatch):
+        from strands_code_cli.policy.policy_gate import ApprovalBroker
+
+        broker = ApprovalBroker()
+        real_poll = broker.poll
+        calls_poll = {"n": 0}
+        cancel_calls: list[bool] = []
+
+        class _Agent:
+            def __call__(self, text: str, **kwargs: Any) -> str:
+                time.sleep(0.2)
+                return "ok"
+
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                cancel_calls.append(cancel_background_tasks)
+
+        def raising_poll(timeout: float = 0.05):
+            calls_poll["n"] += 1
+            if calls_poll["n"] == 1:
+                raise KeyboardInterrupt()
+            return real_poll(timeout=timeout)
+
+        monkeypatch.setattr(broker, "poll", raising_poll)
+        agent = _Agent()
+        agent._approval_broker = broker
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda question: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        with pytest.raises(KeyboardInterrupt):
+            _invoke_agent(agent, "task", threading.Event(), btw=btw)
+        assert cancel_calls == [True]
+
+    def test_close_loop_session_cancels_background_flushes_and_shuts_down(
+        self, tmp_path, monkeypatch
+    ):
+        from concurrent.futures import ThreadPoolExecutor
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.session.session_index import SessionIndex
+
+        events: list[Any] = []
+
+        class _Agent:
+            messages: list = []
+
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                events.append(("cancel", cancel_background_tasks))
+
+            def shutdown(self) -> None:
+                events.append("shutdown")
+
+        monkeypatch.setattr(
+            loop_mod, "explicit_save", lambda a: events.append("explicit_save")
+        )
+        monkeypatch.setattr(
+            loop_mod, "flush_memory", lambda a: events.append("flush_memory")
+        )
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            loop_mod._close_loop_session(
+                _Agent(), btw, None, "test-model", [], pool, None, index, sid
+            )
+        assert events == [("cancel", True), "explicit_save", "flush_memory", "shutdown"]
+        # Agents without cancel/shutdown or raising cleanup stay harmless.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            loop_mod._close_loop_session(
+                object(), btw, None, "test-model", [], pool, None, index, sid
+            )

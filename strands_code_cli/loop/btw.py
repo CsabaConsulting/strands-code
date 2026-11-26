@@ -30,6 +30,9 @@ from strands_harness import create_harness
 from strands_harness.memory import resolve_memory
 
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
+from strands_code_agent.python_environments.local_sandboxed import (
+    SandboxedPythonInterpreter,
+)
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
     SUMMARY_LABEL,
@@ -407,13 +410,42 @@ class BtwContext:
         return depth
 
 
-def _register_btw_gate(agent: Any, interventions: Any) -> None:
-    """Register the /btw side agent under its explicit tag on PolicyGateHandler."""
+def fresh_tools_for_delegate(tools: Any) -> Any:
+    """Return a delegate tool list with an isolated ``python_repl`` instance.
+
+    When ``tools`` contains no ``python_repl`` tool, the original sequence is
+    returned unchanged (preserving list identity). When ``python_repl`` is
+    present, a shallow copy replaces it with a fresh
+    :class:`SandboxedPythonInterpreter` so concurrent delegates never share
+    executor state with the parent.
+    """
+    if not isinstance(tools, (list, tuple)):
+        return tools
+    if not any(getattr(tool, "tool_name", None) == "python_repl" for tool in tools):
+        return tools
+    isolated: list[Any] = []
+    for tool in tools:
+        if getattr(tool, "tool_name", None) == "python_repl":
+            isolated.append(
+                SandboxedPythonInterpreter("", authorized_imports=set()).get_tool()
+            )
+        else:
+            isolated.append(tool)
+    return isolated
+
+
+def _register_btw_gate(agent: Any, interventions: Any, *, parent: Any = None) -> None:
+    """Register the /btw side agent on PolicyGateHandler and inherit read-only."""
     for handler in interventions or ():
         register = getattr(handler, "register_agent", None)
         if callable(register):
             register(agent, "btw")
             agent._policy_gate = handler
+            if parent is not None:
+                is_ro = getattr(handler, "is_read_only", None)
+                enter_ro = getattr(handler, "enter_read_only", None)
+                if callable(is_ro) and callable(enter_ro) and is_ro(parent):
+                    enter_ro(agent)
             return
 
 
@@ -423,13 +455,13 @@ def build_btw_agent(
     """Build the side agent via a ``create_harness`` factory rebuild.
 
     Replays the parent's ``create_harness`` kwargs with the delegate
-    overrides: the SAME model/tools/interventions objects (never
-    rebuilt), ``session`` forced off, recall-only shared memory, the
-    parent hooks minus the steering hook object (dropped by identity
-    via the ``steering_hook`` marker key, which is never forwarded),
-    instructions plus one btw framing line, and the shared callback
-    handler wrapped in :class:`FencedBtwHandler`. The shared memory
-    conventions inject via :func:`register_memory_plugin`.
+    overrides: the SAME model/interventions objects (never rebuilt) and
+    isolated ``python_repl`` via :func:`fresh_tools_for_delegate`, ``session``
+    forced off, recall-only shared memory, the parent hooks minus the
+    steering hook object (dropped by identity via the ``steering_hook``
+    marker key, which is never forwarded), instructions plus one btw framing
+    line, and the shared callback handler wrapped in :class:`FencedBtwHandler`.
+    The shared memory conventions inject via :func:`register_memory_plugin`.
 
     Args:
         parent_kwargs: The parent's ``create_harness`` keyword
@@ -450,6 +482,9 @@ def build_btw_agent(
     base_url = kwargs.pop("_base_url", None)
     base_url_provider = kwargs.pop("_base_url_provider", None)
     kwargs.pop("_api_mode", None)
+    parent_agent = kwargs.pop("_parent_agent", None)
+    if "tools" in kwargs:
+        kwargs["tools"] = fresh_tools_for_delegate(kwargs["tools"])
     if "model" in kwargs:
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
@@ -477,7 +512,7 @@ def build_btw_agent(
     kwargs["instructions"] = f"{CODE_AGENT_INSTRUCTIONS}\n{BTW_FRAMING}"
     kwargs["callback_handler"] = FencedBtwHandler(kwargs["callback_handler"], question)
     agent = create_harness(**kwargs)
-    _register_btw_gate(agent, kwargs.get("interventions"))
+    _register_btw_gate(agent, kwargs.get("interventions"), parent=parent_agent)
     resolved_model = getattr(agent, "model", None)
     raw_model = kwargs.get("model")
     target_id = (

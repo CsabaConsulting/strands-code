@@ -28,6 +28,7 @@ from strands_code_cli.entry.first_run import (
     preflight_credentials,
 )
 from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.entry.subagent import build_cli_subagent
 from strands_code_cli.loop.btw import LockedHandler
 from strands_code_cli.loop.core import run_loop
 from strands_code_cli.loop.steering import register_steering_hook
@@ -221,6 +222,7 @@ def build_agent(
             # so the convenience tool stays off (fail-closed); airtightness
             # over convenience until the tracer proves inner-call gating.
             "programmatic_tool_caller": False,
+            "subagent": False,
         },
         # Single deterministic PolicyGateHandler on Strands InterventionHandler;
         # never a second instance (name-collision rule) and never
@@ -252,7 +254,10 @@ def build_agent(
         if isinstance(getattr(model, "_strands_model_ref", None), str):
             # Pre-built adapter already carries config/CacheConfig; avoid harness warning.
             kwargs["caching"] = False
+    parent_holder: dict[str, Any] = {"agent": None}
+    kwargs["tools"].append(build_cli_subagent(parent_holder, kwargs))
     agent = create_harness(**kwargs)
+    parent_holder["agent"] = agent
     resolved_model = getattr(agent, "model", None)
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     if base_url:

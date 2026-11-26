@@ -1444,3 +1444,163 @@ class TestLiveIdleScenario:
         assert "--- btw: " in capsys.readouterr().out
         assert len(main.messages) == 2
         assert len(session_turns) == 1
+
+
+class TestBtwLiveModelBillingAndReplIsolation:
+    """D-08: live model sync, routed /cost attribution, REPL isolation, read-only."""
+
+    def test_btw_context_picks_up_switched_live_model_and_endpoint(self, monkeypatch):
+        import strands_code_cli.loop.core as loop_mod
+
+        old_model = SimpleNamespace(
+            config=SimpleNamespace(model_id="anthropic/claude-opus-4-6")
+        )
+        new_model = SimpleNamespace(config=SimpleNamespace(model_id="openai/gpt-5"))
+        builds: list = []
+
+        def fake_build(kwargs, history, question):
+            builds.append((dict(kwargs), question))
+            return SimpleNamespace(model=kwargs["model"]), []
+
+        monkeypatch.setattr(loop_mod, "build_btw_agent", fake_build)
+        agent = SimpleNamespace(
+            model=old_model,
+            messages=[],
+            _base_url="https://old.example/v1",
+            _base_url_provider="anthropic",
+            _api_mode="responses",
+            _harness_kwargs={
+                "model": old_model,
+                "tools": [],
+                "interventions": [],
+                "memory": False,
+                "callback_handler": object(),
+                "_base_url": "https://old.example/v1",
+                "_base_url_provider": "anthropic",
+                "_api_mode": "responses",
+            },
+        )
+        ctx = loop_mod._btw_context_for(agent)
+        # Switch main agent model and clear endpoint after /btw context creation.
+        agent.model = new_model
+        agent._base_url = None
+        agent._base_url_provider = None
+        agent._api_mode = None
+
+        ctx.build("first check")
+        ctx.attach_live(object(), _pending_future(), "first check")
+        ctx.build("second while live")
+
+        assert len(builds) == 2
+        for kw, _q in builds:
+            assert kw["model"] is new_model
+            assert "_base_url" not in kw
+            assert "_base_url_provider" not in kw
+            assert "_api_mode" not in kw
+
+    def test_routed_btw_bills_under_side_model_rates(self, monkeypatch):
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.cost.cost_context import cost_for, cost_report
+
+        opus_id = "us.anthropic.claude-opus-4-6-v1"
+        haiku_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        side_model = SimpleNamespace(config=SimpleNamespace(model_id=haiku_id))
+
+        btw = _idle_btw()
+        future: Future = Future()
+        future.set_result(_MeteredResult("ok", in_tok=100_000, out_tok=50_000))
+        _finish_btw_turn(
+            btw, SimpleNamespace(model=side_model, messages=[]), future, "q1"
+        )
+        assert len(btw.pending) == 1
+        assert btw.pending[0][4] == haiku_id
+
+        session_turns: list = []
+        loop_mod._announce_turn_usage(
+            btw,
+            _MeteredResult("main", in_tok=1_000, out_tok=500),
+            opus_id,
+            session_turns,
+            SimpleNamespace(
+                model=SimpleNamespace(config=SimpleNamespace(model_id=opus_id))
+            ),
+            "tool",
+            [],
+        )
+        assert len(session_turns) == 2
+        assert session_turns[0]["model"] == haiku_id
+        assert session_turns[1]["model"] == opus_id
+        haiku_cost = cost_for(100_000, 50_000, haiku_id)
+        opus_cost = cost_for(100_000, 50_000, opus_id)
+        assert (
+            haiku_cost is not None and opus_cost is not None and haiku_cost < opus_cost
+        )
+        report = cost_report(session_turns, opus_id)
+        assert f"${haiku_cost:.4f}" in report
+
+        # Idle drain also attributes using side_model_id instead of parent opus_id.
+        btw2 = _idle_btw()
+        done_future: Future = Future()
+        done_future.set_result(_MeteredResult("ok", in_tok=100_000, out_tok=50_000))
+        btw2.attach_live(
+            SimpleNamespace(model=side_model, messages=[]), done_future, "q2"
+        )
+        idle_turns: list = []
+        _drain_idle_btw(SimpleNamespace(messages=[]), btw2, None, opus_id, idle_turns)
+        assert len(idle_turns) == 1
+        assert idle_turns[0]["model"] == haiku_id
+
+    def test_fresh_tools_for_delegate_and_build_btw_agent_isolate_python_repl(
+        self, monkeypatch
+    ):
+        from strands_code_agent.python_environments.local_sandboxed import (
+            SandboxedPythonInterpreter,
+        )
+        from strands_code_cli.loop.btw import fresh_tools_for_delegate
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
+
+        non_repl = [object()]
+        assert fresh_tools_for_delegate(non_repl) is non_repl
+
+        parent_interp = SandboxedPythonInterpreter("", authorized_imports=set())
+        parent_repl = parent_interp.get_tool()
+        other_tool = SimpleNamespace(tool_name="search")
+        parent_gate = PolicyGateHandler()
+        parent_agent = SimpleNamespace()
+        parent_gate.register_agent(parent_agent, "main")
+        parent_gate.enter_read_only(parent_agent)
+
+        import strands_code_cli.loop.btw as btw_mod
+
+        captured: dict = {}
+
+        def fake_create_harness(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+        monkeypatch.setattr(btw_mod, "create_harness", fake_create_harness)
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda a, i: None)
+
+        side_agent, _ = build_btw_agent(
+            {
+                "model": object(),
+                "tools": [parent_repl, other_tool],
+                "interventions": [parent_gate],
+                "memory": False,
+                "session": {"id": "s"},
+                "callback_handler": object(),
+                "_parent_agent": parent_agent,
+            },
+            [],
+            "compute",
+        )
+        child_tools = captured["tools"]
+        assert child_tools[1] is other_tool
+        child_repl = child_tools[0]
+        assert child_repl is not parent_repl
+        parent_repl(code="x = 10")
+        child_repl(code="x = 999")
+        assert parent_repl(code="print(x)") == "STDOUT:\n10"
+        assert child_repl(code="print(x)") == "STDOUT:\n999"
+        assert parent_gate.tag_for(side_agent) == "btw"
+        assert parent_gate.is_read_only(side_agent) is True

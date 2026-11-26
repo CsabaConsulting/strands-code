@@ -339,7 +339,11 @@ class TestSideDrainCarrier:
         from strands_code_cli.loop.core import _finish_btw_turn, record_turn_metrics
 
         def _side_agent(cost):
-            model = _wrapped("litellm/openrouter/qwen/qwen3-32b", _litellm_stub)
+            model = _wrapped(
+                "litellm/openrouter/qwen/qwen3-32b",
+                _litellm_stub,
+                config=SimpleNamespace(model_id="litellm/openrouter/qwen/qwen3-32b"),
+            )
             model.format_chunk(_metadata(cost))
             return SimpleNamespace(model=model, messages=[])
 
@@ -348,12 +352,13 @@ class TestSideDrainCarrier:
             future: Future = Future()
             future.set_result(_Summary(10, 1))
             _finish_btw_turn(btw, _side_agent(cost), future, question)
-        assert [len(entry) for entry in btw.pending] == [4, 4]
+        assert [len(entry) for entry in btw.pending] == [5, 5]
         turns: list = []
-        for _question, _body, result, reported in btw.pending:
+        for _question, _body, result, reported, side_model_id in btw.pending:
+            assert side_model_id == "litellm/openrouter/qwen/qwen3-32b"
             record_turn_metrics(
                 result,
-                "litellm/openrouter/qwen/qwen3-32b",
+                side_model_id,
                 turns,
                 reported_cost=reported,
             )

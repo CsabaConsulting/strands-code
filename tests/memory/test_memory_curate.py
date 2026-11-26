@@ -216,6 +216,57 @@ class TestCurateLoop:
         assert [p.id for p in calls] == ["p1", "p2"]
         assert queue.list_pending() == []
 
+    def test_review_silent_mode_leaves_init_proposals_pending(self):
+        queue = CurateQueue()
+        queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        queue.propose("Test", "init-shallow", "Run pytest.\n", proposal_id="p2")
+        queue.propose("Layout", "init-deep", "src/ tree.\n", proposal_id="p3")
+        calls: list = []
+        lines = review_memory_queue(queue, MemoryModeState("silent"), calls.append)
+        assert lines == [silent_note("Build", "promoted")]
+        assert [p.id for p in calls] == ["p1"]
+        assert [p.id for p in queue.list_pending()] == ["p2", "p3"]
+
+    def test_curate_queue_dedups_denied_content_without_burning_ids(self, tmp_path):
+        queue = CurateQueue()
+        first = queue.propose("Build", "promoted", "Run uv build.\n")
+        assert first is not None and first.id == "p1"
+        queue.deny("p1")
+
+        # Re-proposing identical (section, normalized_body) is rejected before counter++.
+        assert queue.propose("  build  ", "init-shallow", "Run   uv build.") is None
+        assert queue.list_pending() == []
+
+        distinct = queue.propose("Test", "promoted", "Run pytest.\n")
+        assert distinct is not None and distinct.id == "p2"
+
+        init_state = _arm_init(depth="shallow", stale=["Build"])
+        reply = consume_init_turn(
+            "```proposed:Build\nRun uv build.\n```", init_state, queue
+        )
+        assert reply == "Drafted 0 sections from shallow scan — review with /memory."
+
+        fact_dir = tmp_path / ".agent" / "memory"
+        fact_dir.mkdir(parents=True)
+        (fact_dir / "Build.md").write_text("Run uv build.\n", encoding="utf-8")
+        seen: set[str] = set()
+        assert queue.sweep_promotions(fact_dir, seen) == []
+        assert "Build.md" in seen
+
+    def test_seed_and_sweep_fail_soft_on_symlinked_memory_dirs(self, tmp_path):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.md").write_text("Leak.\n", encoding="utf-8")
+        agent_dir = tmp_path / ".agent"
+        agent_dir.mkdir()
+        mem_dir = agent_dir / "memory"
+        try:
+            mem_dir.symlink_to(outside, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        assert seed_promotion_seen(mem_dir) == set()
+        assert CurateQueue().sweep_promotions(mem_dir, set()) == []
+
     def test_review_curate_prompts_per_proposal(self, monkeypatch):
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")

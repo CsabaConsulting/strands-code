@@ -291,19 +291,26 @@ def format_init_prompt(report: Any, stale_sections: list[str]) -> str:
     )
 
 
+def _proposal_fingerprint(section: str, body: str) -> tuple[str, str]:
+    """Canonical (section, normalized_body) key for deny deduplication."""
+    return (section.strip().lower(), " ".join(body.split()))
+
+
 class CurateQueue:
     """Pending memory proposals with session-sticky deny memory.
 
     Ids auto-generate as ``p1``, ``p2``, ... unless the caller passes
-    an explicit ``proposal_id``. Denied ids are refused on re-propose
-    (the no-nag prohibition); pending and approved ids refuse
-    duplicates so the queue can never hold two entries under one id.
+    an explicit ``proposal_id``. Denied ids and denied content
+    fingerprints are refused on re-propose (the no-nag prohibition);
+    pending and approved ids refuse duplicates so the queue can never
+    hold two entries under one id.
     """
 
     def __init__(self) -> None:
         self._pending: dict[str, Proposal] = {}
         self._approved: set[str] = set()
         self._denied: set[str] = set()
+        self._denied_fingerprints: set[tuple[str, str]] = set()
         self._counter = 0
 
     @property
@@ -319,11 +326,15 @@ class CurateQueue:
         created_turn: str = "",
         proposal_id: str | None = None,
     ) -> Proposal | None:
-        """Queue a proposal; None when the id is already known.
+        """Queue a proposal; None when the id or content was already denied.
 
-        A denied id is refused outright — a denied proposal is never
-        re-queued unprompted in the same session.
+        A denied id or previously denied ``(section, normalized_body)``
+        is refused before advancing the counter — a denied proposal is
+        never re-queued unprompted in the same session.
         """
+        fingerprint = _proposal_fingerprint(section, body)
+        if fingerprint in self._denied_fingerprints:
+            return None
         if proposal_id is None:
             self._counter += 1
             proposal_id = f"p{self._counter}"
@@ -362,7 +373,7 @@ class CurateQueue:
         return f"Approved {proposal_id} → {proposal.section}."
 
     def deny(self, proposal_id: str) -> str:
-        """Skip one proposal; records the id so it never re-queues.
+        """Skip one proposal; records id and content so it never re-queues.
 
         Records only — no covering, no file write (the D-02 deny
         shape: deny-skips-and-continues).
@@ -371,6 +382,9 @@ class CurateQueue:
         if proposal is None:
             return unknown_proposal(proposal_id)
         self._denied.add(proposal_id)
+        self._denied_fingerprints.add(
+            _proposal_fingerprint(proposal.section, proposal.body)
+        )
         return f"Denied {proposal_id} — skipped, will not re-ask this session."
 
     def sweep_promotions(
@@ -417,8 +431,8 @@ class CurateQueue:
             proposal = self.propose(
                 section=Path(name).stem, source="promoted", body=body
             )
-            if proposal is None:  # pragma: no cover - counter ids never collide
-                continue
             seen.add(name)
+            if proposal is None:
+                continue
             queued.append(proposal)
         return queued

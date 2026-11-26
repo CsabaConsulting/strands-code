@@ -27,6 +27,7 @@ from strands_code_cli.loop.btw import (
 )
 from strands_code_cli.loop.core import (
     CANCEL_FIRST_PRESS,
+    _cancel_agent_background_tasks,
     _choose_cancel_targets,
     _finish_btw_turn,
     _poll_live,
@@ -311,6 +312,7 @@ def _pump_handle_interrupt(
     btw_agent: Any,
     btw_future: Any,
     btw_question: str | None,
+    agent: Any = None,
 ) -> tuple[str, tuple[Any, Any, str | None]]:
     """Route one pump-loop KeyboardInterrupt; the caller acts on the verdict.
 
@@ -336,6 +338,7 @@ def _pump_handle_interrupt(
         # set here too (idempotent) and the turn always
         # stops.
         cancel_event.set()
+        _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
         unregister_btw_cancel(broker)
         return _PUMP_RAISE, (btw_agent, btw_future, btw_question)
@@ -346,6 +349,7 @@ def _pump_handle_interrupt(
     btw.cancel_targets = targets
     if "main" in targets:
         cancel_event.set()
+        _cancel_agent_background_tasks(agent)
     if "btw" in targets:
         btw.cancel_event.set()
         unregister_btw_cancel(broker)
@@ -388,6 +392,7 @@ def _pump_collect_result(
     except TurnCancelled:
         # Worker aborted on cancel without a main-thread
         # KeyboardInterrupt reaching us: same cancel path.
+        _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
         unregister_btw_cancel(broker)
         raise KeyboardInterrupt from None
@@ -395,12 +400,13 @@ def _pump_collect_result(
         if not worker_cancelled(exc):
             raise
         # SDK-wrapped cancel (EventLoopException): same path.
+        _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
         unregister_btw_cancel(broker)
         raise KeyboardInterrupt from None
     history = getattr(agent, "messages", None)
     if isinstance(history, list):
-        for question, answer, _, _ in btw.pending:
+        for question, answer, *_ in btw.pending:
             append_btw_turn(history, question, answer)
     return result
 
@@ -458,6 +464,7 @@ def _pump_parallel(
                             btw_agent,
                             btw_future,
                             btw_question,
+                            agent=agent,
                         )
                     )
                     if action == _PUMP_RESUME:
