@@ -75,6 +75,7 @@ sweep **all existing peer functions** across `strands_code_cli/` in the same pha
 ## 4. Static Repo Invariants (CI-Enforced)
 
 - `strands_code_agent/` remains unmodified on `main` (`git diff ee42ea2 -- strands_code_agent/` empty) so upstream resyncs stay conflict-free; put CLI code and temporary upstream-PR workarounds in `strands_code_cli/` as isolated, auto-retiring bridges, editing `strands_code_agent/` only on a dedicated upstream-PR branch or with explicit user approval when wrapping from `strands_code_cli/` is impossible.
+- **Upstream-first contribution & bridge retirement:** For generic bugs or gaps in upstream repos (`aws-samples/sample-strands-code-agent`, `strands-agents/harness-sdk`, `strands-agents/sdk-python`, `strands-agents/box`, or other AWS dependencies), detour to file an upstream issue (and PR when applicable), tag any interim `strands_code_cli/` bridge with `# Upstream: <org>/<repo>#<id> — retire once released`, and track it in `docs/upstream/` + `.planning/STATE.md` for clean removal on future upstream resyncs.
 - Zero `os.environ` / `os.getenv` tokens in `model/model_switch.py`, `cost/cost_context.py`, `dispatch/core.py`, `loop/core.py`, `loop/pump.py`, or `entry/main.py`.
 - Zero unnegated `"budget"`, `"enforce"`, `"quota"`, or `"halt"` substrings in those modules.
 - `xenon --max-absolute C strands_code_cli tests scripts` (`CC <= 20`) and `lint-imports` pass.
