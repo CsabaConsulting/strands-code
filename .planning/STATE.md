@@ -1,15 +1,15 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: 19
-current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
-current_plan: 3
-status: validated
-stopped_at: Phase 19 Nyquist validation complete (`19-VALIDATION.md` validated, `nyquist_compliant: true`) — ready for `/gsd-discuss-phase 19.1`
-last_updated: "2026-11-26T03:08:00Z"
+current_phase: "19.1"
+current_phase_name: Policy Gate, Persistence & Concurrency Hardening
+current_plan: 0
+status: discussed
+stopped_at: Phase 19.1 discussion complete (`19.1-CONTEXT.md` locked, `D-01`–`D-08`) — ready for `/gsd-plan-phase 19.1`
+last_updated: "2026-11-26T03:23:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Completed Phase 19 Nyquist validation (`19-VALIDATION.md` validated, `nyquist_compliant: true`; `box.py` 1178/1180 = 99.8% [100% reachable]; 1848+1 tests + live `strands-box 0.3.1` + 44/44 rig + 6/6 CI gates)
-state_head: 9ac28d3
+last_activity_desc: Completed Phase 19.1 discussion (`19.1-CONTEXT.md` `D-01`–`D-08` & `19.1-DISCUSSION-LOG.md`)
+state_head: ef292b4
 progress:
   total_phases: 13
   completed_phases: 7
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19 Validated (`SANDBOX-01` — `19-UAT.md` `6/6 PASS`, `19-SECURITY.md` `11/11 closed`, `19-VALIDATION.md` `nyquist_compliant: true`) — ready for `/gsd-discuss-phase 19.1`
+**Current focus:** Milestone `v2.0` · Phase 19.1 Discussed (`HARDEN-01`, `19.1-CONTEXT.md` `D-01`–`D-08` locked) — ready for `/gsd-plan-phase 19.1`
 
 ## Current Position
 
-Phase: 19 of 23 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Complete & Nyquist Validated (`19-01`..`19-03`)
-Plan: 3 of 3 complete in Phase 19
-Status: Validated (`19-UAT.md` `6/6 PASS`, `19-SECURITY.md` `11/11 closed`, `19-VALIDATION.md` `nyquist_compliant: true`, `1849` unit suite + live `strands-box 0.3.1` host check + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-discuss-phase 19.1`
-Last activity: 2026-11-25 — Completed Phase 19 Nyquist validation (`19-VALIDATION.md` validated)
+Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Discussed (`19.1-CONTEXT.md` locked)
+Plan: 0 of TBD in Phase 19.1
+Status: Discussed (`19.1-CONTEXT.md` `D-01`–`D-08` locked after 3 Peer Parity Matrices & 6 atomic questions) — ready for `/gsd-plan-phase 19.1`
+Last activity: 2026-11-25 — Completed Phase 19.1 discussion (`19.1-CONTEXT.md` & `19.1-DISCUSSION-LOG.md`)
 
 Progress: [█████░░░░░] 54%
 
@@ -87,10 +87,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Full `v1.0`/`v2.0` parity & architecture audit (`.planning/research/V1_V2_PARITY_AUDIT.md`, `2026-11-25`): audited Phases 1–19 across CLI/toggles, persistence/paths/Py3.10/packaging, gates/loops/CodeAct/`/btw`/`subagent`/memory, and routing/`/cost`/models/import-graph; user approved breaking cleanups (`requires-python >=3.11`, removing `engine.primary`, removing `/diff approve-each`, session-sticky `/memory mode` & `/codeact` + collapsing `diff.yaml`/`memory.yaml`, pruning redundant aliases, `PolicyGateHandler(InterventionHandler)`), inserted **Phase 19.1** (`HARDEN-01`) and **Phase 19.2** (`PARITY-01`) before Phase 20, and appended **Phase 23** (`STRUCT-02`, `CLEANUP-02`) after Phase 22.
 - Phase 19 security audit (`19-SECURITY.md` `11/11 closed`, `threats_open: 0`, `status: verified`, `2026-11-25`): remediated `T-19-09` HIGH (ancestor `max_ancestors=2` + pre-`realpath` `_resolve_code_dirs()` symlink refusal + fail-closed `_validate_launch_config()`/`_validate_launch_box_dir()` checks), `T-19-10` HIGH (`git` flag-before-`push` MFOTL coverage + Dogwood `forbid_box_config_write`/`delete`/`move` rules + `os.X_OK`/control-char checks in `discover_box_binaries()`), and `T-19-11` MEDIUM (`XDG_*` absolute/non-root validation in `_render_agent_env()`), verified across live `strands-box 0.3.1` integration (`1 passed`, `7.46s`), `1843 + 1 = 1844` unit suite, `44/44` rig, and all 6 CI gates (`box.py` max `radon C 16`).
 - Phase 19 Nyquist validation (`19-VALIDATION.md` `validated`, `nyquist_compliant: true`, `2026-11-25`): audited Phase 19 modules via `sys.monitoring` (`box.py` `1178/1180 = 99.8%` [100.0% reachable on Python 3.12], `sandbox/__init__.py` `1/1 = 100.0%`, `100.0%` on Phase 19 integration seams in `codeact.py`/`policy/core.py`/`dispatch/core.py`/`entry/main.py`) and closed all `58` reachable edge-branch gaps across `5` new tests in `tests/sandbox/test_box.py` & `tests/sandbox/test_box_cli.py` (`0` runtime edits, `1848 + 1 = 1849` default suite + `1` live `strands-box 0.3.1` integration + `44/44` rig + all 6 CI gates green).
+- Phase 19.1 discussion (`19.1-CONTEXT.md` `D-01`–`D-08`, `19.1-DISCUSSION-LOG.md`, `2026-11-25`): locked direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` with per-agent `read_only_agents` and `event.cancel_tool`, outside-scope `read` `Prompt` + sensitive secret-file `read` downgrade (matching Dogwood floor), expanded `write`/`edit` protected paths (`.agent/**`, `.git/**`, `.env*`), home-only `trust_delegated` (warn+ignore in repo), `KNOWN_TOOLS` + `BUILTIN_ALLOWED_TOOLS` for all 4 live harness plugin tools + tool-only rules + `search` path rules, shared `platform_io.py` (`0o600` private / standard readable git-tracked `STRANDS.md` & `skills-lock.json`), shared `ui/console.py` + strict `[A-Za-z0-9][A-Za-z0-9._-]*` `_validate_session_id` + main-thread HITL prompts + `sanitize_display`, `silent` mode keeping `init-*` interactive + content-fingerprinted `CurateQueue` dedup, `/btw` live-model/routed-billing/fresh-REPL fixes, custom `make_subagent`, and `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()` teardown.
 
 ### Pending Todos
 
-- Run `/gsd-discuss-phase 19.1` and `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
+- Run `/gsd-plan-phase 19.1`, execute `HARDEN-01`, then run `/gsd-discuss-phase 19.2` before Phase 20 (`SANDBOX-02` Monty Python VM).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -103,6 +104,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-26T03:08:00Z
-Stopped at: Phase 19 Nyquist validation complete (`19-VALIDATION.md` validated, `nyquist_compliant: true`) — ready for `/gsd-discuss-phase 19.1`
-Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-VALIDATION.md
+Last session: 2026-11-26T03:23:00Z
+Stopped at: Phase 19.1 discussion complete (`19.1-CONTEXT.md` locked, `D-01`–`D-08`) — ready for `/gsd-plan-phase 19.1`
+Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-CONTEXT.md
