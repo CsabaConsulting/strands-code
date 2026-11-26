@@ -3,18 +3,18 @@ gsd_state_version: "1.0"
 milestone: v2.0
 current_phase: "19.1"
 current_phase_name: Policy Gate, Persistence & Concurrency Hardening
-current_plan: 0
-status: planned
-stopped_at: Phase 19.1 planning complete (`19.1-01`..`04-PLAN.md` verified PASS) — ready for `/gsd-execute-phase 19.1`
-last_updated: "2026-11-26T04:04:00Z"
+current_plan: 4
+status: complete
+stopped_at: Phase 19.1 complete (`HARDEN-01`, Waves 1–4 verified PASS in `19.1-VERIFICATION.md`) — ready for `/gsd-discuss-phase 19.2`
+last_updated: "2026-11-26T06:03:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Planned Phase 19.1 (`HARDEN-01` across Waves 1–4: `19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01`..`04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS)
-state_head: 7015c11
+last_activity_desc: Executed & verified Phase 19.1 (`HARDEN-01` across Waves 1–4 `b0d01f9`, `42e72e9`, `4f54fb5`, `cbc6ad1`; `1900 + 1` tests, `44/44` rig, host Box probe, and all 6 CI gates green)
+state_head: cbc6ad1
 progress:
   total_phases: 13
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 24
-  completed_plans: 20
+  completed_plans: 24
 ---
 
 # Project State
@@ -24,21 +24,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.1 Planned (`HARDEN-01` — Waves 1–4 verified PASS in `19.1-PLAN-CHECK.md`) — ready for `/gsd-execute-phase 19.1`
+**Current focus:** Milestone `v2.0` · Phase 19.1 Complete (`HARDEN-01`, `19.1-VERIFICATION.md` `12/12 PASS`) — ready for `/gsd-discuss-phase 19.2`
 
 ## Current Position
 
-Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Planned (`19.1-01`..`19.1-04`)
-Plan: 0 of 4 in Phase 19.1
-Status: Planned (`19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01`..`04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19.1`
-Last activity: 2026-11-25 — Planned Phase 19.1 (`19.1-01`..`04-PLAN.md` verified PASS)
+Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Complete (`4/4` plans executed & verified)
+Plan: 4 of 4 in Phase 19.1
+Status: Complete (`19.1-VERIFICATION.md` `12/12 PASS`, all 6 CI gates green)
+Last activity: 2026-11-25 — Executed Phase 19.1 (`HARDEN-01`: Waves 1–4 + full verification)
 
-Progress: [█████░░░░░] 54%
+Progress: [██████░░░░] 62%
 
 ## Performance Metrics
 
 - `v1.0` shipped 2026-10-16: 12 phases, 41 plans, 129 tasks ([v1.0 Archive](.planning/MILESTONES.md))
-- `v2.0` active: 7/13 phases complete (Phases 13–19 done; Phases 19.1, 19.2, 20–23 queued)
+- `v2.0` active: 8/13 phases complete (Phases 13–19, 19.1 done; Phases 19.2, 20–23 queued)
 
 ## Accumulated Context
 
@@ -90,21 +90,23 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19.1 discussion (`19.1-CONTEXT.md` `D-01`–`D-08`, `19.1-DISCUSSION-LOG.md`, `2026-11-25`): locked direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` with per-agent `read_only_agents` and `event.cancel_tool`, outside-scope `read` `Prompt` + sensitive secret-file `read` downgrade (matching Dogwood floor), expanded `write`/`edit` protected paths (`.agent/**`, `.git/**`, `.env*`), home-only `trust_delegated` (warn+ignore in repo), `KNOWN_TOOLS` + `BUILTIN_ALLOWED_TOOLS` for all 4 live harness plugin tools + tool-only rules + `search` path rules, shared `platform_io.py` (`0o600` private / standard readable git-tracked `STRANDS.md` & `skills-lock.json`), shared `ui/console.py` + strict `[A-Za-z0-9][A-Za-z0-9._-]*` `_validate_session_id` + main-thread HITL prompts + `sanitize_display`, `silent` mode keeping `init-*` interactive + content-fingerprinted `CurateQueue` dedup, `/btw` live-model/routed-billing/fresh-REPL fixes, custom `make_subagent`, and `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()` teardown.
 - Phase 19.1 planning (`19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01..04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS): verified upstream `HookOrder.SDK_FIRST < INTERVENTION_INPUT` and `on_error="throw"` (`TurnCancelled` preservation), `is_fetch_get()` `-T`/`-I`/`-X` case-lowering bug, thread-safe `/proc/self/status` umask-masked `mode=None` for repo files, `save_strategy` (`C 20 -> ~B 6`) and `_setup_decision_entries` (`C 20 -> ~C 15`) complexity decompositions, isolated `entry/subagent.py`, and exact legacy test migration/preservation inventory across Waves 1–4.
 
+- Phase 19.1 (`b0d01f9`, `42e72e9`, `4f54fb5`, `cbc6ad1`, `19.1-VERIFICATION.md` `12/12 PASS`): shipped `HARDEN-01` across Waves 1–4: added dependency-free `platform_io.py` & `ui/console.py` leaves, hardened `policy/core.py` & `scope.py` (`is_fetch_get`, `_serialise_rule`, shell/symlink `[[allow]]`, tool-scoped canonical `effective_roots`, unboxed `read` + sensitive secret floor, `.agent/**`/`.git/**`/`.env*` protection, home-only `trust_delegated`, 4 live harness plugin tools + tool-only/`search` path rules), replaced `PolicyHumanInTheLoop` with direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` + main-thread `ApprovalBroker.request` prompts + SHA-256 `BatchState` + locked `steering.py`, swept all 15 persistence stores onto `platform_io.py` (`save_strategy` `C 20 -> A 3`, `apply_stashed` target rechecks, `live_pricing` region validation, same-FS marketplace staging), unified `ui/console.py` + strict `[A-Za-z0-9][A-Za-z0-9._-]*` `_validate_session_id` + sanitized curate/`/route setup` output (`_setup_decision_entries` `C 20 -> B 8`), guarded `silent` mode against `init-*` auto-apply + content-fingerprinted `CurateQueue` dedup, fixed `/btw` live-model sync + 5-tuple routed-model billing + `fresh_tools_for_delegate`, replaced builtin `subagent` with `entry/subagent.py` `build_cli_subagent`, and wired `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()`; verified `1900 + 1 = 1901` default suite + `44/44` rig + `1` live host `strands-box 0.3.1` integration + all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
+
 ### Pending Todos
 
-- Run `/gsd-execute-phase 19.1` (`HARDEN-01`), then `/gsd-discuss-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM).
-- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (plus optional `harness-sdk` enhancement note for dynamic parent-model inheritance in `build_default_subagent`).
+- Run `/gsd-discuss-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM).
+- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`, plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
 
 - ✅ ~~[Phase 4→] `reasoningContent` in resumed opus history fails validation on non-reasoning Bedrock models~~ — **Closed in Phase 13** (`strands-agents==1.65.0` `#5166` `BedrockModel._rejects_reasoning_block` + `drop_block` wire strip + `model_switch.prepare_resumed_history()` hybrid restore on non-Bedrock / media-less launches; pinned offline in `TestUpstreamReasoningWireStrip` and `TestPrepareResumedHistory`).
 - ✅ ~~[v2.0 Coordination] Phase 14 (`MODEL-06` `first_run.py` preflight) must check non-empty key presence only (no vendor prefix checks) and skip `sts.get_caller_identity()` when `STRANDS_BOX=1`~~ — **Closed in Phase 14** (`first_run.py` checks non-empty env presence only, skips STS for non-AWS providers and `STRANDS_BOX=1`).
-- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`) and `_setup_decision_entries` (`C 20`), plus `_check_explicit_provider` (`C 20`), `price_table` (`C 20`), and `save_strategy` (`C 20`), sit near/at the `xenon --max-absolute C` ceiling (`CC <= 20`) — Phases 19.1, 19.2, 20 & 21 MUST keep helpers isolated (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `sandbox/monty.py`) until Phase 23's full breakup.
+- ⚠️ [v2.0 Complexity Budget] `run_loop` (`C 18`), `_route_side_spawn` (`C 18`), `_check_explicit_provider` (`C 20`), and `price_table` (`C 20`) sit near/at the `xenon --max-absolute C` ceiling (`CC <= 20`; `_setup_decision_entries` reduced to `B 8` and `save_strategy` reduced to `A 3` in Phase 19.1) — Phases 19.2, 20 & 21 MUST keep helpers isolated (`dispatch/help.py`, `dispatch/review.py`, `ui/attachments.py`, `sandbox/monty.py`) until Phase 23's full breakup.
 - ⚠️ [Phase 21 / Future LOOP-05 Security] CVE-2026-18830 / CoreBreak boundary — `strands-agents` `event_loop_cycle` executes trailing `toolUse` blocks without model mediation; Phase 19.1/21 MUST attach `RejectCallerToolUseHook` in `entry/main.py` and build `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` dicts, and any future JSON/headless input (`LOOP-05`) or untrusted snapshot loader must reject/strip caller-supplied `toolUse` blocks.
-- ⚠️ [v1.0 Carryover] Silent memory mode can memorialize model rationalizations; `PendingStore` dual-stream lock safety relies on turn discipline — scoped for remediation in **Phase 19.1** (`HARDEN-01`, `.planning/research/V1_V2_PARITY_AUDIT.md` Part III §E).
+- ✅ ~~[v1.0 Carryover] Silent memory mode can memorialize model rationalizations; `PendingStore` dual-stream lock safety relies on turn discipline~~ — **Closed in Phase 19.1** (`_review_silent` restricts auto-apply to `"promoted"` + content-fingerprinted `CurateQueue` dedup + `platform_io` / `PendingStore` hardened).
 
 ## Session Continuity
 
-Last session: 2026-11-26T04:04:00Z
-Stopped at: Phase 19.1 planning complete (`19.1-01`..`04-PLAN.md` verified PASS) — ready for `/gsd-execute-phase 19.1`
-Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-01-PLAN.md
+Last session: 2026-11-26T06:03:00Z
+Stopped at: Phase 19.1 complete (`HARDEN-01`, Waves 1–4 verified PASS in `19.1-VERIFICATION.md`) — ready for `/gsd-discuss-phase 19.2`
+Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-VERIFICATION.md
