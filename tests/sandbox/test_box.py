@@ -945,6 +945,244 @@ class TestSandboxSecurityAndDiagnostics:
         assert env_ok["XDG_CONFIG_HOME"] == valid_xdg
 
 
+class TestBoxNyquistEdgeBranches:
+    def test_shebang_atomic_write_and_dir_helper_edge_branches(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.sandbox import box as sandbox_box
+
+        assert sandbox_box._shebang_interpreter(tmp_path / "missing") is None
+        assert sandbox_box._shebang_interpreter(tmp_path) is None
+
+        empty_shebang = tmp_path / "empty_shebang.sh"
+        empty_shebang.write_text("#!   \nexit 0\n", encoding="utf-8")
+        assert sandbox_box._shebang_interpreter(empty_shebang) is None
+
+        assert sandbox_box._valid_nonroot_dir(None) is None
+        repo_no_venv = tmp_path / "repo_no_venv"
+        repo_no_venv.mkdir()
+        assert (
+            sandbox_box._resolve_venv_dir(repo_no_venv, Path("/opt/custom/python3"))
+            is None
+        )
+
+        monkeypatch.setattr(sandbox_box, "_valid_nonroot_dir", lambda _cand: None)
+        assert sandbox_box._system_arch_lib_dir() is None
+
+        out_dir = tmp_path / "atomic_fail"
+        out_dir.mkdir()
+
+        def _fail_replace(*_args, **_kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", _fail_replace)
+        with pytest.raises(OSError, match="disk full"):
+            sandbox_box._atomic_write_text(out_dir / "box.toml", "x = 1\n")
+        assert list(out_dir.iterdir()) == []
+
+    def test_provider_detection_fallbacks_and_alias_egress_keys(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.sandbox import box as sandbox_box
+
+        assert (
+            sandbox_box._provider_from_model_id("us.anthropic.claude-sonnet-4-6")
+            == "bedrock"
+        )
+        assert (
+            sandbox_box._provider_from_model_id(
+                "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude"
+            )
+            == "bedrock"
+        )
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        or_strat = RoutingStrategy(
+            engine=RoutingEngine(order=("openrouter",)), candidates=()
+        )
+        assert "openrouter" in detect_active_providers(
+            repo, config=ProviderConfig(), routing_strategy=or_strat, env={}
+        )
+
+        assert sandbox_box._normalize_requested_providers(
+            ["google,,anthropic,"],
+            allow_decisions_api=False,
+            allow_github_skills=False,
+        ) == ["google", "anthropic"]
+
+        google_spec = sandbox_box._egress_specs_for_providers(
+            ["google"],
+            aws_region="us-west-2",
+            aws_profile=None,
+            env={"GEMINI_API_KEY": "g"},
+        )[0]
+        assert google_spec.secret_ref == "env://GEMINI_API_KEY"
+
+        meta_spec = sandbox_box._egress_specs_for_providers(
+            ["meta"],
+            aws_region="us-west-2",
+            aws_profile=None,
+            env={"META_API_KEY": "m"},
+        )[0]
+        assert meta_spec.secret_ref == "env://META_API_KEY"
+
+        refs = sandbox_box._configured_model_refs(
+            ProviderConfig(),
+            RoutingStrategy(
+                engine=RoutingEngine(order=("llm",), llm_model="ollama/qwen3:8b"),
+                candidates=(),
+            ),
+        )
+        assert refs == ["ollama/qwen3:8b"]
+
+        def _raise_val(*_args, **_kwargs):
+            raise ValueError("corrupt")
+
+        monkeypatch.setattr(ProviderConfig, "load", _raise_val)
+        assert detect_active_providers(
+            repo,
+            routing_strategy=RoutingStrategy(
+                engine=RoutingEngine(order=()), candidates=()
+            ),
+            env={},
+        ) == ["bedrock"]
+
+        monkeypatch.setattr(sandbox_box, "load_strategy", _raise_val)
+        assert detect_active_providers(repo, config=ProviderConfig(), env={}) == [
+            "bedrock"
+        ]
+
+    def test_doctor_and_binary_discovery_edge_branches(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        full = _fake_box_dir(tmp_path / "full", include_all=True)
+        dogwood = full / "dogwood"
+        dogwood.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(dogwood, 0o755)
+
+        found_dir, missing_dir = discover_box_binaries(full)
+        assert found_dir == full / "box" and missing_dir == []
+
+        rep_darwin = run_box_doctor(
+            repo,
+            box_bin=full,
+            env={"HOME": str(tmp_path), "PATH": str(full)},
+            system_name="Darwin",
+            machine="arm64",
+        )
+        checks_d = {c.name: c for c in rep_darwin.checks}
+        assert checks_d["linux_arch"].ok is False
+        assert "Unsupported host OS 'Darwin'" in checks_d["linux_arch"].detail
+        assert "Optional dogwood CLI installed at" in checks_d["dogwood_cli"].detail
+        assert checks_d["box_config"].ok is False
+        assert "Config not found" in checks_d["box_config"].detail
+
+        sysctl = tmp_path / "sysctl"
+        sysctl.write_text("0\n", encoding="utf-8")
+        bad_dir = tmp_path / "bad_cfg"
+        bad_dir.mkdir()
+        bad_toml = bad_dir / "box.toml"
+        bad_toml.write_text("name = [broken\n", encoding="utf-8")
+        (bad_dir / "policy.dw").write_text("", encoding="utf-8")
+        rep_arm = run_box_doctor(
+            repo,
+            config_path=bad_toml,
+            box_bin=full / "box",
+            env={"HOME": str(tmp_path)},
+            system_name="Linux",
+            machine="aarch64",
+            apparmor_sysctl_path=sysctl,
+        )
+        checks_a = {c.name: c for c in rep_arm.checks}
+        assert checks_a["linux_arch"].ok is True
+        assert "GA supported" in checks_a["linux_arch"].detail
+        assert checks_a["apparmor_userns"].ok is True
+        assert "restriction disabled" in checks_a["apparmor_userns"].detail
+        assert checks_a["box_config"].ok is False
+        assert "Invalid box.toml" in checks_a["box_config"].detail
+
+        sym_dir = tmp_path / "sym_cfg"
+        sym_dir.mkdir()
+        sym_toml = sym_dir / "box.toml"
+        sym_toml.symlink_to(bad_toml)
+        (sym_dir / "policy.dw").write_text("", encoding="utf-8")
+        rep_sym = run_box_doctor(
+            repo,
+            config_path=sym_toml,
+            box_bin=full / "box",
+            env={"HOME": str(tmp_path)},
+        )
+        checks_s = {c.name: c for c in rep_sym.checks}
+        assert checks_s["box_config"].ok is False
+        assert "Symlink refused" in checks_s["box_config"].detail
+
+    def test_launch_box_run_validation_and_default_config_edge_branches(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.sandbox import box as sandbox_box
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        full = _fake_box_dir(tmp_path / "full", include_all=True)
+
+        with pytest.raises(ValueError, match="Box config not found"):
+            launch_box_run(
+                [],
+                repo_root=repo,
+                box_bin=full / "box",
+                env={"HOME": str(tmp_path)},
+            )
+
+        res = init_box_config(repo, env={"HOME": str(tmp_path)})
+        with pytest.raises(ValueError, match="Strands Box binary layout incomplete"):
+            launch_box_run(
+                [],
+                repo_root=repo,
+                config_path=res.box_toml,
+                box_bin=tmp_path / "missing-box",
+                env={"HOME": str(tmp_path)},
+            )
+
+        abs_sym_pol = tmp_path / "abs_sym.dw"
+        abs_sym_pol.symlink_to(res.policy_dw)
+        abs_cfg_dir = tmp_path / "abs_cfg"
+        abs_cfg_dir.mkdir()
+        abs_cfg = abs_cfg_dir / "box.toml"
+        abs_cfg.write_text(f'policy = "{abs_sym_pol}"\n', encoding="utf-8")
+        with pytest.raises(ValueError, match="Refusing symlink policy"):
+            launch_box_run(
+                [],
+                repo_root=repo,
+                config_path=abs_cfg,
+                box_bin=full / "box",
+                env={"HOME": str(tmp_path)},
+            )
+
+        monkeypatch.setattr(sandbox_box, "tomllib", None)
+        assert sandbox_box._validate_launch_config(res.box_toml) is None
+
+
 def _assert_box_run_clean(
     box_bin: Path, box_toml: Path, cwd: Path, env: dict[str, str]
 ) -> None:

@@ -217,3 +217,29 @@ class TestBoxCliSubcommands:
         assert "decisionapi.net" in normalized
         assert "OpenRouter /api/alpha/decisions" not in normalized
         assert "codeload/objects" in normalized
+
+    def test_box_run_strips_forwarded_leading_double_dash(self, tmp_path, monkeypatch):
+        self._forbid_preflight(monkeypatch)
+        recorded: dict[str, object] = {}
+
+        def _fake_launch(extra_args, **kwargs):
+            recorded["extra_args"] = list(extra_args)
+            recorded["kwargs"] = kwargs
+            return 0, []
+
+        monkeypatch.setattr(sandbox_box, "launch_box_run", _fake_launch)
+        cfg = tmp_path / "box.toml"
+        result = CliRunner().invoke(
+            entry_main.app,
+            [
+                "box",
+                "run",
+                "--config",
+                str(cfg),
+                "--",
+                "--",
+                "--codeact",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert recorded["extra_args"] == ["--codeact"]
