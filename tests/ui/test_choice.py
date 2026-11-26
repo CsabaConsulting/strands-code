@@ -15,12 +15,11 @@ from typing import Any
 import pytest
 from strands.interventions.actions import Deny as HitlDeny
 from strands.interventions.actions import Proceed
-from strands.vended_interventions.hitl import HumanInTheLoop
 
 import strands_code_cli.ui.choice as choice_module
 from strands_code_cli.dispatch.core import show_picker
 from strands_code_cli.policy.core import PolicyConfig
-from strands_code_cli.policy.policy_gate import PolicyClassifier
+from strands_code_cli.policy.policy_gate import PolicyGateHandler
 
 
 class _FakeAgent:
@@ -36,7 +35,7 @@ def _event(name: str, tool_input: dict[str, Any], uid: str = "t1"):
 
 
 def _tty_gate(monkeypatch, picked: Any):
-    """Classifier + handler with a tty stdin and stubbed radio dialog."""
+    """PolicyGateHandler with a tty stdin and stubbed radio dialog."""
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
     if isinstance(picked, BaseException):
 
@@ -46,11 +45,8 @@ def _tty_gate(monkeypatch, picked: Any):
         monkeypatch.setattr(choice_module, "radio_choice", _raise)
     else:
         monkeypatch.setattr(choice_module, "radio_choice", lambda *a, **k: picked)
-    classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-    handler = HumanInTheLoop(
-        allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-    )
-    return classifier, handler
+    handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
+    return handler, handler
 
 
 def _run(handler, event):
@@ -59,10 +55,10 @@ def _run(handler, event):
 
 class TestApprovalDialog:
     def test_dialog_yes_approves(self, monkeypatch):
-        classifier, handler = _tty_gate(monkeypatch, "y")
+        _, handler = _tty_gate(monkeypatch, "y")
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
         assert isinstance(result, Proceed)
-        assert any("approved shell" in line for line in classifier.batch.covered())
+        assert any("approved shell" in line for line in handler.batch.covered())
 
     def test_dialog_escape_denies_fail_closed(self, monkeypatch):
         _, handler = _tty_gate(monkeypatch, None)

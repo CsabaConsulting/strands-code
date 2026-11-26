@@ -1,48 +1,46 @@
-"""Single-HITL permissions gate: classifier + ask + batching (TOOL-03, D-01..D-04, D-12).
+"""Single-intervention permissions gate on Strands InterventionHandler (D-01..D-04).
 
-Exactly ONE :class:`HumanInTheLoop` instance carries the allowlist plus a
-custom classifier (TOML matching, owns the verdict) and a custom ask
-(rendering only). A second instance would collide at construction
-(``strands:human-in-the-loop`` name rule) — see the tracer test module.
+Replaces the legacy ``HumanInTheLoop`` + ``DENY:`` reason smuggling +
+``_ACTIVE`` module global with a single stateful :class:`PolicyGateHandler`
+attached directly to each built agent via :func:`build_interventions` and
+``agent._policy_gate``.
 
-Secure-reading note on 03-PLAN.md resolved item 5: it states
-"Deny → requires_approval False ... so ask short-circuits". Taken
-literally that would ``Proceed()`` (run) the denied tool — fail-open.
-Implemented instead as requires-approval True with a ``DENY:``-prefixed
-reason so the ask layer short-circuits to a printed refusal and returns
-``"n"`` (deny) without prompting. Fail-closed wins over literal text.
-
-Layer split: ``PolicyClassifier`` reads the ``BeforeToolCallEvent`` tool
-name + input and calls :func:`strands_code_cli.policy.core.decide`; the ask
-renders full detail (exact command or diff + one-line risk reason, D-01)
-inside :func:`strands_code_cli.ui.output.output_context`. D-03 remember
-writes happen inside the ask (which closes over tool name + input via
-the classifier's last-decision context), never in ``evaluate`` (which
-stays ``default_evaluate``). No ``enable_trust`` (wrong granularity),
-no second handler.
+Threading & safety invariants:
+- ``name == "strands-code:policy-gate"`` enforces single-handler uniqueness
+  via ``InterventionRegistry`` / ``resolve_interventions``.
+- ``on_error`` remains ``"throw"`` (inherited from ``InterventionHandler``) so
+  ``TurnCancelled`` and ``KeyboardInterrupt`` propagate cleanly to the loop;
+  internal gate errors catch fail-closed to ``Deny``.
+- Agent identity keys on ``id(agent)`` (``"main"``, registered ``"btw"``,
+  unregistered delegated ``"subagent"``) with ``weakref.finalize`` cleanup and
+  per-agent ``read_only_agents`` tracking.
+- ``BatchState`` is mutex-protected and keys signatures with full SHA-256 of
+  canonical JSON ``tool_input``.
+- Worker threads NEVER open ``output_context()``; full prompt rendering executes
+  inside :meth:`ApprovalBroker.request` on the main pump thread under
+  :data:`RENDER_LOCK`.
 """
 
 from __future__ import annotations
 
-import asyncio
-import inspect
+import hashlib
+import json
 import logging
 import os
 import queue
 import sys
 import threading
+import weakref
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Iterator
+from typing import Any, Callable, Iterator
 
-from rich.console import Console
 from rich.syntax import Syntax
-from strands.interventions.actions import Deny as InterventionDeny
+from strands.interventions import Deny as InterventionDeny
+from strands.interventions import InterventionHandler
+from strands.interventions import Proceed as InterventionProceed
 from strands.types.exceptions import EventLoopException
-from strands.vended_interventions.hitl import HumanInTheLoop
-from strands.vended_interventions.hitl.classifier import ClassifierResult
 
-from strands_code_cli.loop.btw import RENDER_LOCK
 from strands_code_cli.loop.steering import stdin_guard as gate_open
 from strands_code_cli.policy.core import (
     Allow,
@@ -51,148 +49,121 @@ from strands_code_cli.policy.core import (
     Prompt,
     Rule,
     _is_protected_skills_or_config_path,
+    _is_sensitive_read_path,
     decide,
     normalise_command,
 )
-from strands_code_cli.ui.output import output_context, print_plain
+from strands_code_cli.ui.console import (
+    RENDER_LOCK,
+    console,
+    sanitize_display,
+    sanitize_line,
+)
+from strands_code_cli.ui.output import print_plain
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 _ASK_OPTIONS = "Approve? [y/n/always/never]"
 _PROTECTED_ASK_OPTIONS = (
     "[y]es once / [n]o skip / [never] deny+remember (protected path)"
 )
-_ASK_SUFFIX = _ASK_OPTIONS + " "
 _ANSWER_PROMPT = "> "
 
-
-def _is_protected_prompt(ctx: dict[str, Any]) -> bool:
-    if ctx.get("tool_name") not in ("write", "edit"):
-        return False
-    tool_input = ctx.get("tool_input") or {}
-    return _is_protected_skills_or_config_path(tool_input.get("path", ""), Path.cwd())
-
-
-# ``gate_open`` is the shared reentrant stdin guard, defined in
-# steering (this module lazily imports choice, so the guard must not
-# live here). Held while ``ask`` waits for an answer: the steering
-# reader never consumes stdin while held, so a steering line can
-# never be consumed as an answer (and the answer is never diverted
-# into steering). Covers the typed ``input()`` fallback, the
-# arrow-key dialog, and the cancel chooser.
-
 PLAN_MUTATING_TOOLS = ("write", "edit", "shell", "python_repl")
-"""Tools denied in Plan mode (MODE-01, D-03).
-
-Read-only = ``read`` + ``search`` (gate allowlist) plus GET-shaped
-``web_fetch``/``web_search`` (pre-allowed, harmless). ``python_repl``
-is mutating-by-construction (interior ``open()``/write, residual
-T-03-08) so it is denied, not merely discouraged.
-"""
+"""Tools denied in Plan mode and on read-only delegated agents."""
 
 PLAN_DENY_TEMPLATE = "Plan mode is read-only — {tool} skipped, continuing."
 """Mode-vocabulary denial (never a policy-rule or diff-mode word)."""
 
 REVISE_HINT = "Revise the code or try a different approach."
-"""Revise hint appended to denied python_repl observations (D-06).
+"""Revise hint appended to denied python_repl observations."""
 
-The denial feeds the model a revise hint while the standard
-skip-and-continue verdict keeps the turn alive, so the agent can
-revise the code or try a different approach within the live turn.
-"""
+
+def _emit(text: str) -> None:
+    """Print dynamic text to the shared UI console under RENDER_LOCK."""
+    with RENDER_LOCK:
+        print_plain(console, text)
+
+
+def _is_protected_prompt(
+    tool_name: str, tool_input: dict[str, Any], base: Path | None = None
+) -> bool:
+    """True when Standing Allow ('always') and trust_delegated must be blocked."""
+    root = base if base is not None else Path.cwd()
+    raw = tool_input.get("path", "")
+    if tool_name in ("write", "edit"):
+        return _is_protected_skills_or_config_path(raw, root)
+    if tool_name == "read":
+        return _is_sensitive_read_path(raw, root)
+    return False
 
 
 def tag_for(agent: Any, main_agent: Any) -> str:
-    """Agent tag for approval prompts: ``"main"`` or ``"btw"`` (LOOP-03, D-06).
-
-    Identity comes from the event's agent object, never mutable turn
-    state: ``None`` (unknown) or the bound main agent is ``"main"``;
-    any other agent object (the btw side agent) is ``"btw"``.
-    """
+    """Compat helper: ``"main"`` when unset or equal to ``main_agent``, else ``"btw"``."""
     if agent is None or agent is main_agent:
         return "main"
     return "btw"
 
 
-_ASK_TAG = threading.local()
-"""Ask-time agent tag, set by ``__call__`` on the classifying worker thread.
-
-The ask runs on the same worker thread as its classify, so the
-thread-local routes each ask to its own context even when main and btw
-classify concurrently (a shared single slot would swap them). Unset
-(tests, direct calls) reads back as ``"main"``."""
+def _input_signature(
+    tool_name: str, tool_input: dict[str, Any], verdict: Prompt | Deny
+) -> tuple[str, ...]:
+    """Full-input SHA-256 cache key preventing identical-prefix batch aliasing."""
+    canonical = json.dumps(
+        tool_input, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    if isinstance(verdict, Deny):
+        detail = verdict.rule.describe() if verdict.rule is not None else verdict.reason
+        return ("deny", tool_name, detail, digest)
+    return ("prompt", tool_name, verdict.reason, digest)
 
 
 class BatchState:
-    """Turn-scoped approval cache keyed by matched-rule signature (D-04).
-
-    Tool calls execute sequentially, so upfront listing of future actions
-    is impossible: the first matching call per (signature, turn) prompts
-    with full detail naming the covering rule; later same-signature
-    APPROVED calls in the turn proceed silently and are recorded. Denied
-    calls never cover — a denied-then-retried call re-prompts
-    (fail-closed). Reset per turn via :meth:`bind_turn` (called from
-    ``loop.py`` before each ``agent(text)``); the cache never crosses
-    turns. Also keeps the covered-action log for ``/policy last``.
-    """
+    """Thread-safe turn-scoped approval cache keyed by full input signature."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._turn: str | None = None
         self._covered: set[tuple[str, tuple[str, ...]]] = set()
         self._log: list[str] = []
 
     def bind_turn(self, turn_id: str) -> None:
-        """Start a new turn: clear per-turn coverage, keep the log."""
-        self._turn = turn_id
-        self._covered = set()
+        """Start a new turn: clear per-turn coverage, keep the session log."""
+        with self._lock:
+            self._turn = turn_id
+            self._covered = set()
 
     def is_covered(self, signature: tuple[str, ...], tag: str = "main") -> bool:
-        """True when this signature already prompted this turn for ``tag``.
-
-        Coverage is namespaced per agent (LOOP-03, D-06): a main
-        approval never silences an identical btw call and vice versa.
-        """
-        return (tag, signature) in self._covered
+        """True when this signature was already approved this turn for ``tag``."""
+        with self._lock:
+            return (tag, signature) in self._covered
 
     def mark(
         self, signature: tuple[str, ...], description: str, tag: str = "main"
     ) -> None:
-        """Record a covered signature plus its human-readable description."""
-        self._covered.add((tag, signature))
-        self._log.append(description)
+        """Record an approved signature plus its human-readable description."""
+        with self._lock:
+            self._covered.add((tag, signature))
+            self._log.append(description)
 
     def covered(self) -> list[str]:
-        """Covered-action descriptions for ``/policy last``."""
-        return list(self._log)
+        """Snapshot of covered/recorded action descriptions for ``/policy last``."""
+        with self._lock:
+            return list(self._log)
 
     def record(self, description: str) -> None:
-        """Log a one-shot outcome for ``/policy last`` WITHOUT covering.
-
-        Denials never cover: a denied-then-retried call must re-prompt
-        (fail-closed). Only approvals cover, keeping the D-04
-        same-signature silence for the approved case.
-        """
-        self._log.append(description)
+        """Log an outcome for ``/policy last`` without marking batch coverage."""
+        with self._lock:
+            self._log.append(description)
 
 
 class TurnCancelled(Exception):
-    """Worker-side abort: cancel fired while awaiting a prompt answer.
-
-    Raised in the SDK worker thread when the turn's cancel event is set.
-    Never swallowed: ``ask`` re-raises past its fail-closed handler so the
-    worker exits instead of parking on stdin.
-    """
+    """Worker-side abort raised when cancel fires while awaiting an approval prompt."""
 
 
 def worker_cancelled(exc: BaseException) -> bool:
-    """True when this worker failure is a user cancel (G-7-2 F-2).
-
-    The SDK wraps ``TurnCancelled`` in ``EventLoopException`` (it is not
-    in the event loop's pass-through tuple), so ``except TurnCancelled``
-    sites never fire for real agents — only this unwrap sees the cancel.
-    Nested wraps map too; anything else is a genuine failure.
-    """
+    """True when ``exc`` is ``TurnCancelled`` or wraps one via ``EventLoopException``."""
     current: BaseException | None = exc
     while current is not None:
         if isinstance(current, TurnCancelled):
@@ -200,6 +171,7 @@ def worker_cancelled(exc: BaseException) -> bool:
         if not isinstance(current, EventLoopException):
             return False
         current = current.original_exception
+    return False
 
 
 class _ApprovalRequest:
@@ -211,9 +183,6 @@ class _ApprovalRequest:
         self._prompt = prompt
         self._done = threading.Event()
         self.answer: str | None = None
-        # The waiter's own cancel event (None for legacy/tests): the
-        # pump skips requests whose event is already set instead of
-        # serving a phantom dialog for a dead worker (G-7-2 F-1).
         self.cancel = cancel
 
     def run_prompt(self) -> None:
@@ -224,23 +193,12 @@ class _ApprovalRequest:
             self._done.set()
 
     def abort(self) -> None:
-        """Mark a dead worker's request unanswered (pump-side skip).
-
-        A not-yet-aborted waiter sees the set done-flag with no answer
-        and raises :class:`TurnCancelled` via the cancel/None path.
-        """
+        """Mark a dead worker's request unanswered (pump-side skip)."""
         self.answer = None
         self._done.set()
 
     def wait_answer(self, cancel: threading.Event | None) -> str:
-        """Worker side: block for the answer; abort promptly on cancel.
-
-        A set done-flag with no answer means the pump died without
-        answering (Ctrl-C took the dialog's cancel path while prompt_toolkit
-        owned SIGINT, so the turn handler never set cancel): that is a
-        cancellation too, never an ``AssertionError`` — the bare assert's
-        empty message used to surface as a blank "failed closed" line.
-        """
+        """Worker side: wait for pump answer, aborting cleanly on cancel."""
         while not self._done.wait(0.05):
             if cancel is not None and cancel.is_set():
                 raise TurnCancelled()
@@ -252,41 +210,20 @@ class _ApprovalRequest:
 
 
 class ApprovalBroker:
-    """Hands approval prompts from the SDK worker thread to the pump thread.
-
-    The SDK invokes ``ask`` inside its event-loop worker thread
-    (``ThreadPoolExecutor`` + ``asyncio.run``), where blocking on stdin is
-    fatal twice over: SIGINT lands in the main thread (parked in
-    ``future.result()``), so the worker stays parked in the read while the
-    main thread unwinds — executor ``shutdown(wait=True)`` then stalls
-    until Enter, and a second Ctrl-C leaks the parked worker, which steals
-    every later prompt's input (the double-Ctrl-C wedge). Prompt_toolkit
-    is unusable there too: ``asyncio.run`` cannot nest in the running loop
-    (observed ``run_async was never awaited`` → fail-closed deny).
-
-    So the worker hands the prompt to the pump thread and waits on a
-    per-request event plus the turn's cancel signal; the pump (main thread
-    during ``_invoke_agent``) prompts synchronously, where signals and
-    ``asyncio.run`` behave. With no pump registered (tests, direct calls)
-    the prompt runs inline, legacy behaviour.
-    """
+    """Hands approval prompts from SDK worker threads to the main pump thread."""
 
     def __init__(self) -> None:
         self._queue: queue.Queue[_ApprovalRequest] = queue.Queue()
         self._pumping = threading.Event()
         self._cancel: threading.Event | None = None
         self._pump_ident: int | None = None
-        # Nesting depth: turn pumps nest inside the session pump (see
-        # run_loop), so an inner exit must not wipe the outer pump's
-        # entered state. All pump enter/exit runs on the main thread
-        # (session + turn pumps today) — no lock needed.
         self._depth = 0
         self._cancel_lock = threading.Lock()
         self._cancel_by_tag: dict[str, threading.Event] = {}
 
     @contextmanager
     def pump(self, cancel: threading.Event) -> Iterator["ApprovalBroker"]:
-        """Serve prompts on this thread until the turn ends."""
+        """Serve prompts on this thread until the turn or session ends."""
         old_cancel, old_ident = self._cancel, self._pump_ident
         self._cancel = cancel
         self._pump_ident = threading.get_ident()
@@ -302,36 +239,24 @@ class ApprovalBroker:
                 self._pumping.clear()
 
     def register_cancel(self, tag: str, event: threading.Event) -> None:
-        """Bind one worker's cancel event under its agent tag (LOOP-03, D-06).
-
-        The main turn registers ``"main"`` on pump entry; the side
-        channel registers ``"btw"`` at spawn. Each waiter then aborts
-        only on its own event — cancelling one never disturbs the other.
-        """
+        """Bind a worker cancel event under ``tag``."""
         with self._cancel_lock:
             self._cancel_by_tag[tag] = event
 
     def unregister_cancel(self, tag: str) -> None:
-        """Drop one tag's cancel binding (turn end / side completion)."""
+        """Drop ``tag``'s cancel binding."""
         with self._cancel_lock:
             self._cancel_by_tag.pop(tag, None)
 
     def cancel_for(self, tag: str) -> threading.Event | None:
-        """This tag's cancel event, or None when unregistered."""
+        """Return ``tag``'s cancel event, or None when unregistered."""
         with self._cancel_lock:
             return self._cancel_by_tag.get(tag)
 
     def request(
         self, prompt: Callable[[], str], cancel: threading.Event | None = None
     ) -> str:
-        """Worker side: have the prompt answered by the pump thread.
-
-        ``cancel`` is the waiter's own event; None falls back to the
-        pump cancel, so every existing single-arg call site behaves
-        identically. An aborted waiter discards its own request so a
-        never-polled orphan cannot resurface as a phantom prompt on
-        the next turn.
-        """
+        """Run ``prompt`` on the pump thread (inline if already on pump/no pump)."""
         if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
             return prompt()
         req = _ApprovalRequest(prompt, cancel)
@@ -342,22 +267,16 @@ class ApprovalBroker:
             self.discard(req)
             raise
 
-    def discard(self, req: "_ApprovalRequest") -> None:
-        """Drop a request orphaned by cancel (best-effort).
-
-        Only the aborted waiter calls this: the pump may have stopped
-        polling (cancel chooser) or the turn may be over. Already
-        polled means nothing orphaned. No ``task_done`` bookkeeping —
-        nothing calls ``join()`` on this queue.
-        """
+    def discard(self, req: _ApprovalRequest) -> None:
+        """Drop an unpolled request orphaned by cancel (best-effort)."""
         with self._queue.mutex:
             try:
                 self._queue.queue.remove(req)
             except ValueError:
-                pass  # already polled; nothing orphaned
+                pass
 
     def poll(self, timeout: float = 0.05) -> _ApprovalRequest | None:
-        """Pump side: next pending prompt, or None on timeout."""
+        """Pump side: fetch next pending request, or None on timeout."""
         try:
             return self._queue.get(timeout=timeout)
         except queue.Empty:
@@ -365,25 +284,12 @@ class ApprovalBroker:
 
     @property
     def has_pending(self) -> bool:
-        """True when a prompt waits unserved (peek — never consumes).
-
-        Idle-drain entry for the D-11 bounded-wait notice: the drain
-        must detect a waiting side approval without dequeuing it, so
-        the next turn's pump still serves the request itself.
-        """
+        """True when an unserved request waits in the queue."""
         return not self._queue.empty()
 
 
-def _signature(tool_name: str, verdict: Prompt | Deny) -> tuple[str, ...]:
-    """Cache key: identical actions share it, distinct ones do not."""
-    if isinstance(verdict, Deny):
-        detail = verdict.rule.describe() if verdict.rule is not None else verdict.reason
-        return ("deny", tool_name, detail)
-    return ("prompt", tool_name, verdict.reason)
-
-
 def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
-    """Narrow derived rule for D-03 always/never (never ``tool = "*"``)."""
+    """Derive a narrow persisted TOML rule for ``always``/``never`` responses."""
     if tool_name == "shell":
         command = tool_input.get("command", "")
         if isinstance(command, str) and command.strip():
@@ -394,7 +300,7 @@ def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
         if isinstance(code, str) and code.strip():
             return Rule(tool="python_repl", command=normalise_command(code)[:500])
         return None
-    if tool_name in ("write", "edit"):
+    if tool_name in ("write", "edit", "read"):
         raw = tool_input.get("path", "")
         if isinstance(raw, str) and raw:
             absolute = raw if Path(raw).is_absolute() else str(Path(os.getcwd()) / raw)
@@ -403,246 +309,264 @@ def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
     return None
 
 
-class PolicyClassifier:
-    """Custom HITL classifier: TOML matching over the tool-call event.
+def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Sanitized single-line tool detail for prompt headers (strips ANSI/controls)."""
+    if tool_name == "shell":
+        raw = str(tool_input.get("command", ""))
+    elif tool_name == "python_repl":
+        raw = str(tool_input.get("code", ""))
+    elif "path" in tool_input:
+        raw = str(tool_input.get("path", ""))
+    else:
+        raw = str(tool_input)
+    return sanitize_line(raw, max_len=500)
 
-    Reads ``event.tool_use`` name + input, honours D-12
-    ``trust_delegated`` (unbound/unknown agent → prompt, fail-closed),
-    and stashes the last decision per agent tag as the ask layer's
-    context (LOOP-03: interleaved main/btw pipelines never swap).
-    """
+
+_DIALOG_DETAIL_CHARS = 60
+"""Maximum descriptor characters displayed in an approval dialog title."""
+
+
+def _dialog_title(tag: str, tool_name: str, tool_input: dict[str, Any]) -> str:
+    """Sanitized self-identifying dialog title carrying agent tag, tool, and detail."""
+    raw = _detail_line(tool_name, tool_input)
+    detail = sanitize_display(raw, max_len=_DIALOG_DETAIL_CHARS)
+    if not detail:
+        return f"Approve? [{tag}] {tool_name}"
+    return f"Approve? [{tag}] {tool_name} — {detail}"
+
+
+def _user_deny_action(
+    tool_name: str, prefix: str = "Denied by user"
+) -> InterventionDeny:
+    """Format model-facing InterventionDeny reason with optional REPL revise hint."""
+    reason = f"{prefix} — skipped, continuing."
+    if tool_name == "python_repl":
+        reason += f" {REVISE_HINT}"
+    return InterventionDeny(reason=reason)
+
+
+class PolicyGateHandler(InterventionHandler):
+    """Single deterministic TOML+Python permissions gate on Strands InterventionHandler."""
 
     def __init__(
         self,
         policy_loader: Callable[[], PolicyConfig] | None = None,
         batch: BatchState | None = None,
         append_path: str | Path | None = None,
+        broker: ApprovalBroker | None = None,
+        mode: str = "act",
     ) -> None:
+        if mode not in ("plan", "act"):
+            raise ValueError(f"unknown mode {mode!r}: expected plan|act")
         self._loader = policy_loader or PolicyConfig.load
         self._batch = batch if batch is not None else BatchState()
         self._append_path = append_path
-        self._main_agent: Any = None
+        self._broker = broker if broker is not None else ApprovalBroker()
+        self._state_lock = threading.Lock()
+        self._mode = mode
+        self._main_agent_id: int | None = None
         self._main_bound = False
-        self._last_by_tag: dict[str, dict[str, Any]] = {}
-        self._mode = "act"
-        self._steering: Any = None
+        self._agent_tags: dict[int, str] = {}
+        self._read_only_agents: set[int] = set()
+        self._finalizers: dict[int, weakref.finalize] = {}
+
+    @property
+    def name(self) -> str:
+        """Unique handler identifier enforcing single-gate registration."""
+        return "strands-code:policy-gate"
 
     @property
     def batch(self) -> BatchState:
-        """The turn cache (shared with the ask closure)."""
+        """Per-turn approval cache and session covered-action log."""
         return self._batch
 
+    @property
+    def broker(self) -> ApprovalBroker:
+        """Main-thread prompt broker owned by this gate."""
+        return self._broker
+
+    def _cleanup_agent_id(self, agent_id: int) -> None:
+        with self._state_lock:
+            self._agent_tags.pop(agent_id, None)
+            self._read_only_agents.discard(agent_id)
+            self._finalizers.pop(agent_id, None)
+            if self._main_agent_id == agent_id:
+                self._main_agent_id = None
+                self._main_bound = False
+
+    def _attach_finalizer_locked(self, agent: Any, agent_id: int) -> None:
+        if agent_id in self._finalizers:
+            return
+        try:
+            self._finalizers[agent_id] = weakref.finalize(
+                agent, self._cleanup_agent_id, agent_id
+            )
+        except TypeError:
+            pass  # non-weakrefable test doubles (e.g., SimpleNamespace)
+
     def bind_main_agent(self, agent: Any) -> None:
-        """Record the main agent for D-12 delegated-turn detection."""
-        self._main_agent = agent
-        self._main_bound = True
+        """Register the primary session agent as ``"main"``."""
+        if agent is None:
+            return
+        agent_id = id(agent)
+        with self._state_lock:
+            self._main_agent_id = agent_id
+            self._main_bound = True
+            self._agent_tags[agent_id] = "main"
+            self._attach_finalizer_locked(agent, agent_id)
+
+    def register_agent(self, agent: Any, tag: str) -> None:
+        """Associate an agent object with an explicit tag (e.g. ``"btw"``, ``"subagent"``)."""
+        if agent is None:
+            return
+        agent_id = id(agent)
+        with self._state_lock:
+            self._agent_tags[agent_id] = tag
+            self._attach_finalizer_locked(agent, agent_id)
+
+    def unregister_agent(self, agent: Any) -> None:
+        """Explicitly remove ``agent`` from tag and read-only tracking."""
+        if agent is None:
+            return
+        agent_id = id(agent)
+        with self._state_lock:
+            self._agent_tags.pop(agent_id, None)
+            self._read_only_agents.discard(agent_id)
+            fin = self._finalizers.pop(agent_id, None)
+            if fin is not None:
+                fin.detach()
+            if self._main_agent_id == agent_id:
+                self._main_agent_id = None
+                self._main_bound = False
+
+    def tag_for(self, agent: Any) -> str:
+        """Return ``"main"``, registered tag (e.g. ``"btw"``), or ``"subagent"``."""
+        if agent is None:
+            return "main"
+        agent_id = id(agent)
+        with self._state_lock:
+            if agent_id in self._agent_tags:
+                return self._agent_tags[agent_id]
+            if not self._main_bound or agent_id == self._main_agent_id:
+                return "main"
+            return "subagent"
+
+    def is_delegated(self, agent: Any) -> bool:
+        """True when ``agent`` is a non-main agent and main agent has been bound."""
+        if agent is None:
+            return False
+        agent_id = id(agent)
+        with self._state_lock:
+            return self._main_bound and agent_id != self._main_agent_id
 
     def set_mode(self, mode: str) -> None:
-        """Flip the Plan/Act enforcement flag (MODE-02, D-06/D-07).
-
-        Raises:
-            ValueError: For anything outside ``plan|act``.
-        """
+        """Flip session-wide ``"plan"`` vs ``"act"`` mode."""
         if mode not in ("plan", "act"):
             raise ValueError(f"unknown mode {mode!r}: expected plan|act")
-        self._mode = mode
+        with self._state_lock:
+            self._mode = mode
 
-    def bind_steering(self, source: Any) -> None:
-        """Bind the steering slot for armed-boundary skip-prompt.
+    def enter_read_only(self, agent: Any) -> None:
+        """Restrict ``agent`` to read-only operations until released."""
+        if agent is None:
+            return
+        agent_id = id(agent)
+        with self._state_lock:
+            self._read_only_agents.add(agent_id)
+            self._attach_finalizer_locked(agent, agent_id)
 
-        ``source`` needs only ``consume_arm(tool_use_id) -> bool``
-        (``SteeringState`` or ``SteeringSlot``); duck-typed so this
-        module never imports the steering layer.
-        """
-        self._steering = source
+    def exit_read_only(self, agent: Any) -> None:
+        """Lift per-agent read-only restriction from ``agent``."""
+        if agent is None:
+            return
+        with self._state_lock:
+            self._read_only_agents.discard(id(agent))
+
+    def is_read_only(self, agent: Any) -> bool:
+        """True when session mode is ``"plan"`` or ``agent`` is marked read-only."""
+        agent_id = id(agent) if agent is not None else None
+        with self._state_lock:
+            if self._mode == "plan":
+                return True
+            return agent_id is not None and agent_id in self._read_only_agents
+
+    @contextmanager
+    def read_only(self, agent: Any) -> Iterator[None]:
+        """Context manager placing ``agent`` in read-only mode for the block."""
+        self.enter_read_only(agent)
+        try:
+            yield
+        finally:
+            self.exit_read_only(agent)
+
+    def bind_turn(self, turn_id: str) -> None:
+        """Reset per-turn approval batch cache."""
+        self._batch.bind_turn(turn_id)
+
+    def last_covered(self) -> list[str]:
+        """Covered and logged gate outcomes for ``/policy last``."""
+        return self._batch.covered()
 
     def _current_policy(self) -> PolicyConfig:
         try:
             return self._loader()
-        except Exception as exc:  # symlink fail-loud surfaces as prompt-all here
+        except Exception as exc:
             logger.warning("Policy load failed; prompting for everything: %s", exc)
             return PolicyConfig()
 
-    def _tag_for_event(self, event: Any) -> str:
-        """Agent tag for this event; an unbound main defaults to ``"main"``."""
-        agent = getattr(event, "agent", None)
-        main = self._main_agent if self._main_bound else agent
-        return tag_for(agent, main)
+    def _handle_deny(self, tag: str, tool_name: str, verdict: Deny) -> InterventionDeny:
+        rule_text = (
+            verdict.rule.describe() if verdict.rule is not None else verdict.reason
+        )
+        refusal = f"Denied by policy rule [deny {rule_text}] — skipped, continuing."
+        if tool_name == "python_repl":
+            refusal += f" {REVISE_HINT}"
+        _emit(refusal)
+        self._batch.record(f"[{tag}] denied {tool_name} [{rule_text}]")
+        return InterventionDeny(reason=refusal)
 
-    def __call__(
-        self, event: Any, **kwargs: Any
-    ) -> ClassifierResult | Awaitable[ClassifierResult]:
-        tool_use = event.tool_use or {}
-        tool_name = tool_use.get("name", "")
-        tool_input = tool_use.get("input", {})
-        if not isinstance(tool_input, dict):
-            tool_input = {}
-        tool_use_id = tool_use.get("toolUseId", "")
-        tag = self._tag_for_event(event)
-        # Drop any stale stashed context before classifying (T-13-02): a
-        # mid-classify error or SDK duplicate-toolUseId short-circuit must
-        # never see an earlier call's preview or deny reason.
-        self._last_by_tag.pop(tag, None)
-        # Steering-armed boundary: the hook already redirected this call
-        # via cancel_tool, so skip the approval prompt (Proceed) while the
-        # executor still cancels with the redirect message. One-shot and
-        # above everything — a steered call is never prompted.
-        if tool_use_id and self._steering is not None:
-            try:
-                if self._steering.consume_arm(tool_use_id):
-                    return ClassifierResult(
-                        requires_human_in_the_loop=False, reason="steering-redirected"
-                    )
-            except Exception as exc:  # fail-closed: a broken arm still prompts
-                logger.warning("Steering arm check failed closed: %s", exc)
-        # Plan-deny sits ABOVE the trust_delegated early return: delegated
-        # turns do not escape read-only. Always denied (never batch-covered
-        # to Proceed) so Plan mode cannot execute a mutation on retry.
-        if self._mode == "plan" and tool_name in PLAN_MUTATING_TOOLS:
-            reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
-            verdict = Deny(reason=reason)
-            signature = _signature(tool_name, verdict)
-            self._last_by_tag[tag] = {
-                "tool_name": tool_name,
-                "tool_input": tool_input,
-                "tool_use_id": tool_use_id,
-                "verdict": verdict,
-                "signature": signature,
-            }
-            _ASK_TAG.tag = tag
-            return ClassifierResult(
-                requires_human_in_the_loop=True, reason=f"DENY:{reason}"
-            )
-        policy = self._current_policy()
-        agent = getattr(event, "agent", None)
-        if (
-            policy.options.trust_delegated
-            and self._main_bound
-            and agent is not None
-            and agent is not self._main_agent
-        ):
-            # btw counts as delegated: auto-trust, but announced — the
-            # transcript always names the call (LOOP-03 transparency).
+    def _render_prompt_header(
+        self, tag: str, tool_name: str, tool_input: dict[str, Any], verdict: Prompt
+    ) -> None:
+        with RENDER_LOCK:
+            print_plain(console, f"Approval needed: [{tag}] {tool_name}")
+            if tool_name == "python_repl":
+                console.print(Syntax(str(tool_input.get("code", "")), "python"))
+            else:
+                print_plain(console, f"  Detail: {_detail_line(tool_name, tool_input)}")
+            print_plain(console, f"  Risk: {verdict.reason}")
+
+    def _prompt_user(
+        self,
+        tag: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        verdict: Prompt,
+        signature: tuple[str, ...],
+        protected: bool,
+    ) -> InterventionProceed | InterventionDeny:
+        def render_and_read() -> str:
+            self._render_prompt_header(tag, tool_name, tool_input, verdict)
+            if sys.stdin.isatty():
+                return self._dialog_answer(
+                    _dialog_title(tag, tool_name, tool_input),
+                    allow_always=not protected,
+                )
             with RENDER_LOCK:
                 print_plain(
                     console,
-                    f"Auto-trusted delegated call ({tool_name}) — trust_delegated is on.",
+                    _PROTECTED_ASK_OPTIONS if protected else _ASK_OPTIONS,
                 )
-            return ClassifierResult(
-                requires_human_in_the_loop=False, reason="delegated-trusted"
-            )
-        verdict = decide(tool_name, tool_input, policy)
-        if isinstance(verdict, Allow):
-            return ClassifierResult(requires_human_in_the_loop=False)
-        signature = _signature(tool_name, verdict)
-        if self._batch.is_covered(signature, tag=tag):
-            return ClassifierResult(
-                requires_human_in_the_loop=False, reason="batch-covered"
-            )
-        self._last_by_tag[tag] = {
-            "tool_name": tool_name,
-            "tool_input": tool_input,
-            "tool_use_id": tool_use_id,
-            "verdict": verdict,
-            "signature": signature,
-        }
-        _ASK_TAG.tag = tag
-        if isinstance(verdict, Deny):
-            rule_text = (
-                verdict.rule.describe() if verdict.rule is not None else verdict.reason
-            )
-            return ClassifierResult(
-                requires_human_in_the_loop=True, reason=f"DENY:{rule_text}"
-            )
-        return ClassifierResult(requires_human_in_the_loop=True, reason=verdict.reason)
+                console.print(_ANSWER_PROMPT, end="", markup=False)
+                if hasattr(console.file, "flush"):
+                    console.file.flush()
+            return input().strip().lower()
 
-    def ask(self, prompt: str, **kwargs: Any) -> str:
-        """Render the approval prompt; return canonical ``"y"``/``"n"``.
-
-        Deny verdicts short-circuit to a printed refusal (no ``input``).
-        Errors anywhere return ``"n"`` — a callback raise would abort the
-        run, so the gate fails to skip-and-continue instead.
-        """
-        tag = getattr(_ASK_TAG, "tag", "main")
-        ctx = self._last_by_tag.get(tag)
-        try:
-            with output_context():
-                if ctx is None:
-                    print("Approval context missing — denying (fail-closed).")
-                    return "n"
-                verdict = ctx["verdict"]
-                tool_name = ctx["tool_name"]
-                if isinstance(verdict, Deny):
-                    rule_text = (
-                        verdict.rule.describe()
-                        if verdict.rule is not None
-                        else verdict.reason
-                    )
-                    if rule_text.startswith("Plan mode is read-only"):
-                        # Plan denial: mode vocabulary only, never the
-                        # policy-rule wrapper (vocabulary lock, T-04-10).
-                        print(rule_text)
-                        self._batch.record(f"[{tag}] plan-mode denied {tool_name}")
-                        return "n"
-                    refusal = f"Denied by policy rule [deny {rule_text}] — skipped, continuing."
-                    if tool_name == "python_repl":
-                        refusal += f" {REVISE_HINT}"
-                    print(refusal)
-                    self._batch.record(f"[{tag}] denied {tool_name} [{rule_text}]")
-                    return "n"
-                assert isinstance(verdict, Prompt)
-                print(f"Approval needed: [{tag}] {tool_name}")
-                if tool_name == "python_repl":
-                    # D-05 whole-block approval: the preview is the
-                    # complete block as a Syntax render, never the
-                    # 500-char truncation (T-11-08: a truncated preview
-                    # could hide trailing malicious code). One prompt
-                    # per code action, at the boundary only (D-08).
-                    console.print(
-                        Syntax(str(ctx["tool_input"].get("code", "")), "python")
-                    )
-                else:
-                    print(f"  Detail: {_detail_line(tool_name, ctx['tool_input'])}")
-                print(f"  Risk: {verdict.reason}")
-
-                protected = _is_protected_prompt(ctx)
-
-                def read_answer() -> str:
-                    if sys.stdin.isatty():
-                        # Arrow-key dialog (choice.radio_choice): prompt_toolkit
-                        # owns SIGINT + termios for the duration. Runs in the
-                        # pump thread (main), never the SDK worker thread.
-                        # Ctrl-C re-raises (cancel path); ESC/failure denies.
-                        return self._dialog_answer(
-                            _dialog_title(tag, tool_name, ctx["tool_input"]),
-                            allow_always=not protected,
-                        )
-                    # Print the whole prompt block through the same stream:
-                    # input()'s own prompt arg bypasses the output proxy and
-                    # lands lines too early (observed "> " jumping above the
-                    # Approval block). Bare input() keeps echo on the "> " line.
-                    # The stdin fd mode is never touched here (nor by the
-                    # steering reader): flipping the shared fd parked the
-                    # reader in os.read and wedged the terminal.
-                    print(_PROTECTED_ASK_OPTIONS if protected else _ASK_OPTIONS)
-                    print(_ANSWER_PROMPT, end="", flush=True)
-                    return input().strip().lower()
-
-                broker = _active_broker()
-                gate_open.set()
-                try:
-                    if broker is not None:
-                        answer = broker.request(read_answer, broker.cancel_for(tag))
-                    else:
-                        answer = read_answer()
-                finally:
-                    gate_open.clear()
-                return self._apply_answer(answer, ctx, tag)
-        except TurnCancelled:
-            raise  # worker abort on cancel: must reach the SDK, never deny
-        except Exception as exc:  # never leak a raise into the HITL run
-            logger.warning("Policy ask failed closed: %s", exc)
-            return "n"
+        with gate_open.hold():
+            answer = self._broker.request(render_and_read, self._broker.cancel_for(tag))
+        return self._apply_answer(
+            answer, tag, tool_name, tool_input, verdict, signature, protected
+        )
 
     def _dialog_answer(
         self, title: str = "Approve?", *, allow_always: bool = True
@@ -657,229 +581,167 @@ class PolicyClassifier:
         if allow_always:
             options.append(("always", "Always — approve + remember rule"))
         options.append(("never", "Never — deny + remember rule"))
-        picked = radio_choice(
-            title,
-            options,
-            default=1,  # fail-closed highlight
-        )
-        if picked is None:
-            return "n"
-        return str(picked)
+        picked = radio_choice(title, options, default=1)
+        return str(picked) if picked is not None else "n"
 
-    def _apply_answer(self, answer: str, ctx: dict[str, Any], tag: str = "main") -> str:
-        """Shared verdict handling for the dialog and typed answers."""
-        verdict = ctx["verdict"]
-        tool_name = ctx["tool_name"]
-        signature = ctx["signature"]
-        if answer in ("y", "yes"):
-            self._batch.mark(
-                signature, f"[{tag}] approved {tool_name}: {verdict.reason}", tag=tag
-            )
-            return "y"
-        if answer == "always" and _is_protected_prompt(ctx):
-            print("Protected path: standing allow rules are disabled; approving once.")
-            self._batch.mark(
-                signature, f"[{tag}] y-once {tool_name}: {verdict.reason}", tag=tag
-            )
-            return "y"
-        if answer in ("always", "never"):
-            derived = _derive_rule(tool_name, ctx["tool_input"])
-            if derived is None:
-                print("Cannot derive a narrow rule here; one-shot answer only.")
-                single = "y" if answer == "always" else "n"
-                if single == "y":
-                    self._batch.mark(
-                        signature,
-                        f"[{tag}] {single}-once {tool_name}: {verdict.reason}",
-                        tag=tag,
-                    )
-                else:
-                    self._batch.record(
-                        f"[{tag}] {single}-once {tool_name}: {verdict.reason}"
-                    )
-                return single
-            kind = "allow" if answer == "always" else "deny"
-            try:
-                if self._append_path is not None:
-                    PolicyConfig().append_rule(
-                        kind, derived, repo_path=self._append_path
-                    )
-                else:
-                    PolicyConfig().append_rule(kind, derived)
-            except (OSError, ValueError) as exc:
-                print(f"Could not append standing rule: {exc}")
-                return "n" if answer == "never" else "y"
-            print(f"Appended standing rule [{kind} {derived.describe()}].")
-            if answer == "always":
-                self._batch.mark(
-                    signature,
-                    f"[{tag}] {answer} {tool_name} [{derived.describe()}]",
-                    tag=tag,
-                )
-            else:
-                self._batch.record(
-                    f"[{tag}] {answer} {tool_name} [{derived.describe()}]"
-                )
-            return "y" if answer == "always" else "n"
-        self._batch.record(f"[{tag}] denied {tool_name}: {verdict.reason}")
-        return "n"
-
-    def clear_last(self, event: Any) -> None:
-        """Drop stashed ask/deny context for ``event``'s agent tag."""
-        self._last_by_tag.pop(self._tag_for_event(event), None)
-
-    def last_deny_reason(self, event: Any) -> str | None:
-        """Model-facing deny reason for a classifier-issued Deny, else None."""
-        tag = self._tag_for_event(event)
-        ctx = self._last_by_tag.get(tag)
-        event_uid = (getattr(event, "tool_use", None) or {}).get("toolUseId", "")
-        if (
-            not ctx
-            or not isinstance(ctx.get("verdict"), Deny)
-            or ctx.get("tool_use_id", "") != event_uid
-        ):
-            return None
-        verdict = ctx["verdict"]
-        rule_text = (
-            verdict.rule.describe() if verdict.rule is not None else verdict.reason
-        )
-        if rule_text.startswith("Plan mode is read-only"):
-            return rule_text
-        reason = f"DENY:{rule_text}"
-        if ctx.get("tool_name") == "python_repl":
-            reason += f" {REVISE_HINT}"
-        return reason
-
-
-def _detail_line(tool_name: str, tool_input: dict[str, Any]) -> str:
-    """Exact command/code/path shown in the prompt (D-01 full detail)."""
-    if tool_name == "shell":
-        return str(tool_input.get("command", ""))[:500]
-    if tool_name == "python_repl":
-        return str(tool_input.get("code", ""))[:500]
-    if "path" in tool_input:
-        return str(tool_input.get("path", ""))[:500]
-    return str(tool_input)[:500]
-
-
-_DIALOG_DETAIL_CHARS = 60
-"""Detail snippet length carried in the dialog title (single line)."""
-
-
-def _dialog_title(tag: str, tool_name: str, tool_input: dict[str, Any]) -> str:
-    """Self-identifying dialog header: agent tag plus request descriptor.
-
-    Each ``Approve?`` box names its agent and request at a glance, so a
-    multi-dialog flow never asks the user to guess which box belongs to
-    which worker (G-7-4). The descriptor shares the ``_detail_line``
-    source with the Approval-needed header, collapsed to one short
-    line; the header lines and the typed fallback stay byte-identical.
-    """
-    detail = " ".join(_detail_line(tool_name, tool_input).split())
-    if len(detail) > _DIALOG_DETAIL_CHARS:
-        detail = detail[: _DIALOG_DETAIL_CHARS - 3] + "..."
-    if not detail:
-        return f"Approve? [{tag}] {tool_name}"
-    return f"Approve? [{tag}] {tool_name} — {detail}"
-
-
-_ACTIVE: dict[str, Any] = {}
-
-
-class PolicyHumanInTheLoop(HumanInTheLoop):
-    """Single-HITL handler preserving policy/Plan deny reasons in Deny actions."""
-
-    async def before_tool_call(self, event: Any, **kwargs: Any) -> Any:
-        """Delegate to HumanInTheLoop and restore classifier Deny reasons."""
+    def _append_standing_rule(self, kind: str, derived: Rule) -> bool:
         try:
-            action = await super().before_tool_call(event, **kwargs)
-            if isinstance(action, InterventionDeny) and isinstance(
-                self._classifier, PolicyClassifier
-            ):
-                reason = self._classifier.last_deny_reason(event)
-                if reason is not None:
-                    return InterventionDeny(reason=reason)
-            return action
-        finally:
-            if isinstance(self._classifier, PolicyClassifier):
-                self._classifier.clear_last(event)
+            if self._append_path is not None:
+                PolicyConfig().append_rule(kind, derived, repo_path=self._append_path)
+            else:
+                PolicyConfig().append_rule(kind, derived)
+        except (OSError, ValueError) as exc:
+            _emit(f"Could not append standing rule: {exc}")
+            return False
+        _emit(f"Appended standing rule [{kind} {derived.describe()}].")
+        return True
+
+    def _record_one_shot(
+        self,
+        approve: bool,
+        tag: str,
+        tool_name: str,
+        reason: str,
+        signature: tuple[str, ...],
+        label: str,
+    ) -> InterventionProceed | InterventionDeny:
+        if approve:
+            self._batch.mark(
+                signature, f"[{tag}] {label} {tool_name}: {reason}", tag=tag
+            )
+            return InterventionProceed()
+        self._batch.record(f"[{tag}] {label} {tool_name}: {reason}")
+        return _user_deny_action(tool_name)
+
+    def _apply_answer(
+        self,
+        answer: str,
+        tag: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        verdict: Prompt,
+        signature: tuple[str, ...],
+        protected: bool,
+    ) -> InterventionProceed | InterventionDeny:
+        if answer in ("y", "yes"):
+            return self._record_one_shot(
+                True, tag, tool_name, verdict.reason, signature, "approved"
+            )
+        if answer == "always" and protected:
+            _emit("Protected path: standing allow rules are disabled; approving once.")
+            return self._record_one_shot(
+                True, tag, tool_name, verdict.reason, signature, "y-once"
+            )
+        if answer in ("always", "never"):
+            return self._apply_standing_choice(
+                answer, tag, tool_name, tool_input, verdict, signature
+            )
+        return self._record_one_shot(
+            False, tag, tool_name, verdict.reason, signature, "denied"
+        )
+
+    def _apply_standing_choice(
+        self,
+        answer: str,
+        tag: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        verdict: Prompt,
+        signature: tuple[str, ...],
+    ) -> InterventionProceed | InterventionDeny:
+        approve = answer == "always"
+        derived = _derive_rule(tool_name, tool_input)
+        if derived is None:
+            _emit("Cannot derive a narrow rule here; one-shot answer only.")
+            label = "y-once" if approve else "n-once"
+            return self._record_one_shot(
+                approve, tag, tool_name, verdict.reason, signature, label
+            )
+        kind = "allow" if approve else "deny"
+        if not self._append_standing_rule(kind, derived):
+            return InterventionProceed() if approve else _user_deny_action(tool_name)
+        desc = f"[{tag}] {answer} {tool_name} [{derived.describe()}]"
+        if approve:
+            self._batch.mark(signature, desc, tag=tag)
+            return InterventionProceed()
+        self._batch.record(desc)
+        return _user_deny_action(
+            tool_name, f"Denied by user [never {derived.describe()}]"
+        )
+
+    async def before_tool_call(
+        self, event: Any, **kwargs: Any
+    ) -> InterventionProceed | InterventionDeny:
+        """Evaluate tool call deterministically: steering -> Plan/RO -> decide -> trust -> batch -> prompt."""
+        try:
+            if getattr(event, "cancel_tool", False):
+                return InterventionProceed(reason="steering-redirected")
+            tool_use = event.tool_use or {}
+            tool_name = tool_use.get("name", "")
+            raw_input = tool_use.get("input", {})
+            tool_input = raw_input if isinstance(raw_input, dict) else {}
+            agent = getattr(event, "agent", None)
+            tag = self.tag_for(agent)
+            if self.is_read_only(agent) and tool_name in PLAN_MUTATING_TOOLS:
+                reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
+                _emit(reason)
+                self._batch.record(f"[{tag}] plan-mode denied {tool_name}")
+                return InterventionDeny(reason=reason)
+            return self._evaluate_act_call(agent, tag, tool_name, tool_input)
+        except (TurnCancelled, KeyboardInterrupt):
+            raise
+        except Exception as exc:
+            logger.warning("Policy gate failed closed: %s", exc)
+            return InterventionDeny(
+                reason="Approval gate failed closed — skipped, continuing."
+            )
+
+    def _evaluate_act_call(
+        self,
+        agent: Any,
+        tag: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> InterventionProceed | InterventionDeny:
+        policy = self._current_policy()
+        verdict = decide(tool_name, tool_input, policy)
+        if isinstance(verdict, Allow):
+            return InterventionProceed()
+        if isinstance(verdict, Deny):
+            return self._handle_deny(tag, tool_name, verdict)
+        protected = _is_protected_prompt(tool_name, tool_input)
+        if (
+            policy.options.trust_delegated
+            and self.is_delegated(agent)
+            and not protected
+        ):
+            _emit(f"Auto-trusted delegated call ({tool_name}) — trust_delegated is on.")
+            return InterventionProceed(reason="delegated-trusted")
+        signature = _input_signature(tool_name, tool_input, verdict)
+        if self._batch.is_covered(signature, tag=tag):
+            return InterventionProceed(reason="batch-covered")
+        return self._prompt_user(
+            tag, tool_name, tool_input, verdict, signature, protected
+        )
 
 
 def build_interventions(
     policy_loader: Callable[[], PolicyConfig] | None = None,
-) -> list[HumanInTheLoop]:
-    """Build the single-HITL intervention list (the ONLY construction site).
-
-    Returns exactly one ``HumanInTheLoop`` carrying the read/search
-    allowlist, the TOML classifier, and the rendering ask.
-    """
-    classifier = PolicyClassifier(policy_loader=policy_loader)
-    gate = PolicyHumanInTheLoop(
-        allowed_tools=["read", "search"],
-        classifier=classifier,
-        ask=classifier.ask,
-    )
-    broker = ApprovalBroker()
-    _ACTIVE["classifier"] = classifier
-    _ACTIVE["batch"] = classifier.batch
-    _ACTIVE["handler"] = gate
-    _ACTIVE["broker"] = broker
-    return [gate]
+) -> list[PolicyGateHandler]:
+    """Construct the single PolicyGateHandler instance for ``create_harness``."""
+    return [PolicyGateHandler(policy_loader=policy_loader)]
 
 
-def _active_classifier() -> PolicyClassifier | None:
-    candidate = _ACTIVE.get("classifier")
-    return candidate if isinstance(candidate, PolicyClassifier) else None
+def gate_for(agent: Any) -> PolicyGateHandler | None:
+    """Return the :class:`PolicyGateHandler` attached to ``agent``, or None."""
+    candidate = getattr(agent, "_policy_gate", None)
+    return candidate if isinstance(candidate, PolicyGateHandler) else None
 
 
-def _active_broker() -> ApprovalBroker | None:
-    """Session broker for main-thread prompts (None before build / in tests)."""
-    candidate = _ACTIVE.get("broker")
+def broker_for(agent: Any) -> ApprovalBroker | None:
+    """Return the :class:`ApprovalBroker` bound to ``agent`` (gate or test override)."""
+    gate = gate_for(agent)
+    if gate is not None:
+        return gate.broker
+    candidate = getattr(agent, "_approval_broker", None)
     return candidate if isinstance(candidate, ApprovalBroker) else None
-
-
-def policy_ask(prompt: str, **kwargs: Any) -> str:
-    """Module-level ask entry: delegates to the built gate, ``"n"`` if none."""
-    classifier = _active_classifier()
-    if classifier is None:
-        return "n"
-    result = classifier.ask(prompt, **kwargs)
-    if inspect.isawaitable(result):
-        return asyncio.run(result)  # type: ignore[return-value]
-    return result
-
-
-def bind_main_agent(agent: Any) -> None:
-    """Record the main agent for D-12 detection (no-op before build)."""
-    classifier = _active_classifier()
-    if classifier is not None:
-        classifier.bind_main_agent(agent)
-
-
-def set_mode(mode: str) -> None:
-    """Flip the active classifier's Plan/Act flag (no-op before build)."""
-    classifier = _active_classifier()
-    if classifier is not None:
-        classifier.set_mode(mode)
-
-
-def bind_steering(source: Any) -> None:
-    """Bind the steering slot for armed-boundary skip-prompt (no-op before build)."""
-    classifier = _active_classifier()
-    if classifier is not None:
-        classifier.bind_steering(source)
-
-
-def bind_turn(turn_id: str) -> None:
-    """Reset the turn cache (called from ``loop.py``; no-op before build)."""
-    batch = _ACTIVE.get("batch")
-    if isinstance(batch, BatchState):
-        batch.bind_turn(turn_id)
-
-
-def last_covered() -> list[str]:
-    """Covered-action log for ``/policy last`` (empty before build)."""
-    batch = _ACTIVE.get("batch")
-    if isinstance(batch, BatchState):
-        return batch.covered()
-    return []

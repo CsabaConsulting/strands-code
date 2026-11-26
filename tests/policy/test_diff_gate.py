@@ -476,18 +476,13 @@ class TestGateSubsumption:
     def test_one_prompt_total_with_gate(self, tmp_path):
         """Gate ask (1, answered y) + gate-active wrapper (0) == 1 total."""
         from strands_code_cli.policy.core import PolicyConfig
-        from strands_code_cli.policy.policy_gate import PolicyClassifier
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
 
         files: dict = {}
         read, write = _mem_io(files)
         gate_prompts = {"n": 0}
 
-        from strands.vended_interventions.hitl import HumanInTheLoop
-
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        handler = HumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
         import builtins
 
         real_input = builtins.input

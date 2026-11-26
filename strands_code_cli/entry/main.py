@@ -51,12 +51,7 @@ from strands_code_cli.policy.diff_gate import (
     make_gated_edit,
     make_gated_write,
 )
-from strands_code_cli.policy.policy_gate import (
-    bind_main_agent,
-    bind_steering,
-    build_interventions,
-    set_mode,
-)
+from strands_code_cli.policy.policy_gate import build_interventions
 from strands_code_cli.sandbox.box import box_app
 from strands_code_cli.session.session_index import SessionIndex
 
@@ -218,10 +213,10 @@ def build_agent(
             # over convenience until the tracer proves inner-call gating.
             "programmatic_tool_caller": False,
         },
-        # The single HumanInTheLoop (allowlist + TOML classifier + ask);
+        # Single deterministic PolicyGateHandler on Strands InterventionHandler;
         # never a second instance (name-collision rule) and never
         # "ask"/"smart"/NL-string/Cedar (D-05 determinism).
-        "interventions": build_interventions(),
+        "interventions": (interventions := build_interventions()),
         "instructions": CODE_AGENT_INSTRUCTIONS,
         "session": {"id": session_id, "dir": str(session_path)},
         # Render-locked proxy (LOOP-03): main message blocks stay
@@ -288,17 +283,17 @@ def build_agent(
         except Exception:
             pass
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
-    bind_main_agent(agent)  # D-12 delegated-turn detection
+    gate = interventions[0]
+    agent._policy_gate = gate
+    gate.bind_main_agent(agent)  # D-12 delegated-turn detection
     # Phase 4: single steering hook (BeforeToolCallEvent at SDK_FIRST, so
-    # it runs before the HITL approval prompt) closed over a session slot
-    # the loop swaps per turn; the classifier skips the prompt for armed
-    # boundaries and starts in Act. Still exactly one HumanInTheLoop.
-    slot = register_steering_hook(agent)
-    bind_steering(slot)
+    # it runs before PolicyGateHandler) closed over a session slot swapped per
+    # turn; PolicyGateHandler checks event.cancel_tool directly and starts in Act.
+    register_steering_hook(agent)
     # Phase 6: single memory injector (dual STRANDS.md + .agent/MEMORY.md
     # auto-load, .agent wins); idempotent per agent like the hook above.
     register_memory_plugin(agent, load_memory)
-    set_mode("act")
+    gate.set_mode("act")
     return agent
 
 

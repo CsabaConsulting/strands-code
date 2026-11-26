@@ -19,6 +19,8 @@ import threading
 import time
 from types import SimpleNamespace
 
+from strands.interventions.actions import Proceed
+
 from strands_code_cli.loop.steering import (
     STEERING_NOTED,
     STREAMING_LIMIT,
@@ -32,7 +34,7 @@ from strands_code_cli.loop.steering import (
     start_steering_reader,
 )
 from strands_code_cli.policy.core import PolicyConfig
-from strands_code_cli.policy.policy_gate import PolicyClassifier, gate_open
+from strands_code_cli.policy.policy_gate import PolicyGateHandler, gate_open
 
 
 def _hook_event(name="shell", uid="u1", **tool_input):
@@ -55,10 +57,8 @@ class TestSteeringState:
     def test_bind_turn_resets(self):
         state = SteeringState()
         state.note("hello")
-        state.arm("u1")
         state.bind_turn("turn-2")
         assert not state.has_pending()
-        assert not state.consume_arm("u1")
 
     def test_blank_lines_ignored(self):
         state = SteeringState()
@@ -82,13 +82,6 @@ class TestSteeringHook:
         assert "continue toward the revised goal" in event.cancel_tool
         assert "was not executed" in event.cancel_tool
 
-    def test_hook_arms_boundary_for_skip_prompt(self):
-        state = SteeringState()
-        state.note("use sqlite")
-        make_steering_hook(state)(_hook_event(uid="u7"))
-        assert state.consume_arm("u7") is True
-        assert state.consume_arm("u7") is False  # one-shot
-
     def test_hook_noop_without_pending(self):
         state = SteeringState()
         event = _hook_event()
@@ -103,27 +96,32 @@ class TestSteeringHook:
         event = _hook_event(uid="u3")
         make_steering_hook(slot)(event)
         assert "pivot" in event.cancel_tool
-        assert slot.consume_arm("u3") is True
 
 
 class TestArmedSkipPrompt:
-    def test_armed_boundary_skips_prompt_then_normal(self):
-        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
+    def test_redirected_boundary_skips_prompt_then_normal(self, monkeypatch):
+        import asyncio
+
+        from strands.interventions.actions import Deny as HitlDeny
+
+        handler = PolicyGateHandler(policy_loader=lambda: PolicyConfig())
         slot = SteeringSlot()
         state = SteeringState()
         slot.state = state
-        classifier.bind_steering(slot)
         state.note("steer me")
-        make_steering_hook(slot)(_hook_event(uid="u5"))
+        steered = _hook_event(uid="u5", command="x")
+        make_steering_hook(slot)(steered)
 
-        from tests.policy.test_mode import _event
-
-        first = classifier(_event("shell", {"command": "x"}, uid="u5"))
-        assert first.requires_human_in_the_loop is False
+        monkeypatch.setattr("builtins.input", lambda *args: "n")
+        steered.agent = None
+        first = asyncio.run(handler.before_tool_call(steered))
+        assert isinstance(first, Proceed)
         assert first.reason == "steering-redirected"
-        # Arm consumed: the same boundary shape prompts normally again.
-        second = classifier(_event("shell", {"command": "x"}, uid="u6"))
-        assert second.requires_human_in_the_loop is True
+        # Next unsteered call prompts normally again.
+        unsteered = _hook_event(uid="u6", command="x")
+        unsteered.agent = None
+        second = asyncio.run(handler.before_tool_call(unsteered))
+        assert isinstance(second, HitlDeny)
 
 
 class _PipeStdin:
@@ -300,15 +298,31 @@ class TestMidTurnSlashReply:
             os.close(read_fd)
 
     def test_gate_open_leaves_approval_unaffected(self, monkeypatch):
-        # While gate_open is set, the classifier still returns its normal
-        # verdict — the reader never diverts the y/n answer.
-        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
-        from tests.policy.test_mode import _event
+        # While gate_open is set, PolicyGateHandler still prompts normally
+        # — the reader never diverts the y/n answer.
+        import asyncio
+
+        from strands.interventions.actions import Deny as HitlDeny
+
+        handler = PolicyGateHandler(policy_loader=lambda: PolicyConfig())
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
+        )
 
         gate_open.set()
         try:
-            result = classifier(_event("shell", {"command": "make test"}, uid="u1"))
-            assert result.requires_human_in_the_loop is True
+            event = SimpleNamespace(
+                agent=None,
+                tool_use={
+                    "name": "shell",
+                    "input": {"command": "make test"},
+                    "toolUseId": "u1",
+                },
+            )
+            result = asyncio.run(handler.before_tool_call(event))
+            assert isinstance(result, HitlDeny)
+            assert prompts == ["ask"]
         finally:
             gate_open.clear()
 

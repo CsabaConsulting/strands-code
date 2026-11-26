@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 
 import strands_code_cli.loop.pump as pump_mod
-import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.loop.btw import BtwContext, BtwQueue
 from strands_code_cli.loop.core import CANCEL_FIRST_PRESS, _invoke_agent
 from strands_code_cli.policy.policy_gate import ApprovalBroker
@@ -36,7 +35,6 @@ class _SlowMain:
 class TestAckBeforeJoin:
     def test_pump_cancel_ack_prints_before_join(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         order: list[str] = []
         real_print_plain = pump_mod.print_plain
 
@@ -63,6 +61,8 @@ class TestAckBeforeJoin:
             pending=[],
         )
         with pytest.raises(KeyboardInterrupt):
-            _invoke_agent(_SlowMain(order), "do the thing", threading.Event(), btw=btw)
+            main_agent = _SlowMain(order)
+            main_agent._approval_broker = broker
+            _invoke_agent(main_agent, "do the thing", threading.Event(), btw=btw)
         assert order == ["ack", "worker-done"]
         assert CANCEL_FIRST_PRESS in capsys.readouterr().out

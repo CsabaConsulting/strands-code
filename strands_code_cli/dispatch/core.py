@@ -142,6 +142,7 @@ def _dispatch_config_cmds(
     mode: ModeState | None,
     session_id: str,
     diff_config_path: str | Path | None,
+    agent: Any = None,
 ) -> tuple[str, str | None] | None:
     """Config/policy slash commands; None when cmd is not one of them."""
     if cmd == "/diff":
@@ -149,7 +150,7 @@ def _dispatch_config_cmds(
     if cmd == "/search":
         return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
     if cmd == "/policy":
-        return ("reply", _policy_message(rest))
+        return ("reply", _policy_message(rest, agent=agent))
     if cmd == "/mode":
         return ("reply", _mode_message(rest, mode))
     return None
@@ -329,7 +330,9 @@ def dispatch(
     handled = _dispatch_session_cmds(cmd, index, session_id, rest)
     if handled is not None:
         return handled
-    handled = _dispatch_config_cmds(cmd, rest, cwd, mode, session_id, diff_config_path)
+    handled = _dispatch_config_cmds(
+        cmd, rest, cwd, mode, session_id, diff_config_path, agent=agent
+    )
     if handled is not None:
         return handled
     handled = _dispatch_memory_cmds(
@@ -2297,14 +2300,14 @@ def _diff_message(session_id: str, rest: str, config_path: str | Path | None) ->
     return f"Unknown /diff mode {verb!r}. {_DIFF_USAGE}"
 
 
-def _policy_message(rest: str) -> str:
+def _policy_message(rest: str, *, agent: Any = None) -> str:
     """Handle /policy: inspect-only replies (show rules, last covered).
 
     Approval prompts never live here (they would race the prompt); this
     only reports the effective policy and the gate's covered-action log.
     """
     from strands_code_cli.policy.core import PolicyConfig
-    from strands_code_cli.policy.policy_gate import last_covered
+    from strands_code_cli.policy.policy_gate import gate_for
 
     verb = rest.strip().lower()
     if verb in ("", "show"):
@@ -2326,7 +2329,8 @@ def _policy_message(rest: str) -> str:
             lines.append("Sandbox: Strands Box active (STRANDS_BOX=1)")
         return "\n".join(lines)
     if verb == "last":
-        covered = last_covered()
+        gate = gate_for(agent)
+        covered = gate.last_covered() if gate is not None else []
         if not covered:
             return "No gated actions this session yet."
         return "Covered actions:\n" + "\n".join(f"  {line}" for line in covered)

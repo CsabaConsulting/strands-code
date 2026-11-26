@@ -17,7 +17,6 @@ from types import SimpleNamespace
 import pytest
 from strands.types.exceptions import EventLoopException
 
-import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.loop.btw import (
     BTW_FORK_PREAMBLE,
     BTW_FRAMING,
@@ -561,8 +560,8 @@ def _fenced_build(inner_tag: str = "side", delay: float = 0.0, fail: bool = Fals
 class TestParallelTurn:
     def test_btw_answers_in_parallel_then_outlives_main(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble(delay=0.1)
+        main._approval_broker = broker
         spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(
@@ -596,8 +595,8 @@ class TestParallelTurn:
 
     def test_btw_failure_renders_fenced_and_main_continues(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(
@@ -683,6 +682,24 @@ class TestBuildBtwAgent:
         assert prompt[-1]["role"] == "user"
         assert "why slow?" in prompt[-1]["content"][-1]["text"]
         assert parent["hooks"] == [hook_steer, hook_other]
+
+    def test_build_btw_agent_registers_side_agent_tag(self, monkeypatch):
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
+
+        _, _, _, sentinel_agent, _ = self._patch_factory(monkeypatch)
+        gate = PolicyGateHandler()
+        parent = {
+            "model": object(),
+            "tools": [],
+            "interventions": [gate],
+            "memory": False,
+            "session": {"id": "s"},
+            "callback_handler": object(),
+        }
+        agent, _ = build_btw_agent(parent, [], "side question")
+        assert agent is sentinel_agent
+        assert gate.tag_for(agent) == "btw"
+        assert getattr(agent, "_policy_gate", None) is gate
 
     def test_mapping_memory_forwards_stores_readonly(self, monkeypatch):
         created, mem_calls, _, _, _ = self._patch_factory(monkeypatch)
@@ -1016,8 +1033,8 @@ class _CountingSideBuild:
 class TestBtwFifoDrain:
     def test_queued_questions_run_in_order_one_at_a_time(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble(delay=0.4)
+        main._approval_broker = broker
         spawn = BtwQueue()
         assert spawn.put("q1") == 1
         assert spawn.put("q2") == 2
@@ -1180,8 +1197,8 @@ class TestOutlivingMain:
         self, monkeypatch, capsys
     ):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(
@@ -1215,7 +1232,6 @@ class TestOutlivingMain:
 
     def test_new_turn_adopts_live_side_without_respawn(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         spawn = BtwQueue()
         spawn.put("why is this slow?")
         sides = _CountingSideBuild(delay=0.4)
@@ -1226,10 +1242,12 @@ class TestOutlivingMain:
             pending=[],
         )
         first = _MainDouble()
+        first._approval_broker = broker
         assert _invoke_agent(first, "turn one", threading.Event(), btw=btw)
         assert btw.has_live  # the side outlived turn one
         assert sides.starts == ["why is this slow?"]
         second = _MainDouble(delay=0.6)
+        second._approval_broker = broker
         both_running = threading.Event()
         result = _invoke_agent(
             second, "turn two", threading.Event(), btw=btw, both_running=both_running
@@ -1255,8 +1273,8 @@ class TestOutlivingMain:
         self, monkeypatch, capsys
     ):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         btw = _idle_btw()
         # A side run lives past its turn while the session pump stays
         # entered (the run_loop idle shape, minus the terminal).
@@ -1314,8 +1332,8 @@ class TestExitDropNote:
 
     def test_live_parked_side_named_waiting_no_next_turn(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         btw = _idle_btw()
         session_cancel = threading.Event()
         with broker.pump(session_cancel):
@@ -1345,8 +1363,8 @@ class TestExitDropNote:
 
     def test_live_running_side_named_still_running(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         btw = _idle_btw()
         with broker.pump(threading.Event()):
             btw.attach_live(object(), _pending_future(), "long analysis")
@@ -1359,8 +1377,8 @@ class TestExitDropNote:
 
     def test_done_unreaped_side_lands_without_drop_note(self, monkeypatch, capsys):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         btw = _idle_btw()
         with broker.pump(threading.Event()):
             btw.attach_live(object(), _done_future(), "q1")
@@ -1408,8 +1426,8 @@ class TestLiveIdleScenario:
         if not os.environ.get("STRANDS_CODE_LIVE_MODEL"):
             pytest.skip("needs a live model + terminal; see the class docstring")
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         main = _MainDouble()
+        main._approval_broker = broker
         spawn = BtwQueue()
         spawn.put("why is this slow?")
         btw = BtwContext(

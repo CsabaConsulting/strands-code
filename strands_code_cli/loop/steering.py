@@ -14,13 +14,11 @@ not a UX choice. The turn continues toward the revised goal (D-11);
 the hook never calls ``agent()`` re-entrantly (``ConcurrencyException``
 otherwise).
 
-Ordering fallback (proven by tracer against the SDK): the intervention
-dispatcher does not check ``cancel_tool`` before running the HITL
-handler, so a steered call would still hit the approval prompt. The
-hook therefore arms the consumed ``toolUseId`` on the state, and
-``PolicyClassifier`` treats an armed boundary as skip-prompt (returns
-allow) while the executor still cancels the call with the redirect
-message. Steering-cancelled calls are never approval-prompted.
+Direct inspection (proven against the SDK): ``BeforeToolCallEvent`` sets
+``event.cancel_tool`` at ``HookOrder.SDK_FIRST``, and
+``PolicyGateHandler`` inspects ``event.cancel_tool`` directly before
+evaluating policy rules (no arm/consume bridge state needed). Steering-cancelled
+calls are never approval-prompted.
 
 Gate-open coordination: while the gate ``ask`` prompt is open the
 reader does not consume stdin, so buffered keystrokes stay available
@@ -50,6 +48,9 @@ import sys
 import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
+
+from strands_code_cli.ui.console import RENDER_LOCK, console
+from strands_code_cli.ui.output import print_plain
 
 STEERING_NOTED = "Steering noted — applies at the next step."
 STREAMING_LIMIT = (
@@ -155,25 +156,22 @@ def mid_turn_slash_reply(text: str) -> str | None:
 
 
 class SteeringState:
-    """Per-turn steering mailbox plus one-shot boundary arms.
+    """Per-turn steering mailbox.
 
-    Mirrors the ``BatchState``/``bind_turn`` pattern: reset every turn,
-    never shared across turns. Thread-safe: the reader thread writes
-    via :meth:`note`, the hook thread reads via :meth:`take`.
+    Reset every turn, never shared across turns. Thread-safe: the reader
+    thread writes via :meth:`note`, the hook thread reads via :meth:`take`.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pending: str | None = None
-        self._armed: set[str] = set()
         self._turn: str | None = None
 
     def bind_turn(self, turn_id: str) -> None:
-        """Start a new turn: drop pending text and stale arms."""
+        """Start a new turn: drop pending text."""
         with self._lock:
             self._turn = turn_id
             self._pending = None
-            self._armed = set()
 
     def note(self, text: str) -> bool:
         """Record typed steering; blank lines are ignored.
@@ -200,25 +198,12 @@ class SteeringState:
         with self._lock:
             return self._pending is not None
 
-    def arm(self, tool_use_id: str) -> None:
-        """Mark a boundary as steering-redirected (skip-prompt key)."""
-        with self._lock:
-            self._armed.add(tool_use_id)
-
-    def consume_arm(self, tool_use_id: str) -> bool:
-        """One-shot check: True once per armed boundary, then forgotten."""
-        with self._lock:
-            if tool_use_id in self._armed:
-                self._armed.discard(tool_use_id)
-                return True
-            return False
-
 
 class SteeringSlot:
     """Session-scoped holder the registered hook closes over.
 
-    ``run_loop`` swaps :attr:`state` every turn; the hook and the
-    classifier always see the current turn's state through this slot.
+    ``run_loop`` swaps :attr:`state` every turn; the hook always sees
+    the current turn's state through this slot.
     """
 
     def __init__(self) -> None:
@@ -228,11 +213,6 @@ class SteeringSlot:
         """Pop pending steering from the current turn's state."""
         state = self.state
         return state.take() if state is not None else None
-
-    def consume_arm(self, tool_use_id: str) -> bool:
-        """One-shot armed-boundary check against the current state."""
-        state = self.state
-        return state.consume_arm(tool_use_id) if state is not None else False
 
 
 def make_steering_hook(source: SteeringState | SteeringSlot) -> Callable[[Any], None]:
@@ -246,32 +226,23 @@ def make_steering_hook(source: SteeringState | SteeringSlot) -> Callable[[Any], 
         text = source.take()
         if not text:
             return  # no steering: the call proceeds untouched
-        tool_use = getattr(event, "tool_use", None) or {}
-        tool_use_id = (
-            tool_use.get("toolUseId", "") if isinstance(tool_use, dict) else ""
-        )
-        if tool_use_id:
-            arm = getattr(source, "arm", None)
-            state = getattr(source, "state", None)
-            if callable(arm):
-                arm(tool_use_id)
-            elif state is not None:
-                state.arm(tool_use_id)
         event.cancel_tool = STEERING_REDIRECT_TEMPLATE.format(text=text)
 
     return _hook
 
 
 def _default_on_line(line: str) -> None:
-    """Echo a captured line: plain print lands in the turn transcript."""
-    print(STEERING_NOTED)
-    print(f"> {line}")
+    """Echo a captured line under RENDER_LOCK: plain print lands in transcript."""
+    with RENDER_LOCK:
+        print_plain(console, STEERING_NOTED)
+        print_plain(console, f"> {line}")
 
 
 def _default_on_refusal(line: str, reply: str) -> None:
-    """Echo a refused slash line plus the refusal (transcript order)."""
-    print(f"> {line}")
-    print(reply)
+    """Echo a refused slash line plus the refusal under RENDER_LOCK."""
+    with RENDER_LOCK:
+        print_plain(console, f"> {line}")
+        print_plain(console, reply)
 
 
 STEERING_HOOK_ORDER = -100

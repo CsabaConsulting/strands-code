@@ -25,16 +25,15 @@ from strands_code_cli.loop.core import _invoke_agent, _poll_live
 from strands_code_cli.policy.core import PolicyConfig
 from strands_code_cli.policy.policy_gate import (
     ApprovalBroker,
-    PolicyClassifier,
-    PolicyHumanInTheLoop,
+    PolicyGateHandler,
     TurnCancelled,
     worker_cancelled,
 )
 
 
-def _event(name: str, tool_input: dict[str, Any], uid: str = "t1"):
+def _event(name: str, tool_input: dict[str, Any], uid: str = "t1", agent: Any = None):
     return SimpleNamespace(
-        agent=SimpleNamespace(state={}),
+        agent=agent if agent is not None else SimpleNamespace(state={}),
         tool_use={"name": name, "input": tool_input, "toolUseId": uid},
     )
 
@@ -177,15 +176,17 @@ class TestBrokerHandoff:
 
 
 class TestInvokeAgentPump:
-    def test_agent_turn_served_with_cancel_kwarg(self, monkeypatch):
+    def test_agent_turn_served_with_cancel_kwarg(self):
         broker = ApprovalBroker()
-        monkeypatch.setitem(pg._ACTIVE, "broker", broker)
         cancel = threading.Event()
         main_ident = threading.get_ident()
         seen: dict[str, Any] = {}
 
         class PumpAgent:
             cancel_signal = True
+
+            def __init__(self) -> None:
+                self._approval_broker = broker
 
             def __call__(self, text, **kwargs):
                 seen["kwargs"] = kwargs
@@ -206,11 +207,7 @@ class TestDenyFailClosed:
     def _handler(self, monkeypatch, answers):
         it = iter(answers)
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
-        return handler
+        return PolicyGateHandler(policy_loader=PolicyConfig.load)
 
     def test_deny_retry_reprompts(self, monkeypatch):
         handler = self._handler(monkeypatch, ["n", "n"])
@@ -242,17 +239,17 @@ class TestDenyFailClosed:
         )
         assert isinstance(second, Proceed)
 
-    def test_turn_cancelled_not_swallowed(self, monkeypatch):
-        handler = self._handler(monkeypatch, [])
-
-        class _CancellingBroker:
+    def test_turn_cancelled_not_swallowed(self):
+        class _CancellingBroker(ApprovalBroker):
             def cancel_for(self, tag):
                 return None
 
             def request(self, prompt, cancel=None):
                 raise TurnCancelled()
 
-        monkeypatch.setattr(pg, "_active_broker", lambda: _CancellingBroker())
+        handler = PolicyGateHandler(
+            policy_loader=PolicyConfig.load, broker=_CancellingBroker()
+        )
         with pytest.raises(TurnCancelled):
             asyncio.run(
                 handler.before_tool_call(
@@ -339,11 +336,13 @@ class TestPerRequestCancel:
         broker.unregister_cancel("main")  # idempotent
 
     def test_ask_passes_tag_cancel_to_broker(self, monkeypatch):
-        # The ask wires its own tag's event into the request.
+        # The gate wires its own tag's event into the request.
         main_agent = SimpleNamespace(state={})
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        classifier.bind_main_agent(main_agent)
+        btw_agent = SimpleNamespace(state={})
         broker = ApprovalBroker()
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load, broker=broker)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
         main_cancel, btw_cancel = threading.Event(), threading.Event()
         broker.register_cancel("main", main_cancel)
         broker.register_cancel("btw", btw_cancel)
@@ -355,10 +354,13 @@ class TestPerRequestCancel:
             return real_request(prompt, cancel=cancel)
 
         monkeypatch.setattr(broker, "request", spy)
-        monkeypatch.setattr(pg, "_active_broker", lambda: broker)
         monkeypatch.setattr("builtins.input", lambda *args: "y")
-        classifier(_event("shell", {"command": "make test"}, uid="b1"))
-        assert classifier.ask("Approve?") == "y"
+        result = asyncio.run(
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, uid="b1", agent=btw_agent)
+            )
+        )
+        assert isinstance(result, Proceed)
         assert seen["cancel"] is btw_cancel
 
 

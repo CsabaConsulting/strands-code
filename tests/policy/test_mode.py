@@ -43,13 +43,17 @@ handler); all Plan reasons use mode vocabulary only.
 from __future__ import annotations
 
 import asyncio
+import io
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from rich.console import Console
 from strands.interventions.actions import Deny as HitlDeny
-from strands.vended_interventions.hitl import HumanInTheLoop
+from strands.interventions.actions import Proceed
 
+import strands_code_cli.policy.policy_gate as pg
 from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
 from strands_code_cli.loop.steering import SteeringState, make_steering_hook
 from strands_code_cli.policy.core import PolicyConfig, PolicyOptions
@@ -62,7 +66,7 @@ from strands_code_cli.policy.mode import (
     PLAN_PREFIX,
     ModeState,
 )
-from strands_code_cli.policy.policy_gate import PolicyClassifier
+from strands_code_cli.policy.policy_gate import PolicyGateHandler, gate_for
 from strands_code_cli.session.session_index import SessionIndex
 
 BANNED_VOCAB = (
@@ -88,69 +92,73 @@ def _event(name: str, tool_input: dict[str, Any], agent: Any = None, uid: str = 
     )
 
 
-def _plan_classifier(**kwargs: Any) -> PolicyClassifier:
-    classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig(), **kwargs)
-    classifier.set_mode("plan")
-    return classifier
+def _plan_handler(**kwargs: Any) -> PolicyGateHandler:
+    return PolicyGateHandler(
+        policy_loader=lambda: PolicyConfig(), mode="plan", **kwargs
+    )
 
 
 # ----------------------------------------------------------------------
-# Tracer (a): classifier Plan-deny, above trust_delegated
+# Tracer (a): PolicyGateHandler Plan-deny, above trust_delegated
 # ----------------------------------------------------------------------
 
 
 class TestTracerPlanDeny:
     @pytest.mark.parametrize("tool", ["write", "edit", "shell", "python_repl"])
     def test_plan_denies_mutations_with_mode_vocabulary(self, tool):
-        classifier = _plan_classifier()
-        result = classifier(
-            _event(tool, {"path": "/x"} if tool in ("write", "edit") else {})
+        handler = _plan_handler()
+        result = asyncio.run(
+            handler.before_tool_call(
+                _event(tool, {"path": "/x"} if tool in ("write", "edit") else {})
+            )
         )
-        assert result.requires_human_in_the_loop is True
+        assert isinstance(result, HitlDeny)
         assert "Plan mode is read-only" in result.reason
         for banned in BANNED_VOCAB:
             assert banned not in result.reason
 
     @pytest.mark.parametrize("tool", ["read", "search"])
     def test_plan_allows_reads(self, tool):
-        classifier = _plan_classifier()
-        result = classifier(_event(tool, {"path": "/x"} if tool == "read" else {}))
-        assert result.requires_human_in_the_loop is False
+        handler = _plan_handler()
+        in_scope = str(Path.cwd() / "README.md")
+        result = asyncio.run(
+            handler.before_tool_call(
+                _event(tool, {"path": in_scope} if tool == "read" else {})
+            )
+        )
+        assert isinstance(result, Proceed)
 
     def test_plan_deny_above_trust_delegated(self):
         main_agent, child_agent = _FakeAgent(), _FakeAgent()
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig(
                 options=PolicyOptions(trust_delegated=True)
+            ),
+            mode="plan",
+        )
+        handler.bind_main_agent(main_agent)
+        # Delegated + trusted would Proceed in Act — still denied in Plan.
+        result = asyncio.run(
+            handler.before_tool_call(
+                _event("shell", {"command": "make test"}, child_agent, "u1")
             )
         )
-        classifier.bind_main_agent(main_agent)
-        classifier.set_mode("plan")
-        # Delegated + trusted would Proceed in Act — still denied in Plan.
-        result = classifier(
-            _event("shell", {"command": "make test"}, child_agent, "u1")
-        )
-        assert result.requires_human_in_the_loop is True
+        assert isinstance(result, HitlDeny)
         assert "Plan mode is read-only" in result.reason
 
     def test_plan_deny_repeated_identical_call_still_denied(self):
-        classifier = _plan_classifier()
-        first = classifier(_event("write", {"path": "/x"}, uid="u1"))
-        second = classifier(_event("write", {"path": "/x"}, uid="u2"))
-        assert first.requires_human_in_the_loop is True
-        assert second.requires_human_in_the_loop is True
+        handler = _plan_handler()
+        first = asyncio.run(
+            handler.before_tool_call(_event("write", {"path": "/x"}, uid="u1"))
+        )
+        second = asyncio.run(
+            handler.before_tool_call(_event("write", {"path": "/x"}, uid="u2"))
+        )
+        assert isinstance(first, HitlDeny)
+        assert isinstance(second, HitlDeny)
 
     def test_act_mode_unaffected_by_flag(self, monkeypatch):
-        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
-        classifier.set_mode("act")
-        _, handler = (
-            classifier,
-            HumanInTheLoop(
-                allowed_tools=["read", "search"],
-                classifier=classifier,
-                ask=classifier.ask,
-            ),
-        )
+        handler = PolicyGateHandler(policy_loader=lambda: PolicyConfig(), mode="act")
         prompts: list[str] = []
         monkeypatch.setattr(
             "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
@@ -162,11 +170,10 @@ class TestTracerPlanDeny:
         assert len(prompts) == 1
 
     def test_plan_ask_refusal_uses_mode_vocabulary(self, monkeypatch):
-        classifier = _plan_classifier()
-        classifier(_event("write", {"path": "/x"}))
-        shown: list[str] = []
+        handler = _plan_handler()
+        buf = io.StringIO()
         monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
+            pg, "console", Console(file=buf, width=400, highlight=False)
         )
         monkeypatch.setattr(
             "builtins.input",
@@ -174,16 +181,17 @@ class TestTracerPlanDeny:
                 AssertionError("Plan deny must not prompt")
             ),
         )
-        assert classifier.ask("Approve?") == "n"
-        text = "\n".join(shown)
+        result = asyncio.run(handler.before_tool_call(_event("write", {"path": "/x"})))
+        assert isinstance(result, HitlDeny)
+        text = buf.getvalue()
         assert "Plan mode is read-only" in text
         for banned in BANNED_VOCAB:
             assert banned not in text
 
     def test_set_mode_rejects_third_mode(self):
-        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
+        handler = PolicyGateHandler(policy_loader=lambda: PolicyConfig())
         with pytest.raises(ValueError):
-            classifier.set_mode("yolo")
+            handler.set_mode("yolo")
 
 
 # ----------------------------------------------------------------------
@@ -195,23 +203,21 @@ class TestTracerHookOrder:
     def _wired_agent(self, model_text: str = "ok"):
         import tempfile
         import uuid
-        from pathlib import Path
 
         from strands_code_cli.entry.main import build_agent
-        from strands_code_cli.policy.policy_gate import _active_classifier
         from tests.session.test_kill_resume import _ReplayModel
 
         session_dir = Path(tempfile.mkdtemp())
         agent = build_agent(
             str(uuid.uuid4()), session_dir, model=_ReplayModel(model_text)
         )
-        return agent, _active_classifier()
+        return agent, gate_for(agent)
 
     def test_steering_hook_before_prompt_with_redirect(self):
         from strands.hooks.events import BeforeToolCallEvent
 
-        agent, classifier = self._wired_agent()
-        assert classifier is not None
+        agent, gate = self._wired_agent()
+        assert gate is not None
         slot = getattr(agent, "_steering_slot", None)
         assert slot is not None and slot.state is None  # fresh until a turn binds
         state = SteeringState()
@@ -230,7 +236,7 @@ class TestTracerHookOrder:
         )
         _, interrupts = asyncio.run(agent.hooks.invoke_callbacks_async(event))
         # Redirect armed by the hook AND no approval interrupt raised:
-        # the steering-cancelled call skips the HITL prompt.
+        # the steering-cancelled call skips the gate prompt.
         assert "Steering redirected by user: use poetry instead" in str(
             event.cancel_tool
         )
@@ -246,10 +252,15 @@ class TestTracerHookOrder:
         state = SteeringState()
         state.bind_turn("turn-1")
         slot.state = state
+        in_scope = str(Path.cwd() / "README.md")
         event = BeforeToolCallEvent(
             agent=agent,
             selected_tool=None,
-            tool_use={"name": "read", "input": {"path": "/x"}, "toolUseId": "ord-2"},
+            tool_use={
+                "name": "read",
+                "input": {"path": in_scope},
+                "toolUseId": "ord-2",
+            },
             invocation_state={},
         )
         _, interrupts = asyncio.run(agent.hooks.invoke_callbacks_async(event))
@@ -418,7 +429,7 @@ class TestWiring:
         import uuid
 
         main_module = importlib.import_module("strands_code_cli.entry.main")
-        from strands_code_cli.policy.policy_gate import _active_classifier
+        from strands_code_cli.policy.policy_gate import gate_for
         from tests.session.test_kill_resume import _ReplayModel
 
         captured: dict[str, Any] = {}
@@ -436,7 +447,7 @@ class TestWiring:
         assert captured["builtin_tools"]["programmatic_tool_caller"] is False
         assert agent.hooks.has_callbacks()
         assert getattr(agent, "_steering_slot", None) is not None
-        classifier = _active_classifier()
-        assert classifier is not None
-        classifier.set_mode("plan")  # setter reachable through the built gate
-        classifier.set_mode("act")
+        gate = gate_for(agent)
+        assert gate is not None
+        gate.set_mode("plan")  # setter reachable through the built gate
+        gate.set_mode("act")

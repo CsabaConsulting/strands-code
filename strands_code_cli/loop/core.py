@@ -109,13 +109,10 @@ from strands_code_cli.policy.codeact import (
 from strands_code_cli.policy.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.policy.policy_gate import (
     TurnCancelled,
-    _active_broker,
-    bind_turn,
+    broker_for,
+    gate_for,
     gate_open,
     worker_cancelled,
-)
-from strands_code_cli.policy.policy_gate import (
-    set_mode as set_gate_mode,
 )
 from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
 from strands_code_cli.ui.choice import radio_choice
@@ -675,6 +672,18 @@ def _btw_context_for(
     return context
 
 
+def _set_gate_mode(agent: Any, mode_name: str) -> None:
+    gate = gate_for(agent)
+    if gate is not None:
+        gate.set_mode(mode_name)
+
+
+def _bind_gate_turn(agent: Any, turn_id: str) -> None:
+    gate = gate_for(agent)
+    if gate is not None:
+        gate.bind_turn(turn_id)
+
+
 def _invoke_agent(
     agent: Any,
     text: str,
@@ -704,7 +713,7 @@ def _invoke_agent(
     agent under the single broker pump, and a side run still going at
     the boundary outlives the turn (D-11) for the idle drain.
     """
-    broker = _active_broker()
+    broker = broker_for(agent)
     if broker is None and btw is None:
         if hasattr(agent, "cancel_signal"):
             return agent(text, cancel_signal=cancel_event)
@@ -2061,7 +2070,7 @@ def _handle_reply_action(
     """
     if message:
         print_plain(console, message)
-    set_gate_mode(mode.mode)  # /mode or /approve may have flipped
+    _set_gate_mode(agent, mode.mode)  # /mode or /approve may have flipped
     head = text.strip().partition(" ")[0].lower()
     if head in ("/compact", "/clear"):
         explicit_save(agent)  # history mutated: flush immediately
@@ -2605,7 +2614,7 @@ def run_loop(
     rich = RichHistory.load(stash_path)
     prepare_resumed_history(agent, current_model, rich, stash_path)
     slot = _steering_slot_for(agent)
-    set_gate_mode(mode.mode)
+    _set_gate_mode(agent, mode.mode)
     cancel_armed_at: float | None = None
     titled = False
     # Session side channel (D-11 outliving-main): one context plus one
@@ -2617,7 +2626,7 @@ def run_loop(
     # exited manually around the loop to avoid re-indenting it; the
     # only exits are the breaks below plus a crashing exception (whose
     # process death moots the broker flag anyway).
-    broker = _active_broker()
+    broker = broker_for(agent)
     session_cancel = threading.Event()
     session_pump = _enter_session_pump(broker, session_cancel)
     btw_session = _btw_context_for(
@@ -2716,10 +2725,10 @@ def run_loop(
         prev_sigint = _install_turn_sigint_handler(cancel_event, both_running)
         try:
             with output_context():
-                bind_turn(turn_id)
+                _bind_gate_turn(agent, turn_id)
                 steering.bind_turn(turn_id)
                 slot.state = steering
-                set_gate_mode(mode.mode)
+                _set_gate_mode(agent, mode.mode)
                 reader = start_steering_reader(steering, gate_open, on_btw=btw.submit)
                 agent_text = _compose_agent_text(message, text, mode)
                 # Fix-at-send (D-14/D-19): later /codeact flips wait for the next ask.

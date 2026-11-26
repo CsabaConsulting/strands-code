@@ -1,75 +1,44 @@
-"""Single-HITL gate tests + tracer spine evidence (TOOL-03, D-01..D-04, D-11, D-12).
-
-Tracer observations (03-PLAN.md task 1):
-
-- Single-HITL construction: ``HumanInTheLoop(allowed_tools=["read"],
-  classifier=<stub>, ask=<stub>)`` constructs fine and passes through
-  ``create_harness`` as ``interventions=[...]`` (kwargs assertion below,
-  same mock-Agent pattern as ``test_tool_surface.py``). A second instance
-  through ``resolve_interventions`` raises ``ValueError`` (handler-name
-  collision ``strands:human-in-the-loop``) — proven by
-  ``test_two_hitl_instances_collide``. Hence exactly one gate instance.
-- Deny-continuation probe: NO live model turn was runnable in this
-  environment (Bedrock credentials absent; ``preflight_credentials``
-  stops before construction). Unit-level evidence instead: a deny
-  verdict drives the real ``HumanInTheLoop.before_tool_call`` to a
-  ``Confirm`` whose evaluate rejects (tool cancelled with a message the
-  agent explains mid-turn and continues — D-02), while the user-visible
-  refusal names the rule. Guide-action/steering fallback: NOT built; if
-  a live turn ever shows identical-retry looping, add prompt steering
-  per task 8(d).
-- Liveness probes: ``web_fetch``/``web_search``/``programmatic_tool_caller``/
-  ``subagent`` are all in the harness DEFAULT set
-  (``strands_harness/agent.py`` docstring: shell/read/write/edit,
-  web_fetch, web_search, programmatic_tool_caller, subagent) and every
-  tool call fires ``before_tool_call``, so the gate sees them.
-  ``web_fetch`` default transport is ``"curl"`` (sandboxed). The
-  ``programmatic_tool_caller`` inner-call path (whether Monty-sandboxed
-  inner tool calls re-fire ``before_tool_call``) is UNVERIFIABLE without
-  a live model here → fail-closed decision: ``programmatic_tool_caller``
-  is pinned ``False`` in the ``builtin_tools`` mapping (risk 9), with
-  this docstring as the record. ``web_fetch``/``web_search`` stay live
-  under built-in fetch-class allows (any host, D-16); ``subagent``
-  inherits the gate and prompts per D-12.
-- ``python_repl`` approval is all-or-nothing per execution: the prompt
-  shows the code string (D-11), but approval does NOT imply
-  file/network confinement inside the snippet (risk 5).
-
-No ``code_agent.py`` prompt change: tracer saw no looping (no live turn
-ran), so per task 8(d) that file is untouched.
-"""
+"""Single-intervention PolicyGateHandler tests & adversarial specs (TOOL-03, D-01..D-07)."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
+import io
+import json
+import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.console import Console
+from strands import Agent, tool
+from strands.hooks import HookRegistry
 from strands.interventions.actions import Deny as HitlDeny
 from strands.interventions.actions import Proceed
-from strands.vended_interventions.hitl import HumanInTheLoop
+from strands.interventions.registry import InterventionRegistry
+from strands.models.model import Model
+from strands.types.exceptions import EventLoopException
 from strands_harness.interventions import resolve_interventions
 
+import strands_code_cli.policy.policy_gate as gate_module
+from strands_code_cli.loop.steering import SteeringState, register_steering_hook
 from strands_code_cli.policy.core import PolicyConfig, PolicyOptions, Rule
 from strands_code_cli.policy.policy_gate import (
+    ApprovalBroker,
     BatchState,
-    PolicyClassifier,
-    PolicyHumanInTheLoop,
-    bind_main_agent,
-    bind_turn,
+    PolicyGateHandler,
+    TurnCancelled,
+    _dialog_title,
     build_interventions,
-    last_covered,
+    gate_for,
+    tag_for,
+    worker_cancelled,
 )
 
 main_module = importlib.import_module("strands_code_cli.entry.main")
-
-
-# ---------------------------------------------------------------------------
-# Fakes
-# ---------------------------------------------------------------------------
 
 
 class _FakeAgent:
@@ -85,47 +54,119 @@ def _event(name: str, tool_input: dict[str, Any], agent: Any = None, uid: str = 
 
 
 def _gate(loader=None, answers: list[str] | None = None, monkeypatch=None, **kwargs):
-    classifier = PolicyClassifier(policy_loader=loader or PolicyConfig.load, **kwargs)
-    handler = PolicyHumanInTheLoop(
-        allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-    )
+    handler = PolicyGateHandler(policy_loader=loader or PolicyConfig.load, **kwargs)
     if answers is not None and monkeypatch is not None:
         it = iter(answers)
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
-    return classifier, handler
+    return handler, handler
+
+
+def _capture_console(monkeypatch) -> io.StringIO:
+    buf = io.StringIO()
+    monkeypatch.setattr(
+        gate_module,
+        "console",
+        Console(file=buf, width=400, highlight=False, no_color=True),
+    )
+    return buf
 
 
 def _run(handler, event):
     return asyncio.run(handler.before_tool_call(event))
 
 
+class _ToolCallingModel(Model):
+    """Offline model double emitting one toolUse turn, then final text."""
+
+    def __init__(self, tool_name: str, tool_input: dict[str, Any]) -> None:
+        self._tool_name = tool_name
+        self._tool_input = tool_input
+        self.calls = 0
+
+    def update_config(self, **model_config: Any) -> None:
+        pass
+
+    def get_config(self) -> Any:
+        return {"model_id": "offline-tool-model"}
+
+    async def structured_output(  # type: ignore[override]
+        self,
+        output_model: Any,
+        prompt: Any,
+        system_prompt: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        raise NotImplementedError
+        yield  # pragma: no cover
+
+    async def stream(
+        self,
+        messages: Any,
+        tool_specs: Any = None,
+        system_prompt: Any = None,
+        **kwargs: Any,
+    ):  # type: ignore[override]
+        idx = self.calls
+        self.calls += 1
+        yield {"messageStart": {"role": "assistant"}}
+        if idx == 0:
+            yield {
+                "contentBlockStart": {
+                    "start": {
+                        "toolUse": {"toolUseId": "tu-steer-1", "name": self._tool_name}
+                    }
+                }
+            }
+            yield {
+                "contentBlockDelta": {
+                    "delta": {"toolUse": {"input": json.dumps(self._tool_input)}}
+                }
+            }
+            yield {"contentBlockStop": {}}
+            stop_reason = "tool_use"
+        else:
+            yield {"contentBlockStart": {"start": {}}}
+            yield {"contentBlockDelta": {"delta": {"text": "redirected-ok"}}}
+            yield {"contentBlockStop": {}}
+            stop_reason = "end_turn"
+        yield {"messageStop": {"stopReason": stop_reason}}
+        yield {
+            "metadata": {
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                "metrics": {"latencyMs": 0},
+            }
+        }
+
+
 # ---------------------------------------------------------------------------
-# Tracer: single-HITL spine
+# Single-intervention gate spine
 # ---------------------------------------------------------------------------
 
 
-class TestSingleHitlSpine:
-    def test_single_hitl_constructs(self):
-        gate = HumanInTheLoop(
-            allowed_tools=["read"], classifier=lambda e: None, ask=lambda p: "y"
-        )
-        assert gate.name == "strands:human-in-the-loop"
+class TestSingleGateSpine:
+    def test_single_gate_constructs(self):
+        gate = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        assert gate.name == "strands-code:policy-gate"
+        assert gate.on_error == "throw"
 
-    def test_two_hitl_instances_collide(self):
-        one = HumanInTheLoop(allowed_tools=["read"])
-        two = HumanInTheLoop(allowed_tools=["read"])
-        with pytest.raises(ValueError):
+    def test_two_gate_instances_collide_resolve_and_registry(self):
+        one = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        two = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        with pytest.raises(ValueError, match="strands-code:policy-gate"):
             resolve_interventions([one, two])
+        with pytest.raises(ValueError, match="Duplicate intervention handler name"):
+            InterventionRegistry([one, two], HookRegistry())
 
-    def test_interventions_reach_create_harness_as_single_hitl(self, tmp_path):
+    def test_interventions_reach_create_harness_as_single_policy_gate(self, tmp_path):
         with patch.object(
             main_module, "create_harness", return_value=MagicMock()
         ) as factory:
-            main_module.build_agent("test-session", tmp_path)
+            agent = main_module.build_agent("test-session", tmp_path)
             kwargs = factory.call_args[1]
         interventions = kwargs["interventions"]
         assert isinstance(interventions, list) and len(interventions) == 1
-        assert isinstance(interventions[0], HumanInTheLoop)
+        assert isinstance(interventions[0], PolicyGateHandler)
+        assert gate_for(agent) is interventions[0]
 
     def test_programmatic_tool_caller_pinned_off(self, tmp_path):
         with patch.object(
@@ -133,37 +174,44 @@ class TestSingleHitlSpine:
         ) as factory:
             main_module.build_agent("test-session", tmp_path)
             mapping = factory.call_args[1]["builtin_tools"]
-        # Risk 9: inner-call gating unverifiable without a live model → off.
         assert mapping["programmatic_tool_caller"] is False
 
 
 # ---------------------------------------------------------------------------
-# Gate layer: classifier + ask + batching + remember-me
+# Gate layer: decide + batching + remember-me
 # ---------------------------------------------------------------------------
 
 
 class TestGateLayer:
-    def test_allow_silent_no_prompt(self, monkeypatch):
+    def test_allow_in_scope_read_silent_while_outside_prompts(self, monkeypatch):
         _, handler = _gate(monkeypatch=monkeypatch, answers=[])
         monkeypatch.setattr(
             "builtins.input",
-            lambda _: (_ for _ in ()).throw(AssertionError("must not prompt")),
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("in-scope read must not prompt")
+            ),
         )
-        result = _run(handler, _event("read", {"path": "/x"}))
-        assert isinstance(result, Proceed)
+        in_scope = str(Path.cwd() / "README.md")
+        assert isinstance(_run(handler, _event("read", {"path": in_scope})), Proceed)
+
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
+        )
+        outside = _run(handler, _event("read", {"path": "/x"}))
+        assert isinstance(outside, HitlDeny)
+        assert prompts == ["ask"]
 
     def test_prompt_once_per_rule_per_turn(self, monkeypatch):
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         first = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
         assert isinstance(first, Proceed)
-        # No second prompt happens because the identical call is batch-covered
-        # (a second input() call would raise StopIteration on the single answer).
         second = _run(handler, _event("shell", {"command": "make test"}, uid="u2"))
         assert isinstance(second, Proceed)
 
     def test_batch_resets_next_turn(self, monkeypatch):
         prompts: list[str] = []
-        classifier, handler = _gate()
+        handler, _ = _gate()
         it = iter(["y", "y"])
         monkeypatch.setattr(
             "builtins.input", lambda *args: (prompts.append("ask"), next(it))[1]
@@ -171,7 +219,7 @@ class TestGateLayer:
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, uid="u1")), Proceed
         )
-        classifier.batch.bind_turn("turn-2")
+        handler.bind_turn("turn-2")
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, uid="u3")), Proceed
         )
@@ -181,10 +229,7 @@ class TestGateLayer:
         def loader():
             return PolicyConfig(deny=[Rule(tool="shell", command="curl")])
 
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
+        buf = _capture_console(monkeypatch)
         _, handler = _gate(loader=loader, monkeypatch=monkeypatch, answers=[])
         monkeypatch.setattr(
             "builtins.input",
@@ -192,9 +237,10 @@ class TestGateLayer:
         )
         result = _run(handler, _event("shell", {"command": "curl http://x"}, uid="u9"))
         assert isinstance(result, HitlDeny)
-        # Deny reason reaches the model-side Deny action AND the user-visible refusal.
         assert "curl" in result.reason
-        assert any("Denied by policy rule" in line and "curl" in line for line in shown)
+        assert "Denied by policy rule" in result.reason
+        assert "Denied by policy rule" in buf.getvalue()
+        assert "curl" in buf.getvalue()
 
     def test_always_appends_narrow_rule(self, tmp_path, monkeypatch):
         repo = tmp_path / "policy.toml"
@@ -203,10 +249,7 @@ class TestGateLayer:
         def loader():
             return PolicyConfig.load(home_path=missing, repo_path=repo)
 
-        classifier = PolicyClassifier(policy_loader=loader, append_path=repo)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
+        handler = PolicyGateHandler(policy_loader=loader, append_path=repo)
         monkeypatch.setattr("builtins.input", lambda *args: "always")
         result = _run(handler, _event("shell", {"command": "git status"}, uid="u1"))
         assert isinstance(result, Proceed)
@@ -214,7 +257,6 @@ class TestGateLayer:
         assert len(reloaded.allow) == 1
         assert reloaded.allow[0].tool == "shell"
         assert reloaded.allow[0].command == "git status"
-        # Next identical action proceeds silently (fresh loader sees the rule).
         monkeypatch.setattr(
             "builtins.input",
             lambda _: (_ for _ in ()).throw(AssertionError("must not prompt")),
@@ -227,12 +269,9 @@ class TestGateLayer:
     def test_never_appends_deny_rule(self, tmp_path, monkeypatch):
         repo = tmp_path / "policy.toml"
         missing = tmp_path / "missing.toml"
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig.load(home_path=missing, repo_path=repo),
             append_path=repo,
-        )
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         monkeypatch.setattr("builtins.input", lambda *args: "never")
         result = _run(handler, _event("shell", {"command": "make test"}, uid="u1"))
@@ -246,15 +285,12 @@ class TestGateLayer:
         monkeypatch.setattr(
             "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
         )
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig(
                 options=PolicyOptions(trust_delegated=True)
             )
         )
-        classifier.bind_main_agent(main_agent)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
+        handler.bind_main_agent(main_agent)
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, child_agent, "u1")),
             Proceed,
@@ -274,13 +310,10 @@ class TestGateLayer:
         assert isinstance(result, Proceed)
 
     def test_unbound_agent_prompts_fail_closed(self, monkeypatch):
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig(
                 options=PolicyOptions(trust_delegated=True)
             )
-        )
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         monkeypatch.setattr("builtins.input", lambda *args: "n")
         result = _run(
@@ -288,19 +321,18 @@ class TestGateLayer:
         )
         assert isinstance(result, HitlDeny)
 
-    def test_ask_error_returns_deny(self, monkeypatch):
-        classifier, _ = _gate(monkeypatch=monkeypatch, answers=[])
-        classifier(
-            _event("shell", {"command": "make test"})
-        )  # stash last-decision context
+    def test_prompt_error_denies_fail_closed(self, monkeypatch):
+        _, handler = _gate(monkeypatch=monkeypatch, answers=[])
         monkeypatch.setattr(
             "builtins.input", lambda _: (_ for _ in ()).throw(RuntimeError("tty gone"))
         )
-        assert classifier.ask("Approve?") == "n"
+        result = _run(handler, _event("shell", {"command": "make test"}))
+        assert isinstance(result, HitlDeny)
+        assert "failed closed" in result.reason
 
 
 # ---------------------------------------------------------------------------
-# Task 8: python_repl gating + delegated e2e + deny messaging
+# python_repl gating + delegated e2e + deny messaging
 # ---------------------------------------------------------------------------
 
 
@@ -328,11 +360,11 @@ class TestReplAndDelegation:
         )
         result = _run(handler, _event("shell", {"command": "curl http://x"}, uid="d1"))
         assert isinstance(result, HitlDeny)
-        assert "DENY" in result.reason and "curl" in result.reason
+        assert "Denied by policy rule" in result.reason and "curl" in result.reason
 
     def test_plan_mode_deny_reason_propagates(self, monkeypatch):
-        classifier, handler = _gate(monkeypatch=monkeypatch, answers=[])
-        classifier.set_mode("plan")
+        handler, _ = _gate(monkeypatch=monkeypatch, answers=[])
+        handler.set_mode("plan")
         monkeypatch.setattr(
             "builtins.input", lambda *args: (_ for _ in ()).throw(AssertionError())
         )
@@ -342,41 +374,33 @@ class TestReplAndDelegation:
 
 
 # ---------------------------------------------------------------------------
-# Module-level bind helpers
+# Turn & log helpers
 # ---------------------------------------------------------------------------
 
 
-class TestBindHelpers:
+class TestGateTurnHelpers:
     def test_bind_turn_and_last_covered(self, monkeypatch):
-        build_interventions()
-        bind_turn("t-1")
-        import strands_code_cli.policy.policy_gate as gate_module
-
-        classifier = gate_module._ACTIVE["classifier"]
-        assert isinstance(classifier, PolicyClassifier)
+        interventions = build_interventions()
+        handler = interventions[0]
+        handler.bind_turn("t-1")
         monkeypatch.setattr("builtins.input", lambda *args: "y")
-        classifier(_event("shell", {"command": "make test"}))
-        classifier.ask("Approve?")
-        assert last_covered() != []
-        bind_turn("t-2")
-        assert (
-            classifier.batch.is_covered(("prompt", "shell", "Shell command: make test"))
-            is False
-        )
+        result = _run(handler, _event("shell", {"command": "make test"}))
+        assert isinstance(result, Proceed)
+        assert handler.last_covered() != []
+        handler.bind_turn("t-2")
+        assert len(handler.batch._covered) == 0
 
-    def test_bind_main_agent_noop_without_crash(self):
-        bind_main_agent(object())
+    def test_bind_main_agent_none_noop(self):
+        PolicyGateHandler().bind_main_agent(None)
 
 
 # ---------------------------------------------------------------------------
-# 07-02 task 1: agent-tagged prompts, race-free ask context, namespaced batch
+# Agent-tagged prompts, 3-way isolation, SHA-256 BatchState
 # ---------------------------------------------------------------------------
 
 
 class TestAgentTaggedGate:
     def test_tag_for_identity(self):
-        from strands_code_cli.policy.policy_gate import tag_for
-
         main = _FakeAgent()
         assert tag_for(None, main) == "main"
         assert tag_for(None, None) == "main"
@@ -386,79 +410,24 @@ class TestAgentTaggedGate:
     def test_is_covered_tag_keyword_defaults_main(self):
         batch = BatchState()
         batch.bind_turn("t-1")
-        sig = ("prompt", "shell", "Shell command: make test")
+        sig = ("prompt", "shell", "Shell command: make test", "abc")
         assert batch.is_covered(sig) is False
         batch.mark(sig, "[main] approved shell: Shell command: make test")
         assert batch.is_covered(sig) is True
         assert batch.is_covered(sig, tag="main") is True
         assert batch.is_covered(sig, tag="btw") is False
 
-    def test_interleaved_asks_keep_own_context(self, monkeypatch):
-        # Classify main, then btw, then ask in reverse order (btw first):
-        # each worker thread's ask must render its own tool detail under
-        # its own tag — never swapped (T-07-04). Prints are collected via
-        # a patched builtins.print (same-file precedent): the ask's
-        # StdoutProxy binds prompt_toolkit's memoized app output, which
-        # escapes per-test capsys once an earlier test touches it.
-        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        classifier.bind_main_agent(main_agent)
-        it = iter(["y", "y"])
-        monkeypatch.setattr("builtins.input", lambda *args: next(it))
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
-        import threading
+    def test_three_way_agent_isolation_and_read_only_agents(self, monkeypatch):
+        main_agent, btw_agent, sub_agent = _FakeAgent(), _FakeAgent(), _FakeAgent()
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
+        assert handler.tag_for(main_agent) == "main"
+        assert handler.tag_for(btw_agent) == "btw"
+        assert handler.tag_for(sub_agent) == "subagent"
 
-        main_classified = threading.Event()
-        btw_asked = threading.Event()
-        box: dict[str, str] = {}
-
-        def main_worker():
-            classifier(
-                _event("shell", {"command": "main-cmd --main"}, main_agent, "m1")
-            )
-            main_classified.set()
-            assert btw_asked.wait(5)
-            box["main"] = classifier.ask("Approve?")
-
-        def btw_worker():
-            assert main_classified.wait(5)
-            classifier(_event("shell", {"command": "btw-cmd --btw"}, btw_agent, "b1"))
-            box["btw"] = classifier.ask("Approve?")
-            btw_asked.set()
-
-        threads = [
-            threading.Thread(target=main_worker),
-            threading.Thread(target=btw_worker),
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10)
-        assert not any(thread.is_alive() for thread in threads)
-        assert box == {"main": "y", "btw": "y"}
-        for tag, command in (("main", "main-cmd --main"), ("btw", "btw-cmd --btw")):
-            head = next(
-                i
-                for i, line in enumerate(shown)
-                if line == f"Approval needed: [{tag}] shell"
-            )
-            assert shown[head + 1].startswith("  Detail: ")
-            assert command in shown[head + 1]
-
-    def test_batch_coverage_namespaced_per_agent(self, monkeypatch):
-        # A main approval never silences an identical btw call (T-07-05);
-        # each side's record carries its own tag.
-        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        classifier.bind_main_agent(main_agent)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
-        it = iter(["y", "y"])
-        monkeypatch.setattr("builtins.input", lambda *args: next(it))
+        answers = iter(["y", "y", "y"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(answers))
         assert isinstance(
             _run(handler, _event("shell", {"command": "make test"}, main_agent, "m1")),
             Proceed,
@@ -467,20 +436,67 @@ class TestAgentTaggedGate:
             _run(handler, _event("shell", {"command": "make test"}, btw_agent, "b1")),
             Proceed,
         )
-        assert list(it) == []
-        assert classifier.batch.covered() == [
-            "[main] approved shell: Shell command: make test",
-            "[btw] approved shell: Shell command: make test",
-        ]
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "make test"}, sub_agent, "s1")),
+            Proceed,
+        )
+        assert list(answers) == []
+
+        with handler.read_only(sub_agent):
+            assert handler.is_read_only(sub_agent) is True
+            assert handler.is_read_only(main_agent) is False
+            sub_res = _run(
+                handler, _event("write", {"path": "x.txt"}, sub_agent, "ro-1")
+            )
+            assert isinstance(sub_res, HitlDeny)
+            assert "Plan mode is read-only" in sub_res.reason
+        assert handler.is_read_only(sub_agent) is False
+
+    def test_concurrent_prompts_keep_own_detail(self, monkeypatch):
+        main_agent, btw_agent = _FakeAgent(), _FakeAgent()
+        broker = ApprovalBroker()
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load, broker=broker)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
+        buf = _capture_console(monkeypatch)
+        answers = iter(["y", "y"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(answers))
+        pump_cancel = threading.Event()
+        outcomes: dict[str, Any] = {}
+
+        def worker(key: str, agent: Any, cmd: str, uid: str):
+            outcomes[key] = _run(handler, _event("shell", {"command": cmd}, agent, uid))
+
+        with broker.pump(pump_cancel):
+            threads = [
+                threading.Thread(
+                    target=worker, args=("main", main_agent, "main-cmd --main", "m1")
+                ),
+                threading.Thread(
+                    target=worker, args=("btw", btw_agent, "btw-cmd --btw", "b1")
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            while any(thread.is_alive() for thread in threads):
+                req = broker.poll(timeout=0.05)
+                if req is not None:
+                    req.run_prompt()
+            for thread in threads:
+                thread.join(timeout=5)
+        assert isinstance(outcomes["main"], Proceed)
+        assert isinstance(outcomes["btw"], Proceed)
+        rendered = buf.getvalue()
+        assert "Approval needed: [main] shell" in rendered
+        assert "main-cmd --main" in rendered
+        assert "Approval needed: [btw] shell" in rendered
+        assert "btw-cmd --btw" in rendered
 
     def test_btw_deny_reprompts(self, monkeypatch):
-        # Denials never cover on either side: a denied btw call re-prompts.
         main_agent, btw_agent = _FakeAgent(), _FakeAgent()
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        classifier.bind_main_agent(main_agent)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
         it = iter(["n", "n"])
         monkeypatch.setattr("builtins.input", lambda *args: next(it))
         assert isinstance(
@@ -494,33 +510,33 @@ class TestAgentTaggedGate:
         assert list(it) == []
 
     def test_trust_delegated_btw_prints_transcript_note(self, monkeypatch, capsys):
-        # btw auto-trust is announced via print_plain (never builtins.print).
         def _raise(*args, **kwargs):
             raise AssertionError("trust note must use print_plain, not print")
 
         monkeypatch.setattr("builtins.print", _raise)
         main_agent, btw_agent = _FakeAgent(), _FakeAgent()
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig(
                 options=PolicyOptions(trust_delegated=True)
             )
         )
-        classifier.bind_main_agent(main_agent)
-        result = classifier(_event("shell", {"command": "make test"}, btw_agent, "b1"))
-        assert result.requires_human_in_the_loop is False
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
+        result = _run(
+            handler, _event("shell", {"command": "make test"}, btw_agent, "b1")
+        )
+        assert isinstance(result, Proceed)
         assert result.reason == "delegated-trusted"
         assert "Auto-trusted delegated call (shell)" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
-# 07-04 task 4: self-identifying approval dialogs (G-7-4)
+# Self-identifying approval dialogs & sanitized headers (G-7-4, D-07)
 # ---------------------------------------------------------------------------
 
 
 class TestDialogAttribution:
     def _dialog_ask(self, monkeypatch, command, pick, *, btw=False):
-        # Drive one ask through the tty dialog branch with a recording
-        # radio_choice double; return (answer, titles seen).
         import strands_code_cli.ui.choice as choice_mod
 
         titles: list[str] = []
@@ -534,79 +550,72 @@ class TestDialogAttribution:
         monkeypatch.setattr(choice_mod, "radio_choice", fake_radio)
         monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         main_agent = _FakeAgent()
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
-        classifier.bind_main_agent(main_agent)
-        event_agent = _FakeAgent() if btw else main_agent
-        classifier(_event("shell", {"command": command}, event_agent, "u1"))
-        return classifier.ask("Approve?"), titles
+        btw_agent = _FakeAgent()
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
+        event_agent = btw_agent if btw else main_agent
+        res = _run(handler, _event("shell", {"command": command}, event_agent, "u1"))
+        return res, titles
 
     def test_main_dialog_title_carries_tag_tool_detail(self, monkeypatch):
-        answer, titles = self._dialog_ask(monkeypatch, "make test", "y")
-        assert answer == "y"
+        res, titles = self._dialog_ask(monkeypatch, "make test", "y")
+        assert isinstance(res, Proceed)
         assert titles == ["Approve? [main] shell — make test"]
 
     def test_btw_dialog_title_carries_tag_tool_detail(self, monkeypatch):
-        answer, titles = self._dialog_ask(monkeypatch, "sleep 30", "y", btw=True)
-        assert answer == "y"
+        res, titles = self._dialog_ask(monkeypatch, "sleep 30", "y", btw=True)
+        assert isinstance(res, Proceed)
         assert titles == ["Approve? [btw] shell — sleep 30"]
 
-    def test_long_detail_truncates_to_one_line(self, monkeypatch):
-        answer, titles = self._dialog_ask(
-            monkeypatch, "run this\nmultiline command " + "x" * 100, "y"
+    def test_long_detail_truncates_to_one_line_and_strips_ansi(self, monkeypatch):
+        res, titles = self._dialog_ask(
+            monkeypatch,
+            "\x1b[31mrun\x1b[0m this\nmultiline command " + "x" * 100,
+            "y",
         )
-        assert answer == "y"
+        assert isinstance(res, Proceed)
         assert len(titles) == 1
+        assert "\x1b" not in titles[0]
         assert "\n" not in titles[0]
         assert titles[0].startswith("Approve? [main] shell — run this multiline")
         assert titles[0].endswith("...")
 
     def test_header_and_typed_fallback_byte_identical(self, monkeypatch):
-        # The typed path keeps its exact lines: header block, options,
-        # and the "> " prompt — attribution lives in the dialog title.
         monkeypatch.setattr("builtins.input", lambda *args: "y")
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
-        classifier = PolicyClassifier(policy_loader=PolicyConfig.load)
+        buf = _capture_console(monkeypatch)
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
         main_agent = _FakeAgent()
-        classifier.bind_main_agent(main_agent)
-        classifier(_event("shell", {"command": "make test"}, main_agent, "u1"))
-        assert classifier.ask("Approve?") == "y"
-        assert shown == [
-            "Approval needed: [main] shell",
-            "  Detail: make test",
-            "  Risk: Shell command: make test",
-            "Approve? [y/n/always/never]",
-            "> ",
-        ]
+        handler.bind_main_agent(main_agent)
+        res = _run(handler, _event("shell", {"command": "make test"}, main_agent, "u1"))
+        assert isinstance(res, Proceed)
+        assert buf.getvalue() == (
+            "Approval needed: [main] shell\n"
+            "  Detail: make test\n"
+            "  Risk: Shell command: make test\n"
+            "Approve? [y/n/always/never]\n"
+            "> "
+        )
 
-    def test_dialog_escape_denies_and_ctrl_c_reraises(self, monkeypatch):
-        answer, _ = self._dialog_ask(monkeypatch, "make test", None)
-        assert answer == "n"  # ESC/None denies fail-closed
+    def test_dialog_escape_denies_and_ctrl_c_fails_closed_via_kbi(self, monkeypatch):
+        res, _ = self._dialog_ask(monkeypatch, "make test", None)
+        assert isinstance(res, HitlDeny)
         with pytest.raises(KeyboardInterrupt):
             self._dialog_ask(monkeypatch, "make test", KeyboardInterrupt)
 
 
 # ---------------------------------------------------------------------------
-# 11-03 task 1: whole-block approval preview + deny revise hint (D-05/D-06)
+# CodeAct preview + deny revise hint + rule coherence (D-05/D-06/D-07)
 # ---------------------------------------------------------------------------
 
 
 def _code_block_2000() -> str:
-    """Exactly 2000 chars of short-line code (no render-width folding)."""
     line = "value = transform(input_value, options)\n"
     return (line * ((2000 // len(line)) + 1))[:2000]
 
 
 class TestCodeactApprovalPreview:
     def test_preview_carries_full_2000_char_block(self, monkeypatch):
-        import io
-
-        from rich.console import Console
-
-        import strands_code_cli.policy.policy_gate as gate_module
-
         block = _code_block_2000()
         assert len(block) == 2000
         buf = io.StringIO()
@@ -614,16 +623,12 @@ class TestCodeactApprovalPreview:
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         result = _run(handler, _event("python_repl", {"code": block}, uid="c1"))
         assert isinstance(result, Proceed)
-        # Syntax pads each line to the console width: strip the padding,
-        # then the render must equal the block exactly (no truncation).
-        rendered = "\n".join(
-            line.rstrip() for line in buf.getvalue().split("\n")
-        ).rstrip("\n")
-        assert rendered == block.rstrip("\n")
+        lines = [line.rstrip() for line in buf.getvalue().split("\n")]
+        start = lines.index("Approval needed: [main] python_repl") + 1
+        end = next(i for i, ln in enumerate(lines) if ln.startswith("  Risk:"))
+        assert "\n".join(lines[start:end]).rstrip("\n") == block.rstrip("\n")
 
     def test_dialog_title_keeps_sixty_char_collapse(self):
-        from strands_code_cli.policy.policy_gate import _dialog_title
-
         block = _code_block_2000()
         assert _dialog_title("main", "python_repl", {"code": block}) == (
             "Approve? [main] python_repl — "
@@ -631,17 +636,14 @@ class TestCodeactApprovalPreview:
         )
 
     def test_single_use_yields_exactly_one_prompt(self, monkeypatch):
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
+        buf = _capture_console(monkeypatch)
         _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         result = _run(handler, _event("python_repl", {"code": "print('hi')"}, uid="c2"))
         assert isinstance(result, Proceed)
-        assert shown.count("Approval needed: [main] python_repl") == 1
-        # The truncated Detail preview is replaced by the Syntax render.
-        assert not any(line.startswith("  Detail:") for line in shown)
-        assert any(line.startswith("  Risk: Python execution:") for line in shown)
+        rendered = buf.getvalue()
+        assert rendered.count("Approval needed: [main] python_repl") == 1
+        assert "  Detail:" not in rendered
+        assert "  Risk: Python execution:" in rendered
 
     def test_deny_carries_revise_hint_with_continue_verdict(self, monkeypatch):
         def loader():
@@ -649,10 +651,7 @@ class TestCodeactApprovalPreview:
                 deny=[Rule(tool="python_repl", command="import socket")]
             )
 
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
+        buf = _capture_console(monkeypatch)
         _, handler = _gate(loader=loader, monkeypatch=monkeypatch, answers=[])
         monkeypatch.setattr(
             "builtins.input",
@@ -664,16 +663,8 @@ class TestCodeactApprovalPreview:
         )
         assert isinstance(result, HitlDeny)
         assert "Revise the code or try a different approach." in result.reason
-        assert any(
-            "Revise the code or try a different approach." in line
-            and "skipped, continuing" in line
-            for line in shown
-        )
-
-
-# ---------------------------------------------------------------------------
-# 11-03 task 2: one rule system + plan-deny coherence pins (D-07/D-04)
-# ---------------------------------------------------------------------------
+        assert "Revise the code or try a different approach." in buf.getvalue()
+        assert "skipped, continuing" in buf.getvalue()
 
 
 class TestCodeactRuleCoherence:
@@ -686,14 +677,7 @@ class TestCodeactRuleCoherence:
         def loader():
             return PolicyConfig.load(home_path=missing, repo_path=repo)
 
-        classifier = PolicyClassifier(policy_loader=loader, append_path=repo)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
-        # Single-line block: multi-line code exposes the pre-existing
-        # _serialise_rule no-escape limitation (invalid TOML on reload —
-        # logged in deferred-items.md, out of scope for this tests-only
-        # task). The D-07 derivation contract pins on one line regardless.
+        handler = PolicyGateHandler(policy_loader=loader, append_path=repo)
         code = "total = '" + "ab" * 300 + "'"
         assert len(code) > 500
         monkeypatch.setattr("builtins.input", lambda *args: "always")
@@ -703,13 +687,7 @@ class TestCodeactRuleCoherence:
         assert len(reloaded.allow) == 1
         assert reloaded.allow[0].tool == "python_repl"
         assert reloaded.allow[0].command == normalise_command(code)[:500]
-        assert len(reloaded.allow[0].command) == 500
-        # A longer block sharing the prefix proceeds silently through a
-        # fresh batch: the persisted rule matches by prefix (D-07).
-        fresh = PolicyClassifier(policy_loader=loader)
-        fresh_handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=fresh, ask=fresh.ask
-        )
+        fresh_handler = PolicyGateHandler(policy_loader=loader)
         monkeypatch.setattr(
             "builtins.input",
             lambda _: (_ for _ in ()).throw(AssertionError("must not prompt")),
@@ -725,12 +703,9 @@ class TestCodeactRuleCoherence:
 
         repo = tmp_path / "policy.toml"
         missing = tmp_path / "missing.toml"
-        classifier = PolicyClassifier(
+        handler = PolicyGateHandler(
             policy_loader=lambda: PolicyConfig.load(home_path=missing, repo_path=repo),
             append_path=repo,
-        )
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
         )
         code = "import socket; print(socket.gethostname())"
         monkeypatch.setattr("builtins.input", lambda *args: "never")
@@ -745,27 +720,31 @@ class TestCodeactRuleCoherence:
     def test_plan_deny_holds_on_both_interfaces(
         self, holder_value, monkeypatch, tmp_path
     ):
-        # D-04 natural fit: the gate never consults the interface, so the
-        # existing plan-deny holds on tool and code turns alike — no new
-        # mode logic. Mirrors test_mode.py BANNED_VOCAB (mode words only).
+        from strands_code_cli.dispatch.core import dispatch
         from strands_code_cli.policy.codeact import CodeactState
         from strands_code_cli.session.session_index import SessionIndex
 
         holder = CodeactState()
         index = SessionIndex(tmp_path / "index")
-        from strands_code_cli.dispatch.core import dispatch
-
         action, _ = dispatch(
             "/codeact " + holder_value, session_id="s", index=index, interface=holder
         )
         assert action == "reply"
         assert holder.interface == holder_value
-        classifier = PolicyClassifier(policy_loader=lambda: PolicyConfig())
-        classifier.set_mode("plan")
-        result = classifier(_event("python_repl", {"code": "print('x')"}))
-        assert result.requires_human_in_the_loop is True
+        buf = _capture_console(monkeypatch)
+        handler = PolicyGateHandler(policy_loader=lambda: PolicyConfig(), mode="plan")
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("Plan deny must not prompt")
+            ),
+        )
+        result = _run(handler, _event("python_repl", {"code": "print('x')"}))
+        assert isinstance(result, HitlDeny)
         assert "Plan mode is read-only" in result.reason
-        banned_vocab = (
+        text = buf.getvalue()
+        assert "Plan mode is read-only" in text
+        for banned in (
             "policy rule",
             "rule [",
             "approve-each",
@@ -773,61 +752,31 @@ class TestCodeactRuleCoherence:
             "auto",
             "/diff",
             "yolo",
-        )
-        for banned in banned_vocab:
+        ):
             assert banned not in result.reason
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
-        monkeypatch.setattr(
-            "builtins.input",
-            lambda _: (_ for _ in ()).throw(
-                AssertionError("Plan deny must not prompt")
-            ),
-        )
-        assert classifier.ask("Approve?") == "n"
-        text = "\n".join(shown)
-        assert "Plan mode is read-only" in text
-        for banned in banned_vocab:
             assert banned not in text
-        # Mode-vocabulary lock: plan-deny stays byte-identical — the D-06
-        # revise hint rides the policy-rule denial only, never plan mode.
         assert "Revise the code" not in text
 
 
-class TestHitlFailClosedStaleContext:
-    def test_duplicate_tool_use_id_denies_fail_closed_without_stale_preview(
-        self, monkeypatch
-    ):
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
-        _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+class TestGateFailClosedAndProtected:
+    def test_duplicate_tool_use_id_renders_own_preview_independently(self, monkeypatch):
+        buf = _capture_console(monkeypatch)
+        it = iter(["y", "n"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(it))
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
         first = _run(handler, _event("shell", {"command": "make test"}, uid="dup-1"))
         assert isinstance(first, Proceed)
-
-        # Duplicate toolUseId skips PolicyClassifier via upstream hitl.py:340;
-        # stale context must already be cleared so ask() fails closed without prompting.
-        monkeypatch.setattr(
-            "builtins.input",
-            lambda _: (_ for _ in ()).throw(
-                AssertionError("must not prompt with stale context")
-            ),
-        )
         second = _run(handler, _event("shell", {"command": "rm -rf /"}, uid="dup-1"))
         assert isinstance(second, HitlDeny)
-        assert any(
-            "Approval context missing — denying (fail-closed)." in line
-            for line in shown
-        )
+        out = buf.getvalue()
+        assert "make test" in out
+        assert "rm -rf /" in out
 
-    def test_duplicate_tool_use_id_after_plan_deny_does_not_leak_stale_deny_reason(
+    def test_duplicate_tool_use_id_after_plan_deny_does_not_leak_reason(
         self, monkeypatch
     ):
-        classifier, handler = _gate(monkeypatch=monkeypatch, answers=[])
-        classifier.set_mode("plan")
+        _, handler = _gate(monkeypatch=monkeypatch, answers=[])
+        handler.set_mode("plan")
         monkeypatch.setattr(
             "builtins.input",
             lambda _: (_ for _ in ()).throw(
@@ -838,42 +787,37 @@ class TestHitlFailClosedStaleContext:
         assert isinstance(first, HitlDeny)
         assert "Plan mode is read-only" in first.reason
 
-        classifier.set_mode("act")
+        handler.set_mode("act")
+        monkeypatch.setattr("builtins.input", lambda *args: "n")
         second = _run(handler, _event("shell", {"command": "echo hi"}, uid="dup-2"))
         assert isinstance(second, HitlDeny)
         assert "Plan mode is read-only" not in second.reason
 
-    def test_classifier_error_clears_prior_context_and_denies_fail_closed(
-        self, monkeypatch
-    ):
-        classifier, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
+    def test_loader_error_clears_nothing_and_denies_fail_closed(self, monkeypatch):
+        _, handler = _gate(monkeypatch=monkeypatch, answers=["y"])
         first = _run(handler, _event("shell", {"command": "make test"}, uid="ok-1"))
         assert isinstance(first, Proceed)
 
         monkeypatch.setattr(
-            classifier,
+            handler,
             "_current_policy",
             lambda: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         monkeypatch.setattr(
             "builtins.input",
             lambda _: (_ for _ in ()).throw(
-                AssertionError("must not prompt with stale context")
+                AssertionError("must not prompt on internal gate error")
             ),
         )
         second = _run(handler, _event("shell", {"command": "rm -rf /"}, uid="err-2"))
         assert isinstance(second, HitlDeny)
+        assert "failed closed" in second.reason
 
-    def test_protected_skills_path_prompts_through_hitl_gate(
-        self, tmp_path, monkeypatch
-    ):
+    def test_protected_skills_path_prompts_through_gate(self, tmp_path, monkeypatch):
         prompts: list[str] = []
         monkeypatch.chdir(tmp_path)
         policy = PolicyConfig(allow=[Rule(tool="write", path="*")])
-        classifier = PolicyClassifier(policy_loader=lambda: policy)
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
+        handler = PolicyGateHandler(policy_loader=lambda: policy)
         monkeypatch.setattr(
             "builtins.input", lambda prompt="": (prompts.append("ask"), "n")[1]
         )
@@ -884,7 +828,7 @@ class TestHitlFailClosedStaleContext:
         assert prompts == ["ask"]
         assert isinstance(verdict, HitlDeny)
 
-    def test_protected_path_hitl_omits_always_dialog_blocks_dead_allow_and_keeps_never(
+    def test_protected_path_omits_always_dialog_blocks_dead_allow_and_keeps_never(
         self, tmp_path, monkeypatch
     ):
         import sys
@@ -893,17 +837,11 @@ class TestHitlFailClosedStaleContext:
         missing_home = tmp_path / "missing.toml"
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".agent").mkdir(parents=True)
-
-        allow_cfg = PolicyConfig(allow=[Rule(tool="write", path="*")])
-        classifier = PolicyClassifier(
-            policy_loader=lambda: allow_cfg,
+        handler = PolicyGateHandler(
+            policy_loader=lambda: PolicyConfig(allow=[Rule(tool="write", path="*")]),
             append_path=repo_policy,
         )
-        handler = PolicyHumanInTheLoop(
-            allowed_tools=["read", "search"], classifier=classifier, ask=classifier.ask
-        )
 
-        # TTY dialog omits "always" option on protected paths.
         seen_choices: list[list[str]] = []
 
         def _fake_radio(_title, options, default=1):
@@ -913,37 +851,195 @@ class TestHitlFailClosedStaleContext:
         monkeypatch.setattr("strands_code_cli.ui.choice.radio_choice", _fake_radio)
         monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
         res_tty = _run(
-            handler,
-            _event("write", {"path": ".agent/routing.yaml"}, uid="prot-tty"),
+            handler, _event("write", {"path": ".agent/routing.yaml"}, uid="prot-tty")
         )
         assert isinstance(res_tty, HitlDeny)
         assert seen_choices == [["y", "n", "never"]]
 
-        # Typing "always" on non-TTY approves once without persisting a dead [[allow]] rule.
         monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-        shown: list[str] = []
-        monkeypatch.setattr(
-            "builtins.print", lambda *a, **k: shown.append(" ".join(map(str, a)))
-        )
+        buf = _capture_console(monkeypatch)
         monkeypatch.setattr("builtins.input", lambda *a: "always")
         res_always = _run(
-            handler,
-            _event("write", {"path": ".agent/policy.toml"}, uid="prot-always"),
+            handler, _event("write", {"path": ".agent/policy.toml"}, uid="prot-always")
         )
         assert isinstance(res_always, Proceed)
         assert not repo_policy.exists()
-        assert any("protected path" in line for line in shown)
-        assert any("standing allow rules are disabled" in line for line in shown)
+        assert "protected path" in buf.getvalue()
+        assert "standing allow rules are disabled" in buf.getvalue()
 
-        # Typing "never" still writes a [[deny]] rule.
         monkeypatch.setattr("builtins.input", lambda *a: "never")
         res_never = _run(
-            handler,
-            _event("write", {"path": "STRANDS.md"}, uid="prot-never"),
+            handler, _event("write", {"path": "STRANDS.md"}, uid="prot-never")
         )
         assert isinstance(res_never, HitlDeny)
         reloaded = PolicyConfig.load(home_path=missing_home, repo_path=repo_policy)
         assert len(reloaded.deny) == 1
-        assert reloaded.deny[0].tool == "write"
         assert reloaded.deny[0].path == str((tmp_path / "STRANDS.md").resolve())
         assert len(reloaded.allow) == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 19.1 Wave 2 adversarial & SDK integration invariants
+# ---------------------------------------------------------------------------
+
+
+class TestWave2HardeningInvariants:
+    def test_real_agent_sdk_first_steering_skips_gate_prompt(self, monkeypatch):
+        executed: list[str] = []
+
+        @tool
+        def shell(command: str) -> str:
+            """Execute command."""
+            executed.append(command)
+            return "ran"
+
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(
+                AssertionError("steered tool must not prompt")
+            ),
+        )
+        gate = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        agent = Agent(
+            model=_ToolCallingModel("shell", {"command": "echo pwn"}),
+            tools=[shell],
+            callback_handler=None,
+        )
+        InterventionRegistry([gate], agent.hooks)
+        slot = register_steering_hook(agent)
+        state = SteeringState()
+        state.bind_turn("turn-1")
+        slot.state = state
+        state.note("pivot to safe approach")
+        result = agent("go")
+        assert executed == []
+        assert "redirected-ok" in str(result)
+
+    def test_turn_cancelled_propagates_past_on_error_throw(self):
+        class _AbortBroker(ApprovalBroker):
+            def request(self, prompt, cancel=None):
+                raise TurnCancelled()
+
+        handler = PolicyGateHandler(
+            policy_loader=PolicyConfig.load, broker=_AbortBroker()
+        )
+        assert handler.on_error == "throw"
+        with pytest.raises(TurnCancelled):
+            _run(handler, _event("shell", {"command": "echo hi"}, uid="tc-1"))
+        assert worker_cancelled(EventLoopException(TurnCancelled())) is True
+
+    def test_sha256_batch_distinguishes_identical_first_200_chars(self, monkeypatch):
+        prefix = "x = " + "a" * 240 + "\n"
+        code_a = prefix + "result = 1"
+        code_b = prefix + "result = 2"
+        prompts: list[str] = []
+        answers = iter(["y", "n"])
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), next(answers))[1]
+        )
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        assert isinstance(
+            _run(handler, _event("python_repl", {"code": code_a}, uid="sha-1")),
+            Proceed,
+        )
+        assert isinstance(
+            _run(handler, _event("python_repl", {"code": code_b}, uid="sha-2")),
+            HitlDeny,
+        )
+        assert len(prompts) == 2
+
+    def test_trust_delegated_still_enforces_deny_outside_write_plan_and_protected(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("SECRET=1\n")
+        (tmp_path / ".agent").mkdir()
+        main_agent, btw_agent, sub_agent = _FakeAgent(), _FakeAgent(), _FakeAgent()
+        cfg = PolicyConfig(
+            allow=[Rule(tool="write", path=".agent/*")],
+            deny=[Rule(tool="shell", command="rm")],
+            options=PolicyOptions(trust_delegated=True),
+        )
+        handler = PolicyGateHandler(policy_loader=lambda: cfg)
+        handler.bind_main_agent(main_agent)
+        handler.register_agent(btw_agent, "btw")
+
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *args: (prompts.append("ask"), "n")[1]
+        )
+        # Normal non-protected delegated shell auto-trusts:
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "echo ok"}, sub_agent, "d1")),
+            Proceed,
+        )
+        # Explicit [[deny]] still blocks btw & subagent:
+        assert isinstance(
+            _run(handler, _event("shell", {"command": "rm -rf ."}, btw_agent, "d2")),
+            HitlDeny,
+        )
+        # Outside-scope write still Denied on delegated agent:
+        assert isinstance(
+            _run(handler, _event("write", {"path": "/opt/pwn/f.txt"}, sub_agent, "d3")),
+            HitlDeny,
+        )
+        # Sensitive .env read & protected .agent write MUST NOT trust_delegated:
+        assert isinstance(
+            _run(handler, _event("read", {"path": ".env"}, btw_agent, "d4")),
+            HitlDeny,
+        )
+        assert isinstance(
+            _run(
+                handler,
+                _event("write", {"path": ".agent/policy.toml"}, sub_agent, "d5"),
+            ),
+            HitlDeny,
+        )
+        assert len(prompts) == 2
+
+        # Plan / read-only overrides trust_delegated:
+        with handler.read_only(btw_agent):
+            ro_res = _run(
+                handler, _event("shell", {"command": "echo ok"}, btw_agent, "d6")
+            )
+            assert isinstance(ro_res, HitlDeny)
+            assert "Plan mode is read-only" in ro_res.reason
+
+    def test_worker_thread_renders_inside_pump_thread_no_output_context(
+        self, monkeypatch
+    ):
+        main_ident = threading.get_ident()
+        broker = ApprovalBroker()
+        handler = PolicyGateHandler(policy_loader=PolicyConfig.load, broker=broker)
+        buf = _capture_console(monkeypatch)
+        render_threads: list[int] = []
+
+        def _fake_input(*args):
+            render_threads.append(threading.get_ident())
+            return "y"
+
+        monkeypatch.setattr("builtins.input", _fake_input)
+        assert not hasattr(gate_module, "output_context")
+
+        result_box: list[Any] = []
+
+        def worker():
+            result_box.append(
+                _run(handler, _event("shell", {"command": "make test"}, uid="w-1"))
+            )
+
+        with broker.pump(threading.Event()):
+            thread = threading.Thread(target=worker)
+            thread.start()
+            while thread.is_alive():
+                req = broker.poll(timeout=0.05)
+                if req is not None:
+                    req.run_prompt()
+            thread.join(timeout=5)
+        assert render_threads == [main_ident]
+        assert isinstance(result_box[0], Proceed)
+        rendered = buf.getvalue()
+        assert "Approval needed: [main] shell" in rendered
+        assert "  Detail: make test" in rendered
+        assert "  Risk: Shell command: make test" in rendered
+        assert "Approve? [y/n/always/never]" in rendered

@@ -2607,13 +2607,10 @@ class TestConfigureStreamingForModel:
 
         fake_agent = SimpleNamespace(model=_ResolvedModel(), hooks=[])
         monkeypatch.setattr(entry_main, "create_harness", lambda **kwargs: fake_agent)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda a: None)
         monkeypatch.setattr(
             entry_main, "register_steering_hook", lambda a: SimpleNamespace()
         )
-        monkeypatch.setattr(entry_main, "bind_steering", lambda *_a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda *_a: None)
-        monkeypatch.setattr(entry_main, "set_mode", lambda *_a: None)
         monkeypatch.setattr(entry_main, "bind_session", lambda *_a: None)
 
         built = entry_main.build_agent(
@@ -3447,8 +3444,6 @@ class TestConfigureBaseUrlAndResolveHarness:
 
         monkeypatch.setattr(entry_main, "create_harness", _fake_create_harness)
         monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
-        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
 
         agent = entry_main.build_agent(
@@ -3964,8 +3959,6 @@ class TestSameProviderSummaryAndOpenAIGuard:
             lambda **_kw: SimpleNamespace(model=built_fake),
         )
         monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
-        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
         entry_main.build_agent("s-oai", tmp_path / "sess", model="openai/gpt-4.1-mini")
         assert "reasoning" not in built_fake.config["params"]
@@ -4367,8 +4360,6 @@ class TestMetaModelAdapter:
             lambda **kw: captured.update(kw) or SimpleNamespace(model=built_model),
         )
         monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
-        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
         entry_main.build_agent("sess-meta", tmp_path / "sess", model=built_model)
         assert captured["caching"] is False
@@ -4775,8 +4766,6 @@ class TestMetaModelAdapter:
             lambda **kw: captured.update(kw) or SimpleNamespace(model=None),
         )
         monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
-        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
         entry_main.build_agent(
             "sess-meta-str",
@@ -5009,8 +4998,6 @@ class TestMetaModelAdapter:
             lambda **kw: captured.update(kw) or SimpleNamespace(model=kw["model"]),
         )
         monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
-        monkeypatch.setattr(entry_main, "bind_steering", lambda _s: None)
-        monkeypatch.setattr(entry_main, "bind_main_agent", lambda _a: None)
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
 
         agent = entry_main.build_agent(

@@ -40,19 +40,8 @@ from strands_code_cli.model.model_switch import (
     model_id_of,
     scoped_base_url,
 )
+from strands_code_cli.ui.console import RENDER_LOCK, console
 from strands_code_cli.ui.output import print_plain
-
-RENDER_LOCK = threading.RLock()
-"""Serializes whole message blocks across the main and btw handlers.
-
-Rich serializes single ``print`` calls internally, but a fenced side
-block is a header+body+footer sequence — only this shared lock keeps
-it contiguous against main output. Reentrant: ``FencedBtwHandler``
-holds it while delegating to the shared ``LockedHandler`` inner on
-the same thread.
-"""
-
-console = Console()
 
 BTW_QUESTION_CHARS = 60
 """Question prefix length carried in the fence header (single line)."""
@@ -418,6 +407,16 @@ class BtwContext:
         return depth
 
 
+def _register_btw_gate(agent: Any, interventions: Any) -> None:
+    """Register the /btw side agent under its explicit tag on PolicyGateHandler."""
+    for handler in interventions or ():
+        register = getattr(handler, "register_agent", None)
+        if callable(register):
+            register(agent, "btw")
+            agent._policy_gate = handler
+            return
+
+
 def build_btw_agent(
     parent_kwargs: dict[str, Any], history: list, question: str
 ) -> tuple[Any, list]:
@@ -478,6 +477,7 @@ def build_btw_agent(
     kwargs["instructions"] = f"{CODE_AGENT_INSTRUCTIONS}\n{BTW_FRAMING}"
     kwargs["callback_handler"] = FencedBtwHandler(kwargs["callback_handler"], question)
     agent = create_harness(**kwargs)
+    _register_btw_gate(agent, kwargs.get("interventions"))
     resolved_model = getattr(agent, "model", None)
     raw_model = kwargs.get("model")
     target_id = (
