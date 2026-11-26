@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 import typer
 
-from strands_code_agent.code_agent import DEFAULT_CODE_AGENT_CALLBACK_HANDLER
 from strands_code_cli.memory.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
@@ -48,6 +47,7 @@ from strands_code_cli.policy.mode import (
     ModeState,
 )
 from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
+from strands_code_cli.ui.console import console, sanitize_display
 from strands_code_cli.ui.output import print_plain
 
 if TYPE_CHECKING:
@@ -705,6 +705,13 @@ def _routing_warns(routing: RoutingState | None) -> bool:
     return warn_applies(routing)
 
 
+def _prompt_inline(text: str) -> None:
+    """Write an inline no-markup prompt without newline and flush before input()."""
+    console.print(text, end="", markup=False, highlight=False)
+    if hasattr(console.file, "flush"):
+        console.file.flush()
+
+
 def _model_warn_action(selection: str) -> tuple:
     """Warn-and-cancel around a /model selection while routing is on.
 
@@ -716,6 +723,8 @@ def _model_warn_action(selection: str) -> tuple:
     """
     from strands_code_cli.routing.core import MODEL_ROUTING_KEEP_REPLY
 
+    safe_selection = sanitize_display(selection)
+
     def _keep() -> tuple:
         return ("reply", MODEL_ROUTING_KEEP_REPLY)
 
@@ -724,7 +733,7 @@ def _model_warn_action(selection: str) -> tuple:
 
         try:
             picked = radio_choice(
-                f"Switch to {selection}? This turns routing off.",
+                f"Switch to {safe_selection}? This turns routing off.",
                 [
                     ("proceed", "Switch — turn routing off"),
                     ("cancel", "Cancel — keep routing"),
@@ -738,11 +747,9 @@ def _model_warn_action(selection: str) -> tuple:
         return ("model", selection) if picked == "proceed" else _keep()
     # Same stream discipline as the gate: print the prompt, then bare
     # input() so echo stays on the prompt line.
-    print(
-        f"Switch to {selection}? This turns routing off. "
-        "[yes to switch, anything else keeps routing]: ",
-        end="",
-        flush=True,
+    _prompt_inline(
+        f"Switch to {safe_selection}? This turns routing off. "
+        "[yes to switch, anything else keeps routing]: "
     )
     try:
         typed = input().strip().lower()
@@ -792,6 +799,47 @@ def _catalog_entry_prices(pricing: object) -> tuple[float | None, float | None]:
     return (None, None)
 
 
+def _clean_catalog_model_id(raw: object) -> str | None:
+    """Return stripped model id when free of ANSI/control bytes, else None."""
+    if not isinstance(raw, str):
+        return None
+    stripped = raw.strip()
+    clean = sanitize_display(stripped)
+    if not clean or clean != stripped:
+        return None
+    return clean
+
+
+def _arch_is_decision(arch: object) -> bool:
+    """True when the architecture lists ``decisions`` in output modalities."""
+    if not isinstance(arch, dict):
+        return False
+    modalities = arch.get("output_modalities")
+    return isinstance(modalities, list) and any(
+        isinstance(entry, str) and entry.lower() == "decisions" for entry in modalities
+    )
+
+
+def _has_positive_context(raw: object) -> bool:
+    """True when ``raw`` parses as a strictly positive context length."""
+    try:
+        return float(raw) > 0  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
+def _catalog_label_and_sort(
+    model_id: str, pricing: object, *, input_only: bool = False
+) -> tuple[str, float]:
+    """Return ``(display_label, sort_key)`` for one validated catalog entry."""
+    in_price, out_price = _catalog_entry_prices(pricing)
+    if in_price is None or out_price is None:
+        return (f"{model_id} (price n/a)", float("inf"))
+    label = f"{model_id} (${in_price:g}/${out_price:g} per 1M)"
+    sort_key = in_price if input_only else (in_price + out_price)
+    return (label, sort_key)
+
+
 def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
     """Chat-capable catalog entries, validated and price-sorted (T-08-11).
 
@@ -811,25 +859,19 @@ def _setup_catalog_entries(models: object) -> list[dict[str, Any]]:
     for model in models:
         if not isinstance(model, dict):
             continue
-        model_id = model.get("id")
-        if not isinstance(model_id, str) or not model_id.strip():
+        model_id = _clean_catalog_model_id(model.get("id"))
+        if model_id is None:
             continue
         lowered = model_id.lower()
         if "embed" in lowered or "rerank" in lowered:
             continue
         if not _arch_is_chat(model.get("architecture")):
             continue
-        in_price, out_price = _catalog_entry_prices(model.get("pricing"))
         params = model.get("supported_parameters")
         structured = isinstance(params, list) and any(
             param in ("response_format", "structured_outputs") for param in params
         )
-        if in_price is None or out_price is None:
-            label = f"{model_id} (price n/a)"
-            sort_key = float("inf")
-        else:
-            label = f"{model_id} (${in_price:g}/${out_price:g} per 1M)"
-            sort_key = in_price + out_price
+        label, sort_key = _catalog_label_and_sort(model_id, model.get("pricing"))
         entries.append(
             {"id": model_id, "label": label, "sort": sort_key, "structured": structured}
         )
@@ -856,42 +898,16 @@ def _setup_decision_entries(models: object) -> list[dict[str, Any]]:
     for model in models:
         if not isinstance(model, dict):
             continue
-        model_id = model.get("id")
-        if not isinstance(model_id, str) or not model_id.strip():
+        model_id = _clean_catalog_model_id(model.get("id"))
+        if model_id is None or model_id.startswith("~"):
             continue
-        if model_id.startswith("~"):
+        if not _has_positive_context(model.get("context_length", 0)):
             continue
-        try:
-            window = float(model.get("context_length", 0))
-        except (TypeError, ValueError):
+        if not _arch_is_decision(model.get("architecture")):
             continue
-        if window <= 0:
-            continue
-        arch = model.get("architecture")
-        if not isinstance(arch, dict):
-            continue
-        modalities = arch.get("output_modalities")
-        if not isinstance(modalities, list) or not any(
-            isinstance(entry, str) and entry.lower() == "decisions"
-            for entry in modalities
-        ):
-            continue
-        in_price: float | None = None
-        out_price: float | None = None
-        pricing = model.get("pricing")
-        if isinstance(pricing, dict):
-            try:
-                if "prompt" in pricing and "completion" in pricing:
-                    in_price = float(pricing["prompt"]) * 1_000_000
-                    out_price = float(pricing["completion"]) * 1_000_000
-            except (TypeError, ValueError):
-                in_price = out_price = None
-        if in_price is None or out_price is None:
-            label = f"{model_id} (price n/a)"
-            sort_key = float("inf")
-        else:
-            label = f"{model_id} (${in_price:g}/${out_price:g} per 1M)"
-            sort_key = in_price
+        label, sort_key = _catalog_label_and_sort(
+            model_id, model.get("pricing"), input_only=True
+        )
         entries.append({"id": model_id, "label": label, "sort": sort_key})
     entries.sort(key=lambda entry: (entry["sort"], entry["id"]))
     return entries
@@ -905,17 +921,19 @@ def _setup_ask(
     ESC/abort, empty input, EOF, Ctrl-C, and unparseable typed answers
     all fail closed to None; the caller aborts with no writes (D-13).
     """
+    safe_title = sanitize_display(title)
+    safe_options = [(value, sanitize_display(label)) for value, label in options]
     if sys.stdin.isatty():
         from strands_code_cli.ui.choice import radio_choice
 
         try:
-            return radio_choice(title, options, default=default)
+            return radio_choice(safe_title, safe_options, default=default)
         except (RuntimeError, KeyboardInterrupt):
             return None
-    print(f"{title}:")
-    for pos, (_, label) in enumerate(options, start=1):
-        print(f"  {pos}. {label}")
-    print("Enter a number (empty aborts): ", end="", flush=True)
+    print_plain(console, f"{safe_title}:")
+    for pos, (_, label) in enumerate(safe_options, start=1):
+        print_plain(console, f"  {pos}. {label}")
+    _prompt_inline("Enter a number (empty aborts): ")
     try:
         typed = input().strip()
     except (KeyboardInterrupt, EOFError):
@@ -926,9 +944,9 @@ def _setup_ask(
         picked = int(typed)
     except ValueError:
         picked = -1
-    if 1 <= picked <= len(options):
-        return options[picked - 1][0]
-    for value, label in options:
+    if 1 <= picked <= len(safe_options):
+        return safe_options[picked - 1][0]
+    for value, label in safe_options:
         if typed == str(value) or typed.lower() == label.lower():
             return value
     return None
@@ -942,12 +960,9 @@ def _setup_confirm(prompt: str, *, default: bool) -> bool | None:
     """
     hint = "Yes/no" if default else "yes/No"
     default_word = "yes" if default else "no"
+    safe_prompt = sanitize_display(prompt)
     for attempt in range(2):
-        print(
-            f"{prompt} [{hint}] (empty takes {default_word}): ",
-            end="",
-            flush=True,
-        )
+        _prompt_inline(f"{safe_prompt} [{hint}] (empty takes {default_word}): ")
         try:
             typed = input().strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -959,7 +974,7 @@ def _setup_confirm(prompt: str, *, default: bool) -> bool | None:
         if typed in ("n", "no"):
             return False
         if attempt == 0:
-            print("Answer yes or no (empty takes the default).")
+            print_plain(console, "Answer yes or no (empty takes the default).")
     return None
 
 
@@ -973,7 +988,9 @@ def _setup_pick_candidates_tty(entries: list[dict[str, Any]]) -> list[str] | Non
     picked: list[str] = []
     remaining = list(entries)
     while True:
-        options = [(entry["id"], entry["label"]) for entry in remaining]
+        options = [
+            (entry["id"], sanitize_display(entry["label"])) for entry in remaining
+        ]
         options.append((_SETUP_DONE, "Done — finish picking"))
         choice = _setup_ask(
             "Pick a candidate model (cheapest first)",
@@ -984,7 +1001,7 @@ def _setup_pick_candidates_tty(entries: list[dict[str, Any]]) -> list[str] | Non
             return None
         if choice == _SETUP_DONE:
             if not picked:
-                print("Pick at least one candidate (ESC aborts).")
+                print_plain(console, "Pick at least one candidate (ESC aborts).")
                 continue
             return picked
         picked.append(choice)
@@ -1001,15 +1018,11 @@ def _setup_pick_candidates_typed(entries: list[dict[str, Any]]) -> list[str] | N
     note) and aborts when nothing usable remains.
     """
     known = {entry["id"] for entry in entries}
-    print("Candidate models (cheapest first):")
+    print_plain(console, "Candidate models (cheapest first):")
     for entry in entries:
-        print(f"  {entry['label']}")
+        print_plain(console, f"  {sanitize_display(entry['label'])}")
     for attempt in range(2):
-        print(
-            "Enter candidate ids, comma-separated (empty aborts): ",
-            end="",
-            flush=True,
-        )
+        _prompt_inline("Enter candidate ids, comma-separated (empty aborts): ")
         try:
             typed = input().strip()
         except (KeyboardInterrupt, EOFError):
@@ -1022,13 +1035,15 @@ def _setup_pick_candidates_typed(entries: list[dict[str, Any]]) -> list[str] | N
         unknown = [piece for piece in valid if piece not in known]
         valid = [piece for piece in valid if piece in known]
         if unknown and attempt == 0:
-            print(
-                f"Unknown model ids (not in the live catalog): "
-                f"{', '.join(unknown)} — try again."
+            shown_unknown = ", ".join(sanitize_display(piece) for piece in unknown)
+            print_plain(
+                console,
+                f"Unknown model ids (not in the live catalog): {shown_unknown} — try again.",
             )
             continue
         if unknown:
-            print(f"Dropping unknown ids: {', '.join(unknown)}.")
+            shown_unknown = ", ".join(sanitize_display(piece) for piece in unknown)
+            print_plain(console, f"Dropping unknown ids: {shown_unknown}.")
         if not valid:
             return None
         return valid
@@ -1042,7 +1057,7 @@ def _setup_typed_id_list(prompt: str) -> list[str] | None:
     validated, so the caller warns and ``/route validate`` judges the
     file afterwards. Empty input aborts.
     """
-    print(f"{prompt} (empty aborts): ", end="", flush=True)
+    _prompt_inline(f"{sanitize_display(prompt)} (empty aborts): ")
     try:
         typed = input().strip()
     except (KeyboardInterrupt, EOFError):
@@ -1065,17 +1080,17 @@ def _setup_pick_decision(
     """
     if typed_only or not entries:
         if typed_only:
-            print("Decisions catalog unreachable — enter a decision model id manually.")
-        else:
-            print(
-                "No usable decision models in the live catalog — "
-                "enter a decision model id manually."
+            print_plain(
+                console,
+                "Decisions catalog unreachable — enter a decision model id manually.",
             )
-        print(
-            "Decision model id (empty aborts): ",
-            end="",
-            flush=True,
-        )
+        else:
+            print_plain(
+                console,
+                "No usable decision models in the live catalog — "
+                "enter a decision model id manually.",
+            )
+        _prompt_inline("Decision model id (empty aborts): ")
         try:
             typed = input().strip()
         except (KeyboardInterrupt, EOFError):
@@ -1084,14 +1099,16 @@ def _setup_pick_decision(
     if sys.stdin.isatty():
         return _setup_ask(
             "Pick the decision model (explicit choice, no default)",
-            [(entry["id"], entry["label"]) for entry in entries],
+            [(entry["id"], sanitize_display(entry["label"])) for entry in entries],
         )
     known = {entry["id"] for entry in entries}
-    print("Decision-model candidates (decisions catalog, cheapest first):")
+    print_plain(
+        console, "Decision-model candidates (decisions catalog, cheapest first):"
+    )
     for entry in entries:
-        print(f"  {entry['label']}")
+        print_plain(console, f"  {sanitize_display(entry['label'])}")
     for attempt in range(2):
-        print("Enter the decision model id (empty aborts): ", end="", flush=True)
+        _prompt_inline("Enter the decision model id (empty aborts): ")
         try:
             typed = input().strip()
         except (KeyboardInterrupt, EOFError):
@@ -1101,7 +1118,10 @@ def _setup_pick_decision(
         if typed in known:
             return typed
         if attempt == 0:
-            print(f"Unknown decision model {typed!r} — pick one from the list above.")
+            print_plain(
+                console,
+                f"Unknown decision model {sanitize_display(typed)!r} — pick one from the list above.",
+            )
             continue
         return None
     return None
@@ -1112,10 +1132,8 @@ def _setup_local_model() -> str | None:
 
     EOF and Ctrl-C abort; an empty line accepts the nimble default tag.
     """
-    print(
-        "Local decision model tag as pulled in Ollama [nimble] (empty takes nimble): ",
-        end="",
-        flush=True,
+    _prompt_inline(
+        "Local decision model tag as pulled in Ollama [nimble] (empty takes nimble): "
     )
     try:
         typed = input().strip()
@@ -1158,15 +1176,11 @@ def _setup_pick_order_typed(available: list[str]) -> list[str] | None:
     re-prompt; the second attempt aborts instead of writing a
     partial order.
     """
-    print("Available engines:")
+    print_plain(console, "Available engines:")
     for name in available:
-        print(f"  {name} — {_ENGINE_LABELS[name]}")
+        print_plain(console, f"  {name} — {_ENGINE_LABELS[name]}")
     for attempt in range(2):
-        print(
-            "Enter engines in try order, comma-separated (empty aborts): ",
-            end="",
-            flush=True,
-        )
+        _prompt_inline("Enter engines in try order, comma-separated (empty aborts): ")
         try:
             typed = input().strip()
         except (KeyboardInterrupt, EOFError):
@@ -1179,7 +1193,8 @@ def _setup_pick_order_typed(available: list[str]) -> list[str] | None:
         unknown = [name for name in names if name not in available]
         names = [name for name in names if name in available]
         if unknown and attempt == 0:
-            print(f"Unknown engines: {', '.join(unknown)} — try again.")
+            shown_unknown = ", ".join(sanitize_display(name) for name in unknown)
+            print_plain(console, f"Unknown engines: {shown_unknown} — try again.")
             continue
         if unknown or not names:
             return None
@@ -1201,21 +1216,24 @@ def _setup_engine_order() -> list[str] | None:
     has_key = native_engine_ready()
     if has_key:
         proposal = ["native", "openrouter", "local"]
-        print(
+        print_plain(
+            console,
             "Proposed engine order: native, openrouter, local "
-            "(TypeSafe key found — native first)."
+            "(TypeSafe key found — native first).",
         )
     else:
         proposal = ["openrouter", "local"]
-        print(
+        print_plain(
+            console,
             "Proposed engine order: openrouter, local "
-            "(no TypeSafe key — native hidden)."
+            "(no TypeSafe key — native hidden).",
         )
     if not local_engine_ready(None, "nimble"):
-        print(
+        print_plain(
+            console,
             "Note: local Ollama daemon not ready for nimble "
             "(down, outdated, or tag not pulled) — "
-            "the local link will skip until it is."
+            "the local link will skip until it is.",
         )
     use_proposal = _setup_confirm("Use this order?", default=True)
     if use_proposal is None:
@@ -1248,17 +1266,18 @@ def _setup_pick_native_model() -> str | None:
         ],
     )
     if picked == NATIVE_JEV_ALIAS:
-        print(
+        print_plain(
+            console,
             f"Warning: {NATIVE_JEV_ALIAS} is a moving alias — it can resolve "
             "to a new build without notice; every verdict logs the serving "
-            "snapshot so drift stays visible."
+            "snapshot so drift stays visible.",
         )
     return picked
 
 
 def _setup_directives() -> str | None:
     """Directive lines until a blank line; empty needs an explicit confirm."""
-    print("Enter one directive per line; a blank line finishes.")
+    print_plain(console, "Enter one directive per line; a blank line finishes.")
     lines: list[str] = []
     while True:
         try:
@@ -1269,11 +1288,7 @@ def _setup_directives() -> str | None:
             break
         lines.append(line)
     if not lines:
-        print(
-            "No directives — write the strategy anyway? [yes to confirm]: ",
-            end="",
-            flush=True,
-        )
+        _prompt_inline("No directives — write the strategy anyway? [yes to confirm]: ")
         try:
             confirm = input().strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -1313,9 +1328,10 @@ def _setup_gather_candidates(
         if candidates is None:
             return None
     else:
-        print(
+        print_plain(
+            console,
             "Live catalog unreachable — enter model ids manually "
-            "(check spelling carefully)."
+            "(check spelling carefully).",
         )
         candidates = _setup_typed_id_list("Candidate model ids, comma-separated")
         if candidates is None:
@@ -1991,7 +2007,7 @@ def _empty_marketplaces_hint() -> str:
 
 
 def _marketplace_list_reply() -> str:
-    from strands_code_cli.memory.marketplace import list_marketplaces, sanitize_display
+    from strands_code_cli.memory.marketplace import list_marketplaces
 
     entries = list_marketplaces()
     if not entries:
@@ -2005,7 +2021,7 @@ def _marketplace_list_reply() -> str:
 
 
 def _marketplace_add_reply(rest: str) -> str:
-    from strands_code_cli.memory.marketplace import add_marketplace, sanitize_display
+    from strands_code_cli.memory.marketplace import add_marketplace
 
     pos, opts, _ = _parse_flag_args(
         rest, flags_with_values=frozenset({"--name", "--ref"})
@@ -2025,7 +2041,6 @@ def _marketplace_add_reply(rest: str) -> str:
 def _skills_marketplace_cmd(arg: str) -> str:
     from strands_code_cli.memory.marketplace import (
         remove_marketplace,
-        sanitize_display,
         update_marketplace,
     )
 
@@ -2066,7 +2081,6 @@ def _skills_browse_cmd(arg: str) -> str:
     from strands_code_cli.memory.marketplace import (
         browse_marketplaces,
         list_marketplaces,
-        sanitize_display,
     )
 
     try:
@@ -2089,7 +2103,7 @@ def _skills_browse_cmd(arg: str) -> str:
 def _skills_install_cmd(
     arg: str, skills: SkillIndex | None, harness_refresh: Any
 ) -> str:
-    from strands_code_cli.memory.marketplace import install_skill, sanitize_display
+    from strands_code_cli.memory.marketplace import install_skill
 
     try:
         pos, opts, _ = _parse_flag_args(arg, flags_with_values=frozenset({"--skill"}))
@@ -2112,10 +2126,7 @@ def _skills_install_cmd(
 def _skills_update_cmd(
     arg: str, skills: SkillIndex | None, harness_refresh: Any
 ) -> str:
-    from strands_code_cli.memory.marketplace import (
-        sanitize_display,
-        update_installed_skills,
-    )
+    from strands_code_cli.memory.marketplace import update_installed_skills
 
     try:
         outcome = update_installed_skills(arg or None, cwd=_skills_cwd(skills))
@@ -2143,10 +2154,7 @@ def _skills_update_cmd(
 
 
 def _skills_sync_cmd(skills: SkillIndex | None, harness_refresh: Any) -> str:
-    from strands_code_cli.memory.marketplace import (
-        sanitize_display,
-        sync_installed_skills,
-    )
+    from strands_code_cli.memory.marketplace import sync_installed_skills
 
     try:
         outcome = sync_installed_skills(cwd=_skills_cwd(skills))
@@ -2566,7 +2574,10 @@ def _picker_tty_loop(index: SessionIndex, session_dir, radio_choice) -> str | No
         picked = radio_choice(
             "Recent sessions",
             [
-                (e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]")
+                (
+                    e["id"],
+                    f"{sanitize_display(e.get('title', 'untitled'))} [{e['id'][:8]}]",
+                )
                 for e in entries
             ]
             + [(_SESSION_DELETE, "Delete a session…"), (None, "Start new session")],
@@ -2582,10 +2593,12 @@ def _picker_tty_loop(index: SessionIndex, session_dir, radio_choice) -> str | No
 
 def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) -> None:
     """Nested delete picker + confirm; prints the forget reply."""
-    console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
     target = radio_choice(
         "Delete a session",
-        [(e["id"], f"{e.get('title', 'untitled')} [{e['id'][:8]}]") for e in entries]
+        [
+            (e["id"], f"{sanitize_display(e.get('title', 'untitled'))} [{e['id'][:8]}]")
+            for e in entries
+        ]
         + [(None, "Cancel")],
         default=len(entries),
     )
@@ -2595,7 +2608,7 @@ def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) 
         (e.get("title", "untitled") for e in entries if e["id"] == target), target
     )
     confirm = radio_choice(
-        f"Delete '{title}' [{target[:8]}]?",
+        f"Delete '{sanitize_display(title)}' [{target[:8]}]?",
         [(_SESSION_DELETE_CONFIRM, "Delete permanently"), (None, "Cancel")],
         default=1,
     )
@@ -2609,20 +2622,19 @@ def _picker_typed_loop(
     index: SessionIndex, session_dir: str | Path | None
 ) -> str | None:
     """Numbered resume picker with a nested delete flow (no tty)."""
-    console = DEFAULT_CODE_AGENT_CALLBACK_HANDLER.console
     while True:
         entries = _picker_entries(index, session_dir)
         if not entries:
             return None
-        console.print("Recent sessions:")
+        print_plain(console, "Recent sessions:")
         for pos, entry in enumerate(entries, 1):
             print_plain(
                 console,
-                f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]",
+                f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{entry['id'][:8]}]",
             )
         delete_at = len(entries) + 1
-        console.print(f"  {delete_at}. Delete a session…")
-        console.print(f"  {delete_at + 1}. Start new session")
+        print_plain(console, f"  {delete_at}. Delete a session…")
+        print_plain(console, f"  {delete_at + 1}. Start new session")
         try:
             choice = typer.prompt("Select session", type=int, default=delete_at + 1)
         except (typer.Abort, EOFError):
@@ -2634,17 +2646,18 @@ def _picker_typed_loop(
             continue
         if choice == delete_at + 1:
             return None
-        console.print(f"Enter a number 1-{delete_at + 1}.")
+        print_plain(console, f"Enter a number 1-{delete_at + 1}.")
 
 
-def _picker_typed_delete(index, session_dir, entries, console) -> None:
+def _picker_typed_delete(index, session_dir, entries, out_console) -> None:
     """Numbered delete picker + confirm; prints the forget reply."""
-    console.print("Delete a session:")
+    print_plain(out_console, "Delete a session:")
     for pos, entry in enumerate(entries, 1):
         print_plain(
-            console, f"  {pos}. {entry.get('title', 'untitled')} [{entry['id'][:8]}]"
+            out_console,
+            f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{entry['id'][:8]}]",
         )
-    console.print(f"  {len(entries) + 1}. Cancel")
+    print_plain(out_console, f"  {len(entries) + 1}. Cancel")
     try:
         choice = typer.prompt("Delete which", type=int, default=len(entries) + 1)
     except (typer.Abort, EOFError):
@@ -2653,10 +2666,11 @@ def _picker_typed_delete(index, session_dir, entries, console) -> None:
         return
     target = entries[choice - 1]
     print_plain(
-        console, f"Delete '{target.get('title', 'untitled')}' [{target['id'][:8]}]?"
+        out_console,
+        f"Delete '{sanitize_display(target.get('title', 'untitled'))}' [{target['id'][:8]}]?",
     )
-    console.print("  1. Delete permanently")
-    console.print("  2. Cancel")
+    print_plain(out_console, "  1. Delete permanently")
+    print_plain(out_console, "  2. Cancel")
     try:
         confirm = typer.prompt("Confirm", type=int, default=2)
     except (typer.Abort, EOFError):
@@ -2664,7 +2678,7 @@ def _picker_typed_delete(index, session_dir, entries, console) -> None:
     if confirm != 1:
         return
     _, reply = forget_session(index, session_dir, target["id"])
-    print_plain(console, reply)
+    print_plain(out_console, reply)
 
 
 def _has_snapshot(session_dir: str | Path, session_id: str) -> bool:

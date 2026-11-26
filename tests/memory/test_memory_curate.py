@@ -7,6 +7,7 @@ consumer functions plus source assertions, never a live REPL.
 
 from __future__ import annotations
 
+import io
 import sys
 import threading
 from datetime import date, timedelta
@@ -14,6 +15,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from rich.console import Console
 
 from strands_code_cli.dispatch.core import (
     _MEMORY_USAGE,
@@ -229,6 +231,31 @@ class TestCurateLoop:
         ]
         assert [p.id for p in calls] == ["p1"]
         assert "p2" in queue.denied_ids
+
+    def test_review_curate_strips_ansi_from_displayed_proposal(self, monkeypatch):
+        import strands_code_cli.loop.core as loop_mod
+
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            loop_mod,
+            "console",
+            Console(file=buf, width=400, highlight=False, no_color=True),
+        )
+        queue = CurateQueue()
+        queue.propose(
+            "Build\x1b[31mEvil",
+            "promoted\x1b]0;title\x07",
+            "Run \x1b[32muv\x1b[0m build.",
+            proposal_id="p1",
+        )
+        monkeypatch.setattr("builtins.input", lambda *args: "deny")
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        lines = review_memory_queue(queue, MemoryModeState(), lambda p: None)
+        assert lines == ["Denied p1 — skipped, will not re-ask this session."]
+        out = buf.getvalue()
+        assert "\x1b" not in out
+        assert "> Run uv build." in out
+        assert "Source: promoted → section BuildEvil" in out
 
     def test_review_ctrl_c_keeps_rest_pending(self, monkeypatch):
         queue = CurateQueue()
@@ -464,13 +491,16 @@ class TestReviseRounds:
             assert message == _MEMORY_USAGE
 
     def test_consume_accept_applies_block_verbatim(self, tmp_path, monkeypatch):
+        import strands_code_cli.loop.core as loop_mod
+
         monkeypatch.chdir(tmp_path)
         path = _write_memory(tmp_path, "## Build\nRun make.\n")
         _non_tty(monkeypatch, "accept")
-        printed: list = []
+        buf = io.StringIO()
         monkeypatch.setattr(
-            "builtins.print",
-            lambda *args, **kwargs: printed.append(" ".join(str(a) for a in args)),
+            loop_mod,
+            "console",
+            Console(file=buf, width=400, highlight=False, no_color=True),
         )
         state = _arm()
         reply = consume_revise_turn(
@@ -483,8 +513,33 @@ class TestReviseRounds:
         assert read_memory_section("Build") == "Run uv build.\n"
         body = path.read_text(encoding="utf-8")
         assert f"<!-- updated: {date.today().isoformat()} -->" in body
+        printed = buf.getvalue().splitlines()
         assert "> Run uv build." in printed  # quoted for review
         assert "Summary: Switched to uv." in printed  # one-line summary
+
+    def test_consume_revise_turn_strips_ansi_on_display(self, tmp_path, monkeypatch):
+        import strands_code_cli.loop.core as loop_mod
+
+        monkeypatch.chdir(tmp_path)
+        _write_memory(tmp_path, "## Build\nRun make.\n")
+        _non_tty(monkeypatch, "revert")
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            loop_mod,
+            "console",
+            Console(file=buf, width=400, highlight=False, no_color=True),
+        )
+        state = _arm()
+        reply = consume_revise_turn(
+            "Here:\n```\nRun \x1b[31muv\x1b[0m build.\n```\nSummary \x1b]0;pwn\x07note.",
+            state,
+            apply_memory_section,
+        )
+        assert reply == "Reverted — 'Build' unchanged."
+        out = buf.getvalue()
+        assert "\x1b" not in out
+        assert "> Run uv build." in out
+        assert "Summary: Summary note." in out
 
     def test_consume_revert_leaves_file_byte_identical(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

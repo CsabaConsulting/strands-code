@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -21,6 +22,14 @@ import httpx
 import platformdirs
 import yaml
 from strands.vended_plugins.skills import Skill
+
+from strands_code_cli.platform_io import (
+    atomic_write_text as _platform_atomic_write_text,
+)
+from strands_code_cli.platform_io import (
+    refuse_symlink as _platform_refuse_symlink,
+)
+from strands_code_cli.ui.console import sanitize_display
 
 _APP_DIR_NAME = "strands-code"
 MARKETPLACES_FILENAME = "marketplaces.yaml"
@@ -43,7 +52,6 @@ _ALIAS_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _SKILL_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _GITHUB_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RESERVED_NAMESPACES = frozenset({"local", "all"})
-_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _MANIFEST_CANDIDATES = (
     PurePosixPath(".agent-plugin/marketplace.json"),
     PurePosixPath(".claude-plugin/marketplace.json"),
@@ -187,23 +195,6 @@ def read_github_token() -> str | None:
     return None
 
 
-def sanitize_display(value: object, max_len: int = 240) -> str:
-    """Strip ANSI CSI sequences and ASCII control chars; keep Rich brackets literal."""
-    text = str(value) if value is not None else ""
-    text = _ANSI_CSI_RE.sub("", text)
-    cleaned_chars: list[str] = []
-    for ch in text:
-        code = ord(ch)
-        if ch in ("\r", "\n", "\t"):
-            cleaned_chars.append(" ")
-        elif code >= 32 and code != 127:
-            cleaned_chars.append(ch)
-    collapsed = " ".join("".join(cleaned_chars).split())
-    if len(collapsed) > max_len:
-        return collapsed[: max_len - 3].rstrip() + "..."
-    return collapsed
-
-
 def valid_namespace(name: str) -> bool:
     """Return True when name is a legal non-reserved marketplace namespace slug."""
     if not isinstance(name, str) or name in _RESERVED_NAMESPACES:
@@ -324,10 +315,7 @@ def canonical_github_repo_url(owner: str, repo: str) -> str:
 
 
 def _refuse_symlink(path: Path, label: str = "path") -> None:
-    if path.is_symlink():
-        raise ValueError(f"Refusing symlink {label}: {path}")
-    if path.parent.is_symlink():
-        raise ValueError(f"Refusing symlink parent for {label}: {path.parent}")
+    _platform_refuse_symlink(path, label, max_ancestors=1)
 
 
 def _refuse_symlink_chain(root: Path, *segments: str) -> None:
@@ -347,24 +335,14 @@ def _atomic_write_text(
     dir_mode: int | None = None,
     file_mode: int | None = None,
 ) -> Path:
-    _refuse_symlink(path, str(path))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if dir_mode is not None:
-        os.chmod(path.parent, dir_mode)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    return _platform_atomic_write_text(
+        path,
+        content,
+        mode=file_mode,
+        dir_mode=dir_mode,
+        refuse_ancestors=1,
+        label=str(path),
     )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        if file_mode is not None:
-            os.chmod(tmp_path, file_mode)
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    return path
 
 
 def load_marketplaces(path: Path | None = None) -> dict[str, MarketplaceEntry]:
@@ -373,7 +351,10 @@ def load_marketplaces(path: Path | None = None) -> dict[str, MarketplaceEntry]:
     _refuse_symlink(target, "marketplaces registry")
     if not target.exists():
         return {}
-    raw = yaml.safe_load(target.read_text(encoding="utf-8"))
+    try:
+        raw = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Malformed marketplaces registry: {target}") from exc
     if not raw:
         return {}
     if not isinstance(raw, dict):
@@ -437,7 +418,10 @@ def load_cached_catalog(name: str, cache_dir: Path | None = None) -> list[Catalo
     _refuse_symlink(path, "marketplace cache")
     if not path.exists():
         return []
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
     if not isinstance(raw, dict):
         return []
     out: list[CatalogSkill] = []
@@ -1544,6 +1528,15 @@ def browse_marketplaces(
     return out
 
 
+def _replace_dir(src: Path, dst: Path) -> None:
+    try:
+        os.replace(src, dst)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        shutil.move(str(src), str(dst))
+
+
 def _atomic_swap_skill_dir(staged_dir: Path, dest_dir: Path) -> None:
     root = (
         dest_dir.parent.parent.parent
@@ -1556,20 +1549,23 @@ def _atomic_swap_skill_dir(staged_dir: Path, dest_dir: Path) -> None:
         dest_dir.name,
     )
     dest_dir.parent.mkdir(parents=True, exist_ok=True)
+    backup_root: Path | None = None
     backup: Path | None = None
     if dest_dir.exists():
-        backup = dest_dir.with_name(f".{dest_dir.name}.bak-{os.getpid()}")
-        if backup.exists():
-            shutil.rmtree(backup)
+        backup_root = Path(
+            tempfile.mkdtemp(prefix=f".{dest_dir.name}.bak-", dir=dest_dir.parent)
+        )
+        backup = backup_root / dest_dir.name
         os.replace(dest_dir, backup)
     try:
-        shutil.move(str(staged_dir), str(dest_dir))
+        _replace_dir(staged_dir, dest_dir)
     except Exception:
         if backup is not None and backup.exists() and not dest_dir.exists():
             os.replace(backup, dest_dir)
         raise
-    if backup is not None and backup.exists():
-        shutil.rmtree(backup)
+    finally:
+        if backup_root is not None:
+            shutil.rmtree(backup_root, ignore_errors=True)
 
 
 def _script_file_digests(skill_dir: Path) -> dict[str, str]:
@@ -1592,14 +1588,17 @@ def _install_catalog_skill(
 ) -> tuple[LockEntry, dict[str, str], dict[str, str], str | None]:
     ns = validate_namespace(cat_skill.marketplace)
     sname = validate_skill_name(cat_skill.name)
-    dest_dir = cwd / MARKETPLACES_SKILLS_REL / ns / sname
+    _refuse_symlink_chain(cwd, ".agent", "skills-marketplaces")
+    stage_parent = cwd / MARKETPLACES_SKILLS_REL
+    stage_parent.mkdir(parents=True, exist_ok=True)
+    dest_dir = stage_parent / ns / sname
     old_scripts = _script_file_digests(dest_dir) if dest_dir.is_dir() else {}
     lockfile_path = cwd / SKILLS_LOCK_REL
     existing_lock = load_lockfile(lockfile_path)
     key = f"{ns}:{sname}"
     old_sha = existing_lock[key].commit_sha if key in existing_lock else None
 
-    with tempfile.TemporaryDirectory(prefix="sc_stage_") as tmp:
+    with tempfile.TemporaryDirectory(prefix=".sc_stage_", dir=stage_parent) as tmp:
         staging_dir = Path(tmp)
         repo_path = Path(cat_skill.repo_url)
         if not cat_skill.repo_url.startswith("https://"):
@@ -1945,6 +1944,17 @@ def _prune_namespace_dir(ns_dir: Path) -> None:
         pass
 
 
+def _has_symlink_in_install_tree(
+    marketplaces_dir: Path, ns: str, skill_dir: Path
+) -> bool:
+    return (
+        marketplaces_dir.parent.is_symlink()
+        or marketplaces_dir.is_symlink()
+        or (marketplaces_dir / ns).is_symlink()
+        or skill_dir.is_symlink()
+    )
+
+
 def remove_installed_skill(
     target: str, *, marketplaces_dir: Path, lockfile_path: Path
 ) -> RemoveOutcome:
@@ -1961,14 +1971,10 @@ def remove_installed_skill(
     ):
         return RemoveOutcome(False, f"Refused to remove skill {target!r}.")
     skill_dir = marketplaces_dir / ns / sname
+    if _has_symlink_in_install_tree(marketplaces_dir, ns, skill_dir):
+        return RemoveOutcome(False, f"Refused to remove symlinked skill '{target}'.")
     lock_map = load_lockfile(lockfile_path) if not lockfile_path.is_symlink() else {}
     removed_fs = False
-    if (
-        marketplaces_dir.is_symlink()
-        or (marketplaces_dir / ns).is_symlink()
-        or skill_dir.is_symlink()
-    ):
-        return RemoveOutcome(False, f"Refused to remove symlinked skill '{target}'.")
     if skill_dir.is_dir():
         resolved = skill_dir.resolve()
         ns_resolved = (marketplaces_dir / ns).resolve()

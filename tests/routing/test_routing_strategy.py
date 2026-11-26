@@ -1854,3 +1854,32 @@ class TestPhase17NyquistStrategyAndCoreBranches:
             "paused: all engines unreachable (openrouter)",
             False,
         )
+
+    def test_save_strategy_uses_mkstemp_0600_and_refuses_symlink_parent(self, tmp_path):
+        import os
+        import stat
+
+        data = {"candidates": [{"id": "a/1"}], "directives": "d"}
+        cfg = tmp_path / "cfg"
+        cfg.mkdir()
+        target = cfg / "routing.yaml"
+        victim = cfg / "victim.txt"
+        victim.write_text("keep", encoding="utf-8")
+        (cfg / "routing.yaml.tmp").symlink_to(victim)
+
+        saved = save_strategy(data, "global", global_path=target)
+        assert saved == target
+        assert stat.S_IMODE(os.stat(saved).st_mode) == 0o600
+        assert victim.read_text(encoding="utf-8") == "keep"
+
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        linked_dir = tmp_path / "linked_dir"
+        linked_dir.symlink_to(real_dir)
+        with pytest.raises(ValueError, match="symlink"):
+            load_strategy(
+                global_path=linked_dir / "routing.yaml",
+                repo_path=tmp_path / "absent.yaml",
+            )
+        with pytest.raises(ValueError, match="symlink"):
+            save_strategy(data, "global", global_path=linked_dir / "routing.yaml")

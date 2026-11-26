@@ -13,6 +13,7 @@ from strands_code_cli.memory.marketplace import (
     sanitize_display,
     verify_installed_marketplace_skills,
 )
+from strands_code_cli.platform_io import refuse_symlink
 
 SKILLS_SOURCE = "local"
 """Namespace source for local project skills; marketplace prefixes derive from directory names."""
@@ -117,6 +118,7 @@ class SkillIndex:
         raw = Path(skills_dir)
         if raw.is_symlink():
             raise ValueError(f"Skills dir must not be a symlink: {raw}")
+        refuse_symlink(raw, "skills dir", max_ancestors=1)
         self.skills_dir = raw
         self.marketplaces_dir, self.lockfile_path = _derive_marketplace_paths(
             raw, marketplaces_dir, lockfile_path
@@ -287,6 +289,10 @@ class SkillIndex:
 def remove_skill(skills_dir: str | Path, name: str) -> bool:
     """Delete one local skill dir; guarded against traversal and outside roots."""
     root = Path(skills_dir)
+    try:
+        refuse_symlink(root, "skills dir", max_ancestors=1)
+    except ValueError:
+        return False
     candidate = root / name
     if candidate.is_symlink():
         return False

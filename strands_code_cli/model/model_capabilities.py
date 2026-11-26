@@ -25,6 +25,8 @@ from pathlib import Path
 import platformdirs
 import yaml
 
+from strands_code_cli.platform_io import refuse_symlink
+
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR_NAME = "strands-code"
@@ -63,8 +65,7 @@ def load_capability_overrides(
         ValueError: Only when the path is a symlink (same policy as config).
     """
     resolved = Path(path) if path is not None else default_capabilities_path()
-    if resolved.is_symlink():
-        raise ValueError(f"Capability overrides must not be a symlink: {resolved}")
+    refuse_symlink(resolved, "capability overrides", max_ancestors=1)
     if not resolved.exists():
         return []
     try:

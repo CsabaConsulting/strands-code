@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import ast
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -24,11 +23,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 import yaml
-from rich.console import Console
 
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+from strands_code_cli.ui.console import console
 from strands_code_cli.ui.output import print_plain
-
-console = Console()
 
 ROOT_MEMORY = Path("STRANDS.md")
 AGENT_MEMORY = Path(".agent/MEMORY.md")
@@ -155,9 +153,8 @@ def _parse_text(text: str) -> tuple[dict[str, Any], str, bool]:
 
 
 def _read_text(path: Path) -> str:
-    """Read through the resolved path; symlinked memory files refuse."""
-    if path.is_symlink():
-        raise ValueError(f"Memory file must not be a symlink: {path}")
+    """Read through the resolved path; symlinked targets or parents refuse."""
+    refuse_symlink(path, "memory file", max_ancestors=1)
     return path.resolve().read_text(encoding="utf-8")
 
 
@@ -179,23 +176,22 @@ def dump_memory_file(path: str | Path, frontmatter: dict[str, Any], body: str) -
     ``ValueError``.
     """
     target = Path(path)
-    if target.is_symlink():
-        raise ValueError(f"Memory file must not be a symlink: {target}")
-    parent = target.parent
-    if parent.is_symlink():
-        raise ValueError(f"Memory parent dir must not be a symlink: {parent}")
-    parent.mkdir(parents=True, exist_ok=True)
+    refuse_symlink(target, "memory file", max_ancestors=1)
+    is_agent_mem = target.resolve().parent.name == ".agent"
     payload = (
         "---\n"
         + yaml.safe_dump(dict(frontmatter), default_flow_style=False, sort_keys=False)
         + "---\n"
         + body
     )
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(payload, encoding="utf-8")
-    if target.resolve().parent.name == ".agent":
-        os.chmod(tmp, 0o600)
-    os.replace(tmp, target)
+    atomic_write_text(
+        target,
+        payload,
+        mode=0o600 if is_agent_mem else None,
+        dir_mode=0o700 if is_agent_mem else None,
+        refuse_ancestors=1,
+        label="memory file",
+    )
 
 
 def load_memory(
@@ -213,8 +209,7 @@ def load_memory(
     mtimes: dict[Path, float] = {}
     missing: list[str] = []
     for path in (root_path, agent_path):
-        if path.is_symlink():
-            raise ValueError(f"Memory file must not be a symlink: {path}")
+        refuse_symlink(path, "memory file", max_ancestors=1)
         if not path.exists():
             missing.append(str(path))
             texts[path] = ""

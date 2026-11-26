@@ -357,3 +357,22 @@ class TestMemoryModes:
             MemoryModeConfig.load(link)
         with pytest.raises(ValueError):
             MemoryModeConfig(mode="silent").save(link)
+
+    def test_symlinked_agent_parent_refused_on_read_and_write(self, tmp_path):
+        from strands_code_cli.memory.memory_file import (
+            dump_memory_file,
+            load_memory,
+            parse_memory_file,
+        )
+
+        real_agent = tmp_path / "real_agent"
+        real_agent.mkdir()
+        (real_agent / "MEMORY.md").write_text("# mem\n", encoding="utf-8")
+        linked_agent = tmp_path / ".agent"
+        linked_agent.symlink_to(real_agent)
+        with pytest.raises(ValueError, match="symlink parent"):
+            parse_memory_file(linked_agent / "MEMORY.md")
+        with pytest.raises(ValueError, match="symlink parent"):
+            load_memory(tmp_path / "STRANDS.md", linked_agent / "MEMORY.md")
+        with pytest.raises(ValueError, match="symlink parent"):
+            dump_memory_file(linked_agent / "MEMORY.md", {"scope": "repo"}, "x\n")

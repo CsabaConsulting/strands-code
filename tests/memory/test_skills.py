@@ -1487,3 +1487,17 @@ class TestPhase18NyquistSkillsAndDispatch:
             )[1]
         )
         assert not drifted_dir.exists()
+
+    def test_symlinked_agent_parent_refuses_index_and_remove_skill(self, tmp_path):
+        import pytest
+
+        from strands_code_cli.memory.skills import remove_skill
+
+        real_agent = tmp_path / "real_agent"
+        (real_agent / "skills" / "demo").mkdir(parents=True)
+        linked_agent = tmp_path / ".agent"
+        linked_agent.symlink_to(real_agent)
+        with pytest.raises(ValueError, match="symlink parent"):
+            SkillIndex(skills_dir=linked_agent / "skills")
+        assert remove_skill(linked_agent / "skills", "demo") is False
+        assert (real_agent / "skills" / "demo").exists()

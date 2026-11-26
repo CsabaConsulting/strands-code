@@ -8,12 +8,17 @@ reads or writes snapshot blob content.
 from __future__ import annotations
 
 import json
-import os
 import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from strands_code_cli.platform_io import (
+    atomic_write_text,
+    ensure_private_dir,
+    refuse_symlink,
+)
 
 _INDEX_NAME = "index.json"
 _TITLE_MAX_CHARS = 120
@@ -51,11 +56,9 @@ class SessionIndex:
 
     def __init__(self, root: str | Path) -> None:
         raw = Path(root)
-        if raw.is_symlink():
-            raise ValueError(f"Session index root must not be a symlink: {raw}")
-        self.root = raw.resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.root, 0o700)
+        self.root = ensure_private_dir(
+            raw, "session index root", mode=0o700, max_ancestors=1
+        )
         self._entries: dict[str, dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------
@@ -71,8 +74,7 @@ class SessionIndex:
             return
         self._entries = {}
         path = self._index_path()
-        if path.is_symlink():
-            raise ValueError(f"Session index must not be a symlink: {path}")
+        refuse_symlink(path, "session index", max_ancestors=2)
         if not path.exists():
             return
         try:
@@ -91,11 +93,14 @@ class SessionIndex:
     def _save(self) -> None:
         assert self._entries is not None
         path = self._index_path()
-        if path.is_symlink():
-            raise ValueError(f"Session index must not be a symlink: {path}")
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self._entries, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(
+            path,
+            json.dumps(self._entries, indent=2),
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=2,
+            label="session index",
+        )
 
     # ------------------------------------------------------------------
     # CRUD

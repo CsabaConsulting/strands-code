@@ -19,13 +19,14 @@ ids are remembered for the session and never re-queued unprompted.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 import platformdirs
 import yaml
+
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,7 @@ class MemoryModeConfig:
             ValueError: On symlinked paths or unknown keys.
         """
         resolved = Path(path) if path is not None else default_memory_mode_config_path()
-        if resolved.is_symlink():
-            raise ValueError(f"Memory mode config must not be a symlink: {resolved}")
+        refuse_symlink(resolved, "memory mode config", max_ancestors=1)
         if not resolved.exists():
             return cls()
         try:
@@ -89,14 +89,14 @@ class MemoryModeConfig:
         if self.mode not in ("curate", "silent"):
             raise ValueError(f"Memory mode must be curate|silent, got {self.mode!r}")
         resolved = Path(path) if path is not None else default_memory_mode_config_path()
-        if resolved.is_symlink():
-            raise ValueError(f"Memory mode config must not be a symlink: {resolved}")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(resolved.parent, 0o700)
-        tmp = resolved.with_suffix(".yaml.tmp")
-        tmp.write_text(yaml.safe_dump({"mode": self.mode}), encoding="utf-8")
-        os.replace(tmp, resolved)
-        return resolved
+        return atomic_write_text(
+            resolved,
+            yaml.safe_dump({"mode": self.mode}),
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=1,
+            label="memory mode config",
+        )
 
 
 MEMORY_MODE_CURATE_REPLY = "Memory mode: curate — every proposal prompts approve/deny."
@@ -170,12 +170,12 @@ def seed_promotion_seen(memory_dir: str | Path) -> set[str]:
     on every launch. Missing dirs and symlinks yield nothing.
     """
     try:
+        fact_dir = Path(memory_dir)
+        refuse_symlink(fact_dir, "memory fact dir", max_ancestors=1)
         return {
-            p.name
-            for p in Path(memory_dir).glob("*.md")
-            if p.is_file() and not p.is_symlink()
+            p.name for p in fact_dir.glob("*.md") if p.is_file() and not p.is_symlink()
         }
-    except OSError:
+    except (OSError, ValueError):
         return set()
 
 
@@ -391,12 +391,14 @@ class CurateQueue:
         and unreadable files yield nothing.
         """
         try:
+            fact_dir = Path(memory_dir)
+            refuse_symlink(fact_dir, "memory fact dir", max_ancestors=1)
             names = sorted(
                 p.name
-                for p in Path(memory_dir).glob("*.md")
+                for p in fact_dir.glob("*.md")
                 if p.is_file() and not p.is_symlink()
             )
-        except OSError:
+        except (OSError, ValueError):
             return []
         skip = skip_sections or set()
         queued: list[Proposal] = []

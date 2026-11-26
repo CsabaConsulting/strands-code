@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,7 @@ from strands_code_cli.model.model_switch import (
     scoped_base_url,
     upstream_supports_meta,
 )
+from strands_code_cli.platform_io import ensure_private_dir
 from strands_code_cli.policy.diff_gate import (
     PendingStore,
     bind_session,
@@ -68,15 +70,22 @@ app.add_typer(
 
 Bedrock_SETUP_POINTER = BEDROCK_SETUP_POINTER
 
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
 
 def _validate_session_id(value: str) -> str:
     """Run a CLI-supplied id through the SDK identifier validator.
 
     Raises:
-        ValueError: When the id is malformed (separators, blank, dot-segments).
+        ValueError: When the id is malformed (separators, blank, dot-segments,
+            or characters outside ``[A-Za-z0-9._-]``).
     """
     checked = validate_identifier(value, Identifier.SESSION)
-    if not checked.strip() or checked in (".", ".."):
+    if (
+        not checked.strip()
+        or checked in (".", "..")
+        or not _SESSION_ID_RE.fullmatch(checked)
+    ):
         raise ValueError(f"session_id is not a valid session identifier: {value!r}")
     return checked
 
@@ -175,9 +184,9 @@ def build_agent(
     (name-collision rule), and the local ``search`` tool rides the
     consumer ``tools`` list.
     """
-    session_path = Path(session_dir)
-    session_path.mkdir(parents=True, exist_ok=True)
-    os.chmod(session_path, 0o700)
+    session_path = ensure_private_dir(
+        session_dir, "session dir", mode=0o700, max_ancestors=1
+    )
     interpreter = SandboxedPythonInterpreter("", authorized_imports=set())
     cwd = os.getcwd()
     store = PendingStore(session_path)

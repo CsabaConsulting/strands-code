@@ -11,7 +11,6 @@ import shutil
 import subprocess
 import sys
 import sysconfig
-import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +18,6 @@ from typing import Any
 
 import platformdirs
 import typer
-from rich.console import Console
 
 try:
     import tomllib
@@ -27,7 +25,20 @@ except ModuleNotFoundError:  # Python 3.10 compatibility
     tomllib = None  # type: ignore[assignment]
 
 from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.platform_io import (
+    _REFUSED_ROOTS,
+)
+from strands_code_cli.platform_io import (
+    atomic_write_text as _platform_atomic_write_text,
+)
+from strands_code_cli.platform_io import (
+    ensure_private_dir as _platform_ensure_private_dir,
+)
+from strands_code_cli.platform_io import (
+    refuse_symlink as _platform_refuse_symlink,
+)
 from strands_code_cli.routing.core import RoutingStrategy, load_strategy
+from strands_code_cli.ui.console import console, stderr_console
 from strands_code_cli.ui.output import print_plain
 
 _BOX_APP_NAME = "strands-box"
@@ -51,23 +62,6 @@ _BOX_BINARIES: tuple[str, ...] = (
     "box",
     "strands-box-contain-trampoline",
     "strands-box-sock-alias",
-)
-_REFUSED_ROOTS: frozenset[Path] = frozenset(
-    Path(p)
-    for p in (
-        "/",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/lib64",
-        "/etc",
-        "/tmp",
-        "/var",
-        "/dev",
-        "/proc",
-        "/sys",
-    )
 )
 _APPARMOR_SYSCTL = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
 _APPARMOR_PROFILE = Path("/etc/apparmor.d/strands-box")
@@ -173,15 +167,7 @@ def _validate_aws_profile(profile: str) -> str:
 
 
 def _refuse_symlink(path: Path, label: str = "path", *, max_ancestors: int = 2) -> None:
-    cur = path
-    for step in range(max_ancestors + 1):
-        if step > 0 and (cur == cur.parent or cur in _REFUSED_ROOTS):
-            break
-        if cur.is_symlink():
-            if step == 0:
-                raise ValueError(f"Refusing symlink {label}: {cur}")
-            raise ValueError(f"Refusing symlink parent for {label}: {cur}")
-        cur = cur.parent
+    _platform_refuse_symlink(path, label, max_ancestors=max_ancestors)
 
 
 def _is_refused_root(path: Path) -> bool:
@@ -189,10 +175,7 @@ def _is_refused_root(path: Path) -> bool:
 
 
 def _ensure_dir(path: Path, label: str) -> Path:
-    _refuse_symlink(path, label)
-    path.mkdir(parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
-    return Path(os.path.realpath(path))
+    return _platform_ensure_private_dir(path, label, mode=0o700, max_ancestors=2)
 
 
 def _shebang_interpreter(tool_path: Path) -> Path | None:
@@ -211,22 +194,14 @@ def _shebang_interpreter(tool_path: Path) -> Path | None:
 
 
 def _atomic_write_text(path: Path, content: str) -> Path:
-    _refuse_symlink(path, path.name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    return _platform_atomic_write_text(
+        path,
+        content,
+        mode=0o600,
+        dir_mode=0o700,
+        refuse_ancestors=2,
+        label=path.name,
     )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.chmod(tmp_path, 0o600)
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    return path
 
 
 def repo_config_id(repo_root: Path) -> str:
@@ -1512,9 +1487,9 @@ def launch_box_run(
 
 def _emit_lines(lines: Sequence[str], *, err: bool = False) -> None:
     """Print plain text lines without Rich markup interpretation."""
-    console = Console(stderr=err)
+    target = stderr_console if err else console
     for line in lines:
-        print_plain(console, line)
+        print_plain(target, line)
 
 
 def _cmd_box_init(

@@ -567,3 +567,35 @@ class TestGateSubsumption:
             _run(gated_write(path=str(outside / "pwn.txt"), content="x"))
         with pytest.raises(ValueError, match="allowed roots"):
             _run(gated_edit(path=str(outside / "pwn.txt"), old_str="a", new_str="b"))
+
+    def test_apply_stashed_enforces_scope_symlink_protected_and_null_toctou(
+        self, tmp_path
+    ):
+        store = PendingStore(tmp_path / "pending")
+        # 1. Outside scope target kept pending and not written:
+        store.stash("/opt/evil/pwn.txt", None, "bad", "write")
+        # 2. Protected repo path kept pending:
+        repo = tmp_path / "repo"
+        (repo / ".agent").mkdir(parents=True)
+        prot = repo / ".agent" / "policy.toml"
+        store.stash(str(prot), None, "allow = []", "write")
+        # 3. Symlinked target kept pending:
+        secret = tmp_path / "secret.txt"
+        secret.write_text("keep")
+        sym = repo / "link.txt"
+        sym.symlink_to(secret)
+        store.stash(str(sym), None, "clobber", "write")
+        # 4. TOCTOU: stashed as new file (expected None) but file appeared before apply:
+        new_file = repo / "created_later.txt"
+        new_file.write_text("already here")
+        store.stash(str(new_file), None, "overwrite", "write")
+
+        report = _run(apply_stashed(store, cwd=repo))
+        assert "outside the allowed roots" in report
+        assert "protected path cannot be auto-applied" in report
+        assert "symlink" in report
+        assert "changed since preview" in report
+        assert secret.read_text() == "keep"
+        assert new_file.read_text() == "already here"
+        assert not prot.exists()
+        assert len(store.list()) == 4

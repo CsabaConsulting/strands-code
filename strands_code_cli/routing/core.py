@@ -31,6 +31,7 @@ from strands_code_cli.cost.cost_context import (
     price_for,
 )
 from strands_code_cli.model.model_switch import supports_reasoning
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 from strands_code_cli.routing import transports as _transports
 from strands_code_cli.routing.transports import (
     ASK_TRUNCATE_CHARS,
@@ -434,8 +435,7 @@ def _parse_strategy(data: dict[str, Any], source: Path) -> RoutingStrategy:
 
 def _load_one(path: Path) -> RoutingStrategy | None:
     """Parse one strategy file: None when missing or unparsable (warned)."""
-    if path.is_symlink():
-        raise ValueError(f"Routing strategy must not be a symlink: {path}")
+    refuse_symlink(path, "routing strategy", max_ancestors=1)
     if not path.exists():
         return None
     try:
@@ -493,43 +493,33 @@ def _is_secret_shaped_key(key: object) -> bool:
     return "apikey" in folded
 
 
-def save_strategy(
-    data: dict[str, Any],
-    scope: str,
-    *,
-    global_path: str | Path | None = None,
-    repo_path: str | Path | None = None,
+def _resolve_strategy_write_path(
+    scope: str, global_path: str | Path | None, repo_path: str | Path | None
 ) -> Path:
-    """Write one guided-setup strategy atomically (D-13).
-
-    ``scope`` selects the global file or the repo file (explicit path
-    overrides exist for tests). The write is tmp-write plus
-    ``os.replace`` with the parent dir at 0700 (the provider-config
-    precedent); api_key-shaped keys are dropped with a warning at both
-    the top level and inside ``engine`` (T-08-10).
-
-    Raises:
-        ValueError: On an unknown scope, a symlinked target, a
-            pre-existing temp file, a non-mapping payload, or zero
-            usable candidates (the setup flow guarantees at least
-            one; this is the fail-loud backstop).
-    """
-    if not isinstance(data, dict):
-        raise ValueError("Routing strategy must be a mapping")
     if scope == "global":
-        resolved = (
+        return (
             Path(global_path)
             if global_path is not None
             else default_global_strategy_path()
         )
-    elif scope == "repo":
-        resolved = (
+    if scope == "repo":
+        return (
             Path(repo_path) if repo_path is not None else default_repo_strategy_path()
         )
-    else:
-        raise ValueError(f"Unknown strategy scope {scope!r}: expected global|repo")
-    if resolved.is_symlink():
-        raise ValueError(f"Routing strategy must not be a symlink: {resolved}")
+    raise ValueError(f"Unknown strategy scope {scope!r}: expected global|repo")
+
+
+def _scrub_secret_engine(engine: dict[Any, Any]) -> dict[Any, Any]:
+    cleaned = {k: v for k, v in engine.items() if not _is_secret_shaped_key(k)}
+    for dropped in set(engine) - set(cleaned):
+        logger.warning(
+            "Dropping secret-shaped routing engine key %r (keys stay runtime env)",
+            dropped,
+        )
+    return cleaned
+
+
+def _scrub_secret_keys(data: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for key, value in data.items():
         if _is_secret_shaped_key(key):
@@ -537,39 +527,49 @@ def save_strategy(
                 "Dropping secret-shaped routing key %r (keys stay runtime env)", key
             )
             continue
-        if key == "engine" and isinstance(value, dict):
-            cleaned = {
-                entry_key: entry_value
-                for entry_key, entry_value in value.items()
-                if not _is_secret_shaped_key(entry_key)
-            }
-            for dropped in set(value) - set(cleaned):
-                logger.warning(
-                    "Dropping secret-shaped routing engine key %r"
-                    " (keys stay runtime env)",
-                    dropped,
-                )
-            payload[key] = cleaned
-        else:
-            payload[key] = value
-    usable = 0
+        payload[key] = (
+            _scrub_secret_engine(value)
+            if key == "engine" and isinstance(value, dict)
+            else value
+        )
+    return payload
+
+
+def _count_usable_candidates(payload: dict[str, Any]) -> int:
     raw_candidates = payload.get("candidates", [])
-    if isinstance(raw_candidates, list):
-        for pos, entry in enumerate(raw_candidates):
-            if _parse_candidate(entry, pos) is not None:
-                usable += 1
-    if usable == 0:
+    if not isinstance(raw_candidates, list):
+        return 0
+    return sum(
+        1
+        for pos, entry in enumerate(raw_candidates)
+        if _parse_candidate(entry, pos) is not None
+    )
+
+
+def save_strategy(
+    data: dict[str, Any],
+    scope: str,
+    *,
+    global_path: str | Path | None = None,
+    repo_path: str | Path | None = None,
+) -> Path:
+    """Write one guided-setup strategy atomically (D-13)."""
+    if not isinstance(data, dict):
+        raise ValueError("Routing strategy must be a mapping")
+    resolved = _resolve_strategy_write_path(scope, global_path, repo_path)
+    payload = _scrub_secret_keys(data)
+    if _count_usable_candidates(payload) == 0:
         raise ValueError(
             "Refusing to write a routing strategy with zero usable candidates"
         )
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(resolved.parent, 0o700)
-    tmp = resolved.with_suffix(".yaml.tmp")
-    if tmp.is_symlink() or tmp.exists():
-        raise ValueError(f"Refusing to write through existing temp file: {tmp}")
-    tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
-    os.replace(tmp, resolved)
-    return resolved
+    return atomic_write_text(
+        resolved,
+        yaml.safe_dump(payload),
+        mode=0o600,
+        dir_mode=0o700,
+        refuse_ancestors=1,
+        label="routing strategy",
+    )
 
 
 @dataclass
@@ -943,12 +943,14 @@ def _select_strategy_source(
     neither-file cases, else ``(data, source, fallback-note)``.
     """
     for path in (repo, home):
-        if path.is_symlink():
+        try:
+            refuse_symlink(path, "routing strategy", max_ancestors=1)
+        except ValueError as exc:
             return ValidationReport(
                 valid=False,
                 source=None,
                 lines=[
-                    f"strategy path is a symlink: {path}",
+                    f"strategy path is a symlink: {exc}",
                     "fix: replace the symlink with a real file",
                 ],
             )

@@ -18,8 +18,7 @@ from time import monotonic
 from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.history import FileHistory, History
-from rich.console import Console
+from prompt_toolkit.history import FileHistory, History, InMemoryHistory
 
 import strands_code_cli.routing.core as routing_mod
 from strands_code_cli.cost.cost_context import (
@@ -95,6 +94,11 @@ from strands_code_cli.model.model_switch import (
     supports_streaming_tools,
     to_stash_json,
 )
+from strands_code_cli.platform_io import (
+    atomic_write_text,
+    ensure_private_dir,
+    refuse_symlink,
+)
 from strands_code_cli.policy.codeact import (
     CodeactState,
     CodeactStint,
@@ -116,10 +120,18 @@ from strands_code_cli.policy.policy_gate import (
 )
 from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
 from strands_code_cli.ui.choice import radio_choice
+from strands_code_cli.ui.console import console, sanitize_display, sanitize_line
 from strands_code_cli.ui.output import output_context, print_plain
 
 logger = logging.getLogger(__name__)
-console = Console()
+
+
+def _prompt_inline(text: str) -> None:
+    """Write an inline no-markup prompt without newline and flush before input()."""
+    console.print(text, end="", markup=False, highlight=False)
+    if hasattr(console.file, "flush"):
+        console.file.flush()
+
 
 _emitted_chain_skip_notes: set[str] = set()
 """D-03 skip notes already printed this session (tests reset by attribute)."""
@@ -134,23 +146,27 @@ def _history() -> History:
     """Reply history backed by a file; in-memory when the cache dir is unusable.
 
     History holds typed asks (T-01-03): the cache dir and file get the same
-    0o700 treatment as the session/index dirs.
+    0o700 treatment as the session/index dirs, with ancestor symlink refusal.
     """
     import os
 
     try:
         import platformdirs
 
-        cache = Path(platformdirs.user_cache_dir("strands-code"))
-        cache.mkdir(parents=True, exist_ok=True)
-        os.chmod(cache, 0o700)
+        cache = ensure_private_dir(
+            Path(platformdirs.user_cache_dir("strands-code")),
+            "cache dir",
+            mode=0o700,
+            max_ancestors=1,
+        )
         history_file = cache / "repl_history"
+        refuse_symlink(history_file, "REPL history", max_ancestors=1)
         history_file.touch(exist_ok=True)
         os.chmod(history_file, 0o600)
         return FileHistory(str(history_file))
     except Exception as exc:  # best-effort history must never block the loop
         logger.warning("Falling back to in-memory REPL history: %s", exc)
-        return History()
+        return InMemoryHistory()
 
 
 def explicit_save(agent: Any) -> None:
@@ -1049,13 +1065,14 @@ class RichHistory:
             return
         if self.messages is None or self.model_id is None:
             try:
+                refuse_symlink(path, "rich stash", max_ancestors=2)
                 path.unlink(missing_ok=True)
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 logger.warning("Rich stash cleanup failed: %s", exc)
             return
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
+            atomic_write_text(
+                path,
                 to_stash_json(
                     {
                         "version": _RICH_STASH_VERSION,
@@ -1065,20 +1082,24 @@ class RichHistory:
                         "messages": self.messages,
                     }
                 ),
-                encoding="utf-8",
+                mode=0o600,
+                dir_mode=0o700,
+                refuse_ancestors=2,
+                label="rich stash",
             )
         except (OSError, TypeError, ValueError) as exc:
             logger.warning("Rich stash save failed: %s", exc)
 
     @classmethod
     def load(cls, path: Path | None) -> RichHistory:
-        """Load a persisted stash; missing or corrupt files load empty."""
+        """Load a persisted stash; missing, symlinked, or corrupt files load empty."""
         rich = cls()
         if path is None:
             return rich
         try:
+            refuse_symlink(path, "rich stash", max_ancestors=2)
             raw = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, ValueError):
             return rich
         try:
             data = from_stash_json(raw)
@@ -1590,7 +1611,7 @@ def _review_answer() -> str:
         return picked if picked in ("approve", "deny", "revise") else "deny"
     # Same stream discipline as the gate: print the prompt, then bare
     # input() so echo stays on the prompt line.
-    print("approve / deny / revise [deny]: ", end="", flush=True)
+    _prompt_inline("approve / deny / revise [deny]: ")
     typed = input().strip().lower()
     if typed in ("approve", "a", "y", "yes"):
         return "approve"
@@ -1629,12 +1650,15 @@ def review_memory_queue(
         try:
             with output_context():
                 for body_line in proposal.body.splitlines() or [""]:
-                    print(f"> {body_line}")
-                print(f"Source: {proposal.source} → section {proposal.section}")
+                    print_plain(console, f"> {sanitize_line(body_line, max_len=1000)}")
+                print_plain(
+                    console,
+                    f"Source: {sanitize_display(proposal.source)} → section {sanitize_display(proposal.section)}",
+                )
                 answer = _review_answer()
                 instruction = ""
                 if answer == "revise":
-                    print("Describe the change in words: ", end="", flush=True)
+                    _prompt_inline("Describe the change in words: ")
                     instruction = input().strip()
         except KeyboardInterrupt:
             break
@@ -1734,7 +1758,7 @@ def _revise_answer() -> str:
         except RuntimeError:
             return "revert"
         return picked if picked in ("accept", "revert", "iterate") else "revert"
-    print("accept / revert / iterate [revert]: ", end="", flush=True)
+    _prompt_inline("accept / revert / iterate [revert]: ")
     typed = input().strip().lower()
     if typed in ("accept", "a", "y", "yes"):
         return "accept"
@@ -1766,13 +1790,15 @@ def consume_revise_turn(
     try:
         with output_context():
             for line in block.splitlines() or [""]:
-                print(f"> {line}")
+                print_plain(console, f"> {sanitize_line(line, max_len=1000)}")
             if summary:
-                print(f"Summary: {summary}")
+                print_plain(
+                    console, f"Summary: {sanitize_display(summary, max_len=1000)}"
+                )
             answer = _revise_answer()
             instruction = ""
             if answer == "iterate":
-                print("Describe the change in words: ", end="", flush=True)
+                _prompt_inline("Describe the change in words: ")
                 instruction = input().strip()
     except KeyboardInterrupt:
         revise_state.disarm()
@@ -1838,7 +1864,7 @@ def _drain_revise_rounds(
             print_plain(
                 console, f"Turn failed ({type(exc).__name__}): {exc}", style="red"
             )
-            console.print("Revise round dropped — the turn failed.")
+            print_plain(console, "Revise round dropped — the turn failed.")
             revise_state.disarm()
             break
         usage = record_turn_metrics(
@@ -2200,9 +2226,11 @@ def _run_turn_attempts(
                 style="red",
             )
             if "tool use in streaming mode" in str(exc):
-                console.print(
-                    "[red]This model needs non-streaming tool use — "
-                    "/model to switch to a supported model.[/red]"
+                print_plain(
+                    console,
+                    "This model needs non-streaming tool use — "
+                    "/model to switch to a supported model.",
+                    style="red",
                 )
             failed = True
             break
@@ -2233,10 +2261,10 @@ def _drop_armed_on_failure(revise_state: ReviseState, init_state: InitState) -> 
     """Drop armed revise/init rounds when the turn failed (fresh arm next turn)."""
     if revise_state.armed:
         revise_state.disarm()
-        console.print("Revise round dropped — the turn failed.")
+        print_plain(console, "Revise round dropped — the turn failed.")
     if init_state.armed:
         init_state.disarm()
-        console.print("Init draft dropped — the turn failed.")
+        print_plain(console, "Init draft dropped — the turn failed.")
 
 
 def _consume_followup_rounds(
@@ -2273,7 +2301,7 @@ def _consume_followup_rounds(
         init_reply = consume_init_turn(
             _result_text(agent, result), init_state, curate_queue
         )
-        console.print(init_reply)
+        print_plain(console, init_reply)
 
 
 def _finish_successful_turn(
@@ -2291,12 +2319,14 @@ def _finish_successful_turn(
         and isinstance(history, list)
         and _turn_appended_empty(before, history)
     ):
-        console.print(
-            "[dim]No response content — the model returned empty twice.[/dim]"
+        print_plain(
+            console,
+            "No response content — the model returned empty twice.",
+            style="dim",
         )
     announcement = maybe_auto_compact(agent, current_model)
     if announcement is not None:
-        console.print(announcement)
+        print_plain(console, announcement)
         explicit_save(agent)
         index.ensure(session_id)
 
@@ -2382,10 +2412,10 @@ def _handle_turn_cancel_path(
     """
     if revise_state.armed:
         revise_state.disarm()
-        console.print("Revise round dropped — interrupted, memory unchanged.")
+        print_plain(console, "Revise round dropped — interrupted, memory unchanged.")
     if init_state.armed:
         init_state.disarm()
-        console.print("Init draft dropped — interrupted, memory unchanged.")
+        print_plain(console, "Init draft dropped — interrupted, memory unchanged.")
     targets = getattr(btw, "cancel_targets", None) or ("main",)
     armed_snapshot = cancel_armed_at
     for target in targets:
@@ -2459,7 +2489,7 @@ def _close_loop_session(
     explicit_save(agent)
     flush_memory(agent)
     index.ensure(session_id)
-    console.print("[dim]Session saved.[/dim]")
+    print_plain(console, "Session saved.", style="dim")
 
 
 def _clear_agent_base_url_on_provider_change(agent: Any, new_model: str) -> None:
@@ -2532,7 +2562,7 @@ def run_loop(
     from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS, SkillIndex
     from strands_code_cli.ui.completer import build_completer
 
-    console.print(f"[dim]Session {session_id} — Ctrl-D to exit.[/dim]")
+    print_plain(console, f"Session {session_id} — Ctrl-D to exit.", style="dim")
     skills = SkillIndex()
     _print_skill_warnings(skills)
     memory_snapshot = load_memory()

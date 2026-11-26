@@ -492,3 +492,87 @@ class TestValidatePing:
         assert "native: engine ok" not in message
         assert "native ping" not in message
         assert calls == []
+
+
+class TestSetupCatalogSanitization:
+    @pytest.mark.parametrize(
+        "poisoned_id",
+        [
+            "bad\x1b[31mid",
+            "bad\x1b]0;title\x07id",
+            "bad\nid",
+            "bad\x07id",
+        ],
+    )
+    def test_catalog_and_decision_entries_reject_ansi_or_control_ids(self, poisoned_id):
+        from strands_code_cli.dispatch.core import (
+            _setup_catalog_entries,
+            _setup_decision_entries,
+        )
+
+        chat_rows = [
+            {
+                "id": poisoned_id,
+                "pricing": {"prompt": "0.00000001", "completion": "0"},
+                "architecture": {
+                    "input_modalities": ["text"],
+                    "output_modalities": ["text"],
+                },
+            },
+            {
+                "id": "good/chat",
+                "pricing": {"prompt": "0.00000002", "completion": "0"},
+                "architecture": {
+                    "input_modalities": ["text"],
+                    "output_modalities": ["text"],
+                },
+            },
+        ]
+        decision_rows = [
+            {
+                "id": poisoned_id,
+                "context_length": 64000,
+                "pricing": {"prompt": "0.00000001", "completion": "0"},
+                "architecture": {"output_modalities": ["decisions"]},
+            },
+            {
+                "id": "good/decide",
+                "context_length": 64000,
+                "pricing": {"prompt": "0.00000002", "completion": "0"},
+                "architecture": {"output_modalities": ["decisions"]},
+            },
+        ]
+        assert [e["id"] for e in _setup_catalog_entries(chat_rows)] == ["good/chat"]
+        assert [e["id"] for e in _setup_decision_entries(decision_rows)] == [
+            "good/decide"
+        ]
+
+    def test_typed_pickers_strip_ansi_from_labels(self, monkeypatch):
+        import io
+
+        from rich.console import Console
+
+        import strands_code_cli.dispatch.core as dispatch_mod
+
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            dispatch_mod,
+            "console",
+            Console(file=buf, width=400, highlight=False, no_color=True),
+        )
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        _scripted_input(monkeypatch, ["bad/id\x1b[31m", "good/a"])
+        picked = dispatch_mod._setup_pick_candidates_typed(
+            [{"id": "good/a", "label": "good/a \x1b[31m($1/1M)\x1b[0m"}]
+        )
+        assert picked == ["good/a"]
+        _scripted_input(monkeypatch, ["bad\x1b[31m", "decide/a"])
+        decided = dispatch_mod._setup_pick_decision(
+            [{"id": "decide/a", "label": "decide/a \x1b]0;x\x07($1/1M)"}],
+            typed_only=False,
+        )
+        assert decided == "decide/a"
+        out = buf.getvalue()
+        assert "\x1b" not in out
+        assert "good/a ($1/1M)" in out
+        assert "decide/a ($1/1M)" in out

@@ -27,13 +27,14 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from strands import tool
 
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+from strands_code_cli.policy.core import _is_protected_skills_or_config_path
 from strands_code_cli.policy.diff_config import DEFAULT_MODE, MODES, DiffConfig
 from strands_code_cli.policy.scope import confine, resolve
 
@@ -111,8 +112,7 @@ class PendingStore:
 
     def __init__(self, root: str | Path) -> None:
         raw = Path(root)
-        if raw.is_symlink():
-            raise ValueError(f"Pending store root must not be a symlink: {raw}")
+        refuse_symlink(raw, "pending store root", max_ancestors=1)
         self.root = raw
         self._entries: dict[str, dict[str, Any]] | None = None
         self._lock = threading.Lock()
@@ -130,8 +130,7 @@ class PendingStore:
             return
         self._entries = {}
         path = self._path()
-        if path.is_symlink():
-            raise ValueError(f"Pending store must not be a symlink: {path}")
+        refuse_symlink(path, "pending store", max_ancestors=2)
         if not path.exists():
             return
         try:
@@ -149,12 +148,14 @@ class PendingStore:
         """Sidecar write; the caller holds :attr:`_lock`."""
         assert self._entries is not None
         path = self._path()
-        if path.is_symlink():
-            raise ValueError(f"Pending store must not be a symlink: {path}")
-        self.root.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(self._entries, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(
+            path,
+            json.dumps(self._entries, indent=2),
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=2,
+            label="pending store",
+        )
 
     def stash(self, path: str, old_text: str | None, new_text: str, op: str) -> None:
         """Record a pending change for later ``/diff`` review."""
@@ -328,23 +329,39 @@ async def _gate_and_apply(
     return f"Applied {op} to {path}."
 
 
+def _validate_stashed_target(target: str, base: Path, op: str) -> str | None:
+    """Re-verify symlink, scope, and protected-path safety before /diff apply."""
+    try:
+        refuse_symlink(target, f"stashed {op} target", max_ancestors=1)
+        confine(resolve(target, base), base, _policy_roots(base, op))
+    except ValueError as exc:
+        return f"{target}: {exc}; kept pending."
+    if _is_protected_skills_or_config_path(target, base):
+        return (
+            f"{target}: protected path cannot be auto-applied from stash; kept pending."
+        )
+    return None
+
+
 async def apply_stashed(
     store: PendingStore,
     path: str | None = None,
     *,
     reader: AsyncReader | None = None,
     writer: AsyncWriter | None = None,
+    cwd: str | Path | None = None,
 ) -> str:
     """Apply stashed on-demand changes (``/diff apply [path]``).
 
-    Re-reads each target first: a stale preview fails loudly per file and
-    that entry is kept, never partially applied. Each entry is consumed
-    (popped) only on success.
+    Re-validates symlink, scope, protected-path, and exact-once content
+    preconditions per file before writing; stale or unsafe entries are kept
+    pending.
     """
     entries = store.list()
     targets = [path] if path is not None else sorted(entries)
     if not targets:
         return "No pending changes."
+    base = Path(cwd) if cwd is not None else Path.cwd()
     applied: list[str] = []
     failed: list[str] = []
     for target in targets:
@@ -352,11 +369,16 @@ async def apply_stashed(
         if entry is None:
             failed.append(f"{target}: no pending change.")
             continue
+        op = str(entry.get("op", "write"))
+        err = _validate_stashed_target(target, base, op)
+        if err is not None:
+            failed.append(err)
+            continue
         read = reader or _fs_read
         write = writer or _fs_write
         seen = await read(target)
         expected = entry.get("old_text")
-        if expected is not None and seen is not None and seen != expected:
+        if seen != expected:
             failed.append(f"{target}: file changed since preview; kept pending.")
             continue
         await write(target, entry["new_text"])

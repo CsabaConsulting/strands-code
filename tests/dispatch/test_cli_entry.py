@@ -419,6 +419,22 @@ class TestCliRouting:
         assert "session-id" in plain.lower()
         assert not Path(".agent").exists()
 
+    def test_markup_session_id_is_usage_error_without_sessions(
+        self, tmp_path, monkeypatch
+    ):
+        import importlib
+
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+
+        monkeypatch.chdir(tmp_path)
+        from typer.testing import CliRunner
+
+        result = CliRunner().invoke(main_module.app, ["--session-id", "a[red]b"])
+        assert result.exit_code != 0
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "session-id" in plain.lower()
+        assert not Path(".agent").exists()
+
 
 # ---------------------------------------------------------------------------
 # /policy inspect-only dispatch (Phase 3: reply-only, never an agent turn)

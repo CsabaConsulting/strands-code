@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
+import stat
 import tarfile
 from pathlib import PurePosixPath
 
@@ -1419,22 +1419,18 @@ class TestPhase18NyquistMarketplaceBranches:
         dest = ws / ".agent" / "skills-marketplaces" / "localcat" / "swap"
         dest.mkdir(parents=True)
         (dest / "SKILL.md").write_text("orig", encoding="utf-8")
-        stale_bak = dest.with_name(f".swap.bak-{os.getpid()}")
-        stale_bak.mkdir()
-        (stale_bak / "old.txt").write_text("old", encoding="utf-8")
-        staged = tmp_path / "staged"
-        staged.mkdir()
+        staged = ws / ".agent" / "skills-marketplaces" / ".sc_stage_test" / "swap"
+        staged.mkdir(parents=True)
         (staged / "SKILL.md").write_text("new", encoding="utf-8")
 
         def _move_fail(_src, _dst):
             raise OSError("disk full")
 
-        monkeypatch.setattr(shutil, "move", _move_fail)
+        monkeypatch.setattr(mp, "_replace_dir", _move_fail)
         with pytest.raises(OSError, match="disk full"):
             mp._atomic_swap_skill_dir(staged, dest)
-        assert (dest / "SKILL.md").read_text(
-            encoding="utf-8"
-        ) == "orig" and not stale_bak.exists()
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "orig"
+        assert list(dest.parent.glob(".swap.bak-*")) == []
 
     def test_update_sync_remove_and_verify_edge_branches(self, tmp_path):
         mpath = tmp_path / "cfg" / "marketplaces.yaml"
@@ -1562,6 +1558,79 @@ class TestPhase18NyquistMarketplaceBranches:
         assert any("symlinked marketplace namespace" in w for w in ver_w)
         assert any("unlocked marketplace skill" in w for w in ver_w)
         assert any("invalid marketplace skill" in w for w in ver_w)
+
+    def test_horizontal_persistence_hardening(self, tmp_path):
+        # 1. save_lockfile uses standard readable perms (not 0o600).
+        lock_path = tmp_path / "repo" / ".agent" / "skills-lock.json"
+        mp.save_lockfile(lock_path, {})
+        mode = stat.S_IMODE(os.stat(lock_path).st_mode)
+        assert mode != 0o600
+        assert mode & 0o444
+
+        # 2. Corrupt YAML raises ValueError on load_marketplaces; corrupt cache returns [].
+        bad_mp_yaml = tmp_path / "bad_mp.yaml"
+        bad_mp_yaml.write_text("marketplaces: [unclosed\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Malformed marketplaces registry"):
+            load_marketplaces(bad_mp_yaml)
+        cdir = tmp_path / "cache"
+        cdir.mkdir()
+        (cdir / "acme.json").write_text("{corrupt", encoding="utf-8")
+        assert mp.load_cached_catalog("acme", cdir) == []
+
+        # 3. Same-FS staging + mkdtemp backup on upgrade leaves zero temp dirs.
+        mpath = tmp_path / "cfg" / "marketplaces.yaml"
+        ws = tmp_path / "upg_ws"
+        ws.mkdir()
+        tar_v1 = _build_tar_gz(
+            [("skills/demo/SKILL.md", _skill_md("demo", "V1."))],
+            prefix=f"acme-skills-{_SHA_V1[:7]}",
+        )
+        tar_v2 = _build_tar_gz(
+            [("skills/demo/SKILL.md", _skill_md("demo", "V2."))],
+            prefix=f"acme-skills-{_SHA_V2[:7]}",
+        )
+        t1 = _github_mock_transport(
+            {("acme", "skills", "main"): _SHA_V1},
+            {("acme", "skills", _SHA_V1): tar_v1},
+        )
+        with httpx.Client(transport=t1, follow_redirects=False) as client:
+            install_skill(
+                "acme/skills",
+                cwd=ws,
+                marketplaces_path=mpath,
+                cache_dir=cdir,
+                client=client,
+            )
+        t2 = _github_mock_transport(
+            {("acme", "skills", "main"): _SHA_V2},
+            {("acme", "skills", _SHA_V2): tar_v2},
+        )
+        with httpx.Client(transport=t2, follow_redirects=False) as client:
+            upg = install_skill(
+                "acme/skills",
+                cwd=ws,
+                marketplaces_path=mpath,
+                cache_dir=cdir,
+                client=client,
+            )
+        assert upg.installed[0].commit_sha == _SHA_V2
+        mp_root = ws / ".agent" / "skills-marketplaces"
+        assert list(mp_root.glob(".sc_stage_*")) == []
+        assert list((mp_root / "acme-skills").glob(".*.bak-*")) == []
+
+        # 4. Symlinked .agent parent refuses remove_installed_skill.
+        real_agent = tmp_path / "real_agent"
+        (real_agent / "skills-marketplaces" / "acme" / "demo").mkdir(parents=True)
+        linked_agent = tmp_path / "sym_ws" / ".agent"
+        linked_agent.parent.mkdir()
+        linked_agent.symlink_to(real_agent)
+        sym_outcome = mp.remove_installed_skill(
+            "acme:demo",
+            marketplaces_dir=linked_agent / "skills-marketplaces",
+            lockfile_path=linked_agent / "skills-lock.json",
+        )
+        assert sym_outcome.removed is False
+        assert "symlinked skill" in sym_outcome.message
 
 
 @pytest.mark.integration

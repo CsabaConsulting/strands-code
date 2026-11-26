@@ -28,6 +28,8 @@ from typing import Any
 
 import platformdirs
 
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+
 CACHE_TTL_SECONDS = 24 * 3600
 """Disk-cache freshness for both live sources."""
 
@@ -95,11 +97,21 @@ def _reset_cooldowns() -> None:
     _cooldown_until.clear()
 
 
+_REGION_RE = re.compile(r"^[a-z]{2}(?:-[a-z0-9]+)+-\d+$")
+
+
+def _valid_region(region: str | None) -> str | None:
+    """Return ``region`` iff it matches a canonical AWS region slug, else None."""
+    if not isinstance(region, str):
+        return None
+    cleaned = region.strip()
+    return cleaned if _REGION_RE.fullmatch(cleaned) else None
+
+
 def _read_cache(path: Path) -> dict[str, Any] | None:
     """Parsed cache payload, or None when missing/symlink/corrupt/wrong-shaped."""
     try:
-        if path.is_symlink():
-            return None
+        refuse_symlink(path, "pricing cache", max_ancestors=1)
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
@@ -111,17 +123,15 @@ def _read_cache(path: Path) -> dict[str, Any] | None:
 def _write_cache(path: Path, payload: dict[str, Any]) -> None:
     """Best-effort atomic, symlink-refusing cache store (never raises)."""
     try:
-        if path.is_symlink():
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(path.parent, 0o700)
-        tmp = path.with_suffix(f"{path.suffix}.tmp")
-        if tmp.is_symlink():
-            return
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except OSError:
+        atomic_write_text(
+            path,
+            json.dumps(payload),
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=1,
+            label="pricing cache",
+        )
+    except (OSError, ValueError):
         pass
 
 
@@ -302,16 +312,19 @@ def _store_bedrock(region: str, items: list[dict[str, Any]]) -> dict[str, Any]:
         slot["in" if direction == "input" else "out"] = per_1m
         publication = publication or item.get("publicationDate")
     payload = {"fetched_at": time.time(), "publication": publication, "prices": prices}
-    _write_cache(_cache_dir() / f"bedrock-pricing-{region}.json", payload)
+    safe_region = _valid_region(region)
+    if safe_region is not None:
+        _write_cache(_cache_dir() / f"bedrock-pricing-{safe_region}.json", payload)
     return payload
 
 
 def _bedrock_cache(region: str) -> dict[str, Any] | None:
     """Parsed core map for a region: fresh cache, refresh, or stale cache."""
-    if _live_disabled():
+    safe_region = _valid_region(region)
+    if safe_region is None or _live_disabled():
         return None
-    key = f"bedrock:{region}"
-    path = _cache_dir() / f"bedrock-pricing-{region}.json"
+    key = f"bedrock:{safe_region}"
+    path = _cache_dir() / f"bedrock-pricing-{safe_region}.json"
     payload = _read_cache(path)
     if (
         payload is not None
@@ -320,20 +333,21 @@ def _bedrock_cache(region: str) -> dict[str, Any] | None:
         return payload
     if _in_cooldown(key):
         return payload  # serve stale (or miss) without another attempt
-    items = fetch_bedrock_records(region)
+    items = fetch_bedrock_records(safe_region)
     if items is None:
         _note_failure(key)
         return payload
-    return _store_bedrock(region, items)
+    return _store_bedrock(safe_region, items)
 
 
 def bedrock_live_price(
     model_id: str, region: str | None
 ) -> tuple[float, float, str] | None:
     """Standard on-demand (in, out) per-1M USD + provenance, else None."""
-    if region is None or _live_disabled():
+    safe_region = _valid_region(region)
+    if safe_region is None or _live_disabled():
         return None
-    cache = _bedrock_cache(region)
+    cache = _bedrock_cache(safe_region)
     if not cache:
         return None
     prices = cache.get("prices", {})
@@ -346,25 +360,25 @@ def bedrock_live_price(
             return (
                 float(slot["in"]),
                 float(slot["out"]),
-                f"Bedrock live {region} (pub {publication})",
+                f"Bedrock live {safe_region} (pub {publication})",
             )
     return None
 
 
 def resolve_region(explicit: str | None = None) -> str | None:
-    """Bedrock region for live pricing: explicit, boto3 chain, or env."""
+    """Bedrock region for live pricing: explicit, env override, or boto3 chain."""
     if explicit:
-        return explicit
+        return _valid_region(explicit)
     for variable in ("AWS_REGION", "AWS_DEFAULT_REGION"):
-        value = os.environ.get(variable)
-        if value:
-            return value
+        raw = os.environ.get(variable)
+        if raw:
+            return _valid_region(raw)
     try:
         import boto3
     except ImportError:
         return None
     try:
-        return boto3.Session().region_name
+        return _valid_region(boto3.Session().region_name)
     except Exception:
         return None
 
@@ -626,9 +640,9 @@ def refresh_caches(region: str | None = None) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     if _live_disabled():
         return {"disabled": True}
-    resolved = region or resolve_region()
+    resolved = _valid_region(region) if region is not None else resolve_region()
     if resolved is None:
-        summary["bedrock"] = {"region": None, "error": "no region resolved"}
+        summary["bedrock"] = {"region": region, "error": "no valid region resolved"}
     else:
         items = fetch_bedrock_records(resolved)
         if items is None:
@@ -662,7 +676,7 @@ def refresh_caches(region: str | None = None) -> dict[str, Any]:
 
 def cached_tables(region: str | None = None) -> dict[str, Any]:
     """Cached payloads for inspection (no network, failures read as None)."""
-    resolved = region or resolve_region()
+    resolved = _valid_region(region) if region is not None else resolve_region()
     bedrock = None
     if resolved is not None:
         payload = _read_cache(_cache_dir() / f"bedrock-pricing-{resolved}.json")

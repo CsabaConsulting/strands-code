@@ -897,7 +897,27 @@ class TestOpenAIAnthropicLivePricing:
         target = tmp_path / "target.json"
         live_pricing._write_cache(target, {"k": 1})
         assert victim.read_text(encoding="utf-8") == "safe"
-        assert not target.exists()
+        assert target.exists()
+        assert (target.stat().st_mode & 0o777) == 0o600
+
+        real_dir = tmp_path / "real-cache"
+        real_dir.mkdir()
+        linked_dir = tmp_path / "linked-cache"
+        linked_dir.symlink_to(real_dir)
+        live_pricing._write_cache(linked_dir / "nested.json", {"k": 2})
+        assert not (real_dir / "nested.json").exists()
+
+        monkeypatch.setenv("AWS_REGION", "../../evil")
+        assert live_pricing.resolve_region() is None
+        assert live_pricing.resolve_region("us-east-1/../../x") is None
+        assert (
+            live_pricing.bedrock_live_price("anthropic.claude-sonnet-4-6", "../../evil")
+            is None
+        )
+        assert live_pricing.cached_tables("../../evil")["region"] is None
+        summary = live_pricing.refresh_caches(region="../../evil")
+        assert summary["bedrock"]["error"] == "no valid region resolved"
+        assert not (tmp_path.parent / "evil").exists()
 
         assert (
             live_pricing._parse_litellm_entry(

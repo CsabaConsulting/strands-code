@@ -117,7 +117,7 @@ class FencedBtwHandler:
         self.inner = inner
         self.question = question
         owned = getattr(inner, "console", None)
-        self.console = owned if isinstance(owned, Console) else Console()
+        self.console = owned if isinstance(owned, Console) else console
 
     def __call__(self, **kwargs: Any) -> None:
         message = kwargs.get("message")

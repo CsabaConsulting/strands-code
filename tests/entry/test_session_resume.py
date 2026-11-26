@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from strands.models.model import Model
 from strands_harness import create_harness
 
@@ -152,6 +153,31 @@ class TestEntryRouting:
         monkeypatch.chdir(tmp_path)
         CliRunner().invoke(app, ["--session-id", "../../x"])
         assert not Path(".agent").exists()
+
+    @pytest.mark.parametrize(
+        "bad_id",
+        ["a[red]b", "-leading", ".hidden", "has space", "x\x1b[31my"],
+    )
+    def test_markup_or_control_session_id_rejected(self, tmp_path, monkeypatch, bad_id):
+        import typer
+        from typer.testing import CliRunner
+
+        from strands_code_cli.entry.main import app, resolve_session_id
+        from strands_code_cli.session.session_index import SessionIndex
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(app, ["--session-id", bad_id])
+        assert result.exit_code != 0
+        assert not Path(".agent").exists()
+        with pytest.raises(typer.BadParameter, match="invalid --session-id"):
+            resolve_session_id(bad_id, SessionIndex(tmp_path / "idx"))
+
+    def test_valid_alnum_punct_session_id_accepted(self, tmp_path):
+        from strands_code_cli.entry.main import resolve_session_id
+        from strands_code_cli.session.session_index import SessionIndex
+
+        chosen = resolve_session_id("abc-123.session_1", SessionIndex(tmp_path / "idx"))
+        assert chosen == "abc-123.session_1"
 
     def test_explicit_session_id_routes_to_loop(self, tmp_path):
         import importlib

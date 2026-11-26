@@ -10,13 +10,14 @@ file mutations pending ``/diff`` review, never all tool calls (D-05).
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import platformdirs
 import yaml
+
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,7 @@ class DiffConfig:
             ValueError: On symlinked paths or unknown keys.
         """
         resolved = Path(path) if path is not None else default_diff_config_path()
-        if resolved.is_symlink():
-            raise ValueError(f"Diff config must not be a symlink: {resolved}")
+        refuse_symlink(resolved, "diff config", max_ancestors=1)
         if not resolved.exists():
             return cls()
         try:
@@ -83,12 +83,12 @@ class DiffConfig:
         if self.mode not in MODES:
             raise ValueError(f"Diff mode must be one of {MODES}, got {self.mode!r}")
         resolved = Path(path) if path is not None else default_diff_config_path()
-        if resolved.is_symlink():
-            raise ValueError(f"Diff config must not be a symlink: {resolved}")
         payload: dict[str, Any] = {"mode": self.mode}
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(resolved.parent, 0o700)
-        tmp = resolved.with_suffix(".yaml.tmp")
-        tmp.write_text(yaml.safe_dump(payload), encoding="utf-8")
-        os.replace(tmp, resolved)
-        return resolved
+        return atomic_write_text(
+            resolved,
+            yaml.safe_dump(payload),
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=1,
+            label="diff config",
+        )

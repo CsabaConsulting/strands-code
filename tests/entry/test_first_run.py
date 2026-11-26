@@ -618,9 +618,17 @@ class TestProviderConfigPersistence:
         victim = tmp_path / "victim.txt"
         victim.write_text("keep", encoding="utf-8")
         (tmp_path / "config.yaml.tmp").symlink_to(victim)
-        with pytest.raises(ValueError, match="symlink"):
-            ProviderConfig(model="openai/gpt-6.1-sol").save(path)
+        saved = ProviderConfig(model="openai/gpt-6.1-sol").save(path)
+        assert saved == path
+        assert (path.stat().st_mode & 0o777) == 0o600
         assert victim.read_text(encoding="utf-8") == "keep"
+
+        real_dir = tmp_path / "real-cfg"
+        real_dir.mkdir()
+        linked_dir = tmp_path / "linked-cfg"
+        linked_dir.symlink_to(real_dir)
+        with pytest.raises(ValueError, match="symlink"):
+            ProviderConfig(model="openai/gpt-6.1-sol").save(linked_dir / "config.yaml")
 
 
 # ----------------------------------------------------------------------
