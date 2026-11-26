@@ -50,6 +50,7 @@ from strands_code_cli.policy.core import (
     Rule,
     _is_protected_skills_or_config_path,
     _is_sensitive_read_path,
+    _is_sensitive_search_input,
     decide,
     normalise_command,
 )
@@ -95,6 +96,8 @@ def _is_protected_prompt(
         return _is_protected_skills_or_config_path(raw, root)
     if tool_name == "read":
         return _is_sensitive_read_path(raw, root)
+    if tool_name == "search":
+        return _is_sensitive_search_input(tool_input, root)
     return False
 
 
@@ -300,7 +303,7 @@ def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
         if isinstance(code, str) and code.strip():
             return Rule(tool="python_repl", command=normalise_command(code)[:500])
         return None
-    if tool_name in ("write", "edit", "read"):
+    if tool_name in ("write", "edit", "read", "search"):
         raw = tool_input.get("path", "")
         if isinstance(raw, str) and raw:
             absolute = raw if Path(raw).is_absolute() else str(Path(os.getcwd()) / raw)

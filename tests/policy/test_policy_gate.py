@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import io
 import json
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -1043,3 +1044,54 @@ class TestWave2HardeningInvariants:
         assert "  Detail: make test" in rendered
         assert "  Risk: Shell command: make test" in rendered
         assert "Approve? [y/n/always/never]" in rendered
+
+    def test_search_sensitive_targets_block_trust_delegated_and_standing_allow(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("SECRET=1\n")
+        toml_path = tmp_path / "policy.toml"
+        cfg = PolicyConfig(options=PolicyOptions(trust_delegated=True))
+        main_agent, sub_agent = _FakeAgent(), _FakeAgent()
+        handler = PolicyGateHandler(policy_loader=lambda: cfg, append_path=toml_path)
+        handler.bind_main_agent(main_agent)
+
+        seen_choices: list[list[str]] = []
+
+        def _fake_radio(_title, options, default=1):
+            seen_choices.append([val for val, _ in options])
+            return "n"
+
+        monkeypatch.setattr("strands_code_cli.ui.choice.radio_choice", _fake_radio)
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        res_path = _run(
+            handler, _event("search", {"pattern": "SECRET", "path": ".env"}, sub_agent)
+        )
+        res_glob = _run(
+            handler,
+            _event("search", {"pattern": "SECRET", "file_glob": ".env*"}, sub_agent),
+        )
+        assert isinstance(res_path, HitlDeny)
+        assert isinstance(res_glob, HitlDeny)
+        assert seen_choices == [["y", "n", "never"], ["y", "n", "never"]]
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        answers = iter(["always", "never"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(answers))
+        res_always = _run(
+            handler, _event("search", {"pattern": "SECRET", "path": ".env"}, main_agent)
+        )
+        assert isinstance(res_always, Proceed)
+        assert not toml_path.exists()
+
+        handler.bind_turn("next-turn")
+        res_never = _run(
+            handler, _event("search", {"pattern": "SECRET", "path": ".env"}, main_agent)
+        )
+        assert isinstance(res_never, HitlDeny)
+        reloaded = PolicyConfig.load(
+            home_path=tmp_path / "missing.toml", repo_path=toml_path
+        )
+        assert len(reloaded.deny) == 1
+        assert reloaded.deny[0].tool == "search"
+        assert reloaded.deny[0].path == str((tmp_path / ".env").resolve())

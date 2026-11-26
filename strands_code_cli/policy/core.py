@@ -134,12 +134,19 @@ _CURL_UNSAFE_LONG_FLAGS = frozenset(
         "--json",
         "--upload-file",
         "--output",
+        "--output-dir",
         "--remote-name",
         "--remote-name-all",
         "--head",
+        "--config",
+        "--cookie-jar",
+        "--dump-header",
+        "--trace",
+        "--trace-ascii",
+        "--next",
     }
 )
-_CURL_UNSAFE_SHORT_CHARS = frozenset({"F", "T", "d", "o", "O", "I"})
+_CURL_UNSAFE_SHORT_CHARS = frozenset({"F", "T", "d", "o", "O", "I", "K", "c", "D", ":"})
 _SHELL_RAW_META_CHARS = frozenset({";", "|", "&", "`", "\n", "\r", ">", "<"})
 _FETCH_DISALLOWED_GIT_FLAGS = ("--upload-pack", "--exec")
 
@@ -699,17 +706,23 @@ def _decide_file_tool(
     return Prompt(reason=f"File {tool_name}: {raw}")
 
 
-def _decide_read_tool(
-    tool_input: dict[str, Any], base: Path, policy: PolicyConfig
+def _decide_read_or_search_tool(
+    tool_name: str,
+    tool_input: dict[str, Any],
+    base: Path,
+    policy: PolicyConfig,
 ) -> Allow | Prompt:
-    """Unboxed read check: sensitive secret files & outside-scope reads prompt (D-03)."""
+    """Unboxed read/search check: sensitive secret paths & outside-scope targets prompt (D-03)."""
     raw = tool_input.get("path", "")
-    if _is_sensitive_read_path(raw, base):
+    if tool_name == "read" and _is_sensitive_read_path(raw, base):
         return Prompt(reason=f"Sensitive path ({raw}): approve explicit read")
+    if tool_name == "search" and _is_sensitive_search_input(tool_input, base):
+        detail = raw or str(tool_input.get("file_glob", ""))
+        return Prompt(reason=f"Sensitive path ({detail}): approve explicit search")
     if isinstance(raw, str) and raw:
         from strands_code_cli.policy.scope import effective_roots, resolve
 
-        roots = effective_roots(base, policy, tool_name="read")
+        roots = effective_roots(base, policy, tool_name=tool_name)
         canonical = Path(os.path.realpath(resolve(raw, base)))
         if not any(canonical == r or r in canonical.parents for r in roots):
             allowed = ", ".join(str(r) for r in roots)
@@ -783,6 +796,17 @@ def _is_sensitive_read_path(raw: object, base: Path) -> bool:
     )
 
 
+def _is_sensitive_search_input(tool_input: dict[str, Any], base: Path) -> bool:
+    """True when ``search`` targets sensitive secret paths or secret globs (D-03)."""
+    if _is_sensitive_read_path(tool_input.get("path", ""), base):
+        return True
+    raw_glob = tool_input.get("file_glob", "")
+    if isinstance(raw_glob, str):
+        lowered = raw_glob.lower()
+        return any(token in lowered for token in (".env", ".ssh", ".aws"))
+    return False
+
+
 def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
     """True when a write/edit target resolves into protected repo/host trees (D-03)."""
     candidates, base_variants = _candidate_path_variants(raw, base)
@@ -828,6 +852,9 @@ def _check_allow_rules(
             )
         if tool_name == "read" and _is_sensitive_read_path(raw_path, base):
             return Prompt(reason=f"Sensitive path ({raw_path}): approve explicit read")
+        if tool_name == "search" and _is_sensitive_search_input(tool_input, base):
+            detail = raw_path or str(tool_input.get("file_glob", ""))
+            return Prompt(reason=f"Sensitive path ({detail}): approve explicit search")
         return Allow()
     return None
 
@@ -841,7 +868,7 @@ def decide(
     """Deny-first verdict across the rule union (D-02..D-05).
 
     Order: deny match (hard-deny) -> allow match (downgraded to Prompt for
-    protected write/edit or sensitive read) -> read scope & secret check ->
+    protected write/edit or sensitive read/search) -> read/search scope & secret check ->
     built-in read-only/internal allows -> Prompt / outside-scope write Deny.
     """
     base = Path(cwd) if cwd is not None else Path(os.getcwd())
@@ -855,8 +882,8 @@ def decide(
     allow_verdict = _check_allow_rules(tool_name, tool_input, base, policy)
     if allow_verdict is not None:
         return allow_verdict
-    if tool_name == "read":
-        return _decide_read_tool(tool_input, base, policy)
+    if tool_name in ("read", "search"):
+        return _decide_read_or_search_tool(tool_name, tool_input, base, policy)
     if tool_name in BUILTIN_ALLOWED_TOOLS:
         return Allow()
     if tool_name in ("web_fetch", "web_search"):

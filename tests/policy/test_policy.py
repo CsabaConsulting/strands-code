@@ -620,3 +620,67 @@ class TestHardeningD02ThroughD05:
         assert (
             PolicyConfig.load(home_path=bad, repo_path=tmp_path / "m.toml").allow == []
         )
+
+    def test_is_fetch_get_rejects_config_cookie_trace_and_output_dir_flags(self):
+        for unsafe in (
+            "curl -K cfg.txt https://a",
+            "curl --config=cfg.txt https://a",
+            "curl -c jar.txt https://a",
+            "curl --cookie-jar jar.txt https://a",
+            "curl -D hdr.txt https://a",
+            "curl --dump-header hdr.txt https://a",
+            "curl --trace t.log https://a",
+            "curl --trace-ascii t.log https://a",
+            "curl --output-dir /tmp https://a",
+            "curl --next https://a",
+            "curl -: https://a",
+        ):
+            assert is_fetch_get(unsafe) is False, f"expected False for {unsafe}"
+        assert is_fetch_get("curl -fsSL https://example.com") is True
+
+    def test_search_matches_unboxed_secret_and_scope_prompt_parity(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / "src").mkdir(parents=True)
+        (repo / "docs").mkdir()
+        (repo / ".env").write_text("API=123\n")
+        (repo / ".env.local").write_text("API=456\n")
+        env_link = repo / "docs" / "env_link"
+        try:
+            env_link.symlink_to(repo / ".env")
+        except OSError:
+            pytest.skip("symlinks unavailable")
+
+        broad = PolicyConfig(allow=[Rule(tool="*", path="*")])
+        sensitive_inputs = (
+            {"pattern": "API", "path": ".env"},
+            {"pattern": "API", "path": ".env.local"},
+            {"pattern": "API", "path": "docs/env_link"},
+            {"pattern": "KEY", "path": str(Path.home() / ".ssh" / "id_rsa")},
+            {"pattern": "KEY", "path": str(Path.home() / ".aws" / "credentials")},
+            {"pattern": "API", "file_glob": ".env*"},
+            {"pattern": "KEY", "file_glob": "**/.ssh/*"},
+        )
+        for cfg in (PolicyConfig(), broad):
+            for bad_input in sensitive_inputs:
+                verdict = decide("search", bad_input, cfg, cwd=str(repo))
+                assert isinstance(verdict, Prompt), f"{bad_input} with {cfg}"
+
+        # Unboxed outside-root search prompts by default (no broad allow rule).
+        assert isinstance(
+            decide(
+                "search",
+                {"pattern": "x", "path": "/etc"},
+                PolicyConfig(),
+                cwd=str(repo),
+            ),
+            Prompt,
+        )
+
+        for ok_input in (
+            {"pattern": "foo"},
+            {"pattern": "foo", "path": "src/a.py"},
+            {"pattern": "foo", "file_glob": "*.py"},
+        ):
+            assert isinstance(
+                decide("search", ok_input, PolicyConfig(), cwd=str(repo)), Allow
+            )
