@@ -5,11 +5,11 @@ current_phase: 19
 current_phase_name: Strands Box Linux Sandbox Floor & Dogwood Policy
 current_plan: 3
 status: verified
-stopped_at: Phase 19 executed & verified (`19-VERIFICATION.md` 12/12 PASS) — ready for `/gsd-verify-work 19`
-last_updated: "2026-11-25T01:16:00Z"
+stopped_at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 20`
+last_updated: "2026-11-26T01:46:00Z"
 last_activity: 2026-11-25
-last_activity_desc: Executed & verified Phase 19 Strands Box Linux Sandbox Floor & Dogwood Policy (`19-01`..`19-03`, `f5a8ac6`, `10ef216`, `dbddce8`, `19-VERIFICATION.md` 12/12 PASS)
-state_head: dbddce8
+last_activity_desc: Completed Phase 19 UAT (`19-UAT.md` 6/6 PASS including live host `strands-box 0.3.1` verification + 1839 unit tests + 44/44 rig + 6/6 CI gates)
+state_head: 87c1564
 progress:
   total_phases: 10
   completed_phases: 7
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-21)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19 Complete (`SANDBOX-01`, `19-VERIFICATION.md` `12/12 PASS`) — ready for `/gsd-verify-work 19`
+**Current focus:** Milestone `v2.0` · Phase 19 Verified + UAT Passed (`SANDBOX-01`, `19-UAT.md` `6/6 PASS`) — ready for `/gsd-secure-phase 19` or `/gsd-discuss-phase 20`
 
 ## Current Position
 
-Phase: 19 of 22 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Complete (`19-01`..`19-03`)
+Phase: 19 of 22 (Strands Box Linux Sandbox Floor & Dogwood Policy) — Verified & UAT Complete (`19-01`..`19-03`)
 Plan: 3 of 3 complete in Phase 19
-Status: Verified (`19-VERIFICATION.md` `12/12 PASS`, `1821` suite + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-verify-work 19`
-Last activity: 2026-11-25 — Executed & verified Phase 19 (`f5a8ac6`, `10ef216`, `dbddce8`)
+Status: Verified (`19-UAT.md` `6/6 PASS`, `1839` unit suite + live `strands-box 0.3.1` host check + `44/44` rig + `6/6` CI gates green) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 20`
+Last activity: 2026-11-25 — Completed Phase 19 UAT (`19-UAT.md` `6/6 PASS`)
 
 Progress: [███████░░░] 70%
 
@@ -83,10 +83,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19 planning (`19-RESEARCH.md`, `19-PATTERNS.md`, `19-01..03-PLAN.md`, `19-VALIDATION.md`, `19-PLAN-CHECK.md` PASS): mapped Waves 1–3 (`tests/sandbox/test_box.py` Wave 0 file with `tomllib` TOML validation & `T-19-01`..`T-19-08` threat coverage, `conftest.py` `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs, `codeact_shell` `shlex.join` `sh -c` routing, `user_config_dir("strands-box")` policy protection, Typer `ctx.invoked_subcommand` early return, `test_no_credential_persistence_sinks` + `test_no_budgets_or_enforcement_vocabulary` compliance, `lint-imports`, `xenon <= C (20)`, and `D-24` pristine `strands_code_agent/`).
 - Roadmap expansion (2026-11-25): inserted Phase 20 (`SANDBOX-02` Monty Rust Python VM via `pydantic-monty` for `python_repl` & `CodeactStint`, closing in-process `smolagents` CLI memory tampering even unboxed while aligning cleanly with Strands Box) right after Phase 19, and cleanly renumbered unstarted Phases 20–21 -> 21–22.
 - Phase 19 (`f5a8ac6`, `10ef216`, `dbddce8`, `19-VERIFICATION.md` `12/12 PASS`, `19-VALIDATION.md` verified): delivered `SANDBOX-01` in `strands_code_cli/sandbox/box.py` (host-only `~/.config/strands-box/repos/<slug>-<hash8>/` storage with `0o700`/`0o600` atomic symlink-refused writes, `uv`/`.venv` realpath resolution, `tomllib`-validated `box.toml`, 7 core + `--allow-decisions-api`/`--allow-github-skills` egress profiles, default-deny `policy.dw` with `.env`/`.ssh`/`.aws` read forbids and canonical MFOTL rule `push_requires_recent_tests` under scoped `v2.0` `D-05` revisit, plus Linux 3-binary/`x86_64` `EXPERIMENTAL_X86_SUPPORT=TRUE`/Ubuntu AppArmor `userns` diagnostics & `strands-code box init|doctor|run`), aligned `codeact_shell` (`["sh", "-c", shlex.join(argv)]` under `STRANDS_BOX=1`), added `~/.config/strands-box` `Prompt` downgrade in `policy/core.py` & `/policy` Box indicator in `dispatch/core.py`, wired `box_app` cleanly in `entry/main.py`, added `STRANDS_BOX_BIN`/`EXPERIMENTAL_X86_SUPPORT` scrubs in `conftest.py` + opt-in `@pytest.mark.integration` host `dogwood`/`box` probe + `docs/QUICKSTART.md` guide, and passed `1820 + 1 = 1821` default suite + `44/44` rig + all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
+- Phase 19 UAT (`19-UAT.md` `6/6` passed; mid-UAT fixes `8219c20`, `3d514e9`..`edbe4ce`, `679c874`, `87c1564`): added `.planning/INVARIANTS.md` cross-cutting peer-parity & invariants rules, resolved cross-phase consistency items (8-provider Box auto-detect with `decisions_api` + policy-only secret-less targets, protected-path `Prompt` downgrades across `~/.local/share/strands-box/**` / `.agent/policy.toml` / `.agent/routing.yaml` / `.agent/MEMORY.md` / `STRANDS.md` + HITL dead-`Always` guard, Google preflight / OpenRouter / Bedrock cost & model parity), aligned `box.toml` + `policy.dw` with live `strands-box 0.3.1` (32-byte `sc-<slug[:20]>-<hash8>` box name, `TMPDIR=~/.cache/strands-code/tmp`, multiarch lib read + `lib-dynload`/`site-packages` exec, shebang interpreter resolution, writable in-workspace tool skip, `[tool.python]` omitted deferring Monty alignment to Phase 20, `forbid ... unless temporal` `output.status: 0` MFOTL rule), and verified live `strands-box 0.3.1` host run + `1838 + 1 = 1839` unit tests + `44/44` rig + all 6 CI gates.
 
 ### Pending Todos
 
-- Run `/gsd-verify-work 19` (or `/gsd-secure-phase 19` / `/gsd-validate-phase 19`) to complete Phase 19 sign-off, then plan Phase 20 (`SANDBOX-02` Monty Python VM).
+- Run `/gsd-secure-phase 19` and `/gsd-validate-phase 19` (or proceed to `/gsd-discuss-phase 20` for `SANDBOX-02` Monty Python VM) as the next step.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`.
 
 ### Blockers/Concerns
@@ -99,6 +100,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-25T01:16:00Z
-Stopped at: Phase 19 executed & verified (`19-VERIFICATION.md` `12/12 PASS`) — ready for `/gsd-verify-work 19`
-Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-VERIFICATION.md
+Last session: 2026-11-26T01:46:00Z
+Stopped at: Phase 19 UAT complete (`19-UAT.md` 6/6 PASS) — ready for `/gsd-secure-phase 19`, `/gsd-validate-phase 19`, or `/gsd-discuss-phase 20`
+Resume file: .planning/phases/19-strands-box-linux-sandbox-floor-dogwood-policy/19-UAT.md
