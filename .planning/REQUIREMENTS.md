@@ -16,7 +16,7 @@
 ### Models & Auth
 
 - [x] **MODEL-06**: First-class `google/` Gemini provider support (`gemini` optional extra + `_SDK_EXTRA_HINTS`), Box-compatible provider-aware startup preflight replacing the unconditional `Bedrock-or-stop` STS gate, `google/` reasoning support via `_harness_supports_thinking`, cross-vendor `toolUse["reasoningSignature"]` stripping in `convert_history()`, `_vendor_family()` dot-split fix, `litellm_entry` `gemini/` lookup + Gemini discovery/cost tables, and Google AI Studio + Google AI Ultra (\$40–\$100/mo Developer Program credit) setup docs
-- [x] **MODEL-07**: First-class native `openai/` API support (`CsabaConsulting/strands-code#17` — `openai = ["strands-agents[openai]", "openai>=2.0.0"]` extra + `_SDK_EXTRA_HINTS`, forwarding `caching=True` & `web_search=True` in `apply_switch()`/`/route`, `litellm_entry` bare-tail lookup + static fallbacks for `GPT-5.4`/`5.6`/`6`/`6.1` & `o3`/`o4-mini`, cache-aware inclusive-`input_tokens` `/cost` discounts, `_vendor_family` `openai` grouping, credential-gated `GET /v1/models` filtered to Responses-capable chat models + curated fallback, non-reasoning / effort-subset guards, Responses-compatible `base_url` handling in `model_for_config()`, documented `use_native_token_count` / `prompt_cache_retention` / `service_tier` / `#3389` replay notes, repeatable UAT & `docs/QUICKSTART.md`)
+- [x] **MODEL-07**: First-class native `openai/` API support (`CsabaConsulting/strands-code#17` — `openai = ["strands-agents[openai]", "openai>=2.0.0"]` extra + `_SDK_EXTRA_HINTS`, forwarding `caching=True` & `web_search=True` in `apply_switch()`/`/route`, `litellm_entry` bare-tail lookup + static fallbacks for `GPT-5.4`/`5.6`/`6`/`6.1`/`6.2` & `o3`/`o4-mini`, cache-aware inclusive-`input_tokens` `/cost` discounts, `_vendor_family` `openai` grouping, credential-gated `GET /v1/models` filtered to Responses-capable chat models + curated fallback, non-reasoning / effort-subset guards, Responses-compatible `base_url` & opt-in `api_mode: chat` handling in `model_for_config()`, documented `use_native_token_count` / `prompt_cache_retention` / `service_tier` / `#3389` replay notes, repeatable UAT & `docs/QUICKSTART.md`)
 - [x] **MODEL-08**: First-class native `anthropic/` API support (`CsabaConsulting/strands-code#22` — `anthropic` optional extra + `_SDK_EXTRA_HINTS`, cache-aware exclusive-`input_tokens` `/cost` & context `%` accounting for `cacheReadInputTokens` & `cacheWriteInputTokens`, forwarding `caching=True` & `web_search=True` in `apply_switch()`/`/route`, `litellm_entry` bare-tail lookup + static fallbacks for `Claude 5.5` & `Fable 5.2` 1M, `_vendor_family` `anthropic` grouping, credential-gated `GET /v1/models` caching live `max_input_tokens`/`max_tokens`/`capabilities`/`retires_at`, cross-provider Bedrock↔Direct thinking-signature gating, `SummaryBlock` (`compact-2026-09-04`) & `temporary_messages` switch safety, `anthropic-version: 2026-10-21` / `max_tokens` / PDF-text doc constraints & `use_native_token_count` coverage, repeatable UAT & `docs/QUICKSTART.md`)
 - [x] **MODEL-09**: First-class Meta Model API (`api.meta.ai` / Muse) support (`CsabaConsulting/strands-code#21` — empirical `/v1/responses` vs `/v1/messages` protocol probe, upstream `strands-agents/harness-sdk` feature proposal for `meta/` provider + `shared/model-info.json` Muse entries + `#3389` reasoning replay linkage, thin retireable `meta/` adapter on `OpenAIResponsesModel`, Box-compatible `MODEL_API_KEY` zero-AWS preflight, credential-gated `GET /v1/models` discovery & `("meta", "muse")` grouping, `_MEDIA_LESS` Bedrock Llama scoping so multimodal Muse retains media, cache-aware contributor-tier `/cost` & 1M windows, repeatable UAT & `docs/QUICKSTART.md`)
 
@@ -26,8 +26,15 @@
 
 ### Sandbox & Policy
 
-- [x] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.2.3+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 7-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
+- [x] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.3.1+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 8-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping + policy-only `/api/v1/models*` / auto-detected `decisions_api` + opt-in `--allow-github-skills`), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
 - [ ] **SANDBOX-02**: Crash-isolated Rust Python VM (`pydantic-monty`) for `strands_code_cli`'s `python_repl` and `CodeactStint` (`sandbox/monty.py`) with stateful multi-turn `feed_run`, explicit narrow host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, `MontyCrashedError` recovery, deterministic worker-pool teardown, `box.toml` runtime compatibility (plus Strands Box embedded Monty evaluation), and clean packaging/fallback while keeping `strands_code_agent/` pristine (`D-24`)
+
+### Parity, Hardening & Structural Hygiene
+
+- [ ] **HARDEN-01**: Security & policy hardening across tool/execution boundaries: direct `PolicyGateHandler(InterventionHandler)` replacing `PolicyHumanInTheLoop`/`DENY:` smuggling/`SteeringState.arm`/`_ACTIVE` (per-agent `id(agent)` keying + per-agent `read_only_agents` support), fixing `is_fetch_get()` metacharacter bypass, `_serialise_rule()` TOML escaping, `read` `[[deny]]` & `scope.confine()` parity, `trust_delegated` deny-wins & untrusted-repo guard, shell-allow word-boundary & realpath-only allow globs, full-content `BatchState` hashing, `effective_roots` `realpath` + tool-scoping, protected `.agent/`+`.git/`+`.env*` paths, `KNOWN_TOOLS` coverage for live harness plugin tools + tool-only rules, shared atomic `mkstemp`/`0o600`/symlink-refusal persistence helper across all writers, `ui/console.py` markup/lock hardening, and `CurateQueue` silent-mode `/init` & `/btw`/`subagent` fixes
+- [ ] **PARITY-01**: Cross-phase CLI, routing, `/cost`, provider & packaging parity: session-sticky toggle unification (`/mode`, `/route on|off`, `/memory mode` restoring `D-07`, `/codeact`; collapsing `diff.yaml`/`memory.yaml` into `config.yaml`), retiring dead `/diff approve-each` + redundant slash aliases, `/resume`/`--session-id` prefix parity, retiring legacy `engine.primary` routing schema, wiring `decisions_api` + `llm` into `/route setup` + `OPENROUTER_API_KEY` skip note, fixing `_route_pre_turn` double-record & `/cost` held/estimate/unknown spend lanes + `/cost refresh` decisions report, fixing `bedrock-mantle/` `_vendor_of`, keyless `base_url` startup/switch/`web_fetch`, unified `provider_of()`, discovery timeout/retry/unsafe-char backport, bumping `requires-python = ">=3.11"`, adding `httpx` + `ollama` extra + `_SDK_EXTRA_HINTS`, hermetic `tests/conftest.py` env/XDG isolation, and full `.github/workflows/gates.yml` extras
+- [ ] **STRUCT-02**: `v2.0` package DAG refactoring & module split: execute the 6 surgical moves breaking the 10-package runtime cycle into a 7-layer DAG enforced by 5 `import-linter` contracts in `pyproject.toml`, split the 6 oversized modules (`loop/core.py`, `dispatch/core.py`, `routing/core.py`, `memory/marketplace.py`, `model/model_switch.py`, `sandbox/box.py`), and refactor the 4 `CC 20` functions (`_check_explicit_provider`, `_setup_decision_entries`, `price_table`, `save_strategy`) below `CC 12`
+- [ ] **CLEANUP-02**: `v2.0` dead-code sweep & doc/codebase-map resync: remove retired `v1.0` shims (`Bedrock_SETUP_POINTER`, dead `routing/core.py` facades, `_LEGACY_TRACE_LABELS`, broken `agent.model.generate`, dead exports), reconcile `maybe_auto_compact` with harness `ContextManager`, and resync `README.md`, `AGENTS.md`, `.planning/codebase/*`, `PROJECT.md`, and `ROADMAP.md` against shipped `v2.0`
 
 ### Interaction & Review
 
@@ -78,16 +85,20 @@
 | UPSTREAM-02 | Phase 17 | Complete |
 | SKILL-03 | Phase 18 | Complete |
 | SANDBOX-01 | Phase 19 | Complete |
+| HARDEN-01 | Phase 19.1 | Pending |
+| PARITY-01 | Phase 19.1 | Pending |
 | SANDBOX-02 | Phase 20 | Pending |
 | LOOP-06 | Phase 21 | Pending |
 | TOOL-05 | Phase 21 | Pending |
 | REVIEW-01 | Phase 21 | Pending |
 | EVAL-01 | Phase 22 | Pending |
+| STRUCT-02 | Phase 23 | Pending |
+| CLEANUP-02 | Phase 23 | Pending |
 
 **Coverage:**
-- `v2.0` requirements: 13 total
-- Mapped to phases: 13
+- `v2.0` requirements: 17 total
+- Mapped to phases: 17
 - Unmapped: 0 ✓
 
 ---
-*Requirements defined: 2026-11-21 (Milestone v2.0)*
+*Requirements defined: 2026-11-21 (Milestone v2.0; expanded 2026-11-25 with HARDEN-01, PARITY-01, STRUCT-02, CLEANUP-02)*

@@ -3,13 +3,13 @@
 ## Milestones
 
 - ✅ **v1.0 Conversational Coding CLI** — Phases 1–12 (shipped 2026-10-16) — [Archive](milestones/v1.0-ROADMAP.md)
-- 🚧 **v2.0 Ecosystem Alignment, Marketplaces, Sandbox & Evals** — Phases 13–22 (in progress)
+- 🚧 **v2.0 Ecosystem Alignment, Marketplaces, Sandbox & Evals** — Phases 13–23 (in progress)
 
 ---
 
 ## Overview (`v2.0`)
 
-`v2.0` brings `strands-code` into alignment with the evolved Strands ecosystem (`strands-py >=1.65`, `harness-py >=0.4.0`, `strands-agents/box` Linux, `pydantic-monty`, `strands-agents-evals >=1.10`), adds first-class Google AI Gemini support (compatible with personal Google AI Ultra Developer Program credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) API support, and provider-aware startup, introduces deny-first remote skills marketplaces with SHA/hash lockfiles, layers Strands Box OS containment beneath HITL approvals alongside a crash-isolated Monty Rust Python VM for `python_repl` & CodeAct, delivers `/help` + `@file` + `/review`, and closes with an automated `strands-evals` regression & red-team suite.
+`v2.0` brings `strands-code` into alignment with the evolved Strands ecosystem (`strands-py >=1.66`, `harness-py >=0.5.0`, `strands-agents/box` Linux, `pydantic-monty`, `strands-agents-evals >=1.10`), adds first-class Google AI Gemini support (compatible with personal Google AI Ultra Developer Program credits), first-class native OpenAI, Anthropic, and Meta (`api.meta.ai` / Muse) API support, and provider-aware startup, introduces deny-first remote skills marketplaces with SHA/hash lockfiles, layers Strands Box OS containment beneath a hardened single-HITL `PolicyGateHandler` and cross-phase parity sweep (`19.1`) alongside a crash-isolated Monty Rust Python VM (`20`), delivers `/help` + `@file` + `/review` (`21`), validates everything with an automated `strands-evals` regression & red-team suite (`22`), and closes with a `v2.0` structural review & hygiene pass (`23`).
 
 ## Phases
 
@@ -19,10 +19,12 @@
 - [x] **Phase 16: First-Class Meta Model API (`api.meta.ai` / Muse) & Upstream Enablement** (`#21`) — Live `/v1/responses` vs `/v1/messages` probe, upstream `strands-agents/harness-sdk` `meta/` proposal, thin `meta/` adapter, `MODEL_API_KEY` preflight, `/model` discovery, multimodal `_MEDIA_LESS` fix & contributor cache `/cost`
 - [x] **Phase 17: Decision Routing Convergence (`DecisionModel`)** — Migrate `routing/` engine transports onto `strands.decisions.DecisionModel` while preserving `apply_model_action`, `0.62`/`0.04` gate, two-call effort flow & `/cost` actuals
 - [x] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards (completed 2026-11-24)
-- [ ] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 7-provider egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs
+- [x] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 8-provider + `--allow-github-skills` egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs (completed 2026-11-25)
+- [ ] **Phase 19.1: Cross-Phase Parity, Policy Hardening & v1/v2 Alignment** *(INSERTED)* — `PolicyGateHandler(InterventionHandler)` & `policy/core.py` security hardening, shared atomic `0o600` persistence & `ui/console.py`, session-sticky toggles (`config.yaml` consolidation), `/resume` prefix parity, `CurateQueue`/`/btw`/`subagent` fixes, 5-engine `/route` & `/cost` symmetry, 8-provider `bedrock-mantle`/`base_url`/discovery parity, `requires-python >=3.11`, hermetic `conftest.py` & CI extras
 - [ ] **Phase 20: Monty Python VM for `python_repl` & CodeAct** — Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli`, explicit host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, worker teardown, `box.toml` compatibility & optional Strands Box Monty alignment
 - [ ] **Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
 - [ ] **Phase 22: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
+- [ ] **Phase 23: v2.0 Structural Review + Hygiene** — 7-layer DAG untangling & 5 `import-linter` contracts, breakup of 6 oversized modules & 4 `CC 20` functions, dead `v1.0` shim sweep & repo-wide doc/codebase-map resync
 
 ---
 
@@ -180,7 +182,7 @@ Plans:
 **Depends on**: Phases 14, 15, 16 (uses provider-aware + `STRANDS_BOX=1` preflight)
 **Requirements**: `SANDBOX-01`
 **Success Criteria** (what must be TRUE):
-  1. `strands-code` generates vetted repo-scoped `box.toml` and Dogwood `policy.dw` configurations (`uv` Python symlink realpaths resolved, `TERM`/`HOME`/`PATH`/`STRANDS_BOX=1` set, configs mounted outside `[agent.filesystem].write`) with working egress profiles for Bedrock SigV4 (no STS hole), Google (`x-goog-api-key`), Anthropic (`x-api-key`), OpenAI (`Authorization: Bearer` `api.openai.com`), Meta (`Authorization: Bearer` `api.meta.ai`), OpenRouter (path-scoped `/api/v1/chat/*` + `/api/alpha/decisions`), and TypeSafe
+  1. `strands-code` generates vetted repo-scoped `box.toml` and Dogwood `policy.dw` configurations (`uv` Python symlink realpaths resolved, `TERM`/`PATH`/`TMPDIR`/`STRANDS_BOX=1` set, configs mounted outside `[agent.filesystem].write`) with working egress profiles for Bedrock SigV4 (no STS hole), Google (`x-goog-api-key`), Anthropic (`x-api-key`), OpenAI (`Authorization: Bearer` `api.openai.com`), Meta (`Authorization: Bearer` `api.meta.ai`), OpenRouter (path-scoped `/api/v1/chat/*` + `/api/alpha/decisions` plus policy-only `/api/v1/models*`), TypeSafe, and `decisions_api` (auto-detected) plus opt-in `--allow-github-skills`
   2. `policy.dw` enforces default-deny egress, `.env` read protection, and at least one canonical MFOTL temporal rule (with a logged, scoped revisit of `D-05` for host-side deterministic Dogwood), and `codeact_shell` routes via `["sh", "-c", shlex.join(argv)]` under `STRANDS_BOX=1` so CodeAct commands feed Dogwood's temporal log
   3. Documentation and diagnostics cover the 3-binary Linux layout, `EXPERIMENTAL_X86_SUPPORT=TRUE` on Linux `x86_64`, and Ubuntu 24.04+ `/etc/apparmor.d/strands-box` `userns` profile
 
@@ -189,7 +191,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [x] `19-01-PLAN.md` — Tracer: `sandbox/box.py` `box.toml`/`policy.dw` generator (host-only storage, `uv` realpaths, 7+2 egress profiles, canonical MFOTL temporal rule), Linux 3-binary/`x86_64`/AppArmor diagnostics, `conftest.py` env scrubs & Wave 0 security suite (`tests/sandbox/test_box.py`)
+- [x] `19-01-PLAN.md` — Tracer: `sandbox/box.py` `box.toml`/`policy.dw` generator (host-only storage, `uv` realpaths, 8+1 egress profiles, canonical MFOTL temporal rule), Linux 3-binary/`x86_64`/AppArmor diagnostics, `conftest.py` env scrubs & Wave 0 security suite (`tests/sandbox/test_box.py`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -198,6 +200,18 @@ Plans:
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
 - [x] `19-03-PLAN.md` — `@pytest.mark.integration` host `box`/`dogwood` validation probe, `docs/QUICKSTART.md` Linux & AppArmor guide, `tests/rig/` & all 6 CI gates
+
+### Phase 19.1: Cross-Phase Parity, Policy Hardening & v1/v2 Alignment *(INSERTED)*
+
+**Goal**: Close every P0/P1 policy, containment, routing/`/cost`, `/btw`/`subagent`, persistence, CLI/toggle, and packaging parity gap surfaced in `.planning/research/V1_V2_PARITY_AUDIT.md` before Phases 20–22 build on top of them
+**Depends on**: Phase 19
+**Requirements**: `HARDEN-01`, `PARITY-01`
+**Success Criteria** (what must be TRUE):
+  1. `PolicyGateHandler(InterventionHandler)` replaces `PolicyHumanInTheLoop` + `DENY:` smuggling + `_ASK_TAG`/`_last_by_tag` + `SteeringState.arm` + `_ACTIVE` (keyed by `id(agent)` with per-agent `read_only_agents` lock); `policy/core.py` fixes `is_fetch_get()` metacharacter bypass, `_serialise_rule()` TOML escaping, `read` `[[deny]]` & `scope.confine()` parity, `trust_delegated` deny-wins & repo-untrusted guard, shell-allow metacharacter/word-boundary & realpath-only allow globs, full-content `BatchState` hashing, `effective_roots` `realpath` + tool-scoping, protected `.agent/` + `.git/` + `.env*`, and `KNOWN_TOOLS` coverage for live harness tools (`skills`, `search_memory`, `retrieve_context`, `strands_manage_background_task`) + tool-only rules
+  2. Shared atomic `mkstemp` `0o600` + parent/target symlink-refusing helper replaces all 10 non-compliant writers (incl. `RichHistory.save`, `PendingStore` per-session scoping, `repl_history`, `memory_file` read parent check); shared `ui/console.py` eliminates Rich markup injection (`session_id`), worker-thread `output_context()` nesting, and unlocked `steering.py` prints; `/mode`, `/route on|off`, `/memory mode` (Phase 6 `D-07`), and `/codeact` are consistently session-sticky (`diff.yaml`/`memory.yaml`/`/diff approve-each`/redundant aliases retired); `/resume` & `--session-id` resolve unique prefixes; `CurateQueue` silent-mode `/init` auto-write & sweep/dedup bugs and `/btw`/`subagent` stale-model/billing/cancel bugs are closed
+  3. Routing, `/cost`, model providers & packaging achieve peer parity: legacy `engine.primary` removed (`engine.order` sole schema); `decisions_api` + `llm` wired into `/route setup` (auto-enabling routing) + `OPENROUTER_API_KEY` skip note; `_route_pre_turn` double-record fixed; `/cost` preserves held/`Uncertain` spend, labels `native` estimated & `decisions_api` `cost n/a`, and reports `decisions` in `/cost refresh`; `bedrock-mantle/` `_vendor_of`, keyless `base_url` startup/switch/`web_fetch`, unified `provider_of()`, and discovery `timeout=5.0`/`max_retries=0`/`_has_unsafe_model_chars` backport land; `requires-python = ">=3.11"` (dropping dead `tomllib = None` shims), `httpx` + `ollama` extra + `_SDK_EXTRA_HINTS`, hermetic `tests/conftest.py` env/XDG isolation, and full `.github/workflows/gates.yml` extras pass all CI gates
+
+**Plans**: TBD
 
 ### Phase 20: Monty Python VM for `python_repl` & CodeAct
 
@@ -235,6 +249,18 @@ Plans:
 
 **Plans**: TBD
 
+### Phase 23: v2.0 Structural Review + Hygiene
+
+**Goal**: Untangle the 10-package runtime import cycle into an enforced 7-layer DAG, break up all re-accumulated >1,500-LOC monoliths and `CC 20` functions, retire dead `v1.0` shims, and resync all repo documentation against the shipped `v2.0` tree (direct successor to `v1.0` Phase 12)
+**Depends on**: Phase 22 (last feature/eval phase; full `v2.0` suite + `strands-evals` guard the refactor)
+**Requirements**: `STRUCT-02`, `CLEANUP-02`
+**Success Criteria** (what must be TRUE):
+  1. The 6 surgical moves from `.planning/research/V1_V2_PARITY_AUDIT.md` Part IV §3.B eliminate all inter-package and `loop.core <-> loop.pump` cycles (including deferred imports), permanently enforced in `pyproject.toml` by 5 `import-linter` contracts (7-layer DAG, `entry` composition-root-only, leaf independence, no feature → `loop`, no `loop.pump` → `loop.core`)
+  2. Oversized modules (`loop/core.py`, `dispatch/core.py`, `routing/core.py`, `memory/marketplace.py`, `model/model_switch.py`, `sandbox/box.py`) are split into coherent submodules and all four `CC 20` functions (`_check_explicit_provider`, `_setup_decision_entries`, `price_table`, `save_strategy`) drop to comfortable complexity headroom (`<= 12`)
+  3. Dead `v1.0` shims (`Bedrock_SETUP_POINTER`, dead `routing/core.py` transport facades, `_LEGACY_TRACE_LABELS`, broken `agent.model.generate`, dead exports) are removed, `maybe_auto_compact` is reconciled with harness `ContextManager`, and `README.md`, `AGENTS.md`, `.planning/codebase/*`, `PROJECT.md`, and `ROADMAP.md` reflect the final shipped `v2.0` architecture with all 6 CI gates, unit tests, rig contracts, and evals green
+
+**Plans**: TBD
+
 ---
 
 ## Progress
@@ -249,6 +275,8 @@ Plans:
 | 17. Decision Routing Convergence (`DecisionModel`) | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
+| 19.1. Cross-Phase Parity, Policy Hardening & v1/v2 Alignment | `v2.0` | 0/0 | Not started | - |
 | 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
+| 23. v2.0 Structural Review + Hygiene | `v2.0` | 0/0 | Not started | - |
