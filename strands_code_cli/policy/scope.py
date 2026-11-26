@@ -75,14 +75,30 @@ def _rule_base_dir(pattern: str) -> Path | None:
     return base
 
 
-def effective_roots(cwd: str | Path, policy: Any) -> list[Path]:
-    """Union of default roots plus realpaths of absolute allow-rule bases.
+def effective_roots(
+    cwd: str | Path, policy: Any, *, tool_name: str | None = None
+) -> list[Path]:
+    """Union of canonical default roots plus realpaths of matching allow-rule bases.
 
-    Takes the policy object duck-typed (``.allow`` rules with ``.path``)
-    so this module never imports the policy store.
+    Takes the policy object duck-typed (``.allow`` rules with ``.tool`` /
+    ``.path``) so this module never imports the policy store. When
+    ``tool_name`` is provided, only ``*`` or matching-tool allow rules expand
+    roots, preventing ``read`` rules from widening ``write``/``edit`` scope.
     """
-    roots = [Path(cwd), Path("/tmp")]
+    roots: list[Path] = []
+    for default_root in (cwd, "/tmp"):
+        try:
+            canon = Path(os.path.realpath(default_root))
+        except OSError:
+            canon = Path(default_root)
+        if canon not in roots:
+            roots.append(canon)
     for rule in getattr(policy, "allow", []) or []:
+        if tool_name is not None and getattr(rule, "tool", None) not in (
+            "*",
+            tool_name,
+        ):
+            continue
         pattern = getattr(rule, "path", None)
         if not pattern:
             continue

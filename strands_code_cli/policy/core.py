@@ -50,15 +50,20 @@ it does NOT imply file/network confinement inside the snippet).
 from __future__ import annotations
 
 import fnmatch
+import json
 import logging
 import os
 import re
+import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import platformdirs
 import tomllib
+
+from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 
 logger = logging.getLogger(__name__)
 
@@ -83,33 +88,60 @@ KNOWN_TOOLS = frozenset(
         "web_search",
         "subagent",
         "programmatic_tool_caller",
+        "skills",
+        "search_memory",
+        "retrieve_context",
+        "strands_manage_background_task",
     }
 )
 
 FILE_TOOLS = frozenset({"write", "edit", "read"})
+PATH_TOOLS = frozenset({"write", "edit", "read", "search"})
 COMMAND_TOOLS = frozenset({"shell", "python_repl"})
+TOOL_ONLY_TOOLS = frozenset(
+    {
+        "web_fetch",
+        "web_search",
+        "subagent",
+        "programmatic_tool_caller",
+        "skills",
+        "search_memory",
+        "retrieve_context",
+        "strands_manage_background_task",
+    }
+)
 
-# Read-only tools pre-allowed by built-in default (D-09).
-BUILTIN_ALLOWED_TOOLS = frozenset({"read", "search"})
+# Read-only / internal harness tools pre-allowed by built-in default (D-03, D-05).
+# Note: "read" itself evaluates scope & sensitive-path floors before allow fallback.
+BUILTIN_ALLOWED_TOOLS = frozenset(
+    {
+        "read",
+        "search",
+        "skills",
+        "search_memory",
+        "retrieve_context",
+        "strands_manage_background_task",
+    }
+)
 
 # Network binaries substring-scanned in normalised shell text (D-14).
 NETWORK_BINARIES = ("curl", "wget", "aria2c", "ssh", "scp", "rsync", "ftp", "sftp")
 
-# curl upload/mutation flags: presence means the fetch is NOT GET-shaped (D-15).
-_CURL_UPLOAD_FLAGS = (
-    "-d",
-    "--data",
-    "--data-binary",
-    "--data-raw",
-    "--data-urlencode",
-    "--upload-file",
-    "-T",
-    "--form",
-    "--form-string",
-    "--head",
-    "-I",
+_CURL_UNSAFE_LONG_FLAGS = frozenset(
+    {
+        "--form",
+        "--form-string",
+        "--json",
+        "--upload-file",
+        "--output",
+        "--remote-name",
+        "--remote-name-all",
+        "--head",
+    }
 )
-_CURL_MUTATING_METHODS = ("POST", "PUT", "DELETE", "PATCH")
+_CURL_UNSAFE_SHORT_CHARS = frozenset({"F", "T", "d", "o", "O", "I"})
+_SHELL_RAW_META_CHARS = frozenset({";", "|", "&", "`", "\n", "\r", ">", "<"})
+_FETCH_DISALLOWED_GIT_FLAGS = ("--upload-pack", "--exec")
 
 # `sh -c "..."` / `bash -c '...'` / `sh -lc "..."` one-level unwrap (resolved item 3).
 _SHELL_PATTERN = re.compile(r"^(sh|bash)\s+(.*)$", re.DOTALL)
@@ -135,7 +167,7 @@ class PolicyOptions:
 
 @dataclass
 class Rule:
-    """One allow/deny rule: ``tool`` plus exactly one of ``path``/``command``."""
+    """One allow/deny rule: ``tool`` plus optional ``path`` or ``command``."""
 
     tool: str
     path: str | None = None
@@ -143,6 +175,8 @@ class Rule:
 
     def describe(self) -> str:
         """Short human form used in prompts and refusal text."""
+        if self.path is None and self.command is None:
+            return self.tool
         selector = (
             f'path "{self.path}"'
             if self.path is not None
@@ -176,9 +210,8 @@ class PolicyConfig:
             Path(home_path) if home_path is not None else default_policy_config_path()
         )
         repo = Path(repo_path) if repo_path is not None else default_repo_policy_path()
-        for candidate in (home, repo):
-            if candidate.is_symlink():
-                raise ValueError(f"Policy file must not be a symlink: {candidate}")
+        for label, candidate in (("home policy", home), ("repo policy", repo)):
+            refuse_symlink(candidate, label, max_ancestors=1)
         try:
             home_cfg = _load_one(home)
             repo_cfg = _load_one(repo)
@@ -193,8 +226,14 @@ class PolicyConfig:
                 continue
             merged.allow.extend(single.allow)
             merged.deny.extend(single.deny)
-            if single.options.trust_delegated:
-                merged.options.trust_delegated = True
+        # trust_delegated is strictly home-only (D-04): untrusted repos cannot opt in.
+        if home_cfg is not None:
+            merged.options.trust_delegated = home_cfg.options.trust_delegated
+        if repo_cfg is not None and repo_cfg.options.trust_delegated:
+            logger.warning(
+                "Ignoring untrusted trust_delegated = true in repo policy %s; only home policy may enable it.",
+                repo,
+            )
         # Repo rules first for explanation order only (deny-wins is order-free).
         if repo_cfg is not None:
             merged.allow = list(repo_cfg.allow) + list(
@@ -212,7 +251,7 @@ class PolicyConfig:
         """Append one narrow derived rule to the REPO policy file, atomically.
 
         Only ``allow``/``deny`` kinds; ``tool = "*"`` is refused (D-03
-        narrow-rules-only). Symlinked targets raise ``ValueError``.
+        narrow-rules-only). Symlinked targets/ancestors raise ``ValueError``.
         """
         if kind not in ("allow", "deny"):
             raise ValueError(f"Rule kind must be 'allow' or 'deny', got {kind!r}")
@@ -222,19 +261,22 @@ class PolicyConfig:
         resolved = (
             Path(repo_path) if repo_path is not None else default_repo_policy_path()
         )
-        if resolved.is_symlink():
-            raise ValueError(f"Policy file must not be a symlink: {resolved}")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(resolved.parent, 0o700)
+        refuse_symlink(resolved, "policy file", max_ancestors=1)
         existing = ""
         if resolved.exists():
             existing = resolved.read_text(encoding="utf-8")
             if existing and not existing.endswith("\n"):
                 existing += "\n"
-        existing += _serialise_rule(kind, rule)
-        tmp = resolved.with_suffix(".toml.tmp")
-        tmp.write_text(existing, encoding="utf-8")
-        os.replace(tmp, resolved)
+        candidate_text = existing + _serialise_rule(kind, rule)
+        tomllib.loads(candidate_text)
+        atomic_write_text(
+            resolved,
+            candidate_text,
+            mode=0o600,
+            dir_mode=0o700,
+            refuse_ancestors=1,
+            label="policy file",
+        )
         target = self.allow if kind == "allow" else self.deny
         target.append(rule)
         return resolved
@@ -306,28 +348,45 @@ def _parse_rule(raw: Any) -> Rule:
 
 
 def _validate_rule(rule: Rule) -> None:
-    """Enforce exactly-one-of path/command and tool scoping."""
+    """Enforce selector exclusivity and tool scoping."""
     has_path = rule.path is not None
     has_command = rule.command is not None
-    if has_path == has_command:
-        raise PolicySchemaError("Policy rule needs exactly one of 'path' or 'command'")
+    if has_path and has_command:
+        raise PolicySchemaError("Policy rule cannot set both 'path' and 'command'")
     if rule.tool != "*" and rule.tool not in KNOWN_TOOLS:
         raise PolicySchemaError(f"Unknown policy rule tool: {rule.tool!r}")
-    if has_path and rule.tool not in FILE_TOOLS and rule.tool != "*":
-        raise PolicySchemaError(f"'path' rules need a file tool, got {rule.tool!r}")
+    if not has_path and not has_command:
+        if rule.tool not in TOOL_ONLY_TOOLS:
+            raise PolicySchemaError("Policy rule needs 'path' or 'command'")
+        return
+    if has_path and (
+        not isinstance(rule.path, str)
+        or not rule.path
+        or (rule.tool not in PATH_TOOLS and rule.tool != "*")
+    ):
+        raise PolicySchemaError(f"'path' rules need a path tool, got {rule.tool!r}")
+    if has_command and (not isinstance(rule.command, str) or not rule.command):
+        raise PolicySchemaError("Policy command selector must be a non-empty string")
     if has_command and rule.tool not in COMMAND_TOOLS and rule.tool != "*":
         raise PolicySchemaError(
             f"'command' rules need shell/python_repl, got {rule.tool!r}"
         )
 
 
+def _toml_rule_str(value: str, field_name: str) -> str:
+    if any((ord(ch) < 32 and ch not in ("\t", "\n")) or ord(ch) == 127 for ch in value):
+        raise ValueError(f"Disallowed control character in policy rule {field_name}")
+    return json.dumps(value)
+
+
 def _serialise_rule(kind: str, rule: Rule) -> str:
-    """Render one rule in the repo's own narrow schema (no TOML writer dep)."""
-    lines = [f"[[{kind}]]", f'tool = "{rule.tool}"']
+    """Render one rule with safe JSON/TOML string escaping."""
+    _validate_rule(rule)
+    lines = [f"[[{kind}]]", f"tool = {_toml_rule_str(rule.tool, 'tool')}"]
     if rule.path is not None:
-        lines.append(f'path = "{rule.path}"')
-    else:
-        lines.append(f'command = "{rule.command}"')
+        lines.append(f"path = {_toml_rule_str(rule.path, 'path')}")
+    elif rule.command is not None:
+        lines.append(f"command = {_toml_rule_str(rule.command, 'command')}")
     return "\n".join(lines) + "\n"
 
 
@@ -373,76 +432,194 @@ def _tool_input_text(tool_name: str, tool_input: dict[str, Any]) -> str:
     return value
 
 
+def _has_unquoted_shell_metachars(text: str) -> bool:
+    """True on backticks/subshell expansions anywhere or unquoted shell metacharacters."""
+    quote: str | None = None
+    escaped = False
+    for idx, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote != "'":
+            escaped = True
+            continue
+        if ch in ("'", '"') and quote in (None, ch):
+            quote = None if quote == ch else ch
+            continue
+        if quote != "'" and (ch == "`" or text[idx : idx + 2] == "$("):
+            return True
+        if quote is None and ch in _SHELL_RAW_META_CHARS:
+            return True
+    return quote is not None
+
+
+def _has_shell_metachars(text: str, *, allow_quoted: bool = False) -> bool:
+    """Detect shell metacharacters, subshells, and multiline control tokens."""
+    if not allow_quoted:
+        return "$(" in text or any(ch in _SHELL_RAW_META_CHARS for ch in text)
+    return _has_unquoted_shell_metachars(text)
+
+
+def _canonical_allow_pattern(pattern: str) -> str:
+    """Canonicalize fixed base of an absolute allow glob without altering glob tokens."""
+    if not Path(pattern).is_absolute():
+        return pattern
+    cut = len(pattern)
+    for ch in ("*", "?", "["):
+        pos = pattern.find(ch)
+        if pos != -1:
+            cut = min(cut, pos)
+    prefix, tail = pattern[:cut], pattern[cut:]
+    if "/" not in prefix:
+        return pattern
+    sep = prefix.rfind("/")
+    dir_part = os.path.realpath(prefix[:sep] or "/")
+    rem = prefix[sep:]
+    if dir_part == "/":
+        return rem + tail if rem.startswith("/") else "/" + rem + tail
+    return dir_part + rem + tail
+
+
+def _match_path_rule(
+    pattern: str,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    base: Path,
+    *,
+    is_allow: bool,
+) -> bool:
+    raw = tool_input.get("path", "")
+    if tool_name == "search" and (not isinstance(raw, str) or not raw):
+        raw = "."
+    if not isinstance(raw, str) or not raw:
+        return False
+    absolute = raw if Path(raw).is_absolute() else str(base / raw)
+    candidates: list[str] = []
+    if not is_allow:
+        candidates.extend((raw, os.path.normpath(absolute)))
+    try:
+        real_abs = os.path.realpath(absolute)
+        candidates.append(real_abs)
+    except OSError:
+        real_abs = os.path.normpath(absolute)
+    try:
+        rel = os.path.relpath(real_abs, os.path.realpath(base))
+        if (
+            rel != ".."
+            and not rel.startswith(f"..{os.sep}")
+            and not rel.startswith("../")
+        ):
+            candidates.append(rel)
+    except (OSError, ValueError):
+        pass
+    target_pattern = _canonical_allow_pattern(pattern) if is_allow else pattern
+    return any(fnmatch.fnmatch(cand, target_pattern) for cand in candidates)
+
+
+def _match_command_rule(
+    prefix: str, tool_name: str, tool_input: dict[str, Any], *, is_allow: bool
+) -> bool:
+    norm = normalise_command(_tool_input_text(tool_name, tool_input))
+    if not is_allow or tool_name != "shell":
+        return norm.startswith(prefix)
+    if _has_shell_metachars(norm, allow_quoted=True):
+        return False
+    return norm == prefix or (
+        norm.startswith(prefix)
+        and len(norm) > len(prefix)
+        and norm[len(prefix)].isspace()
+    )
+
+
 def match_rule(
     rule: Rule,
     tool_name: str,
     tool_input: dict[str, Any],
     cwd: str | Path | None = None,
+    *,
+    is_allow: bool = False,
 ) -> bool:
     """True when ``rule`` covers this (tool, input) pair.
 
-    Path rules fnmatch against the raw input path, the absolute path, the
-    realpath, and the repo-relative path (when under ``cwd``). Command
-    rules prefix-match the normalised command/code.
+    ``[[allow]]`` path rules match canonical realpath candidates ONLY;
+    ``[[deny]]`` keeps raw and canonical candidates. ``[[allow]]`` shell rules
+    reject unquoted metacharacters and require whitespace word boundaries.
     """
     if rule.tool != "*" and rule.tool != tool_name:
         return False
     if rule.path is not None:
-        raw = tool_input.get("path", "")
-        if not isinstance(raw, str) or not raw:
-            return False
-        candidates = [raw]
         base = Path(cwd) if cwd is not None else Path(os.getcwd())
-        absolute = raw if Path(raw).is_absolute() else str(base / raw)
-        candidates.append(absolute)
-        try:
-            candidates.append(os.path.realpath(absolute))
-        except OSError:
-            pass
-        try:
-            rel = os.path.relpath(os.path.realpath(absolute), os.path.realpath(base))
-            if not rel.startswith(".."):
-                candidates.append(rel)
-        except (OSError, ValueError):
-            pass
-        return any(fnmatch.fnmatch(c, rule.path) for c in candidates)
-    if rule.command is not None:
-        return normalise_command(_tool_input_text(tool_name, tool_input)).startswith(
-            rule.command
+        return _match_path_rule(
+            rule.path, tool_name, tool_input, base, is_allow=is_allow
         )
-    return False
+    if rule.command is not None:
+        return _match_command_rule(
+            rule.command, tool_name, tool_input, is_allow=is_allow
+        )
+    return rule.tool == tool_name
+
+
+def _curl_long_flag_unsafe(low: str) -> bool:
+    if low.startswith("--data"):
+        return True
+    return any(
+        low == flag or low.startswith(flag + "=") for flag in _CURL_UNSAFE_LONG_FLAGS
+    )
+
+
+def _curl_short_flags_unsafe(tok: str) -> bool:
+    if not tok.startswith("-") or tok.startswith("--") or len(tok) <= 1:
+        return False
+    body = tok[1:].split("=", 1)[0]
+    return "X" in body or any(ch in _CURL_UNSAFE_SHORT_CHARS for ch in body)
+
+
+def _is_safe_curl_args(args: Sequence[str]) -> bool:
+    idx = 0
+    while idx < len(args):
+        tok = args[idx]
+        if tok == "--":
+            break
+        if tok in ("-X", "--request"):
+            if idx + 1 >= len(args) or args[idx + 1].upper() not in ("GET", "HEAD"):
+                return False
+            idx += 2
+            continue
+        if tok.startswith("--request=") or (tok.startswith("-X") and len(tok) > 2):
+            method = (
+                tok.split("=", 1)[1] if tok.startswith("--") else tok[2:].lstrip("=")
+            )
+            if method.upper() not in ("GET", "HEAD"):
+                return False
+            idx += 1
+            continue
+        if _curl_long_flag_unsafe(tok.lower()) or _curl_short_flags_unsafe(tok):
+            return False
+        idx += 1
+    return True
 
 
 def is_fetch_get(command: str) -> bool:
-    """True for GET-shaped read-only fetches (D-15): curl without upload or
-    mutating-method flags, or ``git fetch``."""
+    """True for isolated GET-shaped fetches (D-02): ``curl`` without upload,
+    write, or mutating flags, or exact ``git fetch``."""
     text = normalise_command(command)
-    lowered = text.lower()
-    if "git fetch" in lowered:
-        return True
-    if "curl" not in lowered:
+    if _has_shell_metachars(text, allow_quoted=False):
         return False
-    tokens = text.split()
-    for pos, token in enumerate(tokens):
-        low = token.lower()
-        if low in _CURL_UPLOAD_FLAGS or any(
-            low == flag or low.startswith(flag + "=")
-            for flag in _CURL_UPLOAD_FLAGS
-            if flag.startswith("--")
-        ):
-            return False
-        if low in ("-X", "--request") and pos + 1 < len(tokens):
-            if tokens[pos + 1].upper() in _CURL_MUTATING_METHODS:
-                return False
-        if (
-            low.startswith("-x")
-            and len(low) > 2
-            and low[2:].upper() in _CURL_MUTATING_METHODS
-        ):
-            return False
-    if re.search(r"(?i)-X\s*(POST|PUT|DELETE|PATCH)", text):
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
         return False
-    return True
+    if not tokens:
+        return False
+    if tokens[0] == "git" and len(tokens) >= 2 and tokens[1] == "fetch":
+        return not any(
+            t.lower() == f or t.lower().startswith(f + "=")
+            for t in tokens[2:]
+            for f in _FETCH_DISALLOWED_GIT_FLAGS
+        )
+    if tokens[0] == "curl":
+        return _is_safe_curl_args(tokens[1:])
+    return False
 
 
 def is_network_command(command: str) -> bool:
@@ -507,14 +684,12 @@ def _decide_shell(tool_input: dict[str, Any]) -> Allow | Prompt:
 def _decide_file_tool(
     tool_name: str, tool_input: dict[str, Any], base: Path, policy: PolicyConfig
 ) -> Prompt | Deny:
-    """Verdict for file tools: outside-scope paths deny, else prompt."""
+    """Verdict for write/edit file tools: outside-scope paths deny, else prompt."""
     raw = tool_input.get("path", "")
-    from strands_code_cli.policy.scope import effective_roots
+    from strands_code_cli.policy.scope import effective_roots, resolve
 
-    roots = effective_roots(base, policy)
+    roots = effective_roots(base, policy, tool_name=tool_name)
     if isinstance(raw, str) and raw:
-        from strands_code_cli.policy.scope import resolve
-
         canonical = Path(os.path.realpath(resolve(raw, base)))
         if not any(canonical == r or r in canonical.parents for r in roots):
             allowed = ", ".join(str(r) for r in roots)
@@ -522,6 +697,26 @@ def _decide_file_tool(
                 reason=f"Path {canonical} is outside the allowed roots: {allowed}"
             )
     return Prompt(reason=f"File {tool_name}: {raw}")
+
+
+def _decide_read_tool(
+    tool_input: dict[str, Any], base: Path, policy: PolicyConfig
+) -> Allow | Prompt:
+    """Unboxed read check: sensitive secret files & outside-scope reads prompt (D-03)."""
+    raw = tool_input.get("path", "")
+    if _is_sensitive_read_path(raw, base):
+        return Prompt(reason=f"Sensitive path ({raw}): approve explicit read")
+    if isinstance(raw, str) and raw:
+        from strands_code_cli.policy.scope import effective_roots, resolve
+
+        roots = effective_roots(base, policy, tool_name="read")
+        canonical = Path(os.path.realpath(resolve(raw, base)))
+        if not any(canonical == r or r in canonical.parents for r in roots):
+            allowed = ", ".join(str(r) for r in roots)
+            return Prompt(
+                reason=f"Path {canonical} is outside the allowed roots: {allowed}"
+            )
+    return Allow()
 
 
 def _path_matches_protected(
@@ -532,10 +727,13 @@ def _path_matches_protected(
     )
 
 
-def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
-    """True when a write/edit target resolves into .agent/skills* or user config (D-05)."""
+def _is_env_filename(cand: Path) -> bool:
+    return cand.name == ".env" or cand.name.startswith(".env.")
+
+
+def _candidate_path_variants(raw: object, base: Path) -> tuple[list[Path], list[Path]]:
     if not isinstance(raw, str) or not raw:
-        return False
+        return [], []
     from strands_code_cli.policy.scope import resolve
 
     target = resolve(raw, base)
@@ -552,28 +750,86 @@ def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
             base_variants.append(real_base)
     except OSError:
         pass
+    return candidates, base_variants
 
-    protected_dirs = [
-        Path(os.path.realpath(platformdirs.user_config_dir("strands-code"))),
-        Path(os.path.realpath(platformdirs.user_cache_dir("strands-code"))),
-        Path(os.path.realpath(platformdirs.user_config_dir("strands-box"))),
-        Path(os.path.realpath(platformdirs.user_data_dir("strands-box"))),
-    ]
+
+def _add_resolved_dir(bucket: list[Path], raw_dir: str | Path | None) -> None:
+    if not raw_dir:
+        return
+    p = Path(str(raw_dir))
+    bucket.append(Path(os.path.normpath(str(p))))
+    try:
+        bucket.append(Path(os.path.realpath(p)))
+    except OSError:
+        pass
+
+
+def _is_sensitive_read_path(raw: object, base: Path) -> bool:
+    """True when ``read`` targets ``.env*``, ``~/.ssh/*``, or ``~/.aws/*``."""
+    candidates, _ = _candidate_path_variants(raw, base)
+    if not candidates:
+        return False
+    home = Path.home()
+    secret_dirs: list[Path] = []
+    _add_resolved_dir(secret_dirs, home / ".ssh")
+    _add_resolved_dir(secret_dirs, home / ".aws")
+    dirs_tuple = tuple(secret_dirs)
+    return any(
+        _is_env_filename(cand)
+        or _path_matches_protected(cand, dirs_tuple, ())
+        or ".ssh" in cand.parts
+        or ".aws" in cand.parts
+        for cand in candidates
+    )
+
+
+def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
+    """True when a write/edit target resolves into protected repo/host trees (D-03)."""
+    candidates, base_variants = _candidate_path_variants(raw, base)
+    if not candidates:
+        return False
+
+    protected_dirs: list[Path] = []
+    for raw_dir in (
+        platformdirs.user_config_dir("strands-code"),
+        platformdirs.user_cache_dir("strands-code"),
+        os.environ.get("STRANDS_CODE_CACHE_DIR", "").strip(),
+        platformdirs.user_config_dir("strands-box"),
+        platformdirs.user_data_dir("strands-box"),
+    ):
+        _add_resolved_dir(protected_dirs, raw_dir)
+
     protected_files: list[Path] = []
     for root in base_variants:
-        protected_dirs.append(root / ".agent" / "skills")
-        protected_dirs.append(root / ".agent" / "skills-marketplaces")
-        protected_files.append(root / ".agent" / "skills-lock.json")
-        protected_files.append(root / ".agent" / "policy.toml")
-        protected_files.append(root / ".agent" / "routing.yaml")
-        protected_files.append(root / ".agent" / "MEMORY.md")
+        protected_dirs.append(root / ".agent")
+        protected_dirs.append(root / ".git")
         protected_files.append(root / "STRANDS.md")
 
     dirs_tuple = tuple(protected_dirs)
     files_tuple = tuple(protected_files)
     return any(
-        _path_matches_protected(cand, dirs_tuple, files_tuple) for cand in candidates
+        _is_env_filename(cand) or _path_matches_protected(cand, dirs_tuple, files_tuple)
+        for cand in candidates
     )
+
+
+def _check_allow_rules(
+    tool_name: str, tool_input: dict[str, Any], base: Path, policy: PolicyConfig
+) -> Allow | Prompt | None:
+    for rule in policy.allow:
+        if not match_rule(rule, tool_name, tool_input, base, is_allow=True):
+            continue
+        raw_path = tool_input.get("path", "")
+        if tool_name in ("write", "edit") and _is_protected_skills_or_config_path(
+            raw_path, base
+        ):
+            return Prompt(
+                reason=f"Protected path ({raw_path}): approve explicit {tool_name}"
+            )
+        if tool_name == "read" and _is_sensitive_read_path(raw_path, base):
+            return Prompt(reason=f"Sensitive path ({raw_path}): approve explicit read")
+        return Allow()
+    return None
 
 
 def decide(
@@ -582,31 +838,25 @@ def decide(
     policy: PolicyConfig,
     cwd: str | Path | None = None,
 ) -> Allow | Prompt | Deny:
-    """Deny-first verdict across the rule union (D-06/D-07/D-13/D-15).
+    """Deny-first verdict across the rule union (D-02..D-05).
 
-    Order: deny match (hard-deny) → allow match (downgraded to Prompt for
-    write/edit targeting .agent/skills*, .agent/skills-lock.json, or user
-    config per D-05) → built-in read/search/fetch allows → Prompt. Outside-scope
-    file paths with no covering allow rule deny naming the allowed roots.
+    Order: deny match (hard-deny) -> allow match (downgraded to Prompt for
+    protected write/edit or sensitive read) -> read scope & secret check ->
+    built-in read-only/internal allows -> Prompt / outside-scope write Deny.
     """
     base = Path(cwd) if cwd is not None else Path(os.getcwd())
     if not isinstance(tool_input, dict):
         tool_input = {}
     for rule in policy.deny:
-        if match_rule(rule, tool_name, tool_input, base):
+        if match_rule(rule, tool_name, tool_input, base, is_allow=False):
             return Deny(
                 rule=rule, reason=f"Denied by policy rule [deny {rule.describe()}]"
             )
-    for rule in policy.allow:
-        if match_rule(rule, tool_name, tool_input, base):
-            if tool_name in ("write", "edit") and _is_protected_skills_or_config_path(
-                tool_input.get("path", ""), base
-            ):
-                raw_path = tool_input.get("path", "")
-                return Prompt(
-                    reason=f"Protected path ({raw_path}): approve explicit {tool_name}"
-                )
-            return Allow()
+    allow_verdict = _check_allow_rules(tool_name, tool_input, base, policy)
+    if allow_verdict is not None:
+        return allow_verdict
+    if tool_name == "read":
+        return _decide_read_tool(tool_input, base, policy)
     if tool_name in BUILTIN_ALLOWED_TOOLS:
         return Allow()
     if tool_name in ("web_fetch", "web_search"):

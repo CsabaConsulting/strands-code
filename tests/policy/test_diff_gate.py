@@ -550,3 +550,25 @@ class TestGateSubsumption:
         assert "Stashed" in _run(gated(path="n.txt", content="hello\n"))
         applied = _run(apply_stashed(store, reader=read, writer=write))
         assert "Applied" in applied
+
+    def test_read_allow_rule_does_not_widen_write_or_edit_roots(
+        self, tmp_path, monkeypatch
+    ):
+        from pathlib import Path
+
+        from strands_code_cli.policy.core import PolicyConfig, Rule
+
+        outside = Path("/opt/outside-read-only")
+        monkeypatch.setattr(
+            PolicyConfig,
+            "load",
+            classmethod(
+                lambda cls: cls(allow=[Rule(tool="read", path=str(outside / "*"))])
+            ),
+        )
+        gated_write = make_gated_write(cwd=tmp_path, get_mode=lambda: "auto")
+        gated_edit = make_gated_edit(cwd=tmp_path, get_mode=lambda: "auto")
+        with pytest.raises(ValueError, match="allowed roots"):
+            _run(gated_write(path=str(outside / "pwn.txt"), content="x"))
+        with pytest.raises(ValueError, match="allowed roots"):
+            _run(gated_edit(path=str(outside / "pwn.txt"), old_str="a", new_str="b"))

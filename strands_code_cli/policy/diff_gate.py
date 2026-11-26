@@ -253,7 +253,7 @@ async def _persist_text(
     await _fs_write(path, content)
 
 
-def _policy_roots(cwd: str | Path) -> list[Path]:
+def _policy_roots(cwd: str | Path, tool_name: str | None = None) -> list[Path]:
     """Allow-rule-granted roots for union confinement (best-effort).
 
     Lazy import keeps this module free of a hard policy dependency;
@@ -263,7 +263,9 @@ def _policy_roots(cwd: str | Path) -> list[Path]:
         from strands_code_cli.policy.core import PolicyConfig
         from strands_code_cli.policy.scope import effective_roots
 
-        return [r for r in effective_roots(cwd, PolicyConfig.load())]
+        return [
+            r for r in effective_roots(cwd, PolicyConfig.load(), tool_name=tool_name)
+        ]
     except Exception:
         return []
 
@@ -290,7 +292,7 @@ async def _gate_and_apply(
     against the union of cwd + /tmp + allow-rule-granted roots so an
     outside path with a covering allow rule is admitted.
     """
-    confined = confine(resolve(raw_path, cwd), cwd, _policy_roots(cwd))
+    confined = confine(resolve(raw_path, cwd), cwd, _policy_roots(cwd, op))
     path = str(confined)
     mode = get_mode()
     if mode not in MODES:
@@ -403,7 +405,7 @@ def make_gated_write(
             content: The full file content to write.
         """
         old_text = await _current_text(
-            str(confine(resolve(path, cwd), cwd, _policy_roots(cwd))),
+            str(confine(resolve(path, cwd), cwd, _policy_roots(cwd, "write"))),
             reader,
             tool_context,
         )
@@ -458,7 +460,7 @@ def make_gated_edit(
             old_str: Exact text to find. Must be unique within the file.
             new_str: Replacement text.
         """
-        confined = confine(resolve(path, cwd), cwd, _policy_roots(cwd))
+        confined = confine(resolve(path, cwd), cwd, _policy_roots(cwd, "edit"))
         current = await _current_text(str(confined), reader, tool_context)
         if current is None:
             raise ValueError(f"Cannot edit {confined}: file does not exist.")
