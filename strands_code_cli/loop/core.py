@@ -1361,6 +1361,7 @@ def _record_routing_event(
             "effort_confidence": effort_confidence,
             "tie_break": tie_break,
             "engine": engine,
+            "decision_engine": decision_engine,
             "input_tokens": usage[0],
             "output_tokens": usage[1],
             "decision_cost": usage[2],
@@ -1461,7 +1462,7 @@ def _apply_routed_pick(
     engine: str,
     usage: tuple[int, int, float | None],
     routing_events: list | None,
-) -> str:
+) -> tuple[str, bool]:
     """Validate and apply a cross-model routed pick; holds stay on current.
 
     A gated pick validates its routed effort, then applies through
@@ -1471,7 +1472,7 @@ def _apply_routed_pick(
     untouched and prints the hold note.
 
     Returns:
-        The picked model id when applied, else ``current_model``.
+        ``(model_id, applied)`` where ``applied`` is True iff switched.
     """
     try:
         effort_ok = routing_mod.validate_routed_effort(pick, strategy.candidates)
@@ -1506,7 +1507,7 @@ def _apply_routed_pick(
                 detail=f"effort {pick.effort!r} unsupported by {pick.model}",
             ),
         )
-        return current_model
+        return (current_model, False)
     try:
         resolved_id, _reply = apply_model_action(
             agent,
@@ -1538,7 +1539,7 @@ def _apply_routed_pick(
                 current=current_model, detail="resolve failed"
             ),
         )
-        return current_model
+        return (current_model, False)
     if resolved_id is not None:
         # FENCE (G-08-1): routed picks apply in memory only and
         # never persist the global default (routing re-decides
@@ -1549,7 +1550,26 @@ def _apply_routed_pick(
         index.set_model(session_id, current_model)
         if rich is not None and stash_path is not None:
             rich.save(stash_path)
-    return current_model
+        return (current_model, True)
+    _record_routing_event(
+        routing_events,
+        strategy=strategy,
+        side=False,
+        model=current_model,
+        effort="",
+        model_confidence=None,
+        effort_confidence=None,
+        tie_break=False,
+        engine="resolve",
+        decision_engine=engine,
+        usage=usage,
+        held=True,
+    )
+    print_plain(
+        console,
+        routing_mod.format_hold_line(current=current_model, detail="resolve failed"),
+    )
+    return (current_model, False)
 
 
 def _print_routed_note(
@@ -1635,8 +1655,9 @@ def _route_pre_turn(
     if pick is None:
         return current_model
     prev_model = current_model
+    applied = True
     if pick.model != current_model:
-        current_model = _apply_routed_pick(
+        current_model, applied = _apply_routed_pick(
             agent,
             pick,
             strategy,
@@ -1649,21 +1670,22 @@ def _route_pre_turn(
             usage,
             routing_events,
         )
-    _record_routing_event(
-        routing_events,
-        strategy=strategy,
-        side=False,
-        model=pick.model,
-        effort=pick.effort,
-        model_confidence=pick.model_confidence,
-        effort_confidence=pick.effort_confidence,
-        tie_break=pick.tie_break,
-        engine=engine,
-        decision_engine=engine,
-        usage=usage,
-        held=False,
-    )
-    _print_routed_note(strategy, pick, detail, prev_model, ask_text)
+    if applied:
+        _record_routing_event(
+            routing_events,
+            strategy=strategy,
+            side=False,
+            model=pick.model,
+            effort=pick.effort,
+            model_confidence=pick.model_confidence,
+            effort_confidence=pick.effort_confidence,
+            tie_break=pick.tie_break,
+            engine=engine,
+            decision_engine=engine,
+            usage=usage,
+            held=False,
+        )
+        _print_routed_note(strategy, pick, detail, prev_model, ask_text)
     return current_model
 
 

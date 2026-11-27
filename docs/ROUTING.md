@@ -162,7 +162,7 @@ directives: >-
 tie_margin: 0.04
 confidence_threshold: 0.62
 engine:
-  primary: openrouter
+  order: [openrouter]
   # Decisions-catalog id — pick from /route setup, never an alias.
   decision_model: typesafe/jev-1.13
 ```
@@ -181,9 +181,8 @@ directives: >-
   Single candidate: the model call is skipped but the effort choice
   still asks how much thinking each ask needs.
 engine:
-  primary: local
+  order: [local]
   local_model: nimble
-  # Unused while primary is local; kept so flipping primary needs no edit.
   decision_model: typesafe/jev-1.13
 ```
 

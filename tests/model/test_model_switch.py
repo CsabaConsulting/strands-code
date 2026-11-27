@@ -2683,7 +2683,7 @@ class TestConfigureStreamingForModel:
             effort_confidence=None,
             tie_break=False,
         )
-        loop_mod._apply_routed_pick(
+        resolved_pick, applied = loop_mod._apply_routed_pick(
             agent,
             pick=pick,
             strategy=SimpleNamespace(candidates=[pick.model], quiet=True),
@@ -2696,6 +2696,8 @@ class TestConfigureStreamingForModel:
             usage=(0, 0, None),
             routing_events=[],
         )
+        assert applied is True
+        assert resolved_pick == pick.model
         out = capsys.readouterr().out
         assert "streaming disabled for" not in out
         assert "rejects tool use in streaming" not in out

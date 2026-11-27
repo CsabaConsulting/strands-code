@@ -255,12 +255,7 @@ def _provider_from_model_id(model_id: str | None) -> str | None:
 def _strategy_engines(strategy: RoutingStrategy | None) -> list[str]:
     if strategy is None:
         return []
-    raw = (
-        strategy.engine.order
-        if strategy.engine.order is not None
-        else [strategy.engine.primary]
-    )
-    return [engine for engine in raw if engine != "off"]
+    return list(strategy.engine.order)
 
 
 def _providers_from_routing(strategy: RoutingStrategy | None) -> set[str]:

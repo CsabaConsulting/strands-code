@@ -122,7 +122,6 @@ _TOP_LEVEL_KEYS = {
 _CANDIDATE_KEYS = {"id", "tier", "note", "levels", "benchmarks", "criteria"}
 _BENCHMARK_KEYS = {"swe_verified", "lmarena_coding", "aa_index", "pulled"}
 _ENGINE_KEYS = {
-    "primary",
     "decision_model",
     "local_model",
     "local_base_url",
@@ -133,9 +132,7 @@ _ENGINE_KEYS = {
     "skip_notes",
 }
 _VALID_ORDER_ENGINES = ("native", "openrouter", "local", "decisions_api", "llm")
-_VALID_PRIMARY_ENGINES = ("openrouter", "local", "decisions_api", "llm", "off")
 _ENGINE_STRING_KEYS = (
-    "primary",
     "decision_model",
     "local_model",
     "local_base_url",
@@ -168,11 +165,10 @@ class RoutingCandidate:
 class RoutingEngine:
     """Decision engine selection from the strategy file."""
 
-    primary: str = "openrouter"
     decision_model: str | None = None
     local_model: str | None = None
     local_base_url: str | None = None
-    order: list[str] | None = None
+    order: list[str] = field(default_factory=lambda: ["openrouter", "local"])
     native_model: str | None = None
     decisions_api_model: str | None = None
     llm_model: str | None = None
@@ -311,9 +307,6 @@ def _parse_engine_order(raw: dict[str, Any], engine: RoutingEngine) -> None:
 
 
 def _assign_engine_string(engine: RoutingEngine, key: str, value: object) -> None:
-    if key == "primary" and isinstance(value, bool):
-        engine.primary = "openrouter" if value else "off"
-        return
     if not isinstance(value, str):
         logger.warning("Ignoring routing engine %r (not a string)", key)
         return
@@ -345,13 +338,6 @@ def _parse_engine(raw: object) -> RoutingEngine:
         value = raw.get(key)
         if value is not None:
             _assign_engine_string(engine, key, value)
-    if engine.primary not in _VALID_PRIMARY_ENGINES:
-        logger.warning(
-            "Ignoring routing engine primary %r "
-            "(expected openrouter|local|decisions_api|llm|off); using openrouter",
-            engine.primary,
-        )
-        engine.primary = "openrouter"
     _parse_engine_order(raw, engine)
     skip_notes = raw.get("skip_notes", True)
     if not isinstance(skip_notes, bool):
@@ -460,9 +446,9 @@ def load_strategy(
     """Load the routing strategy: repo wins whole-file, else global.
 
     Returns None when both files are missing or unparsable (routing off)
-    and when the winning strategy sets ``engine.primary: off`` — the
-    off switch lives at the load layer, so the hook takes its existing
-    skip-silently branch with zero engine calls and no hold note.
+    and when the winning strategy sets ``engine.order: []`` — the off
+    switch lives at the load layer, so the hook skips silently with zero
+    engine calls and no hold note.
 
     Raises:
         ValueError: When either resolved path is a symlink (fail-loud,
@@ -471,7 +457,7 @@ def load_strategy(
     repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
     strategies = _load_one(repo)
     if strategies is not None:
-        if strategies.engine.primary == "off":
+        if not strategies.engine.order:
             return None
         local_url = strategies.engine.local_base_url
         if local_url and not _is_loopback_host(local_url):
@@ -484,7 +470,7 @@ def load_strategy(
         Path(global_path) if global_path is not None else default_global_strategy_path()
     )
     strategies = _load_one(home)
-    if strategies is not None and strategies.engine.primary == "off":
+    if strategies is not None and not strategies.engine.order:
         return None
     return strategies
 
@@ -778,88 +764,37 @@ def _validate_single_order_engine(
 
 def _validate_engine_order_chain(
     raw_engine: object,
-    raw_order: object,
     engine: RoutingEngine,
     lines: list[str],
 ) -> bool:
     """Judge the engine.order chain shape plus each named engine (strict)."""
     ok = True
-    if isinstance(raw_engine, dict) and "primary" in raw_engine:
-        lines.append("note: engine.primary is ignored (engine.order drives the chain)")
-    if not isinstance(raw_order, list):
-        ok = False
-        lines.append(
-            "engine: INVALID — engine.order is not a list (the loader ignores it)"
-        )
-        lines.append("fix: set engine.order to a list like [native, openrouter]")
-    else:
-        for entry in raw_order:
-            if entry not in _VALID_ORDER_ENGINES:
-                ok = False
-                lines.append(
-                    f"engine: INVALID — unknown engine {entry!r} in engine.order"
-                )
-                lines.append(
-                    f"fix: remove {entry!r} from engine.order "
-                    "(expected native|openrouter|local|decisions_api|llm)"
-                )
+    if isinstance(raw_engine, dict) and "order" in raw_engine:
+        raw_order = raw_engine.get("order")
+        if not isinstance(raw_order, list):
+            ok = False
+            lines.append(
+                "engine: INVALID — engine.order is not a list (the loader ignores it)"
+            )
+            lines.append("fix: set engine.order to a list like [native, openrouter]")
+        else:
+            for entry in raw_order:
+                if entry not in _VALID_ORDER_ENGINES:
+                    ok = False
+                    lines.append(
+                        f"engine: INVALID — unknown engine {entry!r} in engine.order"
+                    )
+                    lines.append(
+                        f"fix: remove {entry!r} from engine.order "
+                        "(expected native|openrouter|local|decisions_api|llm)"
+                    )
     order = _effective_order(engine)
     if not order:
-        lines.append("engine: primary off — routing disabled by config")
+        lines.append("engine: order empty — routing disabled by config")
     else:
         for name in order:
             if not _validate_single_order_engine(name, engine, lines):
                 ok = False
-    return ok
-
-
-def _validate_engine_legacy_primary(
-    raw_engine: object, engine: RoutingEngine, lines: list[str]
-) -> bool:
-    """Judge the legacy engine.primary shape (strict)."""
-    ok = True
-    if isinstance(raw_engine, dict) and "primary" in raw_engine:
-        lines.append(
-            "note: legacy engine.primary shape — "
-            "re-run /route setup to adopt the engines list"
-        )
-    if engine.primary == "off":
-        lines.append("engine: primary off — routing disabled by config")
-        return True
-    if engine.primary == "local":
-        if not engine.local_model:
-            ok = False
-            lines.append("engine: INVALID — primary is local with no local_model")
-            lines.append(
-                "fix: set engine.local_model to your Ollama tag, "
-                "or switch primary to openrouter"
-            )
-        else:
-            lines.append(f"engine: primary local, model {engine.local_model} — ok")
-        if engine.decision_model:
-            lines.append(
-                f"engine: decision model {engine.decision_model} "
-                "(unused while primary is local)"
-            )
-        else:
-            lines.append("engine: no decision model (unused while primary is local)")
-        return ok
-    if engine.primary in ("decisions_api", "llm"):
-        return _validate_single_order_engine(engine.primary, engine, lines)
-    if not engine.decision_model:
-        ok = False
-        lines.append(
-            f"engine: INVALID — primary is {engine.primary} with no decision_model"
-        )
-        lines.append(
-            "fix: set engine.decision_model to a decisions-catalog id, "
-            "or re-run /route setup"
-        )
-    else:
-        passed, extra = _openrouter_catalog_lines(engine.decision_model)
-        if not passed:
-            ok = False
-        lines.extend(extra)
     return ok
 
 
@@ -1008,22 +943,10 @@ def _validate_engine_model_ids(raw_engine: object, lines: list[str]) -> bool:
 
 def _validate_engine_head(
     raw_engine: object,
-    raw_primary: object,
-    explicit_order: bool,
     lines: list[str],
 ) -> bool:
-    """Judge the raw primary value plus the local base URL (strict)."""
+    """Judge the engine model ids plus the local base URL (strict)."""
     ok = _validate_engine_model_ids(raw_engine, lines)
-    if (
-        isinstance(raw_primary, str)
-        and raw_primary not in _VALID_PRIMARY_ENGINES
-        and not explicit_order
-    ):
-        ok = False
-        lines.append(f"engine: INVALID — unknown primary {raw_primary!r}")
-        lines.append(
-            "fix: set engine.primary to openrouter|local|decisions_api|llm|off"
-        )
     raw_base_url = (
         raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None
     )
@@ -1078,16 +1001,9 @@ def validate_strategy(
         valid = False
     engine = _parse_engine(data.get("engine"))
     raw_engine = data.get("engine")
-    raw_primary = raw_engine.get("primary") if isinstance(raw_engine, dict) else None
-    raw_order = raw_engine.get("order") if isinstance(raw_engine, dict) else None
-    explicit_order = isinstance(raw_engine, dict) and "order" in raw_engine
-    if not _validate_engine_head(raw_engine, raw_primary, explicit_order, lines):
+    if not _validate_engine_head(raw_engine, lines):
         valid = False
-    if explicit_order:
-        engine_ok = _validate_engine_order_chain(raw_engine, raw_order, engine, lines)
-    else:
-        engine_ok = _validate_engine_legacy_primary(raw_engine, engine, lines)
-    if not engine_ok:
+    if not _validate_engine_order_chain(raw_engine, engine, lines):
         valid = False
     _validate_directives(data, lines)
     return ValidationReport(valid=valid, source=source, lines=lines)
@@ -1614,6 +1530,8 @@ def chain_skip_notes(strategy: RoutingStrategy) -> list[str]:
         notes.append("native engine skipped: TYPESAFE_API_KEY not set")
     if "decisions_api" in order and not read_env_api_key("JEV_API_KEY"):
         notes.append("decisions_api engine skipped: JEV_API_KEY not set")
+    if "openrouter" in order and not read_env_api_key("OPENROUTER_API_KEY"):
+        notes.append("openrouter engine skipped: OPENROUTER_API_KEY not set")
     return notes
 
 
@@ -1647,29 +1565,19 @@ def is_pause_detail(detail: str) -> bool:
     return detail.startswith("paused:")
 
 
-_LEGACY_PRIMARY_ORDER = {
-    "openrouter": ["openrouter", "local"],
-    "local": ["local"],
-    "decisions_api": ["decisions_api"],
-    "llm": ["llm"],
-    "off": [],
-}
-"""Legacy primary values mapped to their equivalent engine order (D-01)."""
-
-
 def _effective_order(engine: RoutingEngine) -> list[str]:
-    """Engine order for one strategy: explicit order or legacy mapping.
+    """Engine order for one strategy (sole engine.order schema)."""
+    return list(engine.order)
 
-    An explicit ``order`` drives the chain as listed; None means a
-    legacy file, so ``primary`` maps to its equivalent order
-    (openrouter-then-local, local-only, or empty for off).
-    """
-    if engine.order is not None:
-        return list(engine.order)
-    return list(
-        _LEGACY_PRIMARY_ORDER.get(
-            engine.primary or "openrouter", ["openrouter", "local"]
-        )
+
+def _acc_usage(
+    acc: tuple[int, int, float | None], result: EngineResult
+) -> tuple[int, int, float | None]:
+    """Accumulate decision tokens and cost across engine calls."""
+    return (
+        acc[0] + result.input_tokens,
+        acc[1] + result.output_tokens,
+        _merge_cost(acc[2], result.cost),
     )
 
 
@@ -1760,6 +1668,7 @@ def _decide_effort(
     down: list[str] = []
     informative = False
     truncated = False
+    spent: tuple[int, int, float | None] = (0, 0, None)
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -1768,9 +1677,10 @@ def _decide_effort(
         if result is None:
             continue
         truncated = truncated or result.truncated
+        spent = _acc_usage(spent, result)
         if result.answers is None:
             if result.uncertain:
-                return (None, None, (0, 0, None), name, f"{name} uncertain", truncated)
+                return (None, None, spent, name, f"{name} uncertain", truncated)
             failed, detail = name, _link_detail(name, result.error)
             if _note_link_error(name, result.error, down):
                 informative = True
@@ -1784,10 +1694,10 @@ def _decide_effort(
             failed, detail = name, _link_detail(name, "invalid table")
             informative = True
             continue
-        return top, top_prob, usage_triple, name, "", truncated
+        return top, top_prob, spent, name, "", truncated
     if down and not informative:
-        return (None, None, (0, 0, None), down[-1], _pause_detail(down), truncated)
-    return (None, None, (0, 0, None), failed, detail, truncated)
+        return (None, None, spent, down[-1], _pause_detail(down), truncated)
+    return (None, None, spent, failed, detail, truncated)
 
 
 def _decide_single_candidate(
@@ -1849,7 +1759,7 @@ def _decide_single_candidate(
         return (
             None,
             name,
-            (0, 0, None),
+            usage,
             _with_truncation(effort_detail, effort_truncated),
         )
     fast = RoutingPick(
@@ -1865,7 +1775,7 @@ def _decide_single_candidate(
         return (
             None,
             name,
-            (0, 0, None),
+            usage,
             _with_truncation(
                 f"effort {effort!r} unsupported by {only.id}",
                 effort_truncated,
@@ -1901,7 +1811,8 @@ def _resolve_effort(
     """Read the effort level for a routed candidate (call 2 unless degenerate).
 
     Returns ``(effort, confidence, total, truncated, engine, detail)``;
-    effort None signals a hold, with engine/detail naming the cause.
+    effort None signals a hold, with engine/detail naming the cause and
+    ``total`` preserving all paid decision tokens/spend from both calls.
     """
     if len(candidate.levels) == 1:
         # Degenerate choice: nothing to judge, and a one-option
@@ -1923,23 +1834,15 @@ def _resolve_effort(
         effort_detail,
         effort_truncated,
     ) = _decide_effort(strategy, candidate, state, chain)
-    if effort is None:
-        return (
-            None,
-            None,
-            (0, 0, None),
-            effort_truncated,
-            effort_engine,
-            effort_detail,
-        )
+    combined = (
+        result.input_tokens + effort_usage[0],
+        result.output_tokens + effort_usage[1],
+        _merge_cost(result.cost, effort_usage[2]),
+    )
     return (
         effort,
         effort_confidence,
-        (
-            result.input_tokens + effort_usage[0],
-            result.output_tokens + effort_usage[1],
-            _merge_cost(result.cost, effort_usage[2]),
-        ),
+        combined,
         effort_truncated,
         effort_engine,
         effort_detail,
@@ -1986,6 +1889,7 @@ def _evaluate_model_answer(
     Returns ``(False, None)`` when ``pick_model`` failed schema validation
     (continuing the chain) or ``(True, verdict)`` on route or hard hold.
     """
+    call1_usage = (result.input_tokens, result.output_tokens, result.cost)
     selection = _select_model_from_result(name, result, strategy)
     if selection is None:
         return False, None
@@ -1994,7 +1898,7 @@ def _evaluate_model_answer(
         return True, (
             None,
             name,
-            (0, 0, None),
+            call1_usage,
             _with_truncation(gate_detail, truncated_any),
         )
     candidate = _find_candidate(strategy, model_id)
@@ -2002,7 +1906,7 @@ def _evaluate_model_answer(
         return True, (
             None,
             name,
-            (0, 0, None),
+            call1_usage,
             f"picked candidate {model_id} advertises no levels",
         )
     (
@@ -2017,7 +1921,7 @@ def _evaluate_model_answer(
         return True, (
             None,
             effort_engine,
-            (0, 0, None),
+            total,
             _with_truncation(effort_detail, truncated_any or effort_truncated),
         )
     pick = RoutingPick(
@@ -2034,7 +1938,7 @@ def _evaluate_model_answer(
         return True, (
             None,
             name,
-            (0, 0, None),
+            total,
             _with_truncation(
                 f"effort {pick.effort!r} unsupported by {model_id}", shrunk
             ),
@@ -2055,6 +1959,7 @@ def _run_chain(
     down: list[str] = []
     informative = False
     truncated_any = False
+    prior_spent: tuple[int, int, float | None] = (0, 0, None)
     for name, attempt in chain:
         try:
             result = attempt(strategy, state, questions)
@@ -2064,13 +1969,15 @@ def _run_chain(
             continue
         truncated_any = truncated_any or result.truncated
         if result.answers is None:
+            link_spent = _acc_usage(prior_spent, result)
             if result.uncertain:
                 return (
                     None,
                     name,
-                    (0, 0, None),
+                    link_spent,
                     _with_truncation(f"{name} uncertain", truncated_any),
                 )
+            prior_spent = link_spent
             failed, detail = name, _link_detail(name, result.error)
             if _note_link_error(name, result.error, down):
                 informative = True
@@ -2081,17 +1988,24 @@ def _run_chain(
             name, result, strategy, state, chain, current_model, truncated_any
         )
         if handled and verdict is not None:
-            return verdict
+            v_pick, v_engine, v_usage, v_detail = verdict
+            merged = (
+                prior_spent[0] + v_usage[0],
+                prior_spent[1] + v_usage[1],
+                _merge_cost(prior_spent[2], v_usage[2]),
+            )
+            return (v_pick, v_engine, merged, v_detail)
+        prior_spent = _acc_usage(prior_spent, result)
         failed, detail = name, _link_detail(name, "invalid table")
         informative = True
     if down and not informative:
         return (
             None,
             down[-1],
-            (0, 0, None),
+            prior_spent,
             _with_truncation(_pause_detail(down), truncated_any),
         )
-    return (None, failed, (0, 0, None), _with_truncation(detail, truncated_any))
+    return (None, failed, prior_spent, _with_truncation(detail, truncated_any))
 
 
 def decide(
@@ -2105,40 +2019,14 @@ def decide(
 
     Returns ``(pick, engine, usage, detail)`` where engine names the
     model-decision engine on success and the last attempted engine on
-    hold, usage sums both decision calls into one ``(input, output,
-    reported cost)`` triple (zeros plus None on hold), and detail
-    feeds the hold/route notes (empty on a clean route). Total
-    failure — every engine down or schema-invalid — yields a None
-    pick and the caller holds current (D-08). One chain pass per
-    call; each engine retries at most once on retryable failures
-    only. Connection-level failure on every attempted link pauses
-    routing for the ask with a distinct pause detail (D-09); other
-    holds name engine plus cause. When either call shrank the ask to
-    fit the body cap, the detail carries the truncation marker.
-
-    A below-threshold table holds immediately without trying the next
-    engine: the ask itself is ambiguous, so the retry happens next
-    ask (D-16). Past the gate, a second sequential call chooses the
-    thinking level over only the picked candidate's levels, and the
-    top choice routes ungated with its probability recorded as
-    effort_confidence; the level then passes ``validate_routed_effort``
-    on the switch path. Same-model picks skip that validation (the
-    no-op fast path wins: the hook applies no switch and no effort,
-    so there is nothing to judge). A single-level pick skips the
-    second call — nothing to choose, and a one-option question
-    violates the 2-26 floor — so the lone level rides through with
-    effort_confidence None.
-
-    A single candidate skips the model call but still asks the
-    effort question over the lone candidate's levels (D-15): the
-    verdict carries the decided level with model_confidence None, no
-    tie marker, and call-2-only usage. A lone single-level candidate
-    is fully degenerate — nothing to choose at either stage — so the
-    lone level rides through with no decision call. A lone candidate
-    with no levels holds with no engine call: a one-option choice is
-    invalid (2-26) and there is no effort to pass through.
+    hold, usage sums decision calls into one ``(input, output,
+    reported cost)`` triple (preserving paid tokens/spend across holds
+    and ``Uncertain`` outcomes), and detail feeds the hold/route notes.
     """
-    if _effective_order(strategy.engine) and len(strategy.candidates) == 1:
+    order = _effective_order(strategy.engine)
+    if not order:
+        return (None, "off", (0, 0, None), "routing disabled by config")
+    if len(strategy.candidates) == 1:
         return _decide_single_candidate(
             strategy, current_model=current_model, side=side, ask=ask
         )
@@ -2150,8 +2038,7 @@ def decide(
     }
     chain = _chain_for(strategy)
     if not chain:
-        order = _effective_order(strategy.engine)
-        head = order[0] if order else "off"
+        head = order[0]
         return (None, head, (0, 0, None), f"{head} failed")
     return _run_chain(strategy, state, questions, chain, current_model)
 
@@ -2345,21 +2232,14 @@ def route_status_text(routing: RoutingState, strategy: RoutingStrategy | None) -
     count = len(strategy.candidates)
     noun = "candidate" if count == 1 else "candidates"
     lines.append(f"Strategy: {source} ({count} {noun})")
-    if strategy.engine.order is not None:
-        if not strategy.engine.order:
-            lines.append("Engine: off")
-        else:
-            chain_parts = ", ".join(
-                f"{name} ({decision_model_for(strategy, name) or 'none'})"
-                for name in strategy.engine.order
-            )
-            lines.append(f"Engine: {chain_parts}")
+    if not strategy.engine.order:
+        lines.append("Engine: off")
     else:
-        decision = (
-            decision_model_for(strategy, strategy.engine.primary)
-            or "(no decision model)"
+        chain_parts = ", ".join(
+            f"{name} ({decision_model_for(strategy, name) or 'none'})"
+            for name in strategy.engine.order
         )
-        lines.append(f"Engine: {strategy.engine.primary} ({decision})")
+        lines.append(f"Engine: {chain_parts}")
     return "\n".join(lines)
 
 

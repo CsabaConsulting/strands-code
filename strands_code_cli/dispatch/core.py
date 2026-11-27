@@ -786,9 +786,11 @@ _SETUP_DONE = "setup-done-pick"
 _SETUP_ABORTED = "Setup cancelled — no changes written."
 
 _ENGINE_LABELS = {
+    "native": "Native TypeSafe API (needs TYPESAFE_API_KEY)",
+    "decisions_api": "TypeSafe Decisions API (needs JEV_API_KEY)",
     "openrouter": "OpenRouter API (needs OPENROUTER_API_KEY at runtime)",
     "local": "Local Ollama daemon",
-    "native": "Native TypeSafe API",
+    "llm": "Direct LLM model call",
 }
 """Display labels for the setup order builder (D-01, D-06)."""
 
@@ -1227,31 +1229,23 @@ def _setup_pick_order_typed(available: list[str]) -> list[str] | None:
 
 
 def _setup_engine_order() -> list[str] | None:
-    """D-02 order proposal plus the builder when declined (D-01, D-06).
+    """Order proposal auto-detecting keyed engines plus 5-engine builder."""
+    from strands_code_cli.routing.core import (
+        decisions_api_engine_ready,
+        local_engine_ready,
+        native_engine_ready,
+    )
 
-    Native leads the proposal only when the TypeSafe key is present;
-    otherwise the proposal is the current OpenRouter-then-local order
-    and native stays out of every offered choice. An empty line
-    accepts, "no" runs the builder, and EOF or Ctrl-C aborts. A lazy
-    daemon probe notes an unreachable local link before the prompt.
-    """
-    from strands_code_cli.routing.core import local_engine_ready, native_engine_ready
-
-    has_key = native_engine_ready()
-    if has_key:
-        proposal = ["native", "openrouter", "local"]
-        print_plain(
-            console,
-            "Proposed engine order: native, openrouter, local "
-            "(TypeSafe key found — native first).",
-        )
-    else:
-        proposal = ["openrouter", "local"]
-        print_plain(
-            console,
-            "Proposed engine order: openrouter, local "
-            "(no TypeSafe key — native hidden).",
-        )
+    proposal: list[str] = []
+    if native_engine_ready():
+        proposal.append("native")
+    if decisions_api_engine_ready():
+        proposal.append("decisions_api")
+    proposal.extend(["openrouter", "local"])
+    print_plain(
+        console,
+        f"Proposed engine order: {', '.join(proposal)}.",
+    )
     if not local_engine_ready(None, "nimble"):
         print_plain(
             console,
@@ -1264,9 +1258,7 @@ def _setup_engine_order() -> list[str] | None:
         return None
     if use_proposal:
         return proposal
-    available = (
-        ["native", "openrouter", "local"] if has_key else ["openrouter", "local"]
-    )
+    available = ["native", "decisions_api", "openrouter", "local", "llm"]
     if sys.stdin.isatty():
         return _setup_pick_order_tty(available)
     return _setup_pick_order_typed(available)
@@ -1363,41 +1355,109 @@ def _setup_gather_candidates(
     return (candidates, decision_models, decision_entries)
 
 
+def _setup_decisions_api_model() -> str | None:
+    """Prompt for decisions_api model id (empty takes default)."""
+    from strands_code_cli.routing.core import (
+        DECISIONS_API_DEFAULT_MODEL,
+        valid_model_id,
+    )
+
+    for attempt in range(2):
+        _prompt_inline(
+            f"Decisions API model id [{DECISIONS_API_DEFAULT_MODEL}] "
+            "(empty takes default): "
+        )
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return DECISIONS_API_DEFAULT_MODEL
+        if valid_model_id(typed):
+            return typed
+        if attempt == 0:
+            print_plain(
+                console,
+                "Invalid model id (whitespace or control characters) — try again.",
+            )
+            continue
+        return None
+    return None
+
+
+def _setup_llm_model() -> str | None:
+    """Prompt for LLM routing model id (e.g. openai/gpt-4o-mini; empty aborts)."""
+    from strands_code_cli.routing.core import valid_model_id
+
+    for attempt in range(2):
+        _prompt_inline("LLM routing model id (e.g. openai/gpt-4o-mini, empty aborts): ")
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return None
+        if valid_model_id(typed):
+            return typed
+        if attempt == 0:
+            print_plain(
+                console,
+                "Invalid model id (whitespace or control characters) — try again.",
+            )
+            continue
+        return None
+    return None
+
+
 def _setup_gather_engine_models(
     order: list,
     decision_entries: list[dict[str, Any]],
     decision_models: object,
-) -> tuple[str | None, str | None, str | None] | None:
+) -> dict[str, str] | None:
     """Pick per-engine models for listed engines; None aborts unchanged."""
-    decision: str | None = None
-    if "openrouter" in order:
-        decision = _setup_pick_decision(
-            decision_entries, typed_only=decision_models is None
-        )
-        if decision is None:
+    pickers: list[tuple[str, str, Any]] = [
+        (
+            "openrouter",
+            "decision_model",
+            lambda: _setup_pick_decision(
+                decision_entries, typed_only=decision_models is None
+            ),
+        ),
+        ("local", "local_model", _setup_local_model),
+        ("native", "native_model", _setup_pick_native_model),
+        ("decisions_api", "decisions_api_model", _setup_decisions_api_model),
+        ("llm", "llm_model", _setup_llm_model),
+    ]
+    selected = set(order)
+    models: dict[str, str] = {}
+    for engine_name, yaml_key, fn in pickers:
+        if engine_name not in selected:
+            continue
+        picked = fn()
+        if picked is None:
             return None
-    local_model: str | None = None
-    if "local" in order:
-        local_model = _setup_local_model()
-        if local_model is None:
-            return None
-    native_model: str | None = None
-    if "native" in order:
-        native_model = _setup_pick_native_model()
-        if native_model is None:
-            return None
-    return (decision, local_model, native_model)
+        models[yaml_key] = picked
+    return models
+
+
+_ENGINE_MODEL_DISPLAY = (
+    ("decision_model", "openrouter"),
+    ("local_model", "local"),
+    ("native_model", "native"),
+    ("decisions_api_model", "decisions_api"),
+    ("llm_model", "llm"),
+)
 
 
 def _setup_finalize(
     scope: str,
     order: list,
     candidates: list[str],
-    decision: str | None,
-    local_model: str | None,
-    native_model: str | None,
+    engine_models: dict[str, str],
+    *,
+    routing: RoutingState | None = None,
 ) -> str:
-    """Confirm notes/directives, write the strategy, report the outcome."""
+    """Confirm notes/directives, write the strategy, enable routing, report outcome."""
     from strands_code_cli.routing.core import save_strategy
 
     skip_notes = _setup_confirm(
@@ -1411,26 +1471,20 @@ def _setup_finalize(
     payload: dict[str, Any] = {
         "candidates": [{"id": candidate} for candidate in candidates],
         "directives": directives,
-        "engine": {"order": order, "skip_notes": skip_notes},
+        "engine": {"order": order, "skip_notes": skip_notes, **engine_models},
     }
-    if decision is not None:
-        payload["engine"]["decision_model"] = decision
-    if local_model is not None:
-        payload["engine"]["local_model"] = local_model
-    if native_model is not None:
-        payload["engine"]["native_model"] = native_model
     try:
         path = save_strategy(payload, scope)
     except (ValueError, OSError) as exc:
         return f"Setup failed — {exc} (nothing written)."
+    if routing is not None and candidates:
+        routing.set("on")
     noun = "candidate" if len(candidates) == 1 else "candidates"
-    model_bits = []
-    if decision is not None:
-        model_bits.append(f"openrouter {decision}")
-    if local_model is not None:
-        model_bits.append(f"local {local_model}")
-    if native_model is not None:
-        model_bits.append(f"native {native_model}")
+    model_bits = [
+        f"{label} {sanitize_display(engine_models[key])}"
+        for key, label in _ENGINE_MODEL_DISPLAY
+        if key in engine_models
+    ]
     models_bit = f" ({', '.join(model_bits)})" if model_bits else ""
     return (
         f"Routing strategy saved ({scope}): {path}\n"
@@ -1441,21 +1495,8 @@ def _setup_finalize(
     )
 
 
-def _route_setup_message() -> str:
-    """Guided ``/route setup``: scope, order, candidates, models, directives.
-
-    Proposes the availability-driven engine order (native first with
-    a key, else OpenRouter-then-local) with an order builder on
-    decline, then enumerates the live OpenRouter chat catalog for
-    candidates and — for listed engines only — the live decisions
-    catalog for the decider, the Ollama tag, and the pinned Jev
-    list — never hardcoded names (D-06), never key prompts
-    (T-08-34) — and writes a valid strategy atomically; a failed
-    catalog fetch falls back to a typed-id path instead of crashing
-    (T-08-33). ESC or empty input aborts with the session unchanged
-    (empty accepts the proposed order and the nimble default, and
-    keeps skip notes on).
-    """
+def _route_setup_message(routing: RoutingState | None = None) -> str:
+    """Guided ``/route setup``: scope, order, candidates, models, directives."""
     scope = _setup_ask(
         "Where should the strategy live",
         [
@@ -1472,13 +1513,12 @@ def _route_setup_message() -> str:
     if gathered is None:
         return _SETUP_ABORTED
     candidates, decision_models, decision_entries = gathered
-    picked = _setup_gather_engine_models(order, decision_entries, decision_models)
-    if picked is None:
-        return _SETUP_ABORTED
-    decision, local_model, native_model = picked
-    return _setup_finalize(
-        scope, order, candidates, decision, local_model, native_model
+    engine_models = _setup_gather_engine_models(
+        order, decision_entries, decision_models
     )
+    if engine_models is None:
+        return _SETUP_ABORTED
+    return _setup_finalize(scope, order, candidates, engine_models, routing=routing)
 
 
 def _route_validate_message() -> str:
@@ -1574,7 +1614,7 @@ def _route_message(rest: str, routing: RoutingState | None) -> str:
     if verb in ("on", "off"):
         return holder.set(verb)
     if verb == "setup":
-        return _route_setup_message()
+        return _route_setup_message(holder)
     if verb == "validate":
         return _route_validate_message()
     return ROUTE_USAGE

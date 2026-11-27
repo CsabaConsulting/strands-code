@@ -787,7 +787,15 @@ def decision_result_to_engine_result(
     answers: dict[str, Any] = {}
     for q_id in raw_questions:
         if q_id not in result.answers:
-            return EngineResult(answers=None, error="invalid body", truncated=truncated)
+            return EngineResult(
+                answers=None,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                cost=cost,
+                model=model_name,
+                error="invalid body",
+                truncated=truncated,
+            )
         val = result.answers[q_id]
         if llm_mode:
             answers[q_id] = {"type": "llm_choice", "choice": val}

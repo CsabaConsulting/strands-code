@@ -250,7 +250,6 @@ class TestBoxConfigGenerationAndEgress:
             routing_strategy=RoutingStrategy(
                 candidates=[RoutingCandidate(id="google/gemini-3.8-flash")],
                 engine=RoutingEngine(
-                    primary="native",
                     order=["native", "llm", "decisions_api"],
                     llm_model="openai/gpt-6.2-sol",
                 ),
@@ -399,7 +398,7 @@ class TestBoxConfigGenerationAndEgress:
         # Empty routing order disables routing instead of falling back to openrouter.
         disabled = RoutingStrategy(
             candidates=[RoutingCandidate(id="anthropic/claude-sonnet-5-5")],
-            engine=RoutingEngine(primary="openrouter", order=[]),
+            engine=RoutingEngine(order=[]),
         )
         res_empty = init_box_config(
             repo,
@@ -443,7 +442,7 @@ class TestBoxConfigGenerationAndEgress:
             ),
             routing_strategy=RoutingStrategy(
                 candidates=[RoutingCandidate(id="ollama/llama3.2")],
-                engine=RoutingEngine(primary="local"),
+                engine=RoutingEngine(order=["local"]),
             ),
             env={
                 "HOME": str(tmp_path),

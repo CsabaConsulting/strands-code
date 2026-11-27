@@ -897,7 +897,7 @@ class TestEngineChain:
         )
         assert pick is None  # ambiguous ask: hold, retry next ask
         assert engine == "openrouter"
-        assert usage == (0, 0, None)
+        assert usage == (384, 41, pytest.approx(0.000016128))
         assert detail == "confidence 41% < 62%"
         assert urls == [OPENROUTER_DECISIONS_URL]  # local never tried
 
@@ -988,7 +988,7 @@ class TestEngineChain:
 
         _mock_httpx(monkeypatch, _with_preflight(_fake))
         strategy = _strategy(
-            engine=RoutingEngine(primary="local", local_model="nimble")
+            engine=RoutingEngine(order=["local"], local_model="nimble")
         )
         pick, engine, _, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
@@ -1303,7 +1303,7 @@ class TestLocalEngine:
         assert detail == "paused: all engines unreachable (openrouter)"
         assert len(posts) == 1  # refused links never retry
 
-    def test_primary_local_skips_the_api(self, monkeypatch):
+    def test_order_local_skips_the_api(self, monkeypatch):
         urls: list[str] = []
 
         def _fake(request):
@@ -1315,33 +1315,33 @@ class TestLocalEngine:
             return _json_response(self._local_payload())
 
         _mock_httpx(monkeypatch, _with_preflight(_fake))
-        strategy = self._dual(primary="local")
+        strategy = self._dual(order=["local"])
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
         assert len(urls) == 2  # both calls stay local
         assert pick is not None and engine == "local"
 
-    def test_primary_local_failure_holds_without_api_call(self, monkeypatch):
+    def test_order_local_failure_holds_without_api_call(self, monkeypatch):
         def _boom(request):
             raise httpx.ConnectError("daemon down", request=request)
 
         _mock_httpx(monkeypatch, _boom)
-        strategy = self._dual(primary="local")
+        strategy = self._dual(order=["local"])
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "local"
 
-    def test_primary_off_load_yields_none_with_zero_calls(
+    def test_empty_order_load_yields_none_with_zero_calls(
         self, tmp_path, monkeypatch, capsys
     ):
         global_path = tmp_path / "routing.yaml"
         global_path.write_text(
             "candidates:\n"
             f"  - id: {HAIKU}\n"
-            "engine: {primary: off, decision_model: cheap/decider}\n",
+            "engine: {order: [], decision_model: cheap/decider}\n",
             encoding="utf-8",
         )
 
@@ -1355,29 +1355,17 @@ class TestLocalEngine:
         )
         assert capsys.readouterr().out == ""  # specifically no hold note
 
-    def test_quoted_off_disables_routing(self, tmp_path):
-        path = tmp_path / "routing.yaml"
-        path.write_text(
-            "candidates:\n"
-            f"  - id: {HAIKU}\n"
-            "engine: {primary: 'off', decision_model: cheap/decider}\n",
-            encoding="utf-8",
-        )
-        assert (
-            load_strategy(global_path=path, repo_path=tmp_path / "missing.yaml") is None
-        )
-
-    def test_repo_off_shadows_global_on(self, tmp_path):
+    def test_repo_empty_order_shadows_global_on(self, tmp_path):
         repo_path = tmp_path / "repo.yaml"
         repo_path.write_text(
-            f"candidates:\n  - id: {HAIKU}\nengine: {{primary: off}}\n",
+            f"candidates:\n  - id: {HAIKU}\nengine: {{order: []}}\n",
             encoding="utf-8",
         )
         global_path = tmp_path / "global.yaml"
         global_path.write_text(
             "candidates:\n"
             f"  - id: {HAIKU}\n"
-            "engine: {primary: openrouter, decision_model: cheap/decider}\n",
+            "engine: {order: [openrouter], decision_model: cheap/decider}\n",
             encoding="utf-8",
         )
         assert load_strategy(global_path=global_path, repo_path=repo_path) is None
@@ -1421,7 +1409,7 @@ class TestLocalEngine:
         path.write_text(
             "candidates:\n"
             f"  - id: {HAIKU}\n"
-            "engine: {primary: local, local_model: nimble, "
+            "engine: {order: [local], local_model: nimble, "
             "local_base_url: 'ftp://files.local/ollama'}\n",
             encoding="utf-8",
         )
@@ -1444,7 +1432,7 @@ class TestLocalEngine:
             return _json_response(self._local_payload())
 
         _mock_httpx(monkeypatch, _with_preflight(_fake))
-        strategy = self._dual(primary="local")
+        strategy = self._dual(order=["local"])
         pick, _, _, _ = decide(strategy, current_model=SONNET, side=False, ask="hi")
         assert pick is not None
         assert seen["url"] == f"{OLLAMA_DEFAULT_HOST}/v1/systemone"
@@ -1494,7 +1482,7 @@ class TestLocalEngine:
         assert (result.input_tokens, result.output_tokens) == (90, 12)
         assert result.cost is None
         _, _, usage, _ = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert usage == (120, 16, None)  # both local calls summed, still costless
 
@@ -1536,7 +1524,7 @@ class TestLocalEngine:
             raise AssertionError("invalid base URL: no call")
 
         _mock_httpx(monkeypatch, _boom)
-        strategy = self._dual(primary="local", local_base_url="gopher://daemon.local/")
+        strategy = self._dual(order=["local"], local_base_url="gopher://daemon.local/")
         pick, engine, _, _ = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
@@ -1552,7 +1540,7 @@ class TestLocalEngine:
 
         _mock_httpx(monkeypatch, _with_preflight(_fake))
         pick, engine, _, _ = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "local"
@@ -1588,7 +1576,7 @@ class TestLocalEngine:
 
         _mock_httpx(monkeypatch, _recording)
         pick, engine, _, detail = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is not None and pick.model == HAIKU
         assert engine == "local"
@@ -1608,7 +1596,7 @@ class TestLocalEngine:
 
         _mock_httpx(monkeypatch, _recording)
         pick, engine, usage, detail = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "local"
@@ -1622,7 +1610,7 @@ class TestLocalEngine:
 
         _mock_httpx(monkeypatch, _with_preflight(_boom, tags=("other-model:1b",)))
         pick, engine, usage, detail = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None
         assert engine == "local"
@@ -1711,7 +1699,7 @@ class TestLocalEngine:
         _mock_httpx(monkeypatch, _refused)
         assert local_engine_ready(OLLAMA_DEFAULT_HOST, "nimble") is False
         pick, engine, _, detail = decide(
-            self._dual(primary="local"), current_model=SONNET, side=False, ask="hi"
+            self._dual(order=["local"]), current_model=SONNET, side=False, ask="hi"
         )
         assert pick is None  # the hook holds; nothing raised to it
         assert engine == "local"
@@ -1863,24 +1851,28 @@ class TestNativeEngine:
         assert result.model == "jev-1.13.0"
 
     @pytest.mark.parametrize(
-        "primary, mapped",
+        "order,expected",
         [
-            ("openrouter", ["openrouter", "local"]),
-            ("local", ["local"]),
-            ("off", []),
+            (["openrouter", "local"], ["openrouter", "local"]),
+            (["local"], ["local"]),
+            (["decisions_api"], ["decisions_api"]),
+            (["llm"], ["llm"]),
+            ([], []),
         ],
     )
-    def test_legacy_primary_maps_to_identical_chain(self, monkeypatch, primary, mapped):
+    def test_order_drives_chain_verbatim(self, monkeypatch, order, expected):
         import strands_code_cli.routing.core as routing_mod
 
         monkeypatch.setattr(routing_mod, "local_engine_ready", lambda *args: True)
-        base = dict(decision_model="cheap/decider", local_model="nimble")
-        legacy = _strategy(engine=RoutingEngine(primary=primary, **base))
-        ordered = _strategy(engine=RoutingEngine(order=list(mapped), **base))
-        legacy_chain = _chain_for(legacy)
-        ordered_chain = _chain_for(ordered)
-        assert [name for name, _ in ordered_chain] == [name for name, _ in legacy_chain]
-        assert [fn for _, fn in ordered_chain] == [fn for _, fn in legacy_chain]
+        strategy = _strategy(
+            engine=RoutingEngine(
+                order=list(order),
+                decision_model="cheap/decider",
+                local_model="nimble",
+                llm_model="openai/gpt-4o-mini",
+            )
+        )
+        assert [name for name, _ in _chain_for(strategy)] == expected
 
     def test_native_first_attempts_native_before_openrouter(self, monkeypatch):
         urls: list[str] = []
@@ -1942,26 +1934,93 @@ class TestNativeEngine:
         assert pick is not None and pick.model == HAIKU
         assert engine == "openrouter"
 
-    def test_empty_order_holds_like_primary_off(self):
+    def test_empty_order_disables_cleanly_without_off_failed(self):
         strategy = _strategy(engine=RoutingEngine(order=[]))
         pick, engine, usage, detail = decide(
             strategy, current_model=SONNET, side=False, ask="hi"
         )
-        assert pick is None
-        assert engine == "off"
-        assert usage == (0, 0, None)
-        assert detail == "off failed"
+        assert (pick, engine, usage, detail) == (
+            None,
+            "off",
+            (0, 0, None),
+            "routing disabled by config",
+        )
         lone = _strategy(
             candidates=_candidates()[:1],
             engine=RoutingEngine(order=[]),
         )
-        pick, engine, usage, detail = decide(
-            lone, current_model=SONNET, side=False, ask="hi"
+        assert decide(lone, current_model=SONNET, side=False, ask="hi") == (
+            None,
+            "off",
+            (0, 0, None),
+            "routing disabled by config",
         )
-        assert pick is None
-        assert engine == "off"
-        assert usage == (0, 0, None)
-        assert detail == "off failed"
+
+    def test_openrouter_skip_note_when_key_missing(self, monkeypatch):
+        from strands_code_cli.routing.core import chain_skip_notes
+
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        strategy = _strategy(
+            engine=RoutingEngine(order=["openrouter", "local"], decision_model="c/d")
+        )
+        assert (
+            "openrouter engine skipped: OPENROUTER_API_KEY not set"
+            in chain_skip_notes(strategy)
+        )
+
+    def test_uncertain_and_effort_hold_preserve_paid_usage(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from strands.decisions import Uncertain
+
+        import strands_code_cli.routing.core as routing_mod
+        from strands_code_cli.routing.transports import decision_result_to_engine_result
+
+        dec_res = SimpleNamespace(
+            answers={"pick_model": Uncertain(reason="ambiguous")},
+            usage={"inputTokens": 120, "outputTokens": 8},
+            metadata=SimpleNamespace(
+                model_id="openai/gpt-4o-mini", probabilities=None, confidence=None
+            ),
+        )
+        eng_res = decision_result_to_engine_result(
+            dec_res, raw_questions={"pick_model": {}}, cost=0.0012, truncated=False
+        )
+        assert (eng_res.input_tokens, eng_res.output_tokens, eng_res.cost) == (
+            120,
+            8,
+            0.0012,
+        )
+        monkeypatch.setattr(
+            routing_mod, "decide_via_decisions_api", lambda **_kw: eng_res
+        )
+        monkeypatch.setenv("JEV_API_KEY", "test-jev")
+        strat = _strategy(engine=RoutingEngine(order=["decisions_api"]))
+        pick, engine, usage, detail = decide(
+            strat, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick is None and engine == "decisions_api" and "uncertain" in detail
+        assert usage == (120, 8, pytest.approx(0.0012))
+
+        calls = {"n": 0}
+
+        def _call2_fail_fake(request):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _json_response(
+                    _route_payload(input_tokens=200, output_tokens=10, cost=0.0020)
+                )
+            return _http_error(400)
+
+        _mock_httpx(monkeypatch, _call2_fail_fake)
+        or_strat = _strategy(
+            engine=RoutingEngine(order=["openrouter"], decision_model="cheap/decider")
+        )
+        pick2, engine2, usage2, _ = decide(
+            or_strat, current_model=SONNET, side=False, ask="hi"
+        )
+        assert pick2 is None and engine2 == "openrouter"
+        assert usage2 == (200, 10, pytest.approx(0.0020))
 
 
 class TestNativeFaults:
@@ -2449,7 +2508,7 @@ class TestRoutedEffort:
         )
         assert pick is None
         assert engine == "openrouter"
-        assert usage == (0, 0, None)
+        assert usage == (768, 82, pytest.approx(0.000032256))
         assert detail == f"effort 'max' unsupported by {HAIKU}"
 
     def test_single_level_pick_skips_effort_call(self, monkeypatch):
@@ -2484,7 +2543,7 @@ class TestRoutedEffort:
         )
         assert pick is None  # no level to route: hold, never guess
         assert engine == "openrouter"
-        assert usage == (0, 0, None)
+        assert usage == (384, 41, pytest.approx(0.000016128))
         assert detail == "openrouter invalid table"
 
     def test_cost_absent_effort_keeps_call_1_spend(self, monkeypatch):
@@ -2675,6 +2734,7 @@ class TestSingleCandidateFastPath:
                 "effort_confidence": 0.7,
                 "tie_break": False,
                 "engine": "openrouter",
+                "decision_engine": "openrouter",
                 "input_tokens": 384,
                 "output_tokens": 41,
                 "decision_cost": 0.000016128,
@@ -2750,7 +2810,7 @@ class TestLiveEngines:
             strategy = _strategy(
                 candidates=_candidates()[:2],
                 engine=RoutingEngine(
-                    primary="local",
+                    order=["local"],
                     local_model="stub-model",
                     local_base_url=f"http://127.0.0.1:{port}",
                 ),

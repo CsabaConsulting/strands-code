@@ -449,13 +449,17 @@ class TestBlendedTotalsAndSplit:
         assert lines[0].endswith("$0.0006 actual")
         assert "  (actual $0.0006 + estimated $0.0010)" in report.splitlines()
 
-    def test_routing_absent_cost_bare_zero(self):
-        event = _routed_event(decision_cost=None)
-        report = cost_report([], "a/routed", routing=[event])
+    def test_routing_absent_cost_renders_na_when_paid_or_zero_when_unpaid(self):
+        paid_unpriced = _routed_event(decision_cost=None)
+        report = cost_report([], "a/routed", routing=[paid_unpriced])
         lines = _routing_lines(report)
         assert len(lines) == 1
-        assert lines[0].endswith("$0.0000")
+        assert lines[0].endswith("cost n/a")
         assert "actual" not in lines[0]
+
+        zero_event = _routed_event(decision_cost=None, input_tokens=0, output_tokens=0)
+        zero_report = cost_report([], "a/routed", routing=[zero_event])
+        assert _routing_lines(zero_report)[0].endswith("$0.0000")
 
     def test_absent_routing_cost_never_opens_lane(self):
         turns = [_session_row(turn=1, input_tokens=4000, output_tokens=0)]
@@ -581,7 +585,7 @@ class TestRoutingEntries:
             "  ask 1: a/routed (low) [model 85%, effort n/a] via local $0.0000"
         ]
 
-    def test_native_entry_renders_computed_spend_with_marker(self):
+    def test_native_entry_renders_computed_spend_in_estimated_lane(self):
         from strands_code_cli.routing.core import TYPESAFE_INPUT_USD_PER_MTOK
 
         event = _routed_event(
@@ -593,7 +597,7 @@ class TestRoutingEntries:
         )
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
-            "  ask 1: a/routed (low) [model 85%, effort n/a] via native $0.0420 actual"
+            "  ask 1: a/routed (low) [model 85%, effort n/a] via native $0.0420"
         ]
         assert "Prices: native computed input rate." in report
 
@@ -657,7 +661,7 @@ class TestRoutingEntries:
             "  ask ?: ? [model n/a, effort n/a] via ? $0.0000"
         ]
 
-    def test_decisions_api_entry_renders_zero_actual_spend(self):
+    def test_decisions_api_entry_renders_cost_na(self):
         event = _routed_event(
             engine="decisions_api",
             input_tokens=300,
@@ -667,8 +671,24 @@ class TestRoutingEntries:
         )
         report = cost_report([], "a/routed", routing=[event])
         assert _routing_lines(report) == [
-            "  ask 1: a/routed (low) [model 85%, effort n/a] via decisions_api $0.0000"
+            "  ask 1: a/routed (low) [model 85%, effort n/a] via decisions_api cost n/a"
         ]
+
+    def test_resolve_held_native_routes_to_estimated_lane_via_decision_engine(self):
+        event = _routed_event(
+            engine="resolve",
+            decision_engine="native",
+            input_tokens=1000000,
+            output_tokens=7,
+            decision_cost=0.0420,
+            decision_model="jev-1.13.0",
+            held=True,
+        )
+        turns = [_session_row(turn=1, reported_cost=0.0100)]
+        report = cost_report(turns, "a/routed", routing=[event])
+        assert "via resolve [held] $0.0420" in report
+        assert "via resolve [held] $0.0420 actual" not in report
+        assert "  (actual $0.0100 + estimated $0.0420)" in report.splitlines()
 
     def test_llm_entry_renders_and_folds_estimated_spend_lane(self, monkeypatch):
         monkeypatch.setattr(

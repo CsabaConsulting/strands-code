@@ -487,8 +487,9 @@ def _routing_line(event: dict[str, Any]) -> str:
         model = event.get("model", "?")
         effort = event.get("effort", "") or ""
         engine = event.get("engine", "?")
-        int(event.get("input_tokens", 0))
-        int(event.get("output_tokens", 0))
+        cost_engine = event.get("decision_engine") or engine
+        in_tok = int(event.get("input_tokens", 0))
+        out_tok = int(event.get("output_tokens", 0))
     except (TypeError, ValueError):
         return "  ask ?: unparseable routing event"
     head = f"  ask {ask}{side}: {model}"
@@ -505,9 +506,13 @@ def _routing_line(event: dict[str, Any]) -> str:
         head += " [held]"
     spend = _reported_spend(event)
     if spend is not None:
-        if engine == "llm":
+        if cost_engine in ("llm", "native"):
             return f"{head} ${spend:.4f}"
         return f"{head} ${spend:.4f} actual"
+    if cost_engine == "decisions_api" or (
+        cost_engine != "local" and (in_tok > 0 or out_tok > 0)
+    ):
+        return f"{head} cost n/a"
     return f"{head} $0.0000"
 
 
@@ -585,7 +590,8 @@ def _fold_routing_events(
         spend = _reported_spend(event)
         if spend is None:
             continue
-        if event.get("engine") == "llm":
+        cost_engine = event.get("decision_engine") or event.get("engine")
+        if cost_engine in ("llm", "native"):
             has_estimated = True
             total_estimated += spend
         else:
@@ -596,7 +602,7 @@ def _fold_routing_events(
         if not decision_model:
             continue
         provenance = price_provenance(decision_model)
-        if event.get("engine") == "native" and provenance == "unknown":
+        if cost_engine == "native" and provenance == "unknown":
             provenance = "native computed input rate"
         if provenance not in provenances:
             provenances.append(provenance)
@@ -712,6 +718,12 @@ def refresh_report(summary: dict[str, Any]) -> str:
         lines.append(f"OpenRouter: {providers['error']}.")
     else:
         lines.append(f"OpenRouter: {providers.get('models', 0)} models.")
+    decisions = summary.get("decisions")
+    if isinstance(decisions, dict):
+        if "error" in decisions:
+            lines.append(f"Decisions: {decisions['error']}.")
+        else:
+            lines.append(f"Decisions: {decisions.get('models', 0)} models.")
     return "\n".join(lines)
 
 

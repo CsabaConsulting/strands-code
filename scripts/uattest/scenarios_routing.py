@@ -223,7 +223,7 @@ def scenario_r2():
                 "directives: >-\n"
                 "  Always stay on the current model.\n"
                 "engine:\n"
-                "  primary: local\n"
+                "  order: [local]\n"
                 "  local_model: tev1:0.8b\n"
             ),
         )
@@ -288,7 +288,7 @@ def scenario_r3():
                 "directives: >-\n"
                 "  Always stay on the current model.\n"
                 "engine:\n"
-                "  primary: openrouter\n"
+                "  order: [openrouter]\n"
                 f"  decision_model: {decision}\n"
             ),
         )
@@ -378,7 +378,7 @@ def scenario_r4():
                 "directives: >-\n"
                 "  Always stay on the current model.\n"
                 "engine:\n"
-                "  primary: openrouter\n"
+                "  order: [openrouter]\n"
                 f"  decision_model: {decision}\n"
             ),
         )

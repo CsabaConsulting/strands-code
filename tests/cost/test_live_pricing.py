@@ -700,6 +700,7 @@ class TestRefreshCaches:
         report = cost_context.refresh_report(summary)
         assert "us-west-2" in report and "7 models" in report
         assert "OpenRouter: 2 models." in report
+        assert "Decisions: 2 models." in report
 
     def test_refresh_stores_decisions_cache_for_validate(self, monkeypatch):
         _fake_fetch(monkeypatch)

@@ -1026,6 +1026,7 @@ class TestCostRouting:
                 "effort_confidence": 0.7,
                 "tie_break": False,
                 "engine": "openrouter",
+                "decision_engine": "openrouter",
                 "input_tokens": 240,  # both decision calls merged
                 "output_tokens": 50,
                 "decision_cost": 0.0002 + 0.0002,
@@ -1139,6 +1140,7 @@ class TestCostRouting:
                 "effort_confidence": None,
                 "tie_break": False,
                 "engine": "openrouter",
+                "decision_engine": "openrouter",
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "decision_cost": None,
@@ -1823,3 +1825,61 @@ class TestOptInEngineLoopAndBtw:
         ctx.build("ambiguous?")
         assert agent2.messages == prior_msgs
         assert btw_events[-1]["held"] is True
+
+    def test_route_pre_turn_failed_switch_records_single_held_without_phantom_note(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        strategy = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+            ],
+            directives="trivial asks go cheap",
+            engine=RoutingEngine(order=["native"], native_model="jev-1.13.0"),
+        )
+        monkeypatch.setattr(routing_mod, "load_strategy", lambda **kw: strategy)
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_typesafe",
+            lambda **kw: routing_mod.EngineResult(
+                answers={
+                    "pick_model": {
+                        "type": "choice",
+                        "choice": HAIKU,
+                        "probabilities": {HAIKU: 0.9, NOVA_MICRO: 0.1},
+                        "confidence": 0.9,
+                    }
+                },
+                input_tokens=100,
+                output_tokens=4,
+                cost=0.0042,
+            ),
+        )
+        monkeypatch.setattr(
+            loop_mod,
+            "apply_model_action",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        events: list = []
+        served = loop_mod._route_pre_turn(
+            agent,
+            current_model=NOVA_MICRO,
+            ask_text="hello",
+            rich=None,
+            index=index,
+            session_id=index.mint(),
+            stash_path=None,
+            routing=RoutingState(initial="on"),
+            routing_events=events,
+        )
+        assert served == NOVA_MICRO
+        assert len(events) == 1
+        assert events[0]["held"] is True
+        assert events[0]["engine"] == "resolve"
+        assert events[0]["decision_engine"] == "native"
+        out = capsys.readouterr().out
+        assert "Routed \u2192" not in out
+        assert "Routing held" in out

@@ -192,7 +192,7 @@ def calibration_strategy(
         candidates=candidates,
         directives=CALIBRATION_DIRECTIVES,
         engine=RoutingEngine(
-            primary="openrouter",
+            order=["openrouter", "local"],
             decision_model=decision_model,
             local_model=local_model,
             native_model=native_model,

@@ -133,7 +133,7 @@ class TestSetupOrderProposal:
         assert "Proposed engine order: native, openrouter, local" in out
         assert "local link will skip" not in out
 
-    def test_key_absent_hides_native_from_every_choice(
+    def test_key_absent_proposes_openrouter_local_while_offering_all_five(
         self, tmp_path, monkeypatch, capsys
     ):
         repo_path, _ = _setup_paths(monkeypatch, tmp_path)
@@ -143,8 +143,9 @@ class TestSetupOrderProposal:
             monkeypatch,
             [
                 "repo",
-                "local",  # builder primary
-                "openrouter",  # builder fallback (last: no done round)
+                "local",  # builder first
+                "openrouter",  # builder fallback
+                _SETUP_DONE,
                 "good/cheap",
                 "decide/cheap",
             ],
@@ -153,16 +154,63 @@ class TestSetupOrderProposal:
         action, message = _run_setup(tmp_path)
         assert action == "reply"
         assert "saved" in message
-        offered = [value for _, opts in calls for value, _ in opts]
-        assert "native" not in offered
-        assert NATIVE_JEV_PIN not in offered
-        assert NATIVE_JEV_ALIAS not in offered
+        offered = {value for _, opts in calls for value, _ in opts}
+        assert {"native", "decisions_api", "openrouter", "local", "llm"} <= offered
         data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
         assert data["engine"]["order"] == ["local", "openrouter"]
         assert "native_model" not in data["engine"]
         assert "engine order local, openrouter" in message
         out = capsys.readouterr().out
         assert "Proposed engine order: openrouter, local" in out
+
+    def test_decisions_api_and_llm_setup_auto_enables_routing_state(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.routing.core import (
+            DECISIONS_API_DEFAULT_MODEL,
+            RoutingState,
+        )
+
+        repo_path, _ = _setup_paths(monkeypatch, tmp_path)
+        _setup_catalog(monkeypatch)
+        monkeypatch.setenv("JEV_API_KEY", "test-jev-key")
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+        _scripted_radio(
+            monkeypatch,
+            [
+                "repo",
+                "decisions_api",
+                "llm",
+                _SETUP_DONE,
+                "good/cheap",
+                _SETUP_DONE,
+            ],
+        )
+        _scripted_input(
+            monkeypatch,
+            [
+                "no",  # custom order
+                "",  # decisions_api_model default
+                "openai/gpt-4o-mini",  # llm_model
+                "",  # skip_notes yes
+                "cheap asks",
+                "",
+            ],
+        )
+        state = RoutingState(initial="off")
+        action, message = dispatch(
+            "/route setup",
+            session_id="s",
+            index=SessionIndex(tmp_path / "index"),
+            routing=state,
+        )
+        assert action == "reply"
+        assert state.is_on() is True
+        data = yaml.safe_load(repo_path.read_text(encoding="utf-8"))
+        assert data["engine"]["order"] == ["decisions_api", "llm"]
+        assert data["engine"]["decisions_api_model"] == DECISIONS_API_DEFAULT_MODEL
+        assert data["engine"]["llm_model"] == "openai/gpt-4o-mini"
+        assert "decisions_api" in message and "llm openai/gpt-4o-mini" in message
 
     def test_daemon_unready_prints_skip_note(self, tmp_path, monkeypatch, capsys):
         _setup_paths(monkeypatch, tmp_path)

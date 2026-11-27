@@ -39,7 +39,7 @@ def _strategy_yaml(candidates="[{id: a/1}]", extra=""):
     return (
         f"candidates: {candidates}\n"
         "directives: trivial asks go cheap\n"
-        "engine: {primary: openrouter, decision_model: cheap/decider}\n"
+        "engine: {order: [openrouter], decision_model: cheap/decider}\n"
         f"{extra}"
     )
 
@@ -232,7 +232,7 @@ class TestStrategyLoad:
             "directives": "d",
             "tie_margin": 0.1,
             "confidence_threshold": 0.6,
-            "engine": {"primary": "openrouter", "decision_model": "c/d"},
+            "engine": {"order": ["openrouter"], "decision_model": "c/d"},
         }
         path = save_strategy(data, "repo", repo_path=tmp_path / "r.yaml")
         strategy = load_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
@@ -256,10 +256,14 @@ class TestStrategyLoad:
         assert strategy.engine.skip_notes is False
 
     def test_order_defaults_when_absent(self, tmp_path):
-        path = _write(tmp_path / "routing.yaml", _strategy_yaml())
+        path = _write(
+            tmp_path / "routing.yaml",
+            "candidates: [{id: a/1}]\ndirectives: d\n"
+            "engine: {decision_model: cheap/decider}\n",
+        )
         strategy = load_strategy(global_path=path, repo_path=tmp_path / "absent.yaml")
         assert strategy is not None
-        assert strategy.engine.order is None
+        assert strategy.engine.order == ["openrouter", "local"]
         assert strategy.engine.native_model is None
         assert strategy.engine.skip_notes is True
 
@@ -285,16 +289,14 @@ class TestStrategyLoad:
 
         path = _write(
             tmp_path / "routing.yaml",
-            "candidates: [{id: a/1}]\n"
-            "directives: d\n"
-            "engine: {primary: local, order: native}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: native}\n",
         )
         with caplog.at_level(logging.WARNING, logger="strands_code_cli.routing.core"):
             strategy = load_strategy(
                 global_path=path, repo_path=tmp_path / "absent.yaml"
             )
         assert strategy is not None
-        assert strategy.engine.order is None  # legacy primary mapping wins
+        assert strategy.engine.order == ["openrouter", "local"]
         assert "'order' (not a list)" in caplog.text
 
     def test_native_model_wrong_type_warns_and_defaults(self, tmp_path, caplog):
@@ -877,7 +879,7 @@ class TestRouteSetup:
             "directives": "d",
             "api_key": "sk-live-123",
             "engine": {
-                "primary": "openrouter",
+                "order": ["openrouter"],
                 "decision_model": "c/d",
                 "API_KEY": "sk-live-456",
             },
@@ -1005,7 +1007,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
             f"directives: {'d' * 5000}\n"
-            "engine: {primary: openrouter, decision_model: cheap/decider}\n",
+            "engine: {order: [openrouter], decision_model: cheap/decider}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True  # a warning, never a failure
@@ -1023,7 +1025,7 @@ class TestRouteValidate:
                 tmp_path / "repo.yaml",
                 "candidates: [{id: a/1}]\n"
                 f"directives: {directives}\n"
-                "engine: {primary: openrouter, decision_model: cheap/decider}\n",
+                "engine: {order: [openrouter], decision_model: cheap/decider}\n",
             )
             report = validate_strategy(
                 global_path=tmp_path / "absent.yaml", repo_path=path
@@ -1042,7 +1044,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
             "directives: d\n"
-            "engine: {primary: openrouter, decision_model: openrouter/auto}\n",
+            "engine: {order: [openrouter], decision_model: openrouter/auto}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
@@ -1096,10 +1098,10 @@ class TestRouteValidate:
         assert "candidate #1: SKIP — unknown keys: ['bogus']" in text
         assert "fix: remove the unknown keys from candidates[1]" in text
 
-    def test_missing_decision_model_with_primary_openrouter(self, tmp_path):
+    def test_missing_decision_model_with_order_openrouter(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
-            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: openrouter}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: [openrouter]}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
@@ -1107,10 +1109,10 @@ class TestRouteValidate:
         assert "with no decision_model" in text
         assert "fix: set engine.decision_model" in text
 
-    def test_missing_local_model_with_primary_local(self, tmp_path):
+    def test_missing_local_model_with_order_local(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
-            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: local}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: [local]}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
@@ -1118,20 +1120,20 @@ class TestRouteValidate:
         assert "with no local_model" in text
         assert "fix: set engine.local_model" in text
 
-    def test_local_primary_with_model_reports_valid(self, tmp_path):
+    def test_local_order_with_model_reports_valid(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\ndirectives: d\n"
-            "engine: {primary: local, local_model: qwen3:8b}\n",
+            "engine: {order: [local], local_model: qwen3:8b}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
-        assert "unused while primary is local" in report.format()
+        assert "engine: local model qwen3:8b — ok" in report.format()
 
-    def test_primary_off_reports_valid_disabled(self, tmp_path):
+    def test_empty_order_reports_valid_disabled(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
-            "candidates: [{id: a/1}]\ndirectives: d\nengine: {primary: off}\n",
+            "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: []}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
@@ -1147,7 +1149,7 @@ class TestRouteValidate:
         empty = _write(
             tmp_path / "empty.yaml",
             "candidates: []\ndirectives: d\n"
-            "engine: {primary: openrouter, decision_model: c/d}\n",
+            "engine: {order: [openrouter], decision_model: c/d}\n",
         )
         report = validate_strategy(
             global_path=tmp_path / "absent.yaml", repo_path=empty
@@ -1325,7 +1327,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
             "directives: d\n"
-            "engine: {primary: openrouter, decision_model: chat/only}\n",
+            "engine: {order: [openrouter], decision_model: chat/only}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
@@ -1339,7 +1341,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
             "directives: d\n"
-            "engine: {primary: openrouter, decision_model: decide/yes}\n",
+            "engine: {order: [openrouter], decision_model: decide/yes}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
@@ -1442,8 +1444,7 @@ class TestRouteValidate:
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
             "directives: d\n"
-            "engine: {primary: openrouter, order: native,"
-            " decision_model: cheap/decider}\n",
+            "engine: {order: native, decision_model: cheap/decider}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is False
@@ -1451,14 +1452,7 @@ class TestRouteValidate:
         assert "engine.order is not a list" in text
         assert "fix: set engine.order to a list" in text
 
-    def test_legacy_primary_nudges_without_failing(self, tmp_path):
-        _seed_decision_ids(tmp_path, ["cheap/decider"])
-        path = _write(tmp_path / "repo.yaml", _strategy_yaml())
-        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
-        assert report.valid is True
-        assert "re-run /route setup to adopt the engines list" in report.format()
-
-    def test_order_and_primary_notes_primary_ignored(self, tmp_path):
+    def test_unknown_primary_key_ignored_while_order_drives(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
@@ -1469,30 +1463,16 @@ class TestRouteValidate:
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
         text = report.format()
-        assert "engine.primary is ignored" in text
         assert "engine: native model jev-1.13.0 — ok" in text
-        assert "unused while primary is local" not in text
-        bogus = _write(
-            tmp_path / "bogus.yaml",
-            "candidates: [{id: a/1}]\n"
-            "directives: d\n"
-            "engine: {primary: bogus, order: [native],"
-            " native_model: jev-1.13.0}\n",
-        )
-        report = validate_strategy(
-            global_path=tmp_path / "absent.yaml", repo_path=bogus
-        )
-        assert report.valid is True  # ignored primary judges nothing
-        assert "unknown primary" not in report.format()
 
-    def test_empty_order_matches_legacy_off_line(self, tmp_path):
+    def test_empty_order_disables_routing_cleanly(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\ndirectives: d\nengine: {order: []}\n",
         )
         report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
         assert report.valid is True
-        assert "engine: primary off — routing disabled by config" in report.format()
+        assert "engine: order empty — routing disabled by config" in report.format()
 
     def test_ordered_openrouter_and_local_judge_per_engine(self, tmp_path):
         _seed_decision_ids(tmp_path, ["cheap/decider"])
@@ -1564,7 +1544,7 @@ class TestBoolLevelNormalization:
 
 
 class TestOptInDecisionsAPIAndLLMStrategy:
-    def test_order_and_primary_accept_decisions_api_and_llm(self, tmp_path):
+    def test_order_accepts_decisions_api_and_llm(self, tmp_path):
         path = _write(
             tmp_path / "repo.yaml",
             "candidates: [{id: a/1}]\n"
@@ -1583,20 +1563,20 @@ class TestOptInDecisionsAPIAndLLMStrategy:
         assert "decisions_api model ~typesafe/jev-latest — ok" in text
         assert "llm model openai/gpt-4o-mini — ok" in text
 
-        for pri in ("decisions_api", "llm"):
+        for eng in ("decisions_api", "llm"):
             extra = (
-                f"engine: {{primary: {pri}"
-                + (", llm_model: openai/gpt-4o-mini" if pri == "llm" else "")
+                f"engine: {{order: [{eng}]"
+                + (", llm_model: openai/gpt-4o-mini" if eng == "llm" else "")
                 + "}\n"
             )
             p_path = _write(
-                tmp_path / f"{pri}.yaml",
+                tmp_path / f"{eng}.yaml",
                 f"candidates: [{{id: a/1}}]\ndirectives: d\n{extra}",
             )
             p_strategy = load_strategy(
                 global_path=tmp_path / "absent.yaml", repo_path=p_path
             )
-            assert p_strategy is not None and p_strategy.engine.primary == pri
+            assert p_strategy is not None and p_strategy.engine.order == [eng]
             assert (
                 validate_strategy(
                     global_path=tmp_path / "absent.yaml", repo_path=p_path

@@ -1284,7 +1284,7 @@ class TestPhase17NyquistBranches:
         repo_yaml = tmp_path / "repo_routing.yaml"
         repo_yaml.write_text(
             "candidates:\n  - id: openai/gpt-5\n"
-            "engine:\n  primary: local\n  local_base_url: https://evil.example:11434\n",
+            "engine:\n  order: [local]\n  local_base_url: https://evil.example:11434\n",
             encoding="utf-8",
         )
         with pytest.warns(UserWarning, match="non-loopback"):
