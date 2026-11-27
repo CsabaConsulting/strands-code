@@ -40,7 +40,6 @@ from strands_code_cli.memory.memory_file import (
 from strands_code_cli.memory.memory_modes import (
     MEMORY_MODE_CURATE_REPLY,
     MEMORY_MODE_SILENT_REPLY,
-    MemoryModeConfig,
     MemoryModeState,
     silent_note,
 )
@@ -285,7 +284,6 @@ class TestMemoryModes:
             session_id="s1",
             index=SessionIndex(tmp_path / "index"),
             memory_mode=holder,
-            memory_mode_path=tmp_path / "memory.yaml",
         )
         assert action == "reply"
         assert holder.mode == "silent"
@@ -324,39 +322,38 @@ class TestMemoryModes:
             in USAGE_HINT
         )
 
-    def test_mode_switch_persists_to_config(self, tmp_path):
+    def test_mode_switch_stays_in_memory_without_persisting_config(
+        self, tmp_path, monkeypatch
+    ):
+        import strands_code_cli.entry.provider_config as provider_config_module
+
+        config_path = tmp_path / "config.yaml"
+        monkeypatch.setattr(
+            provider_config_module, "default_config_path", lambda: config_path
+        )
         holder = MemoryModeState()
-        config_path = tmp_path / "memory.yaml"
         action, _ = dispatch(
             "/memory mode silent",
             session_id="s1",
             index=SessionIndex(tmp_path / "index"),
             memory_mode=holder,
-            memory_mode_path=config_path,
         )
         assert action == "reply"
-        assert MemoryModeConfig.load(config_path).mode == "silent"
+        assert holder.mode == "silent"
+        assert not config_path.exists()
 
-    def test_mode_config_missing_and_corrupt_yield_curate(self, tmp_path):
-        missing = tmp_path / "absent.yaml"
-        assert MemoryModeConfig.load(missing).mode == "curate"
-        corrupt = tmp_path / "corrupt.yaml"
-        corrupt.write_text("mode: [unclosed\n", encoding="utf-8")
-        assert MemoryModeConfig.load(corrupt).mode == "curate"
-        bogus = tmp_path / "bogus.yaml"
-        bogus.write_text("mode: frobnicate\n", encoding="utf-8")
-        assert MemoryModeConfig.load(bogus).mode == "curate"
+    def test_provider_config_memory_mode_persists_and_validates(self, tmp_path):
+        from strands_code_cli.entry.provider_config import ProviderConfig
 
-    def test_mode_config_round_trip_and_symlink_refusal(self, tmp_path):
-        config_path = tmp_path / "memory.yaml"
-        MemoryModeConfig(mode="silent").save(config_path)
-        assert MemoryModeConfig.load(config_path).mode == "silent"
+        config_path = tmp_path / "config.yaml"
+        ProviderConfig(memory_mode="silent").save(config_path)
+        assert ProviderConfig.load(config_path).memory_mode == "silent"
         link = tmp_path / "link.yaml"
         link.symlink_to(config_path)
         with pytest.raises(ValueError):
-            MemoryModeConfig.load(link)
+            ProviderConfig.load(link)
         with pytest.raises(ValueError):
-            MemoryModeConfig(mode="silent").save(link)
+            ProviderConfig(memory_mode="bogus").save(tmp_path / "bad.yaml")
 
     def test_symlinked_agent_parent_refused_on_read_and_write(self, tmp_path):
         from strands_code_cli.memory.memory_file import (

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +52,8 @@ from strands_code_cli.model.model_switch import (
 from strands_code_cli.model.provider_id import provider_of
 from strands_code_cli.platform_io import ensure_private_dir
 from strands_code_cli.policy.diff_gate import (
+    DEFAULT_MODE,
+    DiffModeState,
     PendingStore,
     bind_session,
     make_gated_edit,
@@ -61,7 +62,7 @@ from strands_code_cli.policy.diff_gate import (
 )
 from strands_code_cli.policy.policy_gate import build_interventions
 from strands_code_cli.sandbox.box import box_app
-from strands_code_cli.session.session_index import SessionIndex
+from strands_code_cli.session.session_index import SessionIndex, resolve_session_prefix
 
 app = typer.Typer(
     add_completion=False,
@@ -105,15 +106,34 @@ def _preflight_credentials(
     return preflight_credentials(model=model, base_url=base_url)
 
 
+def _known_index_ids(index: Any) -> set[str]:
+    """Return known session ids from ``index``, safe against test doubles."""
+    list_recent = getattr(index, "list_recent", None)
+    if not callable(list_recent):
+        return set()
+    entries = list_recent(limit=None)
+    if not isinstance(entries, (list, tuple)):
+        return set()
+    return {
+        entry["id"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    }
+
+
 def resolve_session_id(explicit: str | None, index: SessionIndex) -> str:
-    """Map argv to a session id: validate an explicit id, else mint fresh."""
+    """Map argv to a session id: resolve unique prefix/exact match, or mint fresh."""
     if explicit is not None:
         try:
             checked = _validate_session_id(explicit)
         except ValueError as exc:
             raise typer.BadParameter(f"invalid --session-id: {exc}") from exc
-        index.ensure(checked)
-        return checked
+        resolved, err, _ = resolve_session_prefix(_known_index_ids(index), checked)
+        if err is not None:
+            raise typer.BadParameter(err)
+        target = resolved if resolved is not None else checked
+        index.ensure(target)
+        return target
     return index.mint()
 
 
@@ -199,6 +219,7 @@ def build_agent(
     *,
     base_url: str | None = None,
     api_mode: str | None = None,
+    diff_mode: str | None = None,
 ):
     """Construct the session agent through the harness factory only.
 
@@ -214,8 +235,9 @@ def build_agent(
     )
     interpreter = SandboxedPythonInterpreter("", authorized_imports=set())
     cwd = os.getcwd()
-    store = PendingStore(session_path)
+    store = PendingStore(session_path, session_id=session_id)
     bind_session(session_id, store)
+    diff_holder = DiffModeState(initial=diff_mode or DEFAULT_MODE)
     # Owned skills plugin (G-6-R2-6): the harness passes AgentSkills
     # instances through verbatim, so this handle lets /skills reload
     # refresh the model's registry via set_available_skills instead of
@@ -229,8 +251,18 @@ def build_agent(
         "tools": [
             interpreter.get_tool(),
             make_safe_search_tool(cwd=cwd),
-            make_gated_write(cwd=cwd, store=store, gate_active=True),
-            make_gated_edit(cwd=cwd, store=store, gate_active=True),
+            make_gated_write(
+                cwd=cwd,
+                get_mode=lambda: diff_holder.mode,
+                store=store,
+                gate_active=True,
+            ),
+            make_gated_edit(
+                cwd=cwd,
+                get_mode=lambda: diff_holder.mode,
+                store=store,
+                gate_active=True,
+            ),
         ],
         "builtin_tools": {
             "shell": True,
@@ -318,6 +350,7 @@ def build_agent(
         except Exception:
             pass
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
+    agent._diff_mode = diff_holder
     gate = interventions[0]
     agent._policy_gate = gate
     gate.bind_main_agent(agent)  # D-12 delegated-turn detection
@@ -341,7 +374,7 @@ def _root(
     codeact: str | None = typer.Option(
         None,
         "--codeact",
-        help="Start the session on this action interface (tool|code|both); the bare form implies code.",
+        help="Start the session on this action interface (tool|code|both).",
     ),
     model: str | None = typer.Option(
         None,
@@ -398,6 +431,7 @@ def _root(
         model=model_for_config(effective_model, effective_base_url, effective_api_mode),
         base_url=effective_base_url,
         api_mode=effective_api_mode,
+        diff_mode=config.diff_mode,
     )
     run_loop(
         agent,
@@ -408,39 +442,6 @@ def _root(
     )
 
 
-def _expand_bare_codeact(argv: list[str]) -> list[str]:
-    """Insert the implied code value after a value-less --codeact token.
-
-    The pinned typer never forwards flag_value/is_flag to click, so a bare
-    --codeact dies at parse time before any project code runs. Rewriting
-    argv ahead of parsing gives the valued-only option its missing
-    optional-value path while leaving every downstream site untouched.
-
-    Only the exact --codeact token matches (--codeact=value passes
-    through); expansion fires when the next token is missing or starts
-    with a dash. Scanning stops at a bare -- sentinel, whose remainder
-    is copied verbatim. The input list is never mutated.
-    """
-    out: list[str] = []
-    i = 0
-    while i < len(argv):
-        token = argv[i]
-        if token == "--":
-            out.extend(argv[i:])
-            break
-        if token == "--codeact":
-            out.append(token)
-            nxt = argv[i + 1] if i + 1 < len(argv) else None
-            if nxt is None or nxt.startswith("-"):
-                out.append("code")
-            i += 1
-            continue
-        out.append(token)
-        i += 1
-    return out
-
-
 def main() -> None:
     """Console script entry."""
-    sys.argv[:] = _expand_bare_codeact(list(sys.argv))
     app()

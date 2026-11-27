@@ -21,7 +21,6 @@ from __future__ import annotations
 import copy
 import importlib
 import re
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -473,61 +472,40 @@ class TestCodeactStartupFlag:
         assert "codeact" in plain.lower()
         assert not Path(".agent").exists()
 
-    def test_bare_flag_at_end_implies_code(self):
-        main_module = importlib.import_module("strands_code_cli.entry.main")
-        assert main_module._expand_bare_codeact(["p", "--codeact"]) == [
-            "p",
-            "--codeact",
-            "code",
-        ]
+    def test_bare_flag_rejected_explicit_enum_required(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
 
-    def test_bare_flag_before_other_flag_implies_code(self):
-        main_module = importlib.import_module("strands_code_cli.entry.main")
-        assert main_module._expand_bare_codeact(
-            ["p", "--codeact", "--session-id", "x"]
-        ) == ["p", "--codeact", "code", "--session-id", "x"]
-
-    @pytest.mark.parametrize(
-        "argv", [["p", "--codeact", "both"], ["p", "--codeact=tool"]]
-    )
-    def test_valued_and_equals_forms_untouched(self, argv):
-        main_module = importlib.import_module("strands_code_cli.entry.main")
-        assert main_module._expand_bare_codeact(argv) == argv
-
-    def test_sentinel_stops_expansion(self):
-        main_module = importlib.import_module("strands_code_cli.entry.main")
-        assert main_module._expand_bare_codeact(["p", "--", "--codeact"]) == [
-            "p",
-            "--",
-            "--codeact",
-        ]
-
-    def test_helper_never_mutates_input(self):
-        main_module = importlib.import_module("strands_code_cli.entry.main")
-        argv = ["p", "--codeact"]
-        main_module._expand_bare_codeact(argv)
-        assert argv == ["p", "--codeact"]
-
-    def test_main_expands_bare_flag_to_code(self, tmp_path, monkeypatch):
         main_module = importlib.import_module("strands_code_cli.entry.main")
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(sys, "argv", ["strands-code", "--codeact"])
+        assert not hasattr(main_module, "_expand_bare_codeact")
+        res = CliRunner().invoke(main_module.app, ["--codeact"])
+        assert res.exit_code != 0
+
+    @pytest.mark.parametrize("choice", ["tool", "code", "both"])
+    def test_explicit_codeact_choices_reach_loop(self, tmp_path, monkeypatch, choice):
+        from typer.testing import CliRunner
+
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        monkeypatch.chdir(tmp_path)
         with (
             patch.object(main_module, "_preflight_credentials", return_value=None),
             patch.object(main_module, "build_agent", return_value=object()),
             patch.object(main_module, "run_loop") as loop,
         ):
-            with pytest.raises(SystemExit) as exc:
-                main_module.main()
-        assert exc.value.code == 0
-        assert loop.call_args[1]["codeact"] == "code"
+            res = CliRunner().invoke(main_module.app, ["--codeact", choice])
+        assert res.exit_code == 0, res.output
+        assert loop.call_args[1]["codeact"] == choice
 
 
 class TestCodeactStartupConfig:
     def test_keys_round_trip(self, tmp_path):
         path = tmp_path / "config.yaml"
         cfg = ProviderConfig(
-            model="m", base_url="http://x", codeact="code", codeact_remember=True
+            model="m",
+            base_url="http://x",
+            codeact="code",
+            diff_mode="auto",
+            memory_mode="silent",
         )
         cfg.save(path)
         assert ProviderConfig.load(path) == cfg
@@ -535,13 +513,16 @@ class TestCodeactStartupConfig:
     def test_missing_config_yields_defaults(self, tmp_path):
         loaded = ProviderConfig.load(tmp_path / "missing.yaml")
         assert loaded.codeact is None
-        assert loaded.codeact_remember is False
+        assert loaded.diff_mode is None
+        assert loaded.memory_mode is None
 
     def test_defaults_not_persisted(self, tmp_path):
         path = tmp_path / "config.yaml"
         ProviderConfig(model="m").save(path)
-        assert "codeact" not in path.read_text(encoding="utf-8")
-        assert ProviderConfig.load(path).codeact_remember is False
+        raw = path.read_text(encoding="utf-8")
+        assert "codeact" not in raw
+        assert "diff_mode" not in raw
+        assert "memory_mode" not in raw
 
     def test_unknown_codeact_value_raises(self, tmp_path):
         path = tmp_path / "config.yaml"
@@ -551,69 +532,47 @@ class TestCodeactStartupConfig:
         with pytest.raises(ValueError, match="tool\\|code\\|both"):
             ProviderConfig(codeact="turbo").save(tmp_path / "out.yaml")
 
-    @pytest.mark.parametrize("word", ["'yes'", "1"])
-    def test_non_bool_remember_raises(self, tmp_path, word):
+    @pytest.mark.parametrize(
+        "key,bad,pattern",
+        [
+            ("diff_mode", "approve-each", "on-demand\\|auto"),
+            ("memory_mode", "auto", "curate\\|silent"),
+            ("codeact_remember", "true", "Unknown provider config keys"),
+        ],
+    )
+    def test_invalid_toggle_and_retired_keys_raise(self, tmp_path, key, bad, pattern):
         path = tmp_path / "config.yaml"
-        path.write_text(f"codeact_remember: {word}\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="must be a bool"):
+        path.write_text(f"{key}: {bad}\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=pattern):
             ProviderConfig.load(path)
-        with pytest.raises(ValueError, match="must be a bool"):
-            ProviderConfig(codeact_remember="yes").save(tmp_path / "out.yaml")  # type: ignore[arg-type]
-
-    @pytest.mark.parametrize("word,expected", [("true", True), ("false", False)])
-    def test_bool_spellings_accepted(self, tmp_path, word, expected):
-        path = tmp_path / "config.yaml"
-        path.write_text(f"codeact_remember: {word}\n", encoding="utf-8")
-        assert ProviderConfig.load(path).codeact_remember is expected
 
 
 class TestCodeactStartupPrecedence:
-    def test_flag_wins_over_remembered(self):
-        assert resolve_initial_interface("code", "tool", True) == "code"
+    def test_flag_wins_over_saved(self):
+        assert resolve_initial_interface("code", "tool") == "code"
 
-    def test_remembered_wins_over_default(self):
-        assert resolve_initial_interface(None, "code", True) == "code"
-
-    def test_saved_ignored_unless_remembered(self):
-        assert resolve_initial_interface(None, "code", False) == "tool"
-
-    def test_remember_without_saved_starts_tool(self):
-        assert resolve_initial_interface(None, None, True) == "tool"
+    def test_saved_wins_over_default(self):
+        assert resolve_initial_interface(None, "code") == "code"
 
     def test_default_tool_session_start(self):
-        assert resolve_initial_interface(None, None, False) == "tool"
+        assert resolve_initial_interface(None, None) == "tool"
 
     def test_missing_config_starts_tool(self, tmp_path):
         loaded = ProviderConfig.load(tmp_path / "missing.yaml")
-        initial = resolve_initial_interface(
-            None, loaded.codeact, loaded.codeact_remember
-        )
+        initial = resolve_initial_interface(None, loaded.codeact)
         assert initial == "tool"
 
     def test_invalid_values_raise(self):
         with pytest.raises(ValueError, match="tool\\|code\\|both"):
-            resolve_initial_interface("turbo", None, False)
+            resolve_initial_interface("turbo", None)
         with pytest.raises(ValueError, match="tool\\|code\\|both"):
-            resolve_initial_interface(None, "turbo", True)
+            resolve_initial_interface(None, "turbo")
 
 
-class TestCodeactStartupPersist:
-    def test_save_choice_persists_and_keeps_other_keys(self, tmp_path):
-        path = tmp_path / "config.yaml"
-        cfg = ProviderConfig(model="m", base_url="http://x", codeact_remember=True)
-        cfg.save(path)
-        cfg.save_codeact_choice("both", path)
-        loaded = ProviderConfig.load(path)
-        assert loaded.codeact == "both"
-        assert loaded.model == "m"
-        assert loaded.base_url == "http://x"
-        assert loaded.codeact_remember is True
-
-    def test_save_choice_invalid_raises(self, tmp_path):
-        with pytest.raises(ValueError, match="tool\\|code\\|both"):
-            ProviderConfig().save_codeact_choice("turbo", tmp_path / "out.yaml")
-
-    def test_switch_persists_last_choice(self, tmp_path, monkeypatch):
+class TestCodeactSessionSticky:
+    def test_switch_stays_in_memory_without_persisting_config(
+        self, tmp_path, monkeypatch
+    ):
         import strands_code_cli.entry.provider_config as provider_config_module
 
         path = tmp_path / "config.yaml"
@@ -621,21 +580,15 @@ class TestCodeactStartupPersist:
         holder = CodeactState()
         index = SessionIndex(tmp_path / "index")
         dispatch("/codeact code", session_id="s", index=index, interface=holder)
-        # The loop's persist line: save the flipped holder value.
-        provider_config_module.ProviderConfig.load().save_codeact_choice(
-            holder.interface
-        )
-        assert provider_config_module.ProviderConfig.load().codeact == "code"
+        assert holder.interface == "code"
+        assert not path.exists()
 
-    def test_loop_wires_codeact_startup(self):
+    def test_loop_wires_codeact_startup_without_disk_persist(self):
         source = _loop_source()
         assert "codeact: str | None = None," in source
         assert "resolve_initial_interface(" in source
-
-    def test_loop_wires_codeact_persist(self):
-        source = _loop_source()
         assert "codeact_before = interface.interface" in source
-        assert "save_codeact_choice(interface.interface)" in source
+        assert "save_codeact_choice" not in source
 
 
 def _codeact_source() -> str:

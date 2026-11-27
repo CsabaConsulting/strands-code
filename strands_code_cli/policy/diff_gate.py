@@ -1,25 +1,21 @@
-"""Diff gate: wrapper ``write``/``edit`` tools with approve-each/on-demand/auto (TOOL-02).
+"""Diff gate: wrapper ``write``/``edit`` tools with on-demand/auto modes (TOOL-02).
 
 Mechanism (RESEARCH §4.2 option 2): app-level ``@tool`` functions carrying
 the SAME names as the harness builtins, so the builtins must be pinned off
 in the ``builtin_tools`` mapping (name-collision rule) and these wrappers
-registered instead. Chosen over harness ``interventions`` to avoid building
-Phase 3 TOOL-03 machinery early, and over SDK hooks as least precedented.
+registered instead.
 
 Each wrapper (a) resolves + confines paths via :mod:`strands_code_cli.policy.scope`,
 (b) computes a stdlib ``difflib.unified_diff`` old-vs-new preview, (c)
-consults the :class:`DiffConfig` mode — ``approve-each`` prompts per hunk
-inside the turn via the ``ask`` callable, ``on-demand`` stashes pending
-state as sidecar JSON (``session_index.py`` pattern) for later ``/diff``
-review, ``auto`` applies directly — and (d) re-reads before apply so a
-stale-preview edit fails loudly (exact-once semantics), never misapplies.
+consults the session ``DiffModeState`` mode — ``on-demand`` stashes pending
+state as session-scoped sidecar JSON (``pending-<session_id>.json``) for
+later ``/diff`` review, ``auto`` applies directly — and (d) re-reads before
+apply so a stale-preview edit fails loudly (exact-once semantics), never
+misapplies.
 
 Advisory holes (documented, not closed here): shell redirection
-(``echo > file``, ``sed -i``) and ``python_repl`` ``open()`` calls mutate
-files without touching these wrappers. Airtight mediation of all tools is
-Phase 3 interventions work. Subagent turns inherit this gate through the
-harness factory; note ``approve-each`` may prompt noisily inside delegated
-turns. Zero Phase 3 policy-file code lives here.
+(``echo > file``, ``sed -i``) and ``python_repl`` ``open()`` calls bypass
+these wrappers; ``PolicyGateHandler`` mediates all tools.
 """
 
 from __future__ import annotations
@@ -27,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -43,10 +40,45 @@ from strands_code_cli.policy.core import (
     _is_sensitive_read_path,
     _is_sensitive_search_input,
 )
-from strands_code_cli.policy.diff_config import DEFAULT_MODE, MODES, DiffConfig
 from strands_code_cli.policy.scope import confine, resolve
 
+DIFF_MODES: tuple[str, ...] = ("on-demand", "auto")
+MODES = DIFF_MODES
+DEFAULT_MODE = "on-demand"
+DIFF_USAGE = "Usage: /diff [on-demand|auto|show [path]|apply [path]|discard [path]]"
 _PENDING_NAME = "pending.json"
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+class DiffModeState:
+    """Session-sticky diff mode holder for /diff [on-demand|auto]."""
+
+    VALID: tuple[str, ...] = DIFF_MODES
+
+    def __init__(self, initial: str = DEFAULT_MODE) -> None:
+        if initial not in self.VALID:
+            raise ValueError(f"Unknown diff mode {initial!r}; expected {self.VALID}")
+        self._mode = initial
+
+    @property
+    def mode(self) -> str:
+        """Current active diff mode (``"on-demand"`` or ``"auto"``)."""
+        return self._mode
+
+    def set(self, target: str) -> str:
+        """Switch session diff mode and return the user-facing reply."""
+        norm = target.strip().lower()
+        if norm not in self.VALID:
+            raise ValueError(f"Unknown diff mode {target!r}; expected {self.VALID}")
+        if norm == self._mode:
+            return f"Diff mode unchanged ({self._mode})."
+        self._mode = norm
+        return f"Diff mode set to {self._mode}."
+
+    def announce(self) -> str:
+        """Return a status summary line for the current diff mode."""
+        return f"Diff mode: {self._mode}."
+
 
 AskCallable = Callable[[str], bool]
 AsyncReader = Callable[[str], Awaitable[str | None]]
@@ -96,6 +128,19 @@ def preview_for_edit(path: str, old_str: str, new_str: str) -> str:
     return unified_diff(old_text, new_text, path)
 
 
+def bounded_diff(diff_text: str, max_lines: int = 40) -> str:
+    """Truncate a unified diff preview to at most ``max_lines`` lines."""
+    if not diff_text or max_lines <= 0:
+        return ""
+    lines = diff_text.splitlines()
+    if len(lines) <= max_lines:
+        return "\n".join(lines)
+    omitted = len(lines) - max_lines
+    return "\n".join(
+        [*lines[:max_lines], f"... ({omitted} more diff line(s) truncated)"]
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pending (on-demand) sidecar state
 # ---------------------------------------------------------------------------
@@ -115,18 +160,28 @@ class PendingStore:
     holds ``_lock`` across load-mutate-save so each call is atomic.
 
     Args:
-        root: Directory holding ``pending.json`` (normally the session dir).
+        root: Directory holding the pending JSON file (normally the session dir).
+        session_id: Optional session identifier scoping the sidecar filename
+            to ``pending-<session_id>.json`` (default None -> ``pending.json``).
     """
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(self, root: str | Path, *, session_id: str | None = None) -> None:
         raw = Path(root)
         refuse_symlink(raw, "pending store root", max_ancestors=1)
+        if session_id is not None:
+            if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
+                raise ValueError(
+                    f"session_id is not a valid pending-store identifier: {session_id!r}"
+                )
+            self._filename = f"pending-{session_id}.json"
+        else:
+            self._filename = _PENDING_NAME
         self.root = raw
         self._entries: dict[str, dict[str, Any]] | None = None
         self._lock = threading.Lock()
 
     def _path(self) -> Path:
-        return self.root / _PENDING_NAME
+        return self.root / self._filename
 
     def _ensure_loaded(self) -> None:
         with self._lock:
@@ -312,28 +367,14 @@ async def _gate_and_apply(
     mode = get_mode()
     if mode not in MODES:
         mode = DEFAULT_MODE
-    hunks = split_hunks(preview)
-    if mode == "approve-each" and not gate_active:
-        if ask is None:
-            raise ValueError("approve-each mode needs an ask callable")
-        for pos, hunk in enumerate(hunks, 1):
-            if not ask(f"Apply {op} to {path} (hunk {pos}/{len(hunks)})?\n{hunk}"):
-                return f"Discarded {op} to {path}."
-        # Fall through to exact-once apply below.
-    # When gate_active the interventions gate already prompted once with
-    # full detail, so approve-each skips its per-hunk ask and falls through
-    # to the exact-once apply path (D-10: one prompt total per write).
-    # Invariant: /diff apply never re-prompts — apply_stashed uses _fs_write
-    # (a router-side filesystem write), not a tool call, so the intervention
-    # never sees it.
-    elif mode == "on-demand":
+    if mode == "on-demand":
         if store is None:
             raise ValueError("on-demand mode needs a pending store")
         # Snapshot current content for the later TOCTOU check.
         seen = await _current_text(path, reader, tool_context)
         store.stash(path, seen if seen is not None else old_text, new_text, op)
         return f"Stashed {op} to {path} for /diff review ({len(store.list())} pending)."
-    # auto, or approve-each after approval: re-read, then exact-once apply.
+    # auto: re-read, then exact-once apply.
     seen = await _current_text(path, reader, tool_context)
     if old_text is not None and seen is not None and seen != old_text:
         raise ValueError(
@@ -424,11 +465,6 @@ async def apply_stashed(
 # ---------------------------------------------------------------------------
 
 
-def _default_ask(prompt: str) -> bool:
-    answer = input(f"{prompt}\nApply? [y/N] ").strip().lower()
-    return answer in ("y", "yes")
-
-
 def make_gated_write(
     *,
     cwd: str | Path,
@@ -439,15 +475,9 @@ def make_gated_write(
     writer: AsyncWriter | None = None,
     gate_active: bool = False,
 ):
-    """Build the gated ``write`` wrapper (same name as the builtin it replaces).
-
-    ``gate_active`` subsumes approve-each under the interventions gate
-    (D-10: one prompt total); default False keeps standalone/test
-    behaviour on the Phase 2 contract.
-    """
+    """Build the gated ``write`` wrapper (same name as the builtin it replaces)."""
     if get_mode is None:
-        get_mode = lambda: DiffConfig.load().mode  # noqa: E731
-    ask_fn = ask if ask is not None else _default_ask
+        get_mode = lambda: DEFAULT_MODE  # noqa: E731
 
     @tool(name="write", context="tool_context")
     async def gated_write(path: str, content: str, tool_context: Any = None) -> str:
@@ -471,7 +501,7 @@ def make_gated_write(
             preview=preview,
             cwd=cwd,
             get_mode=get_mode,
-            ask=ask_fn,
+            ask=ask,
             store=store,
             reader=reader,
             writer=writer,
@@ -492,15 +522,9 @@ def make_gated_edit(
     writer: AsyncWriter | None = None,
     gate_active: bool = False,
 ):
-    """Build the gated ``edit`` wrapper (same name as the builtin it replaces).
-
-    ``gate_active`` subsumes approve-each under the interventions gate
-    (D-10: one prompt total); default False keeps standalone/test
-    behaviour on the Phase 2 contract.
-    """
+    """Build the gated ``edit`` wrapper (same name as the builtin it replaces)."""
     if get_mode is None:
-        get_mode = lambda: DiffConfig.load().mode  # noqa: E731
-    ask_fn = ask if ask is not None else _default_ask
+        get_mode = lambda: DEFAULT_MODE  # noqa: E731
 
     @tool(name="edit", context="tool_context")
     async def gated_edit(
@@ -534,7 +558,7 @@ def make_gated_edit(
             preview=preview,
             cwd=cwd,
             get_mode=get_mode,
-            ask=ask_fn,
+            ask=ask,
             store=store,
             reader=reader,
             writer=writer,

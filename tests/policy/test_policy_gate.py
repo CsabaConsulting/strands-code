@@ -1186,6 +1186,76 @@ class TestWave2HardeningInvariants:
         gate._cleanup_agent_id(id(fake), token=stale_token)
         assert gate.tag_for(fake) == "main"
 
+    def test_render_prompt_header_diff_preview_and_boundaries(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.py").write_text("a = 1\n", encoding="utf-8")
+        (tmp_path / ".env").write_text("SECRET=leak\n", encoding="utf-8")
+        (tmp_path / "huge.txt").write_text("x\n" * (140 * 1024), encoding="utf-8")
+        (tmp_path / "bin.dat").write_bytes(b"\xff\xfe\x00\x01")
+        link = tmp_path / "sym.py"
+        try:
+            link.symlink_to(tmp_path / "app.py")
+        except OSError:
+            link = None
+
+        gate = PolicyGateHandler(policy_loader=lambda: PolicyConfig())
+
+        # edit uses zero-I/O preview_for_edit and strips ANSI escapes
+        buf = _capture_console(monkeypatch)
+        gate._render_prompt_header(
+            "main",
+            "edit",
+            {"path": "app.py", "old_str": "a = 1", "new_str": "a = \x1b[31m2\x1b[0m"},
+            Prompt(reason="edit file"),
+        )
+        out_edit = buf.getvalue()
+        assert "--- a/app.py" in out_edit
+        assert "+++ b/app.py" in out_edit
+        assert "-a = 1" in out_edit
+        assert "\x1b[" not in out_edit
+
+        # write existing file shows bounded diff (<= 40 lines + truncation notice)
+        buf = _capture_console(monkeypatch)
+        big_new = "".join(f"line_{i}\n" for i in range(60))
+        gate._render_prompt_header(
+            "main",
+            "write",
+            {"path": "app.py", "content": big_new},
+            Prompt(reason="overwrite file"),
+        )
+        out_write = buf.getvalue()
+        assert "--- a/app.py" in out_write
+        assert "truncated)" in out_write
+
+        # Sensitive, out-of-scope, oversized, non-UTF-8, and symlinked targets never leak old content
+        for path_arg, content_arg in (
+            (".env", "SAFE=1\n"),
+            ("/var/outside_preview_test.txt", "hi\n"),
+            ("huge.txt", "small\n"),
+            ("bin.dat", "text\n"),
+        ):
+            buf = _capture_console(monkeypatch)
+            gate._render_prompt_header(
+                "main",
+                "write",
+                {"path": path_arg, "content": content_arg},
+                Prompt(reason="write check"),
+            )
+            rendered = buf.getvalue()
+            assert "SECRET=leak" not in rendered
+            assert "--- a/" not in rendered
+        if link is not None:
+            buf = _capture_console(monkeypatch)
+            gate._render_prompt_header(
+                "main",
+                "write",
+                {"path": "sym.py", "content": "a = 2\n"},
+                Prompt(reason="symlink check"),
+            )
+            assert "--- a/" not in buf.getvalue()
+
     def test_trust_delegated_prompts_outside_scope_read_and_search(
         self, tmp_path, monkeypatch
     ):

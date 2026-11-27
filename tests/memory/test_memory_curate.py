@@ -1200,23 +1200,19 @@ class TestMemoryGapRound:
     def test_nyquist_memory_mode_config_errors_and_unreadable_fact(
         self, tmp_path, monkeypatch
     ):
-        from strands_code_cli.memory.memory_modes import MemoryModeConfig
+        from strands_code_cli.entry.provider_config import ProviderConfig
 
         empty_cfg = tmp_path / "empty.yaml"
         empty_cfg.write_text("", encoding="utf-8")
-        assert MemoryModeConfig.load(empty_cfg).mode == "curate"
-
-        list_cfg = tmp_path / "list.yaml"
-        list_cfg.write_text("- item\n", encoding="utf-8")
-        assert MemoryModeConfig.load(list_cfg).mode == "curate"
+        assert ProviderConfig.load(empty_cfg).memory_mode is None
 
         bad_keys = tmp_path / "bad_keys.yaml"
-        bad_keys.write_text("mode: silent\nextra: 1\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="Unknown memory mode config keys"):
-            MemoryModeConfig.load(bad_keys)
+        bad_keys.write_text("memory_mode: silent\nextra: 1\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Unknown provider config keys"):
+            ProviderConfig.load(bad_keys)
 
-        with pytest.raises(ValueError, match="curate|silent"):
-            MemoryModeConfig(mode="bogus").save(tmp_path / "out.yaml")
+        with pytest.raises(ValueError, match="curate\\|silent"):
+            ProviderConfig(memory_mode="bogus").save(tmp_path / "out.yaml")
 
         fact_dir = tmp_path / ".agent" / "memory"
         fact_dir.mkdir(parents=True)

@@ -1958,35 +1958,16 @@ class TestCascadePicker:
         assert labels[-1] == "Cancel (stay with anthropic.claude-opus-5)"
         assert any("Custom model id" in label for label in labels)
 
-    def test_models_alias_lists_like_model(self, tmp_path, monkeypatch):
-        import sys
-
-        import strands_code_cli.model.model_switch as model_switch_mod
+    def test_models_alias_retired_returns_unknown_command(self, tmp_path):
         from strands_code_cli.dispatch.core import dispatch
         from strands_code_cli.session.session_index import SessionIndex
 
-        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(
-            model_switch_mod,
-            "discover_models",
-            lambda **_: (["qwen.qwen3-32b-v1:0"], False),
-        )
         index = SessionIndex(tmp_path / "index")
         session_id = index.mint()
-        assert dispatch(
-            "/models", session_id=session_id, index=index, current_model=None
-        ) == dispatch("/model", session_id=session_id, index=index, current_model=None)
-
-    def test_models_alias_validates_selection(self, tmp_path, monkeypatch):
-        from strands_code_cli.dispatch.core import dispatch
-        from strands_code_cli.session.session_index import SessionIndex
-
-        index = SessionIndex(tmp_path / "index")
-        action, message = dispatch(
-            "/models nope/not-a-provider", session_id=index.mint(), index=index
-        )
-        assert action == "reply"
-        assert "Unknown model" in message
+        for cmd in ("/models", "/models nope/not-a-provider"):
+            action, message = dispatch(cmd, session_id=session_id, index=index)
+            assert action == "reply"
+            assert "Unknown command '/models'" in message
 
     def test_missing_sdk_names_the_extra(self, tmp_path, monkeypatch):
         import strands_harness.models as harness_models

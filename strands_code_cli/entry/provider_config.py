@@ -20,8 +20,17 @@ logger = logging.getLogger(__name__)
 _CONFIG_DIR_NAME = "strands-code"
 _CONFIG_FILE_NAME = "config.yaml"
 
-_KNOWN_KEYS = {"model", "base_url", "api_mode", "codeact", "codeact_remember"}
+_KNOWN_KEYS = {
+    "model",
+    "base_url",
+    "api_mode",
+    "codeact",
+    "diff_mode",
+    "memory_mode",
+}
 VALID_API_MODES = ("responses", "chat")
+VALID_DIFF_MODES = ("on-demand", "auto")
+VALID_MEMORY_MODES = ("curate", "silent")
 
 
 def default_config_path() -> Path:
@@ -57,7 +66,8 @@ def _validate_provider_fields(
     base_url: Any,
     api_mode: Any,
     codeact: Any,
-    codeact_remember: Any,
+    diff_mode: Any,
+    memory_mode: Any,
 ) -> None:
     """Validate persisted provider configuration field types and enums."""
     if model is not None and not isinstance(model, str):
@@ -66,45 +76,42 @@ def _validate_provider_fields(
         if not isinstance(base_url, str):
             raise ValueError("Provider config 'base_url' must be a string")
         _validate_base_url(base_url)
-    if api_mode is not None and (
-        not isinstance(api_mode, str) or api_mode not in VALID_API_MODES
-    ):
-        raise ValueError("Provider config 'api_mode' must be one of responses|chat")
-    if codeact is not None and codeact not in CodeactState.VALID:
-        raise ValueError("Provider config 'codeact' must be one of tool|code|both")
-    if codeact_remember is not None and not isinstance(codeact_remember, bool):
-        raise ValueError("Provider config 'codeact_remember' must be a bool")
+    enum_checks: tuple[tuple[str, Any, tuple[str, ...]], ...] = (
+        ("api_mode", api_mode, VALID_API_MODES),
+        ("codeact", codeact, CodeactState.VALID),
+        ("diff_mode", diff_mode, VALID_DIFF_MODES),
+        ("memory_mode", memory_mode, VALID_MEMORY_MODES),
+    )
+    for field_name, val, allowed in enum_checks:
+        if val is not None and (not isinstance(val, str) or val not in allowed):
+            raise ValueError(
+                f"Provider config '{field_name}' must be one of {'|'.join(allowed)}"
+            )
 
 
 @dataclass
 class ProviderConfig:
-    """Persisted provider choice for Phase 5 ``/model`` to inherit.
+    """Persisted provider choice and session-start toggle defaults.
 
     The loaded ``model`` string feeds ``create_harness`` as a constructor
-    kwarg; the file holds only the model string plus the non-secret
-    ``base_url`` host and optional ``api_mode`` (``responses|chat``) for
-    custom OpenAI-compatible endpoints — never keys.
-
-    Phase 11 adds the CodeAct session-start keys (D-02/D-03):
-    ``codeact`` is the persisted last interface choice, honored only
-    when ``codeact_remember`` is true — otherwise sessions start on
-    tool-calling.
+    kwarg; the file holds only non-secret provider settings and optional
+    startup defaults (``codeact``, ``diff_mode``, ``memory_mode``) for
+    session-sticky toggles — never credentials.
     """
 
     model: str | None = None
     base_url: str | None = None
     api_mode: str | None = None
     codeact: str | None = None
-    codeact_remember: bool = False
+    diff_mode: str | None = None
+    memory_mode: str | None = None
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> ProviderConfig:
         """Load config fail-soft: missing or corrupt files yield defaults.
 
         Raises:
-            ValueError: On unknown keys, invalid field types, an
-                ``api_mode`` outside ``responses|chat``, or a ``codeact``
-                value outside ``tool|code|both``.
+            ValueError: On unknown keys, invalid field types, or invalid enum values.
         """
         resolved = Path(path) if path is not None else default_config_path()
         refuse_symlink(resolved, "provider config", max_ancestors=1)
@@ -127,20 +134,23 @@ class ProviderConfig:
         base_url = data.get("base_url")
         api_mode = data.get("api_mode")
         codeact = data.get("codeact")
-        remember = data.get("codeact_remember")
+        diff_mode = data.get("diff_mode")
+        memory_mode = data.get("memory_mode")
         _validate_provider_fields(
             model=model,
             base_url=base_url,
             api_mode=api_mode,
             codeact=codeact,
-            codeact_remember=remember,
+            diff_mode=diff_mode,
+            memory_mode=memory_mode,
         )
         return cls(
             model=model,
             base_url=base_url,
             api_mode=api_mode,
             codeact=codeact,
-            codeact_remember=bool(remember),
+            diff_mode=diff_mode,
+            memory_mode=memory_mode,
         )
 
     def save_model_choice(self, model: str, path: str | Path | None = None) -> Path:
@@ -159,13 +169,6 @@ class ProviderConfig:
         self.model = model
         return self.save(path)
 
-    def save_codeact_choice(self, codeact: str, path: str | Path | None = None) -> Path:
-        """Persist a /codeact switch keeping other keys (never credentials)."""
-        if codeact not in CodeactState.VALID:
-            raise ValueError("Provider config 'codeact' must be one of tool|code|both")
-        self.codeact = codeact
-        return self.save(path)
-
     def save(self, path: str | Path | None = None) -> Path:
         """Persist the provider choice; creates the config home when needed.
 
@@ -180,20 +183,22 @@ class ProviderConfig:
             base_url=self.base_url,
             api_mode=self.api_mode,
             codeact=self.codeact,
-            codeact_remember=self.codeact_remember,
+            diff_mode=self.diff_mode,
+            memory_mode=self.memory_mode,
         )
         resolved = Path(path) if path is not None else default_config_path()
         payload: dict[str, Any] = {}
-        if self.model is not None:
-            payload["model"] = self.model
-        if self.base_url is not None:
-            payload["base_url"] = self.base_url
-        if self.api_mode is not None:
-            payload["api_mode"] = self.api_mode
-        if self.codeact is not None:
-            payload["codeact"] = self.codeact
-        if self.codeact_remember:
-            payload["codeact_remember"] = True
+        for key in (
+            "model",
+            "base_url",
+            "api_mode",
+            "codeact",
+            "diff_mode",
+            "memory_mode",
+        ):
+            val = getattr(self, key)
+            if val is not None:
+                payload[key] = val
         return atomic_write_text(
             resolved,
             yaml.safe_dump(payload),

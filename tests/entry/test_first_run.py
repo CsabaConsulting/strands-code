@@ -620,7 +620,8 @@ class TestProviderConfigPersistence:
             ProviderConfig(model=123),
             ProviderConfig(base_url=123),
             ProviderConfig(codeact="invalid"),
-            ProviderConfig(codeact_remember="yes"),
+            ProviderConfig(diff_mode="approve-each"),
+            ProviderConfig(memory_mode="auto"),
         ):
             with pytest.raises(ValueError):
                 bad_cfg.save(path)

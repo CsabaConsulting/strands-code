@@ -10,8 +10,10 @@ from rich.console import Console
 import strands_code_cli.policy.diff_gate as diff_gate
 from strands_code_agent.callback_handler import CodeAgentCallbackHandler
 from strands_code_cli.dispatch.core import USAGE_HINT, dispatch
-from strands_code_cli.policy.diff_config import DEFAULT_MODE, DiffConfig
+from strands_code_cli.entry.provider_config import ProviderConfig
 from strands_code_cli.policy.diff_gate import (
+    DEFAULT_MODE,
+    DiffModeState,
     PendingStore,
     apply_stashed,
     bind_session,
@@ -43,46 +45,37 @@ def _fresh_index(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# DiffConfig persistence (ProviderConfig pattern)
+# DiffModeState & session-scoped PendingStore
 # ---------------------------------------------------------------------------
 
 
-class TestDiffConfig:
-    def test_default_mode_on_demand(self):
-        assert DiffConfig().mode == DEFAULT_MODE == "on-demand"
+class TestDiffModeState:
+    def test_default_mode_on_demand_and_sticky_switch(self):
+        holder = DiffModeState()
+        assert holder.mode == DEFAULT_MODE == "on-demand"
+        assert holder.announce() == "Diff mode: on-demand."
+        assert holder.set("auto") == "Diff mode set to auto."
+        assert holder.mode == "auto"
+        assert holder.set("auto") == "Diff mode unchanged (auto)."
 
-    def test_mode_round_trip(self, tmp_path):
-        path = tmp_path / "diff.yaml"
-        DiffConfig(mode="approve-each").save(path)
-        assert DiffConfig.load(path).mode == "approve-each"
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="on-demand"):
+            DiffModeState(initial="approve-each")
+        with pytest.raises(ValueError, match="on-demand"):
+            DiffModeState().set("yolo")
 
-    def test_missing_file_fail_soft(self, tmp_path):
-        assert DiffConfig.load(tmp_path / "nope.yaml").mode == "on-demand"
 
-    def test_corrupt_file_fail_soft(self, tmp_path):
-        path = tmp_path / "diff.yaml"
-        path.write_text("{{{not yaml")
-        assert DiffConfig.load(path).mode == "on-demand"
+class TestSessionScopedPendingStore:
+    def test_stores_are_isolated_per_session_id(self, tmp_path):
+        s_a = PendingStore(tmp_path, session_id="sess-a")
+        s_b = PendingStore(tmp_path, session_id="sess-b")
+        s_a.stash("/tmp/a.py", "1", "2", "write")
+        assert (tmp_path / "pending-sess-a.json").exists()
+        assert s_b.list() == {}
 
-    def test_bogus_mode_fail_soft(self, tmp_path):
-        path = tmp_path / "diff.yaml"
-        path.write_text("mode: yolo\n")
-        assert DiffConfig.load(path).mode == "on-demand"
-
-    def test_symlink_refused(self, tmp_path):
-        real = tmp_path / "real.yaml"
-        real.write_text("mode: auto\n")
-        link = tmp_path / "link.yaml"
-        try:
-            link.symlink_to(real)
-        except OSError:
-            pytest.skip("symlinks unavailable")
-        with pytest.raises(ValueError, match="symlink"):
-            DiffConfig.load(link)
-
-    def test_save_rejects_bogus_mode(self, tmp_path):
-        with pytest.raises(ValueError, match="approve-each"):
-            DiffConfig(mode="yolo").save(tmp_path / "diff.yaml")
+    def test_invalid_session_id_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="pending-store"):
+            PendingStore(tmp_path, session_id="../escape")
 
 
 # ---------------------------------------------------------------------------
@@ -91,55 +84,69 @@ class TestDiffConfig:
 
 
 class TestDiffRouter:
-    def test_diff_show_reports_mode_and_pending(self, tmp_path):
+    def test_diff_bare_lists_mode_and_pending_files(self, tmp_path):
         index = _fresh_index(tmp_path)
         sid = index.mint()
-        cfg = tmp_path / "diff.yaml"
-        DiffConfig(mode="auto").save(cfg)
-        store = PendingStore(tmp_path / "sess")
-        store.stash("/tmp/x.py", "a", "b", "write")
+        store = PendingStore(tmp_path / "sess", session_id=sid)
+        store.stash("/tmp/x.py", "a\n", "b\n", "write")
         bind_session(sid, store)
+        holder = DiffModeState(initial="auto")
         action, message = dispatch(
-            "/diff show", session_id=sid, index=index, diff_config_path=cfg
+            "/diff", session_id=sid, index=index, diff_mode=holder
         )
         assert action == "reply"
-        assert "auto" in message
-        assert "1 pending" in message
+        assert "Diff mode: auto (1 pending)." in message
+        assert "write: /tmp/x.py" in message
+        assert "--- a/" not in message
 
-    def test_diff_bare_is_show(self, tmp_path):
+    def test_diff_show_and_uppercase_render_unified_diff(self, tmp_path):
         index = _fresh_index(tmp_path)
-        action, message = dispatch(
-            "/diff",
-            session_id=index.mint(),
-            index=index,
-            diff_config_path=tmp_path / "d.yaml",
-        )
-        assert action == "reply"
-        assert "Diff mode:" in message
+        sid = index.mint()
+        store = PendingStore(tmp_path / "sess", session_id=sid)
+        store.stash("/tmp/x.py", "a\n", "\x1b[31mb\x1b[0m\n", "write")
+        bind_session(sid, store)
+        for cmd in ("/diff show", "/diff SHOW", "/diff show /tmp/x.py"):
+            action, message = dispatch(cmd, session_id=sid, index=index)
+            assert action == "reply"
+            assert "--- a//tmp/x.py" in message
+            assert "+++ b//tmp/x.py" in message
+            assert "-a" in message and "+b" in message
+            assert "\x1b[" not in message
 
-    def test_diff_set_mode_persists(self, tmp_path):
-        index = _fresh_index(tmp_path)
-        cfg = tmp_path / "diff.yaml"
-        action, message = dispatch(
-            "/diff approve-each",
-            session_id=index.mint(),
-            index=index,
-            diff_config_path=cfg,
+        action_miss, msg_miss = dispatch(
+            "/diff show /tmp/nope.py", session_id=sid, index=index
         )
-        assert action == "reply"
-        assert "approve-each" in message
-        assert DiffConfig.load(cfg).mode == "approve-each"
+        assert action_miss == "reply"
+        assert "No pending change to /tmp/nope.py." == msg_miss
 
-    def test_diff_bogus_mode_usage_never_agent_turn(self, tmp_path):
+    def test_diff_set_mode_session_sticky_and_config_yaml_persists(
+        self, tmp_path, monkeypatch
+    ):
+        import strands_code_cli.entry.provider_config as provider_config_module
+
+        cfg = tmp_path / "config.yaml"
+        monkeypatch.setattr(provider_config_module, "default_config_path", lambda: cfg)
         index = _fresh_index(tmp_path)
+        holder = DiffModeState()
         action, message = dispatch(
-            "/diff yolo",
-            session_id=index.mint(),
-            index=index,
-            diff_config_path=tmp_path / "d.yaml",
+            "/diff auto", session_id=index.mint(), index=index, diff_mode=holder
         )
         assert action == "reply"
-        assert "Usage" in message
+        assert message == "Diff mode set to auto."
+        assert holder.mode == "auto"
+        assert not cfg.exists()
+
+        ProviderConfig(diff_mode="auto").save(cfg)
+        assert ProviderConfig.load(cfg).diff_mode == "auto"
+
+    def test_diff_bogus_and_retired_mode_usage(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        for bad in ("yolo", "approve-each"):
+            action, message = dispatch(
+                f"/diff {bad}", session_id=index.mint(), index=index
+            )
+            assert action == "reply"
+            assert "Usage" in message
 
     def test_search_empty_pattern_usage_never_agent_turn(self, tmp_path):
         index = _fresh_index(tmp_path)
@@ -157,11 +164,6 @@ class TestDiffRouter:
         )
         assert action == "reply"
         assert "hay.py" in message
-
-    def test_diff_survives_restart(self, tmp_path):
-        cfg = tmp_path / "diff.yaml"
-        DiffConfig(mode="auto").save(cfg)
-        assert DiffConfig.load(cfg).mode == "auto"
 
     def test_usage_hint_lists_diff_and_search(self):
         assert "/diff" in USAGE_HINT
@@ -193,13 +195,12 @@ class TestDiffHelpers:
 
 
 class TestDiffGateModes:
-    def test_approve_applies(self, tmp_path):
+    def test_auto_mode_applies_without_prompt(self, tmp_path):
         files: dict = {}
         read, write = _mem_io(files)
         gated = make_gated_write(
             cwd=tmp_path,
-            get_mode=lambda: "approve-each",
-            ask=lambda prompt: True,
+            get_mode=lambda: "auto",
             reader=read,
             writer=write,
         )
@@ -207,18 +208,19 @@ class TestDiffGateModes:
         assert "Applied" in result
         assert files[str(tmp_path / "n.txt")] == "hello\n"
 
-    def test_deny_discards(self, tmp_path):
+    def test_unknown_mode_falls_back_to_on_demand(self, tmp_path):
         files: dict = {}
         read, write = _mem_io(files)
+        store = PendingStore(tmp_path / "sess")
         gated = make_gated_write(
             cwd=tmp_path,
             get_mode=lambda: "approve-each",
-            ask=lambda prompt: False,
+            store=store,
             reader=read,
             writer=write,
         )
         result = _run(gated(path="n.txt", content="hello\n"))
-        assert "Discarded" in result
+        assert "Stashed" in result
         assert files == {}
 
     def test_on_demand_stash_then_diff_apply(self, tmp_path):
@@ -428,7 +430,7 @@ class TestGateSubsumption:
         assert len(split_hunks(unified_diff(old, new, "m.txt"))) == 2
         return old, new
 
-    def test_gate_active_skips_per_hunk_ask(self, tmp_path):
+    def test_gate_active_skips_wrapper_ask(self, tmp_path):
         files: dict = {}
         read, write = _mem_io(files)
         old, new = self._two_hunk_files(tmp_path)
@@ -437,11 +439,11 @@ class TestGateSubsumption:
 
         def fail_ask(prompt):
             calls["n"] += 1
-            raise AssertionError("gate-active approve-each must not ask per hunk")
+            raise AssertionError("auto wrapper must not ask per hunk")
 
         gated = make_gated_write(
             cwd=tmp_path,
-            get_mode=lambda: "approve-each",
+            get_mode=lambda: "auto",
             ask=fail_ask,
             reader=read,
             writer=write,
@@ -450,28 +452,6 @@ class TestGateSubsumption:
         result = _run(gated(path="m.txt", content=new))
         assert "Applied" in result
         assert calls["n"] == 0
-
-    def test_gate_inactive_still_prompts_per_hunk(self, tmp_path):
-        files: dict = {}
-        read, write = _mem_io(files)
-        old, new = self._two_hunk_files(tmp_path)
-        files[str(tmp_path / "m.txt")] = old
-        calls = {"n": 0}
-
-        def count_ask(prompt):
-            calls["n"] += 1
-            return True
-
-        gated = make_gated_write(
-            cwd=tmp_path,
-            get_mode=lambda: "approve-each",
-            ask=count_ask,
-            reader=read,
-            writer=write,
-        )
-        result = _run(gated(path="m.txt", content=new))
-        assert "Applied" in result
-        assert calls["n"] == 2  # Phase 2 per-hunk contract intact
 
     def test_one_prompt_total_with_gate(self, tmp_path):
         """Gate ask (1, answered y) + gate-active wrapper (0) == 1 total."""
@@ -520,7 +500,7 @@ class TestGateSubsumption:
 
         gated = make_gated_write(
             cwd=tmp_path,
-            get_mode=lambda: "approve-each",
+            get_mode=lambda: "auto",
             ask=fail_ask,
             reader=read,
             writer=write,

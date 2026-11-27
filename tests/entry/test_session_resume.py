@@ -179,6 +179,22 @@ class TestEntryRouting:
         chosen = resolve_session_id("abc-123.session_1", SessionIndex(tmp_path / "idx"))
         assert chosen == "abc-123.session_1"
 
+    def test_resolve_session_id_unique_prefix_and_ambiguous_rejection(self, tmp_path):
+        import typer
+
+        from strands_code_cli.entry.main import resolve_session_id
+        from strands_code_cli.session.session_index import SessionIndex
+
+        idx = SessionIndex(tmp_path / "idx")
+        full = "deadbeef111122223333444455556666"
+        idx.ensure(full)
+        assert resolve_session_id("deadbeef", idx) == full
+
+        other = "deadbeef999988887777666655554444"
+        idx.ensure(other)
+        with pytest.raises(typer.BadParameter, match="Ambiguous"):
+            resolve_session_id("deadbeef", idx)
+
     def test_explicit_session_id_routes_to_loop(self, tmp_path):
         import importlib
         from unittest.mock import patch

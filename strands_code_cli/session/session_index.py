@@ -251,3 +251,32 @@ class SessionIndex:
         if any(sep in cleaned for sep in ("/", "\\", "\x00")):
             raise ValueError("title must not contain path separators")
         return cleaned[:_TITLE_MAX_CHARS]
+
+
+def resolve_session_prefix(
+    known: set[str], target: str
+) -> tuple[str | None, str | None, list[str]]:
+    """Resolve an exact session id or a unique prefix against ``known`` ids.
+
+    Returns ``(resolved_id, error_message, matches)``:
+    - Exact match: ``(target, None, [])``
+    - Unique prefix: ``(matches[0], None, matches)``
+    - Ambiguous prefix: ``(None, msg, matches)``
+    - No match: ``(None, None, [])``
+    """
+    if target in known:
+        return (target, None, [])
+    if not target:
+        return (None, None, [])
+    matches = sorted(sid for sid in known if sid.startswith(target))
+    if len(matches) == 1:
+        return (matches[0], None, matches)
+    if len(matches) > 1:
+        preview = ", ".join(matches[:5])
+        suffix = f" (+{len(matches) - 5} more)" if len(matches) > 5 else ""
+        return (
+            None,
+            f"Ambiguous session prefix {target!r}: matches {preview}{suffix}.",
+            matches,
+        )
+    return (None, None, [])

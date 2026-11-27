@@ -30,15 +30,21 @@ from strands_code_cli.memory.memory_modes import (
     MEMORY_MODE_USAGE,
     CurateQueue,
     InitState,
-    MemoryModeConfig,
     MemoryModeState,
     Proposal,
     ReviseState,
     format_init_prompt,
     format_revise_prompt,
 )
-from strands_code_cli.policy.diff_config import MODES, DiffConfig
-from strands_code_cli.policy.diff_gate import apply_stashed, store_for
+from strands_code_cli.policy.diff_gate import (
+    DIFF_MODES,
+    DIFF_USAGE,
+    DiffModeState,
+    apply_stashed,
+    bounded_diff,
+    store_for,
+    unified_diff,
+)
 from strands_code_cli.policy.mode import (
     APPROVE_EMPTY,
     APPROVE_EXECUTE,
@@ -46,8 +52,12 @@ from strands_code_cli.policy.mode import (
     MODE_USAGE,
     ModeState,
 )
-from strands_code_cli.session.session_index import SessionIndex, rich_stash_path
-from strands_code_cli.ui.console import console, sanitize_display
+from strands_code_cli.session.session_index import (
+    SessionIndex,
+    resolve_session_prefix,
+    rich_stash_path,
+)
+from strands_code_cli.ui.console import console, sanitize_display, sanitize_multiline
 from strands_code_cli.ui.output import print_plain
 
 if TYPE_CHECKING:
@@ -57,12 +67,12 @@ if TYPE_CHECKING:
 
 USAGE_HINT = (
     "Available commands: /resume, /rename <title>, /forget <id>, "
-    "/diff [approve-each|on-demand|auto|show|apply [path]|discard [path]], "
+    "/diff [on-demand|auto|show [path]|apply [path]|discard [path]], "
     "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
-    "/model|/models [provider/name|id|ARN], /cost [refresh|table [filter]], "
+    "/model [provider/name|id|ARN], /cost [refresh|table [filter]], "
     "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup|validate], "
     "/codeact [tool|code|both], /code <ask>, /tool <ask>, "
-    "/skills|/skill [marketplace|browse|install|update|sync|show|remove|reload], "
+    "/skills [marketplace|browse|install|update|sync|show|remove|reload], "
     "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
     "/init [deeper], /exit"
 )
@@ -108,9 +118,7 @@ def _sdk_hint(selection: str) -> str:
     return f" (install the '{extra}' extra: pip install strands-code-agent[{extra}])"
 
 
-_DIFF_USAGE = (
-    "Usage: /diff [approve-each|on-demand|auto|show|apply [path]|discard [path]]"
-)
+_DIFF_USAGE = DIFF_USAGE
 _SEARCH_USAGE = "Usage: /search <pattern> [--glob <glob>] [--limit <n>]"
 _POLICY_USAGE = "Usage: /policy [show|last]"
 _SKILLS_USAGE = (
@@ -145,12 +153,12 @@ def _dispatch_config_cmds(
     cwd: str | Path | None,
     mode: ModeState | None,
     session_id: str,
-    diff_config_path: str | Path | None,
+    diff_mode: DiffModeState | None,
     agent: Any = None,
 ) -> tuple[str, str | None] | None:
     """Config/policy slash commands; None when cmd is not one of them."""
     if cmd == "/diff":
-        return ("reply", _diff_message(session_id, rest, diff_config_path))
+        return ("reply", _diff_message(session_id, rest, diff_mode=diff_mode))
     if cmd == "/search":
         return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
     if cmd == "/policy":
@@ -166,7 +174,6 @@ def _dispatch_memory_cmds(
     cwd: str | Path | None,
     memory_mode: MemoryModeState | None,
     curate: CurateQueue | None,
-    memory_mode_path: str | Path | None,
     revise: ReviseState | None,
     init: InitState | None,
     skills: SkillIndex | None,
@@ -177,10 +184,10 @@ def _dispatch_memory_cmds(
     if cmd == "/memory":
         if rest.partition(" ")[0].strip().lower() == "revise":
             return _revise_action(rest, revise)
-        return ("reply", _memory_message(rest, memory_mode, curate, memory_mode_path))
+        return ("reply", _memory_message(rest, memory_mode, curate))
     if cmd == "/init":
         return _init_action(rest, cwd if cwd is not None else os.getcwd(), init)
-    if cmd in ("/skills", "/skill"):
+    if cmd == "/skills":
         return ("reply", _skills_message(rest, skills, harness_skills_refresh))
     if cmd == "/approve":
         return _approve_message(mode)
@@ -198,7 +205,7 @@ def _dispatch_model_cmds(
     session_id: str,
 ) -> tuple[str, str | None] | None:
     """Model/cost/context slash commands; None when cmd is not one of them."""
-    if cmd in ("/model", "/models"):
+    if cmd == "/model":
         action, selection = _model_message(rest, current_model)
         if action == "model" and selection is not None and _routing_warns(routing):
             return _model_warn_action(selection)
@@ -251,7 +258,7 @@ def dispatch(
     session_id: str,
     index: SessionIndex,
     cwd: str | Path | None = None,
-    diff_config_path: str | Path | None = None,
+    diff_mode: DiffModeState | None = None,
     mode: ModeState | None = None,
     current_model: str | None = None,
     agent=None,
@@ -259,7 +266,6 @@ def dispatch(
     skills: SkillIndex | None = None,
     harness_skills_refresh: Any = None,
     memory_mode: MemoryModeState | None = None,
-    memory_mode_path: str | Path | None = None,
     curate: CurateQueue | None = None,
     revise: ReviseState | None = None,
     init: InitState | None = None,
@@ -274,7 +280,8 @@ def dispatch(
         session_id: Active session id (the rename target).
         index: Sidecar title index backing /resume and /rename.
         cwd: Working directory for /search and scope checks (default: process cwd).
-        diff_config_path: Override for the persisted diff mode (tests only).
+        diff_mode: Session-sticky diff mode holder (None → on-demand default,
+            keeps standalone/test behaviour without a loop-owned holder).
         mode: Session-sticky mode holder (None → Act default, keeps
             standalone/test behaviour without a loop-owned holder).
         current_model: Active ``provider/name`` string for /model discovery
@@ -292,8 +299,6 @@ def dispatch(
         memory_mode: Session-sticky memory-mode holder (None → curate
             default, keeps standalone/test behaviour without a
             loop-owned holder).
-        memory_mode_path: Override for the persisted memory mode
-            (tests only).
         curate: Session-sticky curate queue backing /memory list,
             approve, and deny (None → throwaway empty queue, keeping
             existing callers untouched).
@@ -335,7 +340,7 @@ def dispatch(
     if handled is not None:
         return handled
     handled = _dispatch_config_cmds(
-        cmd, rest, cwd, mode, session_id, diff_config_path, agent=agent
+        cmd, rest, cwd, mode, session_id, diff_mode, agent=agent
     )
     if handled is not None:
         return handled
@@ -345,7 +350,6 @@ def dispatch(
         cwd,
         memory_mode,
         curate,
-        memory_mode_path,
         revise,
         init,
         skills,
@@ -1759,20 +1763,14 @@ def _memory_list(queue: CurateQueue) -> str:
 def _memory_mode_verb(
     arg: str,
     memory_mode: MemoryModeState | None,
-    memory_mode_path: str | Path | None,
 ) -> str:
-    """Handle /memory mode: announce, switch (persisted fail-soft), or usage."""
+    """Handle /memory mode: announce, session-sticky switch, or usage."""
     holder = _memory_mode_holder(memory_mode)
     pick = arg.strip().lower()
     if not pick:
         return holder.announce()
     if pick in ("curate", "silent"):
-        reply = holder.set(pick)
-        try:
-            MemoryModeConfig(mode=pick).save(memory_mode_path)
-        except (OSError, ValueError):
-            pass
-        return reply
+        return holder.set(pick)
     return _MEMORY_MODE_USAGE
 
 
@@ -1803,7 +1801,6 @@ def _memory_message(
     rest: str,
     memory_mode: MemoryModeState | None,
     curate: CurateQueue | None = None,
-    memory_mode_path: str | Path | None = None,
 ) -> str:
     """Handle /memory: mode, list, approve, deny, batch verbs — replies only.
 
@@ -1811,8 +1808,8 @@ def _memory_message(
     verbs act immediately through the queue's file write. Approval
     *prompts* never live here (they would race the prompt);
     per-proposal prompting happens at the loop turn boundary via
-    ``review_memory_queue``. Mode switches persist to the home
-    config (fail-soft: the session mode still applies).
+    ``review_memory_queue``. Mode switches are session-sticky in memory
+    (startup defaults live in config.yaml ``memory_mode``).
     """
     queue = curate if curate is not None else CurateQueue()
     verb, _, arg = rest.partition(" ")
@@ -1820,7 +1817,7 @@ def _memory_message(
     if verb in ("", "list"):
         return _memory_list(queue)
     if verb == "mode":
-        return _memory_mode_verb(arg, memory_mode, memory_mode_path)
+        return _memory_mode_verb(arg, memory_mode)
     if verb == "approve":
         target = arg.strip()
         if not target:
@@ -1952,7 +1949,10 @@ def _skills_cwd(skills: SkillIndex | None) -> Path:
 
 
 def _parse_flag_args(
-    arg: str, *, flags_with_values: frozenset[str] = frozenset()
+    arg: str,
+    *,
+    flags_with_values: frozenset[str] = frozenset(),
+    allowed_switches: frozenset[str] = frozenset(),
 ) -> tuple[list[str], dict[str, str], set[str]]:
     tokens = shlex.split(arg)
     positionals: list[str] = []
@@ -1968,6 +1968,8 @@ def _parse_flag_args(
             idx += 2
             continue
         if tok.startswith("--"):
+            if tok not in allowed_switches:
+                raise ValueError(f"Unknown flag {tok}")
             switches.add(tok)
             idx += 1
             continue
@@ -2065,10 +2067,7 @@ def _skills_marketplace_cmd(arg: str) -> str:
     )
 
     if not arg:
-        return (
-            "Usage: /skills marketplace [add <source> [--name <alias>] [--ref <ref>]"
-            "|list|update [name]|remove <name>]"
-        )
+        return _marketplace_list_reply()
     sub, _, rest = arg.partition(" ")
     sub = sub.lower()
     rest = rest.strip()
@@ -2104,7 +2103,9 @@ def _skills_browse_cmd(arg: str) -> str:
     )
 
     try:
-        pos, _, switches = _parse_flag_args(arg)
+        pos, _, switches = _parse_flag_args(
+            arg, allowed_switches=frozenset({"--refresh"})
+        )
         refresh = "--refresh" in switches
         target = pos[0] if pos else None
         if not list_marketplaces():
@@ -2200,7 +2201,9 @@ def _skills_sync_cmd(skills: SkillIndex | None, harness_refresh: Any) -> str:
 def _skills_show_cmd(name: str, skills: SkillIndex | None) -> str:
     from strands_code_cli.memory.skills import SKILLS_SOURCE
 
-    if skills is None or not name:
+    if not name:
+        return "Usage: /skills show <name>"
+    if skills is None:
         return f"Unknown skill {name!r}."
     entry = skills.resolve(name)
     if entry is None:
@@ -2242,7 +2245,9 @@ def _skills_remove_cmd(
 ) -> str:
     from strands_code_cli.memory.marketplace import valid_namespace, valid_skill_name
 
-    if skills is None or not name:
+    if not name:
+        return "Usage: /skills remove <name>"
+    if skills is None:
         return f"Unknown skill {name!r}."
     entry = skills.resolve(name)
     if entry is None:
@@ -2297,35 +2302,67 @@ def _skills_message(
         return _skills_sync_cmd(skills, harness_refresh)
     if verb == "show":
         return _skills_show_cmd(name, skills)
-    if verb in ("reload", "refresh"):
+    if verb == "reload":
         if skills is None:
             return "No skills loaded (./.agent/skills missing or empty)."
         return _skills_reload(skills, harness_refresh)
-    if verb in ("remove", "uninstall"):
+    if verb == "remove":
         return _skills_remove_cmd(name, skills, harness_refresh)
     return f"Unknown /skills verb {verb!r}. {_SKILLS_USAGE}"
 
 
-def _diff_message(session_id: str, rest: str, config_path: str | Path | None) -> str:
-    """Handle /diff: mode switch, status show, pending apply/discard — replies only.
+def _diff_holder(diff_mode: DiffModeState | None) -> DiffModeState:
+    return diff_mode if diff_mode is not None else DiffModeState()
 
-    Approval prompts never live here (they would race the prompt); per-hunk
-    approval happens inside the turn via the gate's ask callable.
-    """
-    config = DiffConfig.load(config_path)
+
+def _render_diff_show(pending: dict[str, dict[str, Any]], target: str) -> str:
+    """Render bounded sanitized unified_diff previews for /diff show [path]."""
+    if not pending:
+        return "No pending changes."
+    if target:
+        entry = pending.get(target)
+        if entry is None:
+            return f"No pending change to {target}."
+        diff = unified_diff(
+            entry.get("old_text") or "", entry.get("new_text") or "", target
+        )
+        preview = bounded_diff(diff, max_lines=40)
+        return (
+            sanitize_multiline(preview) if preview else f"No textual diff for {target}."
+        )
+    blocks: list[str] = []
+    for path in sorted(pending):
+        entry = pending[path]
+        diff = unified_diff(
+            entry.get("old_text") or "", entry.get("new_text") or "", path
+        )
+        preview = bounded_diff(diff, max_lines=40)
+        blocks.append(
+            sanitize_multiline(preview)
+            if preview
+            else f"{entry.get('op', 'edit')}: {path} (no diff)"
+        )
+    return "\n".join(blocks)
+
+
+def _diff_message(
+    session_id: str, rest: str, diff_mode: DiffModeState | None = None
+) -> str:
+    """Handle /diff: status, diff preview, session-sticky mode switch, apply/discard."""
+    holder = _diff_holder(diff_mode)
     store = store_for(session_id)
     pending = store.list() if store is not None else {}
-    if not rest or rest == "show":
-        lines = [f"Diff mode: {config.mode} ({len(pending)} pending)."]
+    if not rest:
+        lines = [f"Diff mode: {holder.mode} ({len(pending)} pending)."]
         for path in sorted(pending):
             lines.append(f"  {pending[path].get('op', 'edit')}: {path}")
         return "\n".join(lines)
     verb, _, arg = rest.partition(" ")
     verb = verb.lower()
-    if verb in MODES:
-        config.mode = verb
-        config.save(config_path)
-        return f"Diff mode set to {verb}."
+    if verb == "show":
+        return _render_diff_show(pending, arg.strip())
+    if verb in DIFF_MODES:
+        return holder.set(verb)
     if verb == "apply":
         if store is None:
             return "No pending-change store for this session."
@@ -2429,12 +2466,16 @@ def _parse_search_args(rest: str) -> tuple[str, str | None, int]:
 
 
 def _resume_message(index: SessionIndex, rest: str) -> str:
-    """Render /resume output: one session hint, or the recent list."""
+    """Render /resume output: one session hint (exact or unique prefix), or recent list."""
     if rest:
-        for entry in index.list_recent():
-            if entry["id"] == rest:
-                title = entry.get("title", "untitled")
-                return f"To resume '{title}', exit and relaunch with --session-id {entry['id']}."
+        entries = {e["id"]: e for e in index.list_recent(limit=None)}
+        resolved, err, _ = resolve_session_prefix(set(entries), rest)
+        if err is not None:
+            return err
+        if resolved is not None:
+            entry = entries[resolved]
+            title = entry.get("title", "untitled")
+            return f"To resume '{title}', exit and relaunch with --session-id {entry['id']}."
         return f"Unknown session id {rest!r}. {USAGE_HINT}"
     entries = index.list_recent(limit=_PICKER_LIMIT)
     if not entries:
@@ -2490,16 +2531,14 @@ def _resolve_forget_target(
     known = {e["id"] for e in index.list_recent(limit=None)} | _snapshot_ids(
         session_dir
     )
-    if target in known:
-        return (target, None)
-    matches = sorted(sid for sid in known if sid.startswith(target))
-    if not matches:
-        return (None, f"No session matches {target!r}. {_FORGET_USAGE}")
+    resolved, _err, matches = resolve_session_prefix(known, target)
+    if resolved is not None:
+        return (resolved, None)
     if len(matches) > 1:
         lines = [f"Ambiguous prefix {target!r} — matches:"]
         lines.extend(f"  {sid}" for sid in matches)
         return (None, "\n".join(lines))
-    return (matches[0], None)
+    return (None, f"No session matches {target!r}. {_FORGET_USAGE}")
 
 
 def _remove_snapshot_dir(session_dir: str | Path | None, session_id: str) -> None:

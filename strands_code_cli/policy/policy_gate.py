@@ -396,6 +396,65 @@ def _user_deny_action(
     return InterventionDeny(reason=reason)
 
 
+_MAX_PREVIEW_BYTES = 256 * 1024
+
+
+def _safe_existing_text_for_preview(
+    raw_path: str, cwd: Path, extra_roots: list[Path]
+) -> str | None:
+    """Read existing UTF-8 file text only when confined, non-sensitive, regular, and small.
+
+    Returns ``""`` when the target does not exist yet (new-file preview) and
+    ``None`` when the path is outside scope, sensitive, symlinked, special,
+    binary, or larger than 256 KiB.
+    """
+    import stat
+
+    from strands_code_cli.platform_io import refuse_symlink_under_roots
+    from strands_code_cli.policy.scope import confine, resolve
+
+    raw_obj = Path(raw_path)
+    raw_candidate = Path(
+        os.path.normpath(str(raw_obj if raw_obj.is_absolute() else cwd / raw_obj))
+    )
+    try:
+        refuse_symlink_under_roots(
+            raw_candidate, [cwd, cwd.resolve(), *extra_roots], "diff preview target"
+        )
+    except ValueError:
+        return None
+    resolved = resolve(raw_path, cwd)
+    try:
+        confined = confine(resolved, cwd, extra_roots)
+    except ValueError:
+        return None
+    if (
+        _is_sensitive_read_path(raw_path, cwd)
+        or _is_sensitive_read_path(str(confined), cwd)
+        or _is_protected_skills_or_config_path(raw_path, cwd)
+        or _is_protected_skills_or_config_path(str(confined), cwd)
+    ):
+        return None
+    try:
+        refuse_symlink_under_roots(confined, [cwd, *extra_roots], "diff preview target")
+    except ValueError:
+        return None
+    try:
+        st = confined.lstat()
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        return None
+    if st.st_size > _MAX_PREVIEW_BYTES:
+        return None
+    try:
+        return confined.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 class PolicyGateHandler(InterventionHandler):
     """Single deterministic TOML+Python permissions gate on Strands InterventionHandler."""
 
@@ -593,6 +652,44 @@ class PolicyGateHandler(InterventionHandler):
         self._batch.record(f"[{safe_tag}] denied {safe_tool} [{rule_text}]")
         return InterventionDeny(reason=refusal)
 
+    def _preview_roots(self, cwd: Path, tool_name: str) -> list[Path]:
+        from strands_code_cli.policy.scope import effective_roots
+
+        try:
+            policy = self._current_policy()
+            return list(effective_roots(cwd, policy, tool_name=tool_name))
+        except Exception:
+            return []
+
+    def _render_mutation_diff(self, tool_name: str, tool_input: dict[str, Any]) -> None:
+        raw_path = str(tool_input.get("path") or "")
+        if not raw_path:
+            return
+        from strands_code_cli.policy.diff_gate import (
+            bounded_diff,
+            preview_for_edit,
+            unified_diff,
+        )
+
+        if tool_name == "edit":
+            diff = preview_for_edit(
+                raw_path,
+                str(tool_input.get("old_str") or ""),
+                str(tool_input.get("new_str") or ""),
+            )
+        else:
+            cwd = Path.cwd()
+            extra = self._preview_roots(cwd, tool_name)
+            old_text = _safe_existing_text_for_preview(raw_path, cwd, extra)
+            if old_text is None:
+                return
+            diff = unified_diff(
+                old_text, str(tool_input.get("content") or ""), raw_path
+            )
+        preview = bounded_diff(diff, max_lines=40)
+        if preview:
+            console.print(Syntax(sanitize_multiline(preview), "diff"))
+
     def _render_prompt_header(
         self, tag: str, tool_name: str, tool_input: dict[str, Any], verdict: Prompt
     ) -> None:
@@ -603,6 +700,9 @@ class PolicyGateHandler(InterventionHandler):
             if tool_name == "python_repl":
                 safe_code = sanitize_multiline(tool_input.get("code", ""))
                 console.print(Syntax(safe_code, "python"))
+            elif tool_name in ("write", "edit"):
+                print_plain(console, f"  Detail: {_detail_line(tool_name, tool_input)}")
+                self._render_mutation_diff(tool_name, tool_input)
             else:
                 print_plain(console, f"  Detail: {_detail_line(tool_name, tool_input)}")
             print_plain(

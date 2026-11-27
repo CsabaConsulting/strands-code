@@ -212,8 +212,11 @@ class TestMidTurnSlashReply:
     def test_model_forms_reuse_loop_refusal(self):
         from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
-        for text in ("/model", "/models", "  /model us.x  ", "/MODEL"):
+        for text in ("/model", "  /model us.x  ", "/MODEL"):
             assert mid_turn_slash_reply(text) == MODEL_REFUSAL
+        assert mid_turn_slash_reply("/models") == (
+            "/models applies at the idle prompt — wait for the turn to finish."
+        )
 
     def test_other_commands_generic_idle_only(self):
         assert mid_turn_slash_reply("/cost") == (

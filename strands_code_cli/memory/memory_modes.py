@@ -1,19 +1,10 @@
-"""Session memory modes: curate vs silent (SKILL-02, D-07).
+"""Session memory modes: curate vs silent (SKILL-02, D-07, PARITY-01 D-01).
 
-New sessions open in the persisted mode (``curate`` when no choice
-was ever saved): curate prompts approve/deny per proposal — the
-deny-first posture — while ``/memory mode silent`` opts into
-auto-apply with one transcript line per applied write. The holder
-mirrors :class:`ModeState`; the choice persists via
-:class:`MemoryModeConfig` (DiffConfig shape: fail-soft load, atomic
-save, platformdirs home, never repo-relative).
-
-The curate surface rides :class:`CurateQueue`: promotion sweeps of
-the harness fact store queue :class:`Proposal` records, ``/memory``
-approve/deny verbs act on them immediately, and the loop's
-turn-boundary review prompts per proposal in curate mode or
-auto-applies with :func:`silent_note` lines in silent mode. Denied
-ids are remembered for the session and never re-queued unprompted.
+New sessions open in ``curate`` (or the ``memory_mode`` startup default in
+``~/.config/strands-code/config.yaml``): curate prompts approve/deny per
+proposal — the deny-first posture — while ``/memory mode silent`` opts
+into in-memory session-sticky auto-apply for promoted facts with one
+transcript line per applied write (slash switches never persist to disk).
 """
 
 from __future__ import annotations
@@ -23,82 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-import platformdirs
-import yaml
-
-from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+from strands_code_cli.platform_io import refuse_symlink
 from strands_code_cli.ui.console import sanitize_display
 
 logger = logging.getLogger(__name__)
-
-_CONFIG_DIR_NAME = "strands-code"
-_MEMORY_MODE_FILE_NAME = "memory.yaml"
-
-_KNOWN_KEYS = {"mode"}
-
-
-def default_memory_mode_config_path() -> Path:
-    """User memory-mode config path (platformdirs home, never repo-relative)."""
-    return Path(platformdirs.user_config_dir(_CONFIG_DIR_NAME)) / _MEMORY_MODE_FILE_NAME
-
-
-@dataclass
-class MemoryModeConfig:
-    """Persisted memory mode: curate (prompt) or silent (auto-apply)."""
-
-    mode: str = "curate"
-
-    @classmethod
-    def load(cls, path: str | Path | None = None) -> MemoryModeConfig:
-        """Load fail-soft: missing, corrupt, or bogus-mode files yield curate.
-
-        Raises:
-            ValueError: On symlinked paths or unknown keys.
-        """
-        resolved = Path(path) if path is not None else default_memory_mode_config_path()
-        refuse_symlink(resolved, "memory mode config", max_ancestors=1)
-        if not resolved.exists():
-            return cls()
-        try:
-            data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-        except (OSError, ValueError, yaml.YAMLError) as exc:
-            logger.warning("Ignoring unreadable memory mode config: %s", exc)
-            return cls()
-        if data is None:
-            return cls()
-        if not isinstance(data, dict):
-            logger.warning("Ignoring malformed memory mode config (not a mapping)")
-            return cls()
-        unknown = set(data) - _KNOWN_KEYS
-        if unknown:
-            raise ValueError(f"Unknown memory mode config keys: {sorted(unknown)}")
-        mode = data.get("mode", "curate")
-        if mode not in ("curate", "silent"):
-            logger.warning("Ignoring memory mode config with unknown mode %r", mode)
-            return cls()
-        return cls(mode=mode)
-
-    def save(self, path: str | Path | None = None) -> Path:
-        """Persist the memory mode; creates the config home when needed.
-
-        Args:
-            path: Override for tests; defaults to the platformdirs home.
-
-        Returns:
-            The path written.
-        """
-        if self.mode not in ("curate", "silent"):
-            raise ValueError(f"Memory mode must be curate|silent, got {self.mode!r}")
-        resolved = Path(path) if path is not None else default_memory_mode_config_path()
-        return atomic_write_text(
-            resolved,
-            yaml.safe_dump({"mode": self.mode}),
-            mode=0o600,
-            dir_mode=0o700,
-            refuse_ancestors=1,
-            label="memory mode config",
-        )
-
 
 MEMORY_MODE_CURATE_REPLY = "Memory mode: curate — every proposal prompts approve/deny."
 MEMORY_MODE_SILENT_REPLY = "Memory mode: silent — proposals auto-apply, writes logged."

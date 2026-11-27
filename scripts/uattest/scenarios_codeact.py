@@ -22,37 +22,26 @@ from uattest_lib import (  # noqa: E402 - sibling import needs the sys.path inse
     start_cli,
     stop_cli,
     tmux,
-    wait_for,
     wait_for_new,
     wait_main_end,
 )
 
 
 def scenario_a1():
-    """A1: bare --codeact boots the session into code mode (G-11-1).
-
-    RED before the gap fix (typer rejects the bare flag with
-    "requires an argument"); GREEN after (boots, /codeact reports
-    code). The early-pane check fails fast instead of hanging on
-    the boot wait.
-    """
+    """A1: explicit ``--codeact code`` boots into code mode; bare ``--codeact`` is rejected."""
     workdir = ensure_workdir("w11")
     sess = "uatr8a1"
     tmux("kill-session", "-t", sess)
     tmux("new-session", "-d", "-s", sess, "-x", "200", "-y", "60")
     try:
         send(sess, f"cd {workdir} && {CLI} --codeact", "Enter")
-        time.sleep(8)
+        time.sleep(5)
         early = pane_text(sess)
-        if "requires an argument" in early:
-            raise AssertionError(
-                "G-11-1 reproduced: bare --codeact rejected, want boot into code mode"
-            )
-        if "Recent sessions" in early:
-            print("[picker] Enter for new session", flush=True)
-            send(sess, "Enter")
-        wait_for(sess, r"Ctrl-D to exit", 90, "boot")
-        wait_for(sess, r"^> ?$", 30, "prompt", poll=2)
+        assert "requires an argument" in early, (
+            "bare --codeact should require an explicit tool|code|both value"
+        )
+        tmux("kill-session", "-t", sess)
+        start_cli(sess, workdir, cli_args="--codeact code")
         before = len(re.findall(r"Interface: code", pane_text(sess)))
         send(sess, "/codeact", "Enter")
         text = wait_for_new(sess, r"Interface: code", 30, "code-report", before=before)

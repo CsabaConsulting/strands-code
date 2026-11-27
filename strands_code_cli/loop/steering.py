@@ -148,7 +148,7 @@ def mid_turn_slash_reply(text: str) -> str | None:
     if not cleaned.startswith("/"):
         return None
     head = cleaned.split()[0].lower()
-    if head in ("/model", "/models"):
+    if head == "/model":
         from strands_code_cli.model.model_switch import MODEL_REFUSAL
 
         return MODEL_REFUSAL

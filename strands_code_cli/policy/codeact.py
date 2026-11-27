@@ -387,19 +387,15 @@ def restore_after_turn(agent: Any, swapped: bool, default_tool: Any | None) -> N
         replace(default_tool)
 
 
-def resolve_initial_interface(
-    flag: str | None, saved: str | None, remember: bool
-) -> str:
-    """Resolve the session-start interface by D-03 precedence.
+def resolve_initial_interface(flag: str | None, saved: str | None = None) -> str:
+    """Resolve the session-start interface from CLI flag or config.yaml default.
 
     Args:
         flag: The ``--codeact`` value (None when the flag is absent).
-        saved: The persisted last choice (None when never saved).
-        remember: The remember-last-choice option (D-03).
+        saved: Optional startup default from ``config.yaml`` (``codeact``).
 
     Returns:
-        The flag first, then the saved choice when remembered,
-        else ``"tool"`` (tool-calling stays the default).
+        The CLI flag first, then the config.yaml default, else ``"tool"``.
 
     Raises:
         ValueError: For a flag or saved value outside ``tool|code|both``.
@@ -409,6 +405,6 @@ def resolve_initial_interface(
             raise ValueError(f"unknown interface {value!r}: expected tool|code|both")
     if flag is not None:
         return flag
-    if remember and saved is not None:
+    if saved is not None:
         return saved
     return "tool"

@@ -66,7 +66,6 @@ from strands_code_cli.memory.memory_modes import (
     MEMORY_FACT_DIR,
     CurateQueue,
     InitState,
-    MemoryModeConfig,
     MemoryModeState,
     ReviseState,
     format_revise_prompt,
@@ -110,6 +109,8 @@ from strands_code_cli.policy.codeact import (
     shape_turn_text,
     swap_for_code_turn,
 )
+from strands_code_cli.policy.diff_gate import DEFAULT_MODE as DEFAULT_DIFF_MODE
+from strands_code_cli.policy.diff_gate import DiffModeState
 from strands_code_cli.policy.mode import PLAN_PREFIX, ModeState
 from strands_code_cli.policy.policy_gate import (
     TurnCancelled,
@@ -2116,11 +2117,12 @@ def _dispatch_turn_input(
     routing_events: list | None,
     interface: CodeactState,
     stint: CodeactStint,
+    diff_mode: DiffModeState | None = None,
 ) -> tuple[str, str | None, str]:
     """Dispatch one turn input through the router.
 
     Armed boundary revises bypass dispatch as agent turns. A
-    ``/codeact`` flip persists as the last choice and resets the
+    ``/codeact`` flip stays session-sticky in memory and resets the
     stint (D-17).
 
     Returns:
@@ -2149,12 +2151,9 @@ def _dispatch_turn_input(
             routing=routing,
             routing_events=routing_events,
             interface=interface,
+            diff_mode=diff_mode,
         )
         if action == "reply" and interface.interface != codeact_before:
-            try:
-                ProviderConfig.load().save_codeact_choice(interface.interface)
-            except ValueError as exc:
-                logger.warning("CodeAct choice not persisted: %s", exc)
             # D-17: each CodeAct stint starts fresh on every switch.
             stint.reset()
     return action, message, text
@@ -2445,14 +2444,23 @@ def _init_routing_state() -> routing_mod.RoutingState:
     )
 
 
-def _load_initial_memory_mode() -> MemoryModeState:
-    """Load the opening memory mode; a tampered config starts curate."""
+def _load_initial_toggles(
+    codeact: str | None, agent: Any
+) -> tuple[CodeactState, DiffModeState, MemoryModeState]:
+    """Load session-sticky codeact, diff, and memory modes once from ProviderConfig."""
     try:
-        initial_mode = MemoryModeConfig.load().mode
+        saved = ProviderConfig.load()
     except ValueError:
-        logger.warning("Ignoring tampered memory mode config; starting in curate.")
-        initial_mode = "curate"
-    return MemoryModeState(initial=initial_mode)
+        logger.warning("Ignoring tampered provider config; using toggle defaults.")
+        saved = ProviderConfig()
+    interface = CodeactState(initial=resolve_initial_interface(codeact, saved.codeact))
+    existing_diff = getattr(agent, "_diff_mode", None)
+    if isinstance(existing_diff, DiffModeState):
+        diff_mode = existing_diff
+    else:
+        diff_mode = DiffModeState(initial=saved.diff_mode or DEFAULT_DIFF_MODE)
+    memory_mode = MemoryModeState(initial=saved.memory_mode or "curate")
+    return interface, diff_mode, memory_mode
 
 
 def _warn_if_no_streaming_tools(current_model: str) -> None:
@@ -2711,12 +2719,7 @@ def run_loop(
         history=_history(), completer=build_completer(_skill_words)
     )
     mode = ModeState()
-    _codeact_saved = ProviderConfig.load()
-    interface = CodeactState(
-        initial=resolve_initial_interface(
-            codeact, _codeact_saved.codeact, _codeact_saved.codeact_remember
-        )
-    )
+    interface, diff_mode, memory_mode = _load_initial_toggles(codeact, agent)
     # Loop-owned CodeAct stint (D-10/D-11): REPL state persists across
     # code turns within the stint and resets on every interface switch
     # (D-17) at the post-dispatch hook below. Built lazily on first use.
@@ -2726,7 +2729,6 @@ def run_loop(
     # boundary (None when absent — code turns stay prefix-shaped).
     default_repl = default_repl_handle(agent)
     routing = _init_routing_state()
-    memory_mode = _load_initial_memory_mode()
     curate_queue = CurateQueue()
     promotion_seen: set[str] = seed_promotion_seen(MEMORY_FACT_DIR)
     revise_state = ReviseState()
@@ -2824,6 +2826,7 @@ def run_loop(
             routing_events,
             interface,
             stint,
+            diff_mode=diff_mode,
         )
         _emit_skill_match_note(skills, action, text)
         if action == "exit":

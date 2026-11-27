@@ -386,7 +386,7 @@ class TestSkillsCommand:
 
     def test_usage_hint_advertises_skills(self):
         assert (
-            "/skills|/skill [marketplace|browse|install|update|sync|show|remove|reload]"
+            "/skills [marketplace|browse|install|update|sync|show|remove|reload]"
             in USAGE_HINT
         )
 
@@ -596,8 +596,15 @@ class TestSkillGapRound:
         _write_skill(skills_dir, "alpha")
         index = SkillIndex(skills_dir=skills_dir)
         _write_skill(skills_dir, "beta")
-        _, message = dispatch(
+        _, retired_msg = dispatch(
             "/skills refresh",
+            session_id="s1",
+            index=_session_index(tmp_path),
+            skills=index,
+        )
+        assert "Unknown /skills verb 'refresh'" in retired_msg
+        _, message = dispatch(
+            "/skills reload",
             session_id="s1",
             index=_session_index(tmp_path),
             skills=index,
@@ -669,18 +676,43 @@ class TestSkillGapRound:
         _write_skill(skills_dir, "beta")
         plugin.set_available_skills([str(skills_dir)])  # no raise on rescan
 
-    def test_skill_alias_lists_like_skills(self, tmp_path):
+    def test_skill_alias_and_legacy_verbs_retired_plus_strict_flags(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
         _write_skill(skills_dir, "alpha")
         index = SkillIndex(skills_dir=skills_dir)
-        _, listed = dispatch(
-            "/skills", session_id="s1", index=_session_index(tmp_path), skills=index
+        idx = _session_index(tmp_path)
+
+        action, msg = dispatch("/skill", session_id="s1", index=idx, skills=index)
+        assert action == "reply"
+        assert "Unknown command '/skill'" in msg
+
+        for bad_verb in ("refresh", "uninstall alpha"):
+            _, vmsg = dispatch(
+                f"/skills {bad_verb}", session_id="s1", index=idx, skills=index
+            )
+            assert "Unknown /skills verb" in vmsg
+
+        _, show_usage = dispatch(
+            "/skills show", session_id="s1", index=idx, skills=None
         )
-        _, aliased = dispatch(
-            "/skill", session_id="s1", index=_session_index(tmp_path), skills=index
+        assert show_usage == "Usage: /skills show <name>"
+        _, rem_usage = dispatch(
+            "/skills remove", session_id="s1", index=idx, skills=None
         )
-        assert aliased == listed
-        assert aliased is not None and "local:alpha" in aliased
+        assert rem_usage == "Usage: /skills remove <name>"
+
+        _, mkt_msg = dispatch(
+            "/skills marketplace", session_id="s1", index=idx, skills=index
+        )
+        assert "Usage:" not in mkt_msg
+
+        for bad_flag_cmd in (
+            "/skills marketplace add owner/repo --bogus",
+            "/skills browse --bogus",
+            "/skills install owner/repo --bogus",
+        ):
+            _, fmsg = dispatch(bad_flag_cmd, session_id="s1", index=idx, skills=index)
+            assert "Unknown flag --bogus" in fmsg
 
     def test_colon_prefix_suggests_namespace_skills_only(self, tmp_path):
         skills_dir = tmp_path / ".agent" / "skills"
@@ -1052,8 +1084,13 @@ class TestSkillsMarketplaceEndToEnd:
         _, synced = dispatch("/skills sync", session_id="s1", index=s_idx, skills=index)
         assert "Restored acme:audit." in synced
 
-        _, uninst = dispatch(
+        _, bad_verb = dispatch(
             "/skills uninstall acme:audit", session_id="s1", index=s_idx, skills=index
+        )
+        assert "Unknown /skills verb 'uninstall'" in bad_verb
+
+        _, uninst = dispatch(
+            "/skills remove acme:audit", session_id="s1", index=s_idx, skills=index
         )
         assert "Removed skill 'acme:audit'." in uninst
         assert index.resolve("acme:audit") is None
@@ -1303,7 +1340,7 @@ class TestPhase18NyquistSkillsAndDispatch:
         assert "acme:pinned (@ bbbbbbb)" in pop_list
 
         for bad_cmd, needle in (
-            ("/skills marketplace", "Usage:"),
+            ("/skills marketplace", "No marketplaces configured."),
             ("/skills marketplace bogus", "Usage:"),
             ("/skills marketplace update", "No marketplaces configured."),
             ("/skills browse", "No marketplaces configured."),
@@ -1380,11 +1417,11 @@ class TestPhase18NyquistSkillsAndDispatch:
             in dispatch("/skills sync", session_id="s1", index=s_idx, skills=None)[1]
         )
         assert (
-            "Unknown skill ''."
+            "Usage: /skills show <name>"
             == dispatch("/skills show", session_id="s1", index=s_idx, skills=None)[1]
         )
         assert (
-            "Unknown skill ''."
+            "Usage: /skills remove <name>"
             == dispatch("/skills remove", session_id="s1", index=s_idx, skills=None)[1]
         )
 

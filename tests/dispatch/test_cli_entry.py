@@ -50,6 +50,23 @@ class TestSlashDispatch:
         assert action == "reply"
         assert "Unknown session" in message
 
+    def test_resume_unique_and_ambiguous_prefix(self, tmp_path):
+        index = _fresh_index(tmp_path)
+        first = "pref1111" + "0" * 24
+        second = "pref1111" + "1" * 24
+        unique = "uniq2222" + "0" * 24
+        for sid in (first, second, unique):
+            index.ensure(sid)
+        index.rename(unique, "Unique Atlas")
+        action, msg = dispatch("/resume uniq2222", session_id=first, index=index)
+        assert action == "reply"
+        assert "--session-id " + unique in msg
+        assert "Unique Atlas" in msg
+        action2, msg2 = dispatch("/resume pref1111", session_id=first, index=index)
+        assert action2 == "reply"
+        assert "Ambiguous" in msg2
+        assert first in msg2 and second in msg2
+
     def test_rename_persists_and_shows(self, tmp_path):
         index = _fresh_index(tmp_path)
         sid = index.mint()
