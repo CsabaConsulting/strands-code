@@ -5,11 +5,11 @@ current_phase: "19.1"
 current_phase_name: Policy Gate, Persistence & Concurrency Hardening
 current_plan: 4
 status: complete
-stopped_at: Phase 19.1 complete (`HARDEN-01`, Waves 1–4 verified PASS in `19.1-VERIFICATION.md`) — ready for `/gsd-discuss-phase 19.2`
-last_updated: "2026-11-26T06:03:00Z"
-last_activity: 2026-11-25
-last_activity_desc: Executed & verified Phase 19.1 (`HARDEN-01` across Waves 1–4 `b0d01f9`, `42e72e9`, `4f54fb5`, `cbc6ad1`; `1900 + 1` tests, `44/44` rig, host Box probe, and all 6 CI gates green)
-state_head: cbc6ad1
+stopped_at: Phase 19.1 UAT complete (`19.1-UAT.md` `6/6` passed on `f164e1e`) — ready for `/gsd-discuss-phase 19.2`
+last_updated: "2026-11-27T06:14:00Z"
+last_activity: 2026-11-26
+last_activity_desc: Completed Phase 19.1 UAT (`19.1-UAT.md` `6/6` passed on `f164e1e`; resolved 21 adversarial gaps across Tests 2–5, `1942 + 1 = 1943` unit tests, `44/44` rig, live host `strands-box 0.3.1` integration, and all 6 CI gates green)
+state_head: f164e1e
 progress:
   total_phases: 13
   completed_phases: 8
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.1 Complete (`HARDEN-01`, `19.1-VERIFICATION.md` `12/12 PASS`) — ready for `/gsd-discuss-phase 19.2`
+**Current focus:** Milestone `v2.0` · Phase 19.1 Complete (`HARDEN-01`, `19.1-VERIFICATION.md` `12/12 PASS`, `19.1-UAT.md` `6/6 PASS`) — ready for `/gsd-discuss-phase 19.2`
 
 ## Current Position
 
-Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Complete (`4/4` plans executed & verified)
+Phase: 19.1 of 23 (Policy Gate, Persistence & Concurrency Hardening) — Complete (`4/4` plans executed, verified & UAT `6/6` passed)
 Plan: 4 of 4 in Phase 19.1
-Status: Complete (`19.1-VERIFICATION.md` `12/12 PASS`, all 6 CI gates green)
-Last activity: 2026-11-25 — Executed Phase 19.1 (`HARDEN-01`: Waves 1–4 + full verification)
+Status: Complete (`19.1-VERIFICATION.md` `12/12 PASS`, `19.1-UAT.md` `6/6 PASS`, all 6 CI gates green)
+Last activity: 2026-11-26 — Completed Phase 19.1 UAT (`19.1-UAT.md` `6/6` passed on `f164e1e`)
 
 Progress: [██████░░░░] 62%
 
@@ -91,6 +91,7 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19.1 planning (`19.1-RESEARCH.md`, `19.1-PATTERNS.md`, `19.1-01..04-PLAN.md`, `19.1-VALIDATION.md`, `19.1-PLAN-CHECK.md` PASS): verified upstream `HookOrder.SDK_FIRST < INTERVENTION_INPUT` and `on_error="throw"` (`TurnCancelled` preservation), `is_fetch_get()` `-T`/`-I`/`-X` case-lowering bug, thread-safe `/proc/self/status` umask-masked `mode=None` for repo files, `save_strategy` (`C 20 -> ~B 6`) and `_setup_decision_entries` (`C 20 -> ~C 15`) complexity decompositions, isolated `entry/subagent.py`, and exact legacy test migration/preservation inventory across Waves 1–4.
 
 - Phase 19.1 (`b0d01f9`, `42e72e9`, `4f54fb5`, `cbc6ad1`, `19.1-VERIFICATION.md` `12/12 PASS`): shipped `HARDEN-01` across Waves 1–4: added dependency-free `platform_io.py` & `ui/console.py` leaves, hardened `policy/core.py` & `scope.py` (`is_fetch_get`, `_serialise_rule`, shell/symlink `[[allow]]`, tool-scoped canonical `effective_roots`, unboxed `read` + sensitive secret floor, `.agent/**`/`.git/**`/`.env*` protection, home-only `trust_delegated`, 4 live harness plugin tools + tool-only/`search` path rules), replaced `PolicyHumanInTheLoop` with direct `PolicyGateHandler(InterventionHandler)` keyed by `id(agent)` + main-thread `ApprovalBroker.request` prompts + SHA-256 `BatchState` + locked `steering.py`, swept all 15 persistence stores onto `platform_io.py` (`save_strategy` `C 20 -> A 3`, `apply_stashed` target rechecks, `live_pricing` region validation, same-FS marketplace staging), unified `ui/console.py` + strict `[A-Za-z0-9][A-Za-z0-9._-]*` `_validate_session_id` + sanitized curate/`/route setup` output (`_setup_decision_entries` `C 20 -> B 8`), guarded `silent` mode against `init-*` auto-apply + content-fingerprinted `CurateQueue` dedup, fixed `/btw` live-model sync + 5-tuple routed-model billing + `fresh_tools_for_delegate`, replaced builtin `subagent` with `entry/subagent.py` `build_cli_subagent`, and wired `agent.cancel(cancel_background_tasks=True)` + `agent.shutdown()`; verified `1900 + 1 = 1901` default suite + `44/44` rig + `1` live host `strands-box 0.3.1` integration + all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
+- Phase 19.1 UAT (`19.1-UAT.md` `6/6` passed on `f164e1e`; mid-UAT fixes `df42f18`, `07f7826`, `fa55962`, `65e4ed5`, `f164e1e`): codified the mandatory UAT Adversarial Pre-Check Gate (`GEMINI.md` § 3 & `.planning/INVARIANTS.md` § 5), resolved 21 adversarial gaps across Tests 2–5 (curl/shell/root/glob/`.envrc` policy hardening, `apply_stashed`/marketplace/umask persistence hardening, ECMA-48/C1/Bidi/curate/picker/session-id UI sanitization, and `CurateQueue` auto-ID/`build_btw_agent` `web_search`+`web_fetch`+endpoint/`btw->subagent` clean instructions/`_close_loop_session` interrupt-safe teardown + `btw` teardown), and verified `1942 + 1 = 1943` unit suite + `44/44` rig + `1` live host `strands-box 0.3.1` integration + all 6 CI gates green on `f164e1e`.
 
 ### Pending Todos
 
@@ -107,6 +108,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-26T06:03:00Z
-Stopped at: Phase 19.1 complete (`HARDEN-01`, Waves 1–4 verified PASS in `19.1-VERIFICATION.md`) — ready for `/gsd-discuss-phase 19.2`
-Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-VERIFICATION.md
+Last session: 2026-11-27T06:14:00Z
+Stopped at: Phase 19.1 UAT complete (`19.1-UAT.md` `6/6` passed on `f164e1e`) — ready for `/gsd-discuss-phase 19.2`
+Resume file: .planning/phases/19.1-policy-gate-persistence-concurrency-hardening/19.1-UAT.md
