@@ -28,6 +28,7 @@ dependencies = [
     "strands-harness>=0.5.0",
     "httpx>=0.27",
     "mcp>=1.30.0",
+    "pydantic-monty",
     "smolagents>=1.24.0",
     "jinja2>=3.0",
     "rich>=13.0",
