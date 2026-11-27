@@ -1,15 +1,15 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.0
-current_phase: "20"
-current_phase_name: Monty Python VM for python_repl & CodeAct
-current_plan: 3
-status: validated
-stopped_at: Phase 20 validated (20-VALIDATION.md 594/596 = 99.7%, 2018 + 1 + 44 rig + live Box+Monty + 6/6 CI gates) — ready for Phase 21 (/gsd-discuss-phase 21)
-last_updated: "2026-11-27T22:58:00Z"
+current_phase: "21"
+current_phase_name: CLI Ergonomics (/help, @file / /file, /review)
+current_plan: 0
+status: discussed
+stopped_at: Phase 21 discussed (21-CONTEXT.md D-01..D-11, 21-DISCUSSION-LOG.md) — ready for /gsd-plan-phase 21
+last_updated: "2026-11-27T23:20:00Z"
 last_activity: 2026-11-27
-last_activity_desc: Completed /gsd-validate-phase 20 (sys.monitoring 594/596 = 99.7% / 100.0% reachable, zero runtime edits, 2018 + 1 + 44 rig + live Box+Monty + 6/6 CI gates)
-state_head: ae685fc
+last_activity_desc: Completed /gsd-discuss-phase 21 (locked D-01..D-11 across /help, @file & /file, document switch, CVE-2026-18830 hook, and /review)
+state_head: da05423
 progress:
   total_phases: 13
   completed_phases: 10
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 20 Validated (`20-VALIDATION.md` `594/596 = 99.7%`, `nyquist_compliant: true`) — ready for Phase 21 (`/gsd-discuss-phase 21`)
+**Current focus:** Milestone `v2.0` · Phase 21 Discussed (`21-CONTEXT.md` `D-01`–`D-11`) — ready for `/gsd-plan-phase 21`
 
 ## Current Position
 
-Phase: 20 of 23 (Monty Python VM for `python_repl` & CodeAct) — Validated (`20-VALIDATION.md` `nyquist_compliant: true`)
-Plan: 3 of 3 in Phase 20
-Status: Validated (ready for Phase 21)
-Last activity: 2026-11-27 — Completed `/gsd-validate-phase 20` (`594/596` = `99.7%` total / `100.0%` reachable, `0` runtime edits, `2018 + 1 = 2019` default tests, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty integration, all 6 CI gates green)
+Phase: 21 of 23 (CLI Ergonomics — `/help`, `@file` / `/file`, `/review`) — Discussed (`21-CONTEXT.md` `D-01`–`D-11`)
+Plan: 0 of TBD in Phase 21
+Status: Discussed (ready for `/gsd-plan-phase 21`)
+Last activity: 2026-11-27 — Completed `/gsd-discuss-phase 21` (locked `D-01`–`D-11` across `LOOP-06` `/help`, `TOOL-05` `@file` / `/file` + `"document"` conversion + `CVE-2026-18830`, and `REVIEW-01` `/review`)
 
 Progress: [████████░░] 77%
 
@@ -107,9 +107,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 20 security audit (`20-SECURITY.md` `12/12 closed`, `threats_open: 0`, `status: verified`, 2026-11-27): remediated `T-20-10` HIGH (`CODEACT_MAX_FILE_BYTES = 4 MiB` cap in `_read_regular_file_utf8()` preventing huge-file OOM via `codeact_read`/`codeact_edit`), `T-20-11` HIGH (`_unwrap_env_wrapper()`/`_unwrap_exec_wrapper()`/`_codeact_shell_deny_candidates()` blocking `env -u`/`-C`/`-S` and `nice`/`timeout`/`nohup`/`stdbuf`/`command`/`exec` `[[deny]]` shell bypasses), and `T-20-12` MEDIUM (`_cap_shell_output()` capping `codeact_shell` stdout/stderr at `CODEACT_MAX_SHELL_OUTPUT_BYTES = 4 MiB`); verified `2013 + 1 = 2014` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
 - Phase 20 Nyquist validation (`20-VALIDATION.md` `validated`, `nyquist_compliant: true`, 2026-11-27): audited all 7 Phase 20 modified runtime modules via `sys.monitoring` (`594/596 = 99.7% total / 100.0% reachable`; `100.0%` on `entry/main.py`, `entry/subagent.py`, `loop/btw.py`, `loop/core.py`, and `sandbox/monty.py`; `99.7%` on `policy/codeact.py`; `96.4%` on `sandbox/box.py`) and closed remaining edge branches across `tests/sandbox/test_monty.py`, `tests/policy/test_codeact.py`, `tests/sandbox/test_box.py`, `tests/entry/test_subagent.py`, and `tests/loop/test_btw.py` with zero runtime edits (`2018 + 1 = 2019` default suite under CI env + `44/44` rig + `1/1` live host `strands-box 0.3.1` integration + all 6 CI gates green).
 
+- Phase 21 discussion (`21-CONTEXT.md` `D-01`–`D-11`, `21-DISCUSSION-LOG.md`, 2026-11-27): locked single declarative command table in `dispatch/help.py` backing `USAGE_HINT` + `BUILTIN_SLASH_HEADS` (`+help, file, review`) + built-in & skill `/help <name>` resolution; gitignore-aware `ui/completer.py` `@file` fuzzy completion & `/file` TTY picker pre-fill (`default=buf`); real-file-only `@token` resolution injecting UTF-8 text inline fenced vs binary `ImageContent`/`DocumentContent` under `read`/`codeact_read` fail-closed security floor (`effective_roots`, symlink/`O_NOFOLLOW`, `.env*`/`.ssh`/`.aws`, `[[deny]]`, `4 MiB`/`16 MiB`/`8`-file caps); post-routing `supports_media` abort gate & allowlisted `list[ContentBlock]` + `model_switch.py` `"document"` conversion + fail-closed `RejectCallerToolUseHook` (`BeforeInvocationEvent.cancel`) across all 3 agent sites; and validated `/review` (`HEAD`/`--staged`/`<base-ref>` + optional focus prompt, `256 KiB` `<untrusted_git_diff>` framing, sanitized `/route` `ask_text`, turn-scoped read-only Plan gate + `turn_interface = "tool"`).
+
 ### Pending Todos
 
-- Run `/gsd-discuss-phase 21` (`LOOP-06` `/help`, `TOOL-05` `@file`/`/file`, `REVIEW-01` `/review`).
+- Run `/gsd-plan-phase 21` (`LOOP-06` `/help`, `TOOL-05` `@file` / `/file` + `"document"` switch + `CVE-2026-18830` hook, `REVIEW-01` `/review`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -122,6 +124,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T22:58:00Z
-Stopped at: Phase 20 validated (20-VALIDATION.md 594/596 = 99.7%, nyquist_compliant true) — ready for /gsd-discuss-phase 21
-Resume file: .planning/phases/20-monty-python-vm-for-python-repl-codeact/20-VALIDATION.md
+Last session: 2026-11-27T23:20:00Z
+Stopped at: Phase 21 discussed (21-CONTEXT.md D-01..D-11, 21-DISCUSSION-LOG.md) — ready for /gsd-plan-phase 21
+Resume file: .planning/phases/21-cli-ergonomics-help-file-review/21-CONTEXT.md
