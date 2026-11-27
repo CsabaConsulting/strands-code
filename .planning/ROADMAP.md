@@ -270,7 +270,20 @@ Plans:
   2. `entry/main.py` (`python_repl`) and `policy/codeact.py` (`CodeactStint`) run on the Monty backend (with documented packaging/optional-extra fallback posture and deterministic worker subprocess teardown on reset/exit) while passing existing CodeAct/scope/HITL/diff contracts and leaving `strands_code_agent/` untouched (`D-24`)
   3. `sandbox/box.py` grants `[agent.filesystem].exec` / containment compatibility for `pydantic-monty-runtime` (and documents/evaluates Strands Box embedded Monty Dogwood event-log alignment) with full offline unit/adversarial tests and all 6 CI gates green
 
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [ ] `20-01-PLAN.md` — Tracer: `pydantic-monty` core dep + `uv.lock`, `tests/conftest.py` `MONTY_BIN` scrub, Wave 0 `tests/sandbox/test_monty.py`, and `MontyPythonInterpreter` (`sandbox/monty.py` — stateful sessions, pure-Rust stdlib, blocked `os`/`pathlib`/`subprocess`, `256 MiB`/`60s`/`200`/`4 MiB` caps, fail-closed startup, `MontyCrashedError` salvage/recovery, lazy shared pool + teardown)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `20-02-PLAN.md` — 3-site CLI migration (`entry/main.py`, `CodeactStint`, `loop/btw.py` / `entry/subagent.py`), deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close`, subagent cleanup), and Phase 19.1 symlink/`O_NOFOLLOW`/`atomic_write_text`/sensitive-read/protected-path + non-interactive `PolicyConfig` `[[deny]]` parity in `codeact_read`/`write`/`edit`/`shell`
+
+**Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
+
+- [ ] `20-03-PLAN.md` — `_resolve_monty_binary()` `[agent.filesystem].exec` grant in `sandbox/box.py` (`[tool.python]` omitted), live `@pytest.mark.integration` Box+Monty check, `docs/QUICKSTART.md` guide, and complete CI/suite/rig/loopback verification
 
 ### Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)
 
@@ -324,7 +337,7 @@ Plans:
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
 | 19.1. Policy Gate, Persistence & Concurrency Hardening | `v2.0` | 4/4 | Complete | 2026-11-25 |
 | 19.2. CLI, Routing/Cost, Provider & Packaging Parity | `v2.0` | 4/4 | Complete | 2026-11-27 |
-| 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
+| 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/3 | Planned | - |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
 | 23. v2.0 Structural Review + Hygiene | `v2.0` | 0/0 | Not started | - |

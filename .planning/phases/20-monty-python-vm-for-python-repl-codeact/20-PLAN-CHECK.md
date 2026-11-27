@@ -1,0 +1,19 @@
+# Phase 20 Plan Verification (`gsd-plan-checker`)
+
+**Checked:** 2026-11-27
+**Plans Checked:** `20-01-PLAN.md` (Wave 1), `20-02-PLAN.md` (Wave 2), `20-03-PLAN.md` (Wave 3)
+**Status:** Verified
+
+---
+
+## Verification Checklist
+
+| Dimension | Check | Result | Notes |
+| :--- | :--- | :--- | :--- |
+| **Requirement Coverage** | `SANDBOX-02` 100% mapped across Plans `20-01`..`20-03` | PASS | Wave 1 (`20-01`) locks `pydantic-monty` in core `pyproject.toml` + `uv.lock`, adds `MONTY_BIN` scrub to `tests/conftest.py`, creates Wave 0 `tests/sandbox/test_monty.py`, and ships `MontyPythonInterpreter` (`sandbox/monty.py`) with stateful sessions, pure-Rust stdlib + blocked `os`/`pathlib`/`subprocess`, `256 MiB`/`60s`/`200`/`4 MiB` caps, fail-closed startup, crash salvage/replacement, and shared lazy pool teardown. Wave 2 (`20-02`) migrates all 3 CLI `python_repl` peer sites (`entry/main.py`, `CodeactStint`, `loop/btw.py` / `entry/subagent.py`), wires deterministic session teardown (`_close_loop_session`, `_teardown_btw_agent`, subagent cleanup, `CodeactStint.close`), and hardens `codeact_read`/`write`/`edit`/`shell` with Phase 19.1 symlink/`O_NOFOLLOW`/atomic-write/sensitive-read/protected-path & `[[deny]]` parity. Wave 3 (`20-03`) adds `_resolve_monty_binary()` to `sandbox/box.py` (`[agent.filesystem].exec`, `[tool.python]` omitted), adds live `strands-box 0.3.1` Monty integration verification, updates `docs/QUICKSTART.md`, and runs all 6 CI gates + full regression suites. |
+| **Locked Decisions (`20-CONTEXT.md`)** | `D-01`–`D-11` honored verbatim | PASS | `D-01` core `pyproject.toml` dependency (keeping `smolagents` solely for untouched `strands_code_agent/` per `D-24`); `D-02` fail-closed startup (zero `smolagents` downgrade); `D-03` 3-site uniform CLI migration; `D-04` pure-computation Monty stdlib with `os=None` and `os`/`pathlib`/`subprocess` explicitly denied; `D-05` `256 MiB` / `60s` / `200` / `4 MiB` caps; `D-06` `MontyCrashedError` stdout salvage + fresh worker replacement + explicit state-reset note; `D-07` Phase 19.1 symlink/sensitive/protected-path parity in `codeact_read`/`write`/`edit`; `D-08` non-interactive active `PolicyConfig` `[[deny]]` enforcement in `codeact_read`/`write`/`edit`/`shell`; `D-09` process-wide lazy shared `Monty()` pool + per-interpreter isolated sessions + deterministic teardown; `D-10` `_resolve_monty_binary()` in `box.py` + live Box+Monty integration check; `D-11` embedded `[tool.python]` omitted & evaluated in `docs/QUICKSTART.md`. |
+| **Wave & Dependency Ordering** | Strict DAG across Waves 1–3 | PASS | `20-01` creates the `sandbox/monty.py` leaf and Wave 0 test foundation before `20-02` migrates `entry/main.py`, `codeact.py`, `btw.py`, `subagent.py`, and `loop/core.py`; `20-03` builds on both for `box.py` exec grants, live `strands-box 0.3.1` verification, `docs/QUICKSTART.md`, and complete CI verification. Zero intra-wave file write conflicts. |
+| **Structural & Security Constraints** | `T-20-01`..`T-20-09`, `xenon C <= 20`, `import-linter`, restricted-module hygiene, `D-24` | PASS | Preserves `strands_code_agent/` (`D-24`), keeps `sandbox/monty.py` a clean leaf free of `entry.main` imports (`lint-imports`), avoids adding branches to `run_loop` (`CC 18`) or `build_agent` (`CC 15`) or `codeact_shell` (`CC 11`), uses no `os.environ`/`os.getenv` in restricted modules (reads `MONTY_BIN` inside `sandbox/monty.py` and passed `env` inside `sandbox/box.py`), and never prompts mid-VM inside CodeAct callbacks. |
+| **Test & Nyquist Compliance** | Every task has fast `<automated>` verify & TDD contract | PASS | Wave 0 file (`tests/sandbox/test_monty.py`) scheduled first in `20-01-T1`; every task names exact test files (`test_monty.py`, `test_codeact.py`, `test_btw.py`, `test_subagent.py`, `test_session_resume.py`, `test_box.py`, `tests/rig/`) and CI gate commands. |
+
+**VERDICT:** **PASS**
