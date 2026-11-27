@@ -12,6 +12,7 @@ import subprocess
 import sys
 import sysconfig
 import tomllib
+import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,7 +133,11 @@ def is_in_strands_box(env: Mapping[str, str] | None = None) -> bool:
 
 def _reject_control_chars(value: str, label: str) -> str:
     if any(
-        ord(ch) < 32 or ord(ch) == 127 or 0xD800 <= ord(ch) <= 0xDFFF for ch in value
+        ord(ch) < 32
+        or ord(ch) == 127
+        or 0xD800 <= ord(ch) <= 0xDFFF
+        or unicodedata.category(ch) in ("Cc", "Cf")
+        for ch in value
     ):
         raise ValueError(f"Invalid control or surrogate character in {label}")
     return value
@@ -465,7 +470,11 @@ def _valid_monty_candidate(cand: Path | None) -> Path | None:
     if cand is None or not cand.is_file():
         return None
     real = Path(os.path.realpath(cand))
-    if not real.is_file() or _valid_nonroot_dir(real.parent) is None:
+    if (
+        not real.is_file()
+        or not os.access(real, os.X_OK)
+        or _valid_nonroot_dir(real.parent) is None
+    ):
         return None
     return real
 
@@ -855,6 +864,10 @@ def _render_agent_env(
             out[key] = cleaned
     if "bedrock" in providers or "bedrock-mantle" in providers:
         out["AWS_REGION"] = aws_region
+    raw_monty = env.get("MONTY_BIN")
+    monty_bin = runtime.get("monty_bin")
+    if isinstance(raw_monty, str) and raw_monty.strip() and monty_bin is not None:
+        out["MONTY_BIN"] = _reject_control_chars(str(monty_bin), "MONTY_BIN")
     return out
 
 

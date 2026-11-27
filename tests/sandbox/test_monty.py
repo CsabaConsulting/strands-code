@@ -139,6 +139,10 @@ class TestMontyPythonInterpreter:
             binary_path="/tmp/bad\nmonty"
         ).execute_code("print(1)")
         assert "control character" in err_ctrl
+        _, err_bidi = MontyPythonInterpreter(
+            binary_path="/tmp/bad\u202emonty"
+        ).execute_code("print(1)")
+        assert "control character" in err_bidi
         assert monty_mod._SHARED_POOL is healthy_pool
         assert healthy.execute_code("print(keep_alive)") == ("123", "")
 

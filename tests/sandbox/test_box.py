@@ -1491,7 +1491,8 @@ class TestMontyBinaryBoxGrant:
         venv_py = venv_bin / "python"
         venv_py.symlink_to(uv_py)
         monty_bin = venv_bin / "monty"
-        monty_bin.write_text("binary", encoding="utf-8")
+        monty_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+        monty_bin.chmod(0o755)
 
         monkeypatch.setattr(
             "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
@@ -1521,6 +1522,7 @@ class TestMontyBinaryBoxGrant:
         )
         parsed = tomllib.loads(res.box_toml.read_text(encoding="utf-8"))
         assert str(monty_bin.resolve()) in parsed["agent"]["filesystem"]["exec"]
+        assert "MONTY_BIN" not in parsed["agent"]["env"]
         assert "python" not in parsed.get("tool", {})
 
     def test_resolve_runtime_paths_honors_monty_bin_env_and_rejects_control_chars(
@@ -1535,13 +1537,21 @@ class TestMontyBinaryBoxGrant:
         custom_dir = tmp_path / "custom_monty_dir"
         custom_dir.mkdir()
         custom_monty = custom_dir / "monty"
-        custom_monty.write_text("binary", encoding="utf-8")
+        custom_monty.write_text("#!/bin/sh\n", encoding="utf-8")
+        custom_monty.chmod(0o755)
+        nx_monty = custom_dir / "monty_nx"
+        nx_monty.write_text("not exec", encoding="utf-8")
+        nx_monty.chmod(0o644)
 
         monkeypatch.setattr(
             "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
         )
         monkeypatch.setattr(
             "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir",
+            lambda app: str(home / ".local" / "share" / app),
         )
 
         paths = resolve_runtime_paths(
@@ -1557,13 +1567,36 @@ class TestMontyBinaryBoxGrant:
             for r in paths["read"]
         )
 
-        with pytest.raises(ValueError, match="control"):
-            resolve_runtime_paths(
-                repo,
-                python_executable=uv_py,
-                home=home,
-                env={"MONTY_BIN": "/tmp/bad\nmonty", "PATH": "/usr/bin:/bin"},
-            )
+        res_env = init_box_config(
+            repo,
+            python_executable=uv_py,
+            home=home,
+            env={
+                "HOME": str(home),
+                "MONTY_BIN": str(custom_monty),
+                "PATH": "/usr/bin:/bin",
+            },
+        )
+        parsed_env = tomllib.loads(res_env.box_toml.read_text(encoding="utf-8"))
+        assert parsed_env["agent"]["env"]["MONTY_BIN"] == str(custom_monty.resolve())
+
+        nx_paths = resolve_runtime_paths(
+            repo,
+            python_executable=uv_py,
+            home=home,
+            env={"MONTY_BIN": str(nx_monty), "PATH": "/usr/bin:/bin"},
+        )
+        assert nx_paths["monty_bin"] is None
+        assert nx_monty.resolve() not in nx_paths["exec"]
+
+        for bad in ("/tmp/bad\nmonty", "/tmp/bad\x9bmonty", "/tmp/bad\u202emonty"):
+            with pytest.raises(ValueError, match="control"):
+                resolve_runtime_paths(
+                    repo,
+                    python_executable=uv_py,
+                    home=home,
+                    env={"MONTY_BIN": bad, "PATH": "/usr/bin:/bin"},
+                )
 
         # Refused root MONTY_BIN is rejected cleanly (never adds / to read or exec).
         root_paths = resolve_runtime_paths(

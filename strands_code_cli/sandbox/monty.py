@@ -6,6 +6,7 @@ import ast
 import atexit
 import os
 import threading
+import unicodedata
 import weakref
 from collections.abc import Callable
 from typing import Any
@@ -157,7 +158,11 @@ def _resolve_monty_binary_path(explicit: str | None) -> str:
 
     found = find_monty_binary(explicit)
     if any(
-        ord(ch) < 32 or ord(ch) == 127 or 0xD800 <= ord(ch) <= 0xDFFF for ch in found
+        ord(ch) < 32
+        or ord(ch) == 127
+        or 0xD800 <= ord(ch) <= 0xDFFF
+        or unicodedata.category(ch) in ("Cc", "Cf")
+        for ch in found
     ):
         raise ValueError("Invalid control character in Monty worker binary path")
     if not os.path.isfile(found):
