@@ -2445,10 +2445,11 @@ def _render_diff_show(pending: dict[str, dict[str, Any]], target: str) -> str:
             entry.get("old_text") or "", entry.get("new_text") or "", path
         )
         preview = bounded_diff(diff, max_lines=40)
+        safe_op = sanitize_display(entry.get("op", "edit"))
         blocks.append(
             sanitize_multiline(preview)
             if preview
-            else f"{entry.get('op', 'edit')}: {sanitize_display(path)} (no diff)"
+            else f"{safe_op}: {sanitize_display(path)} (no diff)"
         )
     return "\n".join(blocks)
 
@@ -2466,9 +2467,8 @@ def _diff_message(
     if not rest:
         lines = [f"Diff mode: {holder.mode} ({len(pending)} pending)."]
         for path in sorted(pending):
-            lines.append(
-                f"  {pending[path].get('op', 'edit')}: {sanitize_display(path)}"
-            )
+            safe_op = sanitize_display(pending[path].get("op", "edit"))
+            lines.append(f"  {safe_op}: {sanitize_display(path)}")
         return "\n".join(lines)
     verb, _, arg = rest.partition(" ")
     verb = verb.lower()

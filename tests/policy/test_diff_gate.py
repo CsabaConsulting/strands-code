@@ -706,3 +706,27 @@ class TestGateSubsumption:
             cwd=repo,
         )[1]
         assert "\x1b" not in miss and "\u202e" not in miss
+
+    def test_diff_and_apply_stashed_sanitize_poisoned_op_and_path_echoes(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".agent").mkdir()
+        store = PendingStore(tmp_path / "sess", session_id="poison-s1")
+        bind_session("poison-s1", store)
+        target = str(repo / "a.txt")
+        store.stash(target, "a", "a", "\x1b[31mevil_op\u202e")
+        store.stash(str(repo / "\x1b[31mevil.txt"), None, "x", "write")
+        from strands_code_cli.session.session_index import SessionIndex
+
+        idx = SessionIndex(tmp_path / "idx")
+        list_out = dispatch("/diff", session_id="poison-s1", index=idx, cwd=repo)[1]
+        show_out = dispatch("/diff show", session_id="poison-s1", index=idx, cwd=repo)[
+            1
+        ]
+        apply_out = _run(
+            apply_stashed(store, path=str(repo / "\x1b[31mevil.txt"), cwd=repo)
+        )
+        for rendered in (list_out, show_out, apply_out):
+            assert "\x1b" not in rendered and "\u202e" not in rendered

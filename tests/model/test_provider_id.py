@@ -36,3 +36,19 @@ class TestProviderId:
         from strands_code_cli.model.provider_id import provider_of
 
         assert provider_of(model_id, unwrap_litellm=unwrap) == expected
+
+    def test_scoped_base_url_blocks_litellm_cross_provider_leak(self):
+        from strands_code_cli.model.model_switch import scoped_base_url
+
+        url = "http://127.0.0.1:4000/v1"
+        assert scoped_base_url(url, "litellm", "litellm/custom/foo") == url
+        assert (
+            scoped_base_url(url, "litellm", "litellm/anthropic/claude-sonnet-4-6")
+            == url
+        )
+        assert (
+            scoped_base_url(url, "litellm", "litellm/openrouter/openai/gpt-4o") is None
+        )
+        assert scoped_base_url(url, "litellm", "litellm/ollama/qwen3:8b") is None
+        assert scoped_base_url(url, "openrouter", "litellm/openrouter/a/b") == url
+        assert scoped_base_url(url, "openrouter", "litellm/anthropic/c") is None

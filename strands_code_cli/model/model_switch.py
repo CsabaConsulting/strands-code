@@ -1661,11 +1661,7 @@ def scoped_base_url(
     if not owner_provider or not target_model:
         return base_url
     norm = normalize_model_ref(target_model)
-    target_prov = (
-        provider_of(norm, unwrap_litellm=False)
-        if owner_provider == "litellm"
-        else provider_of(norm, unwrap_litellm=True)
-    )
+    target_prov = provider_of(norm, unwrap_litellm=True)
     return base_url if target_prov == owner_provider else None
 
 

@@ -399,6 +399,38 @@ def _user_deny_action(
 _MAX_PREVIEW_BYTES = 256 * 1024
 
 
+def _read_regular_utf8_nofollow(path: Path, max_bytes: int) -> str | None:
+    """Read UTF-8 text via ``O_NOFOLLOW`` and ``fstat`` checks; ``""`` when absent."""
+    import stat
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return ""
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > max_bytes:
+            return None
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                return None
+            chunks.append(chunk)
+        return b"".join(chunks).decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        os.close(fd)
+
+
 def _safe_existing_text_for_preview(
     raw_path: str, cwd: Path, extra_roots: list[Path]
 ) -> str | None:
@@ -408,16 +440,15 @@ def _safe_existing_text_for_preview(
     ``None`` when the path is outside scope, sensitive, symlinked, special,
     binary, or larger than 256 KiB.
     """
-    import stat
-
-    from strands_code_cli.platform_io import refuse_symlink_under_roots
+    from strands_code_cli.platform_io import refuse_symlink, refuse_symlink_under_roots
     from strands_code_cli.policy.scope import confine, resolve
 
-    raw_obj = Path(raw_path)
+    raw_obj = Path(os.path.expanduser(raw_path))
     raw_candidate = Path(
         os.path.normpath(str(raw_obj if raw_obj.is_absolute() else cwd / raw_obj))
     )
     try:
+        refuse_symlink(raw_candidate, "diff preview target", max_ancestors=1)
         refuse_symlink_under_roots(
             raw_candidate, [cwd, cwd.resolve(), *extra_roots], "diff preview target"
         )
@@ -439,20 +470,7 @@ def _safe_existing_text_for_preview(
         refuse_symlink_under_roots(confined, [cwd, *extra_roots], "diff preview target")
     except ValueError:
         return None
-    try:
-        st = confined.lstat()
-    except FileNotFoundError:
-        return ""
-    except OSError:
-        return None
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        return None
-    if st.st_size > _MAX_PREVIEW_BYTES:
-        return None
-    try:
-        return confined.read_text(encoding="utf-8", errors="strict")
-    except (OSError, UnicodeDecodeError):
-        return None
+    return _read_regular_utf8_nofollow(confined, _MAX_PREVIEW_BYTES)
 
 
 class PolicyGateHandler(InterventionHandler):

@@ -793,3 +793,38 @@ class TestCwdDotenvGuard:
         with pytest.raises(typer.Exit):
             first_run.preflight_credentials(probe=_no_creds, model="openai/gpt-6.2-sol")
         assert "Invalid OPENAI_BASE_URL" in capsys.readouterr().err
+
+    def test_provider_config_and_cli_model_reject_c1_bidi_port_query(self, tmp_path):
+        from typer.testing import CliRunner
+
+        from strands_code_cli.entry.main import app
+        from strands_code_cli.entry.provider_config import (
+            ProviderConfig,
+            _validate_base_url,
+        )
+
+        for bad_url in (
+            "http://127.0.0.1:8080/\x9b31m",
+            "http://127.0.0.1:8080/\u202e",
+            "http://127.0.0.1:99999/v1",
+            "http://127.0.0.1:8080/v1?secret=1",
+            "http://127.0.0.1:8080/v1#frag",
+        ):
+            with pytest.raises(ValueError):
+                _validate_base_url(bad_url)
+
+        for bad_model in (
+            "",
+            "openai/gpt-4o\x1b[31m",
+            "openai/gpt-4o\x9b31m",
+            "openai/gpt-4o\u202e",
+            "openai/gpt 4o",
+        ):
+            with pytest.raises(ValueError):
+                ProviderConfig(model=bad_model).save(tmp_path / "cfg.yaml")
+
+        runner = CliRunner()
+        res = runner.invoke(app, ["--model", "openai/gpt-4o\x1b[31m"])
+        assert res.exit_code == 2
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", res.output)
+        assert "invalid --model" in plain

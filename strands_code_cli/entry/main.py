@@ -38,6 +38,7 @@ from strands_code_cli.memory.memory_file import load_memory, register_memory_plu
 from strands_code_cli.memory.skills import discover_plugin_sources
 from strands_code_cli.model.model_switch import (
     _custom_web_fetch_model,
+    _has_unsafe_model_chars,
     _stamp_model_ref,
     build_meta_model,
     configure_base_url_for_model,
@@ -365,6 +366,17 @@ def build_agent(
     return agent
 
 
+def _validate_cli_model(model: str | None) -> None:
+    """Reject empty or unsafe/control-char ``--model`` values before preflight."""
+    if model is None:
+        return
+    cleaned = model.strip()
+    if not cleaned or _has_unsafe_model_chars(cleaned):
+        raise typer.BadParameter(
+            "invalid --model: must be a non-empty model id without whitespace or control characters"
+        )
+
+
 @app.callback(invoke_without_command=True)
 def _root(
     ctx: typer.Context,
@@ -392,8 +404,7 @@ def _root(
             raise typer.BadParameter(f"invalid --session-id: {exc}") from exc
     if codeact is not None and codeact not in ("tool", "code", "both"):
         raise typer.BadParameter("invalid --codeact: expected tool|code|both")
-    if model is not None and not model.strip():
-        raise typer.BadParameter("invalid --model: must be non-empty")
+    _validate_cli_model(model)
     try:
         config = ProviderConfig.load()
     except ValueError as exc:

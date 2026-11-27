@@ -5,10 +5,10 @@ current_phase: "19.2"
 current_phase_name: CLI, Routing/Cost, Provider & Packaging Parity
 current_plan: 4
 status: verified
-stopped_at: Phase 19.2 UAT complete (19.2-UAT.md 6/6 passed on c45d70e) — ready for /gsd-secure-phase 19.2 & /gsd-validate-phase 19.2
-last_updated: "2026-11-27T19:25:00Z"
+stopped_at: Phase 19.2 UAT & security audit complete (`19.2-UAT.md` 6/6 passed, `19.2-SECURITY.md` 13/13 closed) — ready for `/gsd-validate-phase 19.2`
+last_updated: "2026-11-27T20:07:00Z"
 last_activity: 2026-11-27
-last_activity_desc: Completed Phase 19.2 UAT (6/6 passed) with 5 mid-UAT adversarial fix commits (32ac69b..c45d70e), verified 1984 + 1 = 1985 default suite, 44/44 rig, 1/1 live strands-box 0.3.1 integration, and all 6 CI gates
+last_activity_desc: Completed Phase 19.2 security audit (19.2-SECURITY.md 13/13 closed, remediated T-19.2-10..13) and verified 1988 + 1 = 1989 default suite under CI env, 44/44 rig, 1/1 live strands-box 0.3.1 integration, and all 6 CI gates
 state_head: c45d70e
 progress:
   total_phases: 13
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.2 UAT Complete (`19.2-UAT.md` `6/6` passed on `c45d70e`) — ready for `/gsd-secure-phase 19.2` & `/gsd-validate-phase 19.2`
+**Current focus:** Milestone `v2.0` · Phase 19.2 Security Audited (`19.2-SECURITY.md` `13/13 closed`, `threats_open: 0`, `19.2-UAT.md` `6/6` passed) — ready for `/gsd-validate-phase 19.2`
 
 ## Current Position
 
-Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — UAT Complete (`4/4` wave plans, `19.2-VERIFICATION.md` `12/12 PASS`, `19.2-UAT.md` `6/6` passed on `c45d70e`)
+Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — Security Audited (`19.2-VERIFICATION.md` `12/12`, `19.2-UAT.md` `6/6`, `19.2-SECURITY.md` `13/13` closed)
 Plan: 4 of 4 in Phase 19.2
-Status: UAT Complete (`19.2-UAT.md` `6/6` passed on `c45d70e`; mid-UAT fixes `32ac69b`..`c45d70e`)
-Last activity: 2026-11-27 — Completed Phase 19.2 UAT (`6/6` passed, 11 adversarial pre-check gaps fixed across `32ac69b`, `6dfef6d`, `3f86388`, `eb44a5b`, `c45d70e`), verified `1984 + 1 = 1985` default suite, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates
+Status: Security Audited (`19.2-SECURITY.md` `13/13 closed`, `threats_open: 0`)
+Last activity: 2026-11-27 — Completed `/gsd-secure-phase 19.2` (remediated `T-19.2-10`..`T-19.2-13`, `13/13` closed) and verified `1988 + 1 = 1989` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates
 
 Progress: [███████░░░] 69%
 
@@ -98,10 +98,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19.2 planning (`19.2-RESEARCH.md`, `19.2-PATTERNS.md`, `19.2-01..04-PLAN.md`, `19.2-VALIDATION.md`, `19.2-PLAN-CHECK.md` PASS): structured Waves 1–4 around canonical dependency-free `model/provider_id.py` + `tmp_path_factory.mktemp("xdg")` hermetic `conftest.py` (outside `tmp_path` to avoid `test_first_run.py:458` & protected-path collisions), preserving `make_safe_search_tool` in `diff_gate.py`, safe confined `write` diff previews, shared prefix resolver + mocked `SessionIndex` guard, sole `engine.order` (`order: []` disables cleanly), dict-driven 5-engine `/route setup`, `(model, applied)` switch + `decision_engine` in `/cost`, and declarative OpenAI/`bedrock-mantle/openai.*` capability guards while respecting `CC <= 20` ceilings, `lint-imports`, restricted modules, and `D-24`.
 - Phase 19.2 (`990d7b8`, `3f376f2`, `fa6f94d`, `e8a0409`, `19.2-VERIFICATION.md` `12/12 PASS`): delivered `PARITY-01` across Waves 1–4: added dependency-free `model/provider_id.py` + Mantle `_vendor_of` + keyless `base_url` + discovery hardening + `requires-python >=3.11` / `httpx` / `ollama` extra / `_SDK_EXTRA_HINTS` / CI `--all-extras` / hermetic `conftest.py` (`990d7b8`); unified session-sticky toggles + consolidated `config.yaml` (`codeact`, `diff_mode`, `memory_mode`; retired `diff.yaml`, `memory.yaml`, `diff_config.py`, `codeact_remember`, `approve-each`, `_default_ask`, `/models`, `/skill`, `/skills refresh|uninstall`), added session-scoped `PendingStore`, bounded sanitized `unified_diff` previews in HITL `write`/`edit` & `/diff show`, `--codeact tool|code|both`, `resolve_session_prefix`, and strict `--flag` rejection (`3f376f2`); retired `engine.primary` (`engine.order` sole schema), expanded `/route setup` to all 5 engines with active-session auto-enable + `OPENROUTER_API_KEY` skip note, fixed `_route_pre_turn` double-record, preserved held/`Uncertain` paid tokens/cost, and aligned `/cost` lanes & `refresh_report` (`fa6f94d`); and unified per-model OpenAI + `bedrock-mantle/openai.*` effort guards (`#6522` / `PR #6525` bridge) + `validate_routed_effort()` alignment incl. Gemma-4 (`e8a0409`). Verified `1975 + 1 = 1976` default suite, `44/44` rig, `1/1` live Box integration, and all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
 - Phase 19.2 UAT (`19.2-UAT.md` `6/6` passed on `c45d70e`; mid-UAT adversarial fixes `32ac69b`, `6dfef6d`, `3f86388`, `eb44a5b`, `c45d70e`): closed 11 adversarial pre-check gaps across Tests 1–5 (env `base_url` preflight, Google discovery retry cap, C1/Bidi model/transport char guards, `XDG_DATA_HOME` test isolation, clean code-2 startup exit on invalid `config.yaml`, strict `/skills` flags + relative `/diff` pending path resolution + display sanitization, `/route setup` manual prompt validation + retired `engine.primary` validation note, and real `resolve_harness_model()` `off`/`none`/case effort normalization + cross-provider `validate_routed_effort()` alignment); verified `1984 + 1 = 1985` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates green.
+- Phase 19.2 security audit (`19.2-SECURITY.md` `13/13 closed`, `threats_open: 0`, `status: verified`, 2026-11-27): remediated `T-19.2-10` HIGH (`scoped_base_url()` `litellm/*` -> `litellm/openrouter|ollama` proxy leak), `T-19.2-11` HIGH (`_safe_existing_text_for_preview()` pre-resolve tilde expansion + `O_NOFOLLOW | O_NONBLOCK` + `os.fstat` TOCTOU hardening), `T-19.2-12` HIGH (`ProviderConfig._validate_base_url()` C1/Bidi/port/query/fragment + `ProviderConfig.model` & `--model` control-char validation), and `T-19.2-13` MEDIUM (`/diff` & `apply_stashed()` escape sanitization); verified `1988 + 1 = 1989` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
 
 ### Pending Todos
 
-- Run `/gsd-secure-phase 19.2` and `/gsd-validate-phase 19.2` before starting Phase 20 (`SANDBOX-02` Monty Python VM).
+- Run `/gsd-validate-phase 19.2` before starting Phase 20 (`SANDBOX-02` Monty Python VM).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -114,6 +115,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T19:25:00Z
-Stopped at: Phase 19.2 UAT complete (19.2-UAT.md 6/6 passed on c45d70e) — ready for /gsd-secure-phase 19.2 & /gsd-validate-phase 19.2
-Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-UAT.md
+Last session: 2026-11-27T20:07:00Z
+Stopped at: Phase 19.2 UAT & security audit complete (`19.2-UAT.md` 6/6 passed, `19.2-SECURITY.md` 13/13 closed) — ready for `/gsd-validate-phase 19.2`
+Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-SECURITY.md

@@ -41,6 +41,7 @@ from strands_code_cli.policy.core import (
     _is_sensitive_search_input,
 )
 from strands_code_cli.policy.scope import confine, resolve
+from strands_code_cli.ui.console import sanitize_display
 
 DIFF_MODES: tuple[str, ...] = ("on-demand", "auto")
 MODES = DIFF_MODES
@@ -392,10 +393,11 @@ def _validate_stashed_target(
     from strands_code_cli.policy.scope import effective_roots
 
     resolved = resolve(target, base)
+    safe_target = sanitize_display(target)
     try:
         policy = PolicyConfig.load(repo_path=base / ".agent" / "policy.toml")
     except ValueError as exc:
-        return str(resolved), f"{target}: {exc}; kept pending."
+        return str(resolved), f"{safe_target}: {sanitize_display(exc)}; kept pending."
     extra_roots = list(effective_roots(base, policy, tool_name=op))
     try:
         refuse_symlink_under_roots(
@@ -403,15 +405,18 @@ def _validate_stashed_target(
         )
         confine(resolved, base, extra_roots)
     except ValueError as exc:
-        return str(resolved), f"{target}: {exc}; kept pending."
+        return str(resolved), f"{safe_target}: {sanitize_display(exc)}; kept pending."
     if _is_protected_skills_or_config_path(str(resolved), base):
         return (
             str(resolved),
-            f"{target}: protected path cannot be auto-applied from stash; kept pending.",
+            f"{safe_target}: protected path cannot be auto-applied from stash; kept pending.",
         )
     verdict = decide(op, {"path": str(resolved)}, policy, cwd=base)
     if isinstance(verdict, Deny):
-        return str(resolved), f"{target}: {verdict.reason}; kept pending."
+        return (
+            str(resolved),
+            f"{safe_target}: {sanitize_display(verdict.reason)}; kept pending.",
+        )
     return str(resolved), None
 
 
@@ -437,9 +442,10 @@ async def apply_stashed(
     applied: list[str] = []
     failed: list[str] = []
     for target in targets:
+        safe_target = sanitize_display(target)
         entry = entries.get(target)
         if entry is None:
-            failed.append(f"{target}: no pending change.")
+            failed.append(f"{safe_target}: no pending change.")
             continue
         op = str(entry.get("op", "write"))
         resolved_target, err = _validate_stashed_target(target, base, op)
@@ -451,11 +457,11 @@ async def apply_stashed(
         seen = await read(resolved_target)
         expected = entry.get("old_text")
         if seen != expected:
-            failed.append(f"{target}: file changed since preview; kept pending.")
+            failed.append(f"{safe_target}: file changed since preview; kept pending.")
             continue
         await write(resolved_target, entry["new_text"])
         store.pop(target)
-        applied.append(target)
+        applied.append(safe_target)
     lines = [f"Applied {p}." for p in applied] + failed
     return "\n".join(lines)
 

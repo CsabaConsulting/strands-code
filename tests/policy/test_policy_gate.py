@@ -1387,3 +1387,40 @@ class TestWave2HardeningInvariants:
         monkeypatch.setattr("builtins.input", lambda *a: "always")
         res = _run(bad_gate, _event("shell", {"command": "echo hi"}, uid="ro-append"))
         assert isinstance(res, Proceed)
+
+    def test_diff_preview_refuses_tilde_symlink_and_nofollow_fifo_or_oversized(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import tempfile
+
+        from strands_code_cli.policy.policy_gate import (
+            _read_regular_utf8_nofollow,
+            _safe_existing_text_for_preview,
+        )
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as secret:
+            secret.write("TOP_SECRET_TILDE_TARGET")
+            secret_path = Path(secret.name)
+        try:
+            link = home / "link.txt"
+            link.symlink_to(secret_path)
+            assert _safe_existing_text_for_preview("~/link.txt", repo, []) is None
+            assert _read_regular_utf8_nofollow(link, 1024) is None
+        finally:
+            secret_path.unlink(missing_ok=True)
+
+        big = repo / "big.txt"
+        big.write_text("x" * 2048, encoding="utf-8")
+        assert _read_regular_utf8_nofollow(big, 1024) is None
+
+        fifo = repo / "pipe.fifo"
+        os.mkfifo(fifo)
+        assert _read_regular_utf8_nofollow(fifo, 1024) is None

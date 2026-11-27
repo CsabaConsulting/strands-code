@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,21 +44,40 @@ def _provider_of_model(model: str) -> str:
     return provider_of(model, unwrap_litellm=True)
 
 
+def _has_unsafe_str_chars(value: str) -> bool:
+    """True when ``value`` contains whitespace or ASCII/C1/Bidi control chars."""
+    return any(
+        ch.isspace()
+        or ord(ch) < 32
+        or ord(ch) == 127
+        or unicodedata.category(ch) in ("Cc", "Cf")
+        for ch in value
+    )
+
+
 def _validate_base_url(base_url: str) -> None:
-    """Validate persisted custom endpoint host: http(s) URL without embedded creds."""
-    if not base_url or any(
-        ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in base_url
-    ):
+    """Validate persisted custom endpoint host: http(s) URL without embedded creds/query."""
+    if not base_url or _has_unsafe_str_chars(base_url):
         raise ValueError(
-            "Provider config 'base_url' must be a non-empty URL without whitespace"
+            "Provider config 'base_url' must be a non-empty URL without whitespace or control characters"
         )
-    parsed = urlsplit(base_url)
+    try:
+        parsed = urlsplit(base_url)
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            "Provider config 'base_url' has an invalid URL or port"
+        ) from exc
     if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
         raise ValueError(
             "Provider config 'base_url' must be an http:// or https:// URL with a host"
         )
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("Provider config 'base_url' must not embed credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError(
+            "Provider config 'base_url' must not include a query or fragment"
+        )
 
 
 def _validate_provider_fields(
@@ -70,8 +90,11 @@ def _validate_provider_fields(
     memory_mode: Any,
 ) -> None:
     """Validate persisted provider configuration field types and enums."""
-    if model is not None and not isinstance(model, str):
-        raise ValueError("Provider config 'model' must be a string")
+    if model is not None:
+        if not isinstance(model, str) or not model or _has_unsafe_str_chars(model):
+            raise ValueError(
+                "Provider config 'model' must be a non-empty model id without whitespace or control characters"
+            )
     if base_url is not None:
         if not isinstance(base_url, str):
             raise ValueError("Provider config 'base_url' must be a string")
