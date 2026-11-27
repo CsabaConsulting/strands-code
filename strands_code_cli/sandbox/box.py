@@ -979,6 +979,7 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         "when {",
         '    context.input.path like "*/.env"',
         '    || context.input.path like "*/.env.*"',
+        '    || context.input.path like "*/.envrc"',
         '    || context.input.path like "*/.ssh/*"',
         '    || context.input.path like "*/.aws/*"',
         '    || context.input.path like "*/.git/config"',

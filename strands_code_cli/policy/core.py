@@ -102,6 +102,7 @@ PATH_TOOLS = frozenset({"write", "edit", "read", "search"})
 COMMAND_TOOLS = frozenset({"shell", "python_repl"})
 TOOL_ONLY_TOOLS = frozenset(
     {
+        "search",
         "web_fetch",
         "web_search",
         "subagent",
@@ -162,9 +163,17 @@ _CURL_UNSAFE_LONG_FLAGS = frozenset(
         "--mail-from",
         "--mail-rcpt",
         "--netrc-file",
+        "--netrc",
+        "--netrc-optional",
         "--key",
         "--cert",
         "--cacert",
+        "--proxy-key",
+        "--proxy-cert",
+        "--proxy-cacert",
+        "--unix-socket",
+        "--abstract-unix-socket",
+        "--ssl-sessions",
         "--proxy-header",
         "--telnet-option",
         "--upload-flags",
@@ -174,7 +183,7 @@ _CURL_UNSAFE_LONG_FLAGS = frozenset(
     }
 )
 _CURL_UNSAFE_SHORT_CHARS = frozenset(
-    {"F", "T", "d", "o", "O", "I", "K", "c", "D", ":", "b", "w", "Q"}
+    {"F", "T", "d", "o", "O", "I", "K", "c", "D", ":", "b", "w", "Q", "E", "n"}
 )
 _SHELL_RAW_META_CHARS = frozenset({";", "|", "&", "`", "\n", "\r", ">", "<"})
 _FETCH_DISALLOWED_GIT_FLAGS = ("--upload-pack", "--exec")
@@ -631,10 +640,13 @@ def _match_path_rule(
 def _match_command_rule(
     prefix: str, tool_name: str, tool_input: dict[str, Any], *, is_allow: bool
 ) -> bool:
-    norm = normalise_command(_tool_input_text(tool_name, tool_input))
+    raw = _tool_input_text(tool_name, tool_input)
+    norm = normalise_command(raw)
     if not is_allow or tool_name != "shell":
         return norm.startswith(prefix)
-    if _has_shell_metachars(norm, allow_quoted=True):
+    if _has_shell_metachars(raw, allow_quoted=True) or _has_shell_metachars(
+        norm, allow_quoted=True
+    ):
         return False
     return norm == prefix or (
         norm.startswith(prefix)
@@ -691,7 +703,7 @@ def _curl_token_has_unsafe_scheme_or_file_ref(tok: str) -> bool:
     if tok.startswith("@") or "=@" in tok:
         return True
     low = tok.lower()
-    if low.startswith("-h") and "@" in tok:
+    if tok.startswith("-") and not tok.startswith("--") and "h@" in low:
         return True
     candidate = tok.split("=", 1)[-1] if tok.startswith("--") and "=" in tok else tok
     cand_low = candidate.lower()
@@ -869,7 +881,8 @@ def _path_matches_protected(
 
 
 def _is_env_filename(cand: Path) -> bool:
-    return cand.name == ".env" or cand.name.startswith(".env.")
+    low = cand.name.lower()
+    return low == ".env" or low == ".envrc" or low.startswith(".env.")
 
 
 def _candidate_path_variants(raw: object, base: Path) -> tuple[list[Path], list[Path]]:
@@ -929,36 +942,76 @@ _SEARCH_SECRET_CANARIES = (
     ".env",
     ".env.local",
     ".env.production",
+    ".envrc",
+    "sub/.env",
+    "sub/.env.local",
+    "sub/.env.production",
+    "sub/.envrc",
     ".ssh/id_rsa",
     ".ssh/id_ed25519",
+    "home/.ssh/id_rsa",
+    "home/.ssh/id_ed25519",
     ".aws/credentials",
+    "home/.aws/credentials",
     "id_rsa",
     "id_ed25519",
     "credentials",
 )
+_DOT_SECRET_SEGMENTS = (".env", ".env.local", ".envrc", ".ssh", ".aws")
 
 
-def _expand_brace_glob(pattern: str) -> tuple[str, ...]:
-    match = _BRACE_GLOB_RE.search(pattern)
-    if not match:
-        return (pattern,)
-    prefix = pattern[: match.start()]
-    suffix = pattern[match.end() :]
-    parts = [p.strip() for p in match.group(1).split(",") if p.strip()]
-    return tuple(f"{prefix}{part}{suffix}" for part in parts) or (pattern,)
+def _expand_brace_glob(
+    pattern: str, max_variants: int = 64
+) -> tuple[tuple[str, ...], bool]:
+    variants = [pattern]
+    while True:
+        next_round: list[str] = []
+        progressed = False
+        for variant in variants:
+            match = _BRACE_GLOB_RE.search(variant)
+            if not match:
+                next_round.append(variant)
+                continue
+            parts = [p.strip() for p in match.group(1).split(",") if p.strip()]
+            if not parts:
+                next_round.append(variant)
+                continue
+            progressed = True
+            prefix, suffix = variant[: match.start()], variant[match.end() :]
+            for part in parts:
+                next_round.append(f"{prefix}{part}{suffix}")
+                if len(next_round) > max_variants:
+                    return tuple(next_round[:max_variants]), True
+        variants = next_round
+        if not progressed:
+            break
+    return tuple(variants), False
+
+
+def _variant_matches_secret(variant: str) -> bool:
+    if any(token in variant for token in (".env", ".ssh", ".aws")):
+        return True
+    stripped = variant.lstrip("./")
+    for canary in _SEARCH_SECRET_CANARIES:
+        if fnmatch.fnmatch(canary, variant) or (
+            stripped and fnmatch.fnmatch(canary, stripped)
+        ):
+            return True
+    for seg in variant.split("/"):
+        if (
+            seg.startswith(".")
+            and seg not in (".", "..")
+            and any(fnmatch.fnmatch(target, seg) for target in _DOT_SECRET_SEGMENTS)
+        ):
+            return True
+    return False
 
 
 def _glob_matches_secret(raw_glob: str) -> bool:
-    for variant in _expand_brace_glob(raw_glob.strip().lower()):
-        if any(token in variant for token in (".env", ".ssh", ".aws")):
-            return True
-        stripped = variant.lstrip("./")
-        for canary in _SEARCH_SECRET_CANARIES:
-            if fnmatch.fnmatch(canary, variant) or (
-                stripped and fnmatch.fnmatch(canary, stripped)
-            ):
-                return True
-    return False
+    variants, truncated = _expand_brace_glob(raw_glob.strip().lower())
+    if truncated:
+        return True
+    return any(_variant_matches_secret(variant) for variant in variants)
 
 
 def _is_sensitive_search_input(tool_input: dict[str, Any], base: Path) -> bool:

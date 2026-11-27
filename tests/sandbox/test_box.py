@@ -579,6 +579,7 @@ class TestBoxConfigGenerationAndEgress:
             'context.input.path like "/api/v1/chat/*"',
             'context.input.path like "*/.env"',
             'context.input.path like "*/.env.*"',
+            'context.input.path like "*/.envrc"',
             'context.input.path like "*/.ssh/*"',
             'context.input.path like "*/.aws/*"',
             'context.input.path like "*/.git/config"',

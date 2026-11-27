@@ -59,15 +59,16 @@ def confine(
 
 
 def _rule_base_dir(pattern: str) -> Path | None:
-    """Base dir of an absolute path-glob: text before the first glob char."""
-    if not Path(pattern).is_absolute():
+    """Base dir of an absolute (or tilde) path-glob: text before the first glob char."""
+    expanded = os.path.expanduser(pattern)
+    if not Path(expanded).is_absolute():
         return None
-    cut = len(pattern)
+    cut = len(expanded)
     for char in ("*", "?", "["):
-        pos = pattern.find(char)
+        pos = expanded.find(char)
         if pos != -1:
             cut = min(cut, pos)
-    head = pattern[:cut]
+    head = expanded[:cut]
     if not head or head.endswith("/"):
         base = Path(head or "/")
     else:
@@ -110,6 +111,8 @@ def effective_roots(
         try:
             real = Path(os.path.realpath(base))
         except OSError:
+            continue
+        if real == Path("/"):
             continue
         if real not in roots:
             roots.append(real)

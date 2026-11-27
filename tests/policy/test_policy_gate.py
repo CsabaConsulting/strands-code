@@ -1096,6 +1096,31 @@ class TestWave2HardeningInvariants:
         assert reloaded.deny[0].tool == "search"
         assert reloaded.deny[0].path == str((tmp_path / ".env").resolve())
 
+        # Choosing 'never' on search with only file_glob=".env*" persists [[deny]] tool="search".
+        glob_toml = tmp_path / ".agent" / "policy-glob.toml"
+        glob_handler = PolicyGateHandler(
+            policy_loader=lambda: PolicyConfig.load(
+                home_path=tmp_path / "missing.toml", repo_path=glob_toml
+            ),
+            append_path=glob_toml,
+        )
+        glob_handler.bind_main_agent(main_agent)
+        glob_answers = iter(["never"])
+        monkeypatch.setattr("builtins.input", lambda *args: next(glob_answers))
+        res_glob_never = _run(
+            glob_handler,
+            _event("search", {"pattern": "KEY", "file_glob": ".env*"}, main_agent),
+        )
+        assert isinstance(res_glob_never, HitlDeny)
+        assert "never search" in res_glob_never.reason
+        glob_handler.bind_turn("after-glob-deny")
+        res_glob_reloaded = _run(
+            glob_handler,
+            _event("search", {"pattern": "KEY", "file_glob": ".env*"}, main_agent),
+        )
+        assert isinstance(res_glob_reloaded, HitlDeny)
+        assert "Denied by policy rule" in res_glob_reloaded.reason
+
     def test_broker_eof_symlink_repo_home_deny_derive_tool_only_and_ansi_sanitize(
         self, tmp_path, monkeypatch
     ):
