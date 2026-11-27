@@ -300,7 +300,8 @@ def build_agent(
             # Pre-built adapter already carries config/CacheConfig; avoid harness warning.
             kwargs["caching"] = False
     parent_holder: dict[str, Any] = {"agent": None}
-    kwargs["tools"].append(build_cli_subagent(parent_holder, kwargs))
+    subagent_tool = build_cli_subagent(parent_holder, kwargs)
+    kwargs["tools"].append(subagent_tool)
     agent = create_harness(**kwargs)
     parent_holder["agent"] = agent
     resolved_model = getattr(agent, "model", None)
@@ -352,6 +353,7 @@ def build_agent(
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
     agent._diff_mode = diff_holder
     agent._python_repl_tool = repl_tool
+    agent._subagent_tool = subagent_tool
     gate = interventions[0]
     agent._policy_gate = gate
     gate.bind_main_agent(agent)  # D-12 delegated-turn detection

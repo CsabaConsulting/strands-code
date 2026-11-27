@@ -375,11 +375,23 @@ def close_repl_tool(tool: Any) -> None:
             pass
 
 
+def _close_tool_children(tool: Any) -> None:
+    close_children = getattr(tool, "_close_children", None)
+    if callable(close_children):
+        try:
+            close_children()
+        except Exception:
+            pass
+
+
 def close_agent_repls(agent: Any) -> None:
     """Close any ``python_repl`` interpreter attached to ``agent`` or its registry."""
     registry = getattr(getattr(agent, "tool_registry", None), "registry", None)
     if isinstance(registry, dict):
         close_repl_tool(registry.get("python_repl"))
+        _close_tool_children(registry.get("subagent"))
     close_repl_tool(getattr(agent, "_python_repl_tool", None))
+    _close_tool_children(getattr(agent, "_subagent_tool", None))
     for extra in getattr(agent, "_delegate_repl_tools", None) or ():
         close_repl_tool(extra)
+        _close_tool_children(extra)

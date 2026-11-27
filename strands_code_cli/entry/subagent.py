@@ -333,4 +333,10 @@ def _wrap_subagent_cleanup(tool: Any, built_children: list[Any]) -> None:
                     close_agent_repls(child)
             built_children[:] = remaining
 
+    def _close_all_children() -> None:
+        for child in list(built_children):
+            close_agent_repls(child)
+        built_children.clear()
+
     tool.stream = _closing_stream
+    tool._close_children = _close_all_children

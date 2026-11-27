@@ -555,7 +555,7 @@ def _configure_btw_agent(
     repl_tools = [
         t
         for t in (kwargs.get("tools") or ())
-        if getattr(t, "tool_name", None) == "python_repl"
+        if getattr(t, "tool_name", None) in ("python_repl", "subagent")
     ]
     if repl_tools:
         try:

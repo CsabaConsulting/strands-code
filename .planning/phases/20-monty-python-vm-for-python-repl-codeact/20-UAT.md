@@ -10,16 +10,16 @@ updated: 2026-11-27T21:46:00Z
 
 ## Current Test
 
-number: 1
-name: Monty Python VM Core (`MontyPythonInterpreter`, Pure-Rust Stdlib, Import Blocking, Limits & Crash/Timeout Recovery) (`D-01`, `D-02`, `D-04`–`D-06`, `D-09`)
-expected: `MontyPythonInterpreter` executes Python inside an isolated `pydantic-monty` Rust worker with cross-turn variable persistence, pure-computation stdlib (`math`, `json`, `re`, `collections`, `itertools`, `datetime`, `base64`, `dataclasses`, `typing`) + `ascii` builtin, fail-closed startup when missing/unlaunchable (zero `smolagents` fallback), AST + `os=None` blocking of `os`/`pathlib`/`subprocess`/`__import__`/`importlib`, `256 MiB` memory / `60s` wall / `200` recursion / `4 MiB` stdout caps, and salvage + recovery without leaving the session wedged after crash or limit exhaustion.
+number: 2
+name: All 3 CLI `python_repl` Peer Sites Migrated & Deterministic Worker Teardown (`D-02`, `D-03`, `D-09`)
+expected: Main REPL (`entry/main.py`), `CodeactStint` (`policy/codeact.py`), and `/btw` + `subagent` delegates (`loop/btw.py`, `entry/subagent.py`) all run `MontyPythonInterpreter` with isolated worker state and deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close()`, `_wrap_subagent_cleanup`, `atexit`), with zero `SandboxedPythonInterpreter` remaining in `strands_code_cli/`.
 awaiting: user response
 
 ## Tests
 
 ### 1. Monty Python VM Core (`MontyPythonInterpreter`, Pure-Rust Stdlib, Import Blocking, Limits & Crash/Timeout Recovery) (`D-01`, `D-02`, `D-04`–`D-06`, `D-09`)
 expected: `MontyPythonInterpreter` executes Python inside an isolated `pydantic-monty` Rust worker with cross-turn variable persistence, pure-computation stdlib (`math`, `json`, `re`, `collections`, `itertools`, `datetime`, `base64`, `dataclasses`, `typing`) + `ascii` builtin, fail-closed startup when missing/unlaunchable (zero `smolagents` fallback), AST + `os=None` blocking of `os`/`pathlib`/`subprocess`/`__import__`/`importlib`, `256 MiB` memory / `60s` wall / `200` recursion / `4 MiB` stdout caps, and salvage + recovery without leaving the session wedged after crash or limit exhaustion.
-result: pending
+result: pass
 evidence: |
   - Functional probe on `HEAD` `f177e5e`:
     - Stateful execution (`x = 41` -> `x + 1 == 42`), `ascii('é')`, pure-Rust stdlib (`math`, `json`, `re`, `collections`, `itertools`, `datetime`, `base64`, `dataclasses`, `typing`), blocked imports (`os`, `pathlib`, `subprocess`, `__import__`, `importlib`, `posix`, `io`, `socket`, `ctypes`, `builtins`, `inspect`, `gc`, `shutil`, `tempfile`), `exec`/`eval`/`open('/etc/passwd')` refusals, minimal non-leaking `sys`, surrogate replacement, `RecursionError`, `MemoryError` (`2 MiB` cap) + post-OOM recovery (`after_oom 2`), and stdout truncation verified.
@@ -32,6 +32,14 @@ evidence: |
 ### 2. All 3 CLI `python_repl` Peer Sites Migrated & Deterministic Worker Teardown (`D-02`, `D-03`, `D-09`)
 expected: Main REPL (`entry/main.py`), `CodeactStint` (`policy/codeact.py`), and `/btw` + `subagent` delegates (`loop/btw.py`, `entry/subagent.py`) all run `MontyPythonInterpreter` with isolated worker state and deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close()`, `_wrap_subagent_cleanup`, `atexit`), with zero `SandboxedPythonInterpreter` remaining in `strands_code_cli/`.
 result: pending
+evidence: |
+  - Functional probe on `HEAD` `ea35d49` (`TEST2_BASE_PROBE_OK` + `ZERO_SMOLAGENTS_CLI`):
+    - Zero `SandboxedPythonInterpreter` references across `strands_code_cli/**/*.py`.
+    - `main` REPL, `fresh_tools_for_delegate` (`/btw` & `subagent`), and `CodeactStint` all instantiate isolated `MontyPythonInterpreter` instances with independent variable namespaces (`main` vs `delegate` vs `codeact`).
+    - `stint.reset()`, `stint.close()`, `close_agent_repls()` (`_python_repl_tool`, `_delegate_repl_tools`, and `registry["python_repl"]`) release sessions cleanly (`_session is None`).
+  - Adversarial pre-check gap found on `ea35d49` & fixed in `entry/subagent.py`, `sandbox/monty.py`, `entry/main.py`, `loop/btw.py`, and `tests/entry/test_subagent.py`:
+    - `[Code/Lifecycle Gap]` Attached `_close_children()` in `_wrap_subagent_cleanup()`, wired `close_agent_repls()` to invoke `_close_tool_children()` across `registry["subagent"]`, `_subagent_tool`, and `_delegate_repl_tools`, and recorded `_subagent_tool` / `"subagent"` handle in `entry/main.py` and `loop/btw.py` so unresumed pending `subagent` children close deterministically on session or `/btw` teardown.
+  - Re-verified on fix `HEAD` (`Gaps found: None`): `PARENT_CLOSED: True`, `PENDING_CHILD_CLOSED: True`, `262 passed, 1 deselected` (`tests/entry/`, `tests/loop/test_btw.py`, `tests/loop/test_loop_cancel.py`, `tests/sandbox/test_monty.py`, `tests/policy/test_codeact.py`), and all 6 CI gates green.
 
 ### 3. Hardened CodeAct Host Callbacks (`read`/`write`/`edit`/`shell`) & `PolicyConfig` `[[deny]]` Enforcement (`D-07`, `D-08`)
 expected: CodeAct host callbacks enforce Phase 19.1 symlink refusal (leaf & intermediate ancestors), `O_NOFOLLOW | O_NONBLOCK` regular-file UTF-8 reads (blocking FIFOs/devices), `atomic_write_text`, sensitive-read refusal (`.env*`, `.ssh/*`, `.aws/*`), protected-path blocks (`.agent/**`, `.git/**`, `STRANDS.md`, `~/.config/strands-code/**`, `~/.config/strands-box/**`), and non-interactive active `PolicyConfig` `[[deny]]` rules (failing closed on symlinked `.agent/policy.toml`), both directly and inside `CodeactStint` VM calls.
@@ -52,11 +60,11 @@ result: pending
 ## Summary
 
 total: 6
-passed: 0
+passed: 1
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 
 ## Gaps
 
-None open so far — Test 1 adversarial findings (`monty.py` cumulative `TimeoutError` session reset, `_resolve_monty_binary_path()` `os.X_OK`/control-char validation + non-destructive `_get_shared_pool()` swap, and dynamic truncation cap label) fixed and re-verified on `HEAD`.
+None open so far — Test 1 (`ea35d49`: cumulative `TimeoutError` session reset, `os.X_OK`/control-char check + non-destructive `_SHARED_POOL` swap, dynamic truncation label) and Test 2 (pending `subagent` child Monty session cleanup across `close_agent_repls()`) fixed and re-verified on `HEAD`.

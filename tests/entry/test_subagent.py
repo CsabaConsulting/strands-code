@@ -555,4 +555,8 @@ class TestCliSubagentWiring:
         assert interp_pending._session is not None
         assert interp_done._session is None
         assert children == [pending_child]
-        interp_pending.close()
+
+        # Closing the parent agent also closes any unresumed pending child REPLs.
+        sub_mod.close_agent_repls(SimpleNamespace(_subagent_tool=fake_tool))
+        assert interp_pending._session is None
+        assert children == []
