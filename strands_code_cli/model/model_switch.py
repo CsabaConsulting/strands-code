@@ -16,6 +16,7 @@ import itertools
 import json
 import re
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -1745,6 +1746,94 @@ def _reconcile_web_search_tool(agent: Any, normalized: str) -> None:
         stashed = getattr(agent, "_stashed_web_search_tool", None)
         if stashed is not None:
             reg["web_search"] = stashed
+
+
+def _web_search_unsupported(model: Any) -> bool:
+    """True when ``create_harness`` rejects ``web_search=True`` for ``model``."""
+    from strands.models import Model, ModelRouter
+
+    if isinstance(model, (Model, ModelRouter)):
+        return True
+    try:
+        from strands_harness.models import _web_search_kind
+
+        return _web_search_kind(model) is None
+    except Exception:
+        return False
+
+
+def _custom_web_fetch_model(
+    target_model: Any,
+    *,
+    base_url: str | None = None,
+    base_url_provider: str | None = None,
+    api_mode: str | None = None,
+) -> Any | None:
+    """Resolve a dedicated ``web_fetch`` summarizer for Meta or custom-URL targets."""
+    target_ref = (
+        target_model
+        if isinstance(target_model, str)
+        else getattr(target_model, "_strands_model_ref", None)
+    )
+    if not isinstance(target_ref, str) or not target_ref:
+        return None
+    normalized = normalize_model_ref(target_ref)
+    provider = _provider_of(normalized)
+    scoped = scoped_base_url(base_url, base_url_provider, normalized)
+    if provider != "meta" and not (
+        scoped is not None and provider in ("openai", "anthropic")
+    ):
+        return None
+    try:
+        wf_model = resolve_harness_model(
+            normalized,
+            effort="off",
+            base_url=scoped,
+            api_mode=api_mode if scoped is not None else None,
+            web_search=False,
+            caching=False,
+        )
+    except Exception:
+        return None
+    return None if isinstance(wf_model, str) else wf_model
+
+
+def reconcile_delegate_builtin_tools(
+    builtin_tools: Any,
+    target_model: Any,
+    *,
+    base_url: str | None = None,
+    base_url_provider: str | None = None,
+    api_mode: str | None = None,
+) -> Any:
+    """Copy ``builtin_tools`` and reconcile ``web_search`` / ``web_fetch`` for target model."""
+    if not isinstance(builtin_tools, Mapping):
+        return builtin_tools
+    updated = dict(builtin_tools)
+    if updated.get("web_search") is True and _web_search_unsupported(target_model):
+        updated["web_search"] = False
+    wf_raw = updated.get("web_fetch")
+    if wf_raw is False:
+        return updated
+    wf_enabled = wf_raw is not None or updated.get("*", True) is not False
+    if not wf_enabled:
+        return updated
+    wf_cfg = (
+        {k: v for k, v in wf_raw.items() if k != "model"}
+        if isinstance(wf_raw, Mapping)
+        else {}
+    )
+    custom_wf = _custom_web_fetch_model(
+        target_model,
+        base_url=base_url,
+        base_url_provider=base_url_provider,
+        api_mode=api_mode,
+    )
+    if custom_wf is not None:
+        updated["web_fetch"] = {**wf_cfg, "model": custom_wf}
+    elif isinstance(wf_raw, Mapping) and "model" in wf_raw:
+        updated["web_fetch"] = wf_cfg if wf_cfg else True
+    return updated
 
 
 def apply_switch(

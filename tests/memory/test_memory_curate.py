@@ -308,6 +308,26 @@ class TestCurateLoop:
         assert "> Run uv build." in out
         assert "Source: promoted → section BuildEvil" in out
 
+    def test_auto_proposal_id_skips_explicit_pending_approved_and_denied_ids(self):
+        queue = CurateQueue()
+        p_pend = queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")
+        p_app = queue.propose("Test", "promoted", "Run pytest.\n", proposal_id="p2")
+        p_den = queue.propose("Lint", "promoted", "Run ruff.\n", proposal_id="p3")
+        assert p_pend is not None and p_app is not None and p_den is not None
+        queue.approve("p2", lambda _p: None)
+        queue.deny("p3")
+
+        # Duplicate explicit IDs are still rejected without advancing auto-counter.
+        assert queue.propose("Other", "manual", "x", proposal_id="p1") is None
+        assert queue.propose("Other", "manual", "y", proposal_id="p2") is None
+        assert queue.propose("Other", "manual", "z", proposal_id="p3") is None
+
+        # Auto-IDs advance past all existing/completed explicit IDs.
+        next_auto = queue.propose("Notes", "manual", "Auto item one.")
+        second_auto = queue.propose("Style", "manual", "Auto item two.")
+        assert next_auto is not None and next_auto.id == "p4"
+        assert second_auto is not None and second_auto.id == "p5"
+
     def test_review_ctrl_c_keeps_rest_pending(self, monkeypatch):
         queue = CurateQueue()
         queue.propose("Build", "promoted", "Run uv build.\n", proposal_id="p1")

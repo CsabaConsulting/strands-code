@@ -341,3 +341,95 @@ class TestCliSubagentWiring:
         assert hooks
         hooks[-1][0](SimpleNamespace(agent=child))
         assert "reasoningSignature" not in child.messages[0]["content"][0]["toolUse"]
+
+    def test_subagent_reconciles_stale_web_fetch_after_switch_and_string_spec_model(
+        self, monkeypatch
+    ):
+        import strands_code_cli.entry.subagent as sub_mod
+
+        stale_wf = _ReplayModel("meta/muse-spark-1.3-contributor")
+        parent = SimpleNamespace(model=_ReplayModel("meta/muse-spark-1.3-contributor"))
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            sub_mod,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=kw.get("model")),
+        )
+        monkeypatch.setattr(sub_mod, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setattr(
+            sub_mod, "configure_base_url_for_model", lambda *a, **k: None
+        )
+        monkeypatch.setenv("MODEL_API_KEY", "meta-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "oai-test")
+
+        parent_builtin = {
+            "shell": True,
+            "read": True,
+            "web_fetch": {"model": stale_wf},
+            "web_search": True,
+            "subagent": False,
+        }
+        tool = build_cli_subagent(
+            {"agent": parent},
+            {
+                "model": parent.model,
+                "tools": [],
+                "builtin_tools": parent_builtin,
+                "memory": False,
+                "session": False,
+                "callback_handler": None,
+            },
+        )
+        # Parent switches from Meta to Anthropic -> stale web_fetch removed, web_search off.
+        parent.model = _ReplayModel("anthropic/claude-haiku-4-5")
+        tool._builder(AgentSpec(task="analyze"))
+        assert captured["builtin_tools"]["web_fetch"] is True
+        assert captured["builtin_tools"]["web_search"] is False
+        assert parent_builtin["web_fetch"] == {"model": stale_wf}
+
+        # String spec.model without native search turns web_search=True off.
+        tool._builder(
+            AgentSpec(
+                task="analyze", model="litellm/openrouter/anthropic/claude-sonnet-4"
+            )
+        )
+        assert captured["builtin_tools"]["web_search"] is False
+        assert captured["builtin_tools"]["web_fetch"] is True
+
+        # Excluded web_fetch via spec.tools stays False even on Meta target.
+        tool._builder(
+            AgentSpec(
+                task="read only",
+                tools=["read"],
+                model="meta/muse-spark-1.3-contributor",
+            )
+        )
+        assert captured["builtin_tools"]["web_fetch"] is False
+        assert captured["builtin_tools"]["web_search"] is False
+
+        # Exa opt-in stays preserved and custom OpenAI endpoint gets fresh web_fetch model.
+        exa_parent = SimpleNamespace(
+            model=parent.model,
+            _base_url="https://oai-proxy.example/v1",
+            _base_url_provider="openai",
+            _api_mode="chat",
+        )
+        exa_tool = build_cli_subagent(
+            {"agent": exa_parent},
+            {
+                "model": parent.model,
+                "tools": [],
+                "builtin_tools": {"shell": True, "read": True, "web_search": "exa"},
+                "memory": False,
+                "session": False,
+                "callback_handler": None,
+                "_base_url": "https://oai-proxy.example/v1",
+                "_base_url_provider": "openai",
+                "_api_mode": "chat",
+            },
+        )
+        exa_tool._builder(AgentSpec(task="fetch", model="openai/gpt-5"))
+        assert captured["builtin_tools"]["web_search"] == "exa"
+        assert getattr(
+            captured["builtin_tools"]["web_fetch"]["model"], "_strands_model_ref", None
+        ) == ("openai/gpt-5")

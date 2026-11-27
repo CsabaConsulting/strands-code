@@ -295,6 +295,7 @@ def _pump_drain_side_for_cancel(
         # turn reaps it instead of orphaning it.
         btw.cancel_targets = ("main", "btw")
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(btw_agent)
         unregister_btw_cancel(broker)
         if btw_future is not None:
             _pump_attach_live(btw, btw_agent, btw_future, btw_question)
@@ -340,6 +341,7 @@ def _pump_handle_interrupt(
         cancel_event.set()
         _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(btw_agent)
         unregister_btw_cancel(broker)
         return _PUMP_RAISE, (btw_agent, btw_future, btw_question)
     targets = _choose_cancel_targets()
@@ -352,6 +354,7 @@ def _pump_handle_interrupt(
         _cancel_agent_background_tasks(agent)
     if "btw" in targets:
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(btw_agent)
         unregister_btw_cancel(broker)
     if "main" not in targets:
         # Side aborts on its event, the main turn continues.
@@ -394,6 +397,7 @@ def _pump_collect_result(
         # KeyboardInterrupt reaching us: same cancel path.
         _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(btw.live_agent)
         unregister_btw_cancel(broker)
         raise KeyboardInterrupt from None
     except Exception as exc:
@@ -402,6 +406,7 @@ def _pump_collect_result(
         # SDK-wrapped cancel (EventLoopException): same path.
         _cancel_agent_background_tasks(agent)
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(btw.live_agent)
         unregister_btw_cancel(broker)
         raise KeyboardInterrupt from None
     history = getattr(agent, "messages", None)

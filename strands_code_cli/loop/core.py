@@ -461,20 +461,23 @@ def _finish_btw_turn(
     boundary flush owns history.
     """
     try:
-        result = future.result()
-    except Exception as exc:  # noqa: BLE001 — side failure must never fail the main turn
-        if worker_cancelled(exc):
-            render_btw_cancelled(question)
+        try:
+            result = future.result()
+        except Exception as exc:  # noqa: BLE001 — side failure must never fail the main turn
+            if worker_cancelled(exc):
+                render_btw_cancelled(question)
+                return
+            render_btw_error(question, exc)
             return
-        render_btw_error(question, exc)
-        return
-    side_model = getattr(btw_agent, "model", None)
-    reported = _drain_reported_cost(side_model)
-    side_model_id = model_id_of(side_model, "")
-    btw.pending.append(
-        (question, _result_text(btw_agent, result), result, reported, side_model_id)
-    )
-    btw.done = True
+        side_model = getattr(btw_agent, "model", None)
+        reported = _drain_reported_cost(side_model)
+        side_model_id = model_id_of(side_model, "")
+        btw.pending.append(
+            (question, _result_text(btw_agent, result), result, reported, side_model_id)
+        )
+        btw.done = True
+    finally:
+        _teardown_btw_agent(btw_agent)
 
 
 def _route_side_spawn(
@@ -976,6 +979,21 @@ def _shutdown_agent(agent: Any) -> None:
         shutdown()
     except Exception as exc:  # noqa: BLE001 — best-effort cleanup
         logger.warning("Agent shutdown failed: %s", exc)
+
+
+def _teardown_btw_agent(btw_agent: Any) -> None:
+    """Cancel background tasks, shut down, and unregister a side agent."""
+    if btw_agent is None:
+        return
+    _cancel_agent_background_tasks(btw_agent)
+    _shutdown_agent(btw_agent)
+    gate = gate_for(btw_agent) or getattr(btw_agent, "_policy_gate", None)
+    unregister = getattr(gate, "unregister_agent", None)
+    if callable(unregister):
+        try:
+            unregister(btw_agent)
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+            logger.warning("Btw gate unregister failed: %s", exc)
 
 
 def _handle_turn_cancel(
@@ -2551,21 +2569,32 @@ def _close_loop_session(
     """
     _drain_idle_btw(agent, btw, broker, current_model, session_turns, from_exit=True)
     _note_dropped_side(btw, broker)
+    live_btw_agent = btw.live_agent if btw.has_live else None
     if btw.has_live:
         btw.cancel_event.set()
+        _cancel_agent_background_tasks(live_btw_agent)
+    interrupted = False
     try:
-        side_pool.shutdown(wait=True)
-    except KeyboardInterrupt:
-        side_pool.shutdown(wait=False)
-        raise
-    if session_pump is not None:
-        session_pump.__exit__(None, None, None)
-    _cancel_agent_background_tasks(agent)
-    explicit_save(agent)
-    flush_memory(agent)
-    _shutdown_agent(agent)
-    index.ensure(session_id)
-    print_plain(console, "Session saved.", style="dim")
+        try:
+            side_pool.shutdown(wait=True)
+        except KeyboardInterrupt:
+            interrupted = True
+            side_pool.shutdown(wait=False)
+            raise
+    finally:
+        unregister_btw_cancel(broker)
+        if session_pump is not None:
+            session_pump.__exit__(None, None, None)
+        _cancel_agent_background_tasks(agent)
+        explicit_save(agent)
+        flush_memory(agent)
+        _shutdown_agent(agent)
+        if live_btw_agent is not None:
+            _teardown_btw_agent(live_btw_agent)
+            btw.detach_live()
+        index.ensure(session_id)
+        if not interrupted:
+            print_plain(console, "Session saved.", style="dim")
 
 
 def _clear_agent_base_url_on_provider_change(agent: Any, new_model: str) -> None:

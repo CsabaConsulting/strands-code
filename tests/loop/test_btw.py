@@ -15,6 +15,7 @@ from concurrent.futures import Future
 from types import SimpleNamespace
 
 import pytest
+from strands.models import Model
 from strands.types.exceptions import EventLoopException
 
 from strands_code_cli.loop.btw import (
@@ -1671,3 +1672,225 @@ class TestBtwLiveModelBillingAndReplIsolation:
         )
         assert captured["caching"] is False
         assert "effort" not in captured
+
+
+class _BtwProbeModel(Model):
+    """Minimal Model subclass for real create_harness /btw wiring tests."""
+
+    def __init__(self, model_id: str = "fake") -> None:
+        self._model_id = model_id
+
+    def update_config(self, **model_config):
+        pass
+
+    def get_config(self):
+        return {"model_id": self._model_id}
+
+    async def stream(self, *args, **kwargs):
+        yield {}
+
+    def structured_output(self, *args, **kwargs):
+        return None
+
+
+class TestBtwTest5Hardening:
+    """Test 5 gaps: web_search on Model, stale web_fetch, subagent clean instructions, teardown."""
+
+    def test_btw_web_search_true_on_prebuilt_model_uses_real_create_harness(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        parent_builtin = {
+            "shell": True,
+            "read": True,
+            "web_search": True,
+            "subagent": False,
+        }
+        parent_kwargs = {
+            "model": _BtwProbeModel("anthropic/claude-sonnet-4-5"),
+            "builtin_tools": parent_builtin,
+            "tools": [],
+            "memory": False,
+            "session": False,
+            "callback_handler": LockedHandler(_Body("parent")),
+        }
+        side_agent, _prompt = build_btw_agent(parent_kwargs, [], "check real harness")
+        assert parent_builtin["web_search"] is True
+        assert "web_search" not in side_agent.tool_registry.registry
+
+    def test_btw_reconciles_stale_web_fetch_and_preserves_exa_and_meta(
+        self, monkeypatch
+    ):
+        import strands_code_cli.loop.btw as btw_mod
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=kw.get("model")),
+        )
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setenv("MODEL_API_KEY", "meta-test")
+
+        stale_wf = object()
+        parent_builtin = {
+            "shell": True,
+            "read": True,
+            "web_search": True,
+            "web_fetch": {"model": stale_wf},
+        }
+        btw_mod.build_btw_agent(
+            {
+                "model": _BtwProbeModel("anthropic/claude-sonnet-4-6"),
+                "builtin_tools": parent_builtin,
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+            },
+            [],
+            "check stale",
+        )
+        assert captured["builtin_tools"]["web_search"] is False
+        assert captured["builtin_tools"]["web_fetch"] is True
+        assert parent_builtin["web_fetch"] == {"model": stale_wf}
+
+        # Preserve web_search="exa" and web_fetch=False.
+        btw_mod.build_btw_agent(
+            {
+                "model": _BtwProbeModel("openai/gpt-5"),
+                "builtin_tools": {"web_search": "exa", "web_fetch": False},
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+            },
+            [],
+            "preserve exa",
+        )
+        assert captured["builtin_tools"]["web_search"] == "exa"
+        assert captured["builtin_tools"]["web_fetch"] is False
+
+        # Meta target rebuilds a fresh web_fetch summarizer rather than keeping None/stale.
+        btw_mod.build_btw_agent(
+            {
+                "model": "meta/muse-spark-1.3-contributor",
+                "builtin_tools": {"web_fetch": {"model": stale_wf}, "web_search": True},
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+            },
+            [],
+            "meta target",
+        )
+        new_wf = captured["builtin_tools"]["web_fetch"]["model"]
+        assert new_wf is not stale_wf
+        assert getattr(new_wf, "_strands_model_ref", None) == (
+            "meta/muse-spark-1.3-contributor"
+        )
+
+    def test_btw_stamps_endpoint_and_keeps_rebound_subagent_instructions_clean(
+        self, monkeypatch
+    ):
+        from strands_harness.tools.subagent import AgentSpec
+
+        import strands_code_cli.entry.subagent as sub_mod
+        import strands_code_cli.loop.btw as btw_mod
+
+        sub_captured: dict = {}
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kw: SimpleNamespace(
+                model=kw.get("model"), _tools=kw.get("tools", [])
+            ),
+        )
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setattr(
+            btw_mod, "configure_base_url_for_model", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            sub_mod,
+            "create_harness",
+            lambda **kw: (
+                sub_captured.update(kw) or SimpleNamespace(model=kw.get("model"))
+            ),
+        )
+        monkeypatch.setattr(sub_mod, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setattr(
+            sub_mod, "configure_base_url_for_model", lambda *a, **k: None
+        )
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+        rebound_parent = SimpleNamespace(tool_name="subagent")
+        side_agent, _prompt = build_btw_agent(
+            {
+                "model": _BtwProbeModel("openai/gpt-5"),
+                "tools": [rebound_parent],
+                "instructions": "BASE_ONLY",
+                "builtin_tools": {"shell": True, "read": True, "subagent": False},
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+                "_base_url": "https://oai-proxy.example/v1",
+                "_base_url_provider": "openai",
+                "_api_mode": "chat",
+            },
+            [],
+            "spawn child",
+        )
+        assert side_agent._base_url == "https://oai-proxy.example/v1"
+        assert side_agent._base_url_provider == "openai"
+        assert side_agent._api_mode == "chat"
+
+        sub_tool = next(t for t in side_agent._tools if t.tool_name == "subagent")
+        assert sub_tool is not rebound_parent
+        sub_tool._builder(AgentSpec(task="inspect", model="openai/gpt-4o"))
+        assert BTW_FRAMING not in sub_captured.get("instructions", "")
+        assert sub_captured["instructions"] == "BASE_ONLY"
+        wf_model = sub_captured["builtin_tools"]["web_fetch"]["model"]
+        assert getattr(wf_model, "_strands_model_ref", None) == "openai/gpt-4o"
+
+    def test_finish_btw_turn_tears_down_side_agent_on_success_and_cancel(self):
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
+
+        def _make_side(gate):
+            events: list = []
+
+            class _Side:
+                model = SimpleNamespace(
+                    config=SimpleNamespace(model_id="anthropic/claude-haiku-4-5")
+                )
+                messages = []
+
+                def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                    events.append(("cancel", cancel_background_tasks))
+
+                def shutdown(self) -> None:
+                    events.append("shutdown")
+
+            side = _Side()
+            gate.register_agent(side, "btw")
+            side._policy_gate = gate
+            gate.enter_read_only(side)
+            return side, events
+
+        gate = PolicyGateHandler()
+        main_agent = SimpleNamespace()
+        gate.bind_main_agent(main_agent)
+
+        btw = _idle_btw()
+        side_ok, events_ok = _make_side(gate)
+        fut_ok: Future = Future()
+        fut_ok.set_result(_MeteredResult("answer ok", in_tok=10, out_tok=5))
+        _finish_btw_turn(btw, side_ok, fut_ok, "q ok")
+        assert btw.pending[0][1] == "answer ok"
+        assert events_ok == [("cancel", True), "shutdown"]
+        assert id(side_ok) not in gate._agent_tags
+        assert id(side_ok) not in gate._read_only_agents
+
+        side_cancel, events_cancel = _make_side(gate)
+        fut_cancel: Future = Future()
+        fut_cancel.set_exception(TurnCancelled())
+        _finish_btw_turn(btw, side_cancel, fut_cancel, "q cancel")
+        assert events_cancel == [("cancel", True), "shutdown"]
+        assert id(side_cancel) not in gate._agent_tags
+        assert id(side_cancel) not in gate._read_only_agents

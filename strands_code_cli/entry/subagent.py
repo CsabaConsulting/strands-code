@@ -38,6 +38,7 @@ from strands_code_cli.model.model_switch import (
     configure_streaming_for_model,
     model_id_of,
     normalize_model_ref,
+    reconcile_delegate_builtin_tools,
     resolve_harness_model,
     same_provider,
     same_vendor,
@@ -243,9 +244,12 @@ def build_cli_subagent(
             child_config["context_manager"] = defaults.DEFAULT_CONTEXT_MANAGER
         parent = parent_holder.get("agent")
         if parent is not None:
-            base_url = getattr(parent, "_base_url", None)
-            base_url_provider = getattr(parent, "_base_url_provider", None)
-            api_mode = getattr(parent, "_api_mode", api_mode)
+            if hasattr(parent, "_base_url"):
+                base_url = getattr(parent, "_base_url", None)
+            if hasattr(parent, "_base_url_provider"):
+                base_url_provider = getattr(parent, "_base_url_provider", None)
+            if hasattr(parent, "_api_mode"):
+                api_mode = getattr(parent, "_api_mode", None)
         _resolve_child_model(
             spec,
             parent,
@@ -260,11 +264,13 @@ def build_cli_subagent(
         _select_child_tools(
             spec, parent_builtin, consumer_by_name, mcp_clients_by_name, child_config
         )
-        if (
-            isinstance(child_config.get("model"), Model)
-            and child_config.get("builtin_tools", {}).get("web_search") is True
-        ):
-            child_config["builtin_tools"]["web_search"] = False
+        child_config["builtin_tools"] = reconcile_delegate_builtin_tools(
+            child_config.get("builtin_tools"),
+            child_config.get("model"),
+            base_url=base_url,
+            base_url_provider=base_url_provider,
+            api_mode=api_mode,
+        )
         child_config["memory"] = _resolve_child_memory(parent_config.get("memory"))
         child_config["session"] = False
         child_config["callback_handler"] = None

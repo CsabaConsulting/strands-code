@@ -42,6 +42,7 @@ from strands_code_cli.model.model_switch import (
     configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
+    reconcile_delegate_builtin_tools,
     scoped_base_url,
 )
 from strands_code_cli.ui.console import RENDER_LOCK, console
@@ -453,90 +454,91 @@ def _register_btw_gate(agent: Any, interventions: Any, *, parent: Any = None) ->
             return
 
 
-def build_btw_agent(
-    parent_kwargs: dict[str, Any], history: list, question: str
-) -> tuple[Any, list]:
-    """Build the side agent via a ``create_harness`` factory rebuild.
-
-    Replays the parent's ``create_harness`` kwargs with the delegate
-    overrides: the SAME model/interventions objects (never rebuilt) and
-    isolated ``python_repl`` via :func:`fresh_tools_for_delegate`, ``session``
-    forced off, recall-only shared memory, the parent hooks minus the
-    steering hook object (dropped by identity via the ``steering_hook``
-    marker key, which is never forwarded), instructions plus one btw framing
-    line, and the shared callback handler wrapped in :class:`FencedBtwHandler`.
-    The shared memory conventions inject via :func:`register_memory_plugin`.
-
-    Args:
-        parent_kwargs: The parent's ``create_harness`` keyword
-            arguments (never mutated); may carry ``hooks`` plus a
-            ``steering_hook`` marker naming the hook object to drop.
-        history: Parent ``agent.messages`` snapshot to fork (D-13).
-        question: The btw question tail (verbatim, unstripped framing).
-
-    Returns:
-        ``(agent, prompt)`` where ``prompt`` is the forked history
-        with the framed question as its trailing user turn — the
-        side invocation prompt, passed as the agent's message list.
-    """
-    from strands_code_cli.cost.reported_cost import fresh_side_model
-
-    prompt = fork_btw_history(history, question)
-    kwargs = dict(parent_kwargs)
-    base_url = kwargs.pop("_base_url", None)
-    base_url_provider = kwargs.pop("_base_url_provider", None)
-    kwargs.pop("_api_mode", None)
-    parent_agent = kwargs.pop("_parent_agent", None)
-    btw_holder: dict[str, Any] = {"agent": None}
-    if "tools" in kwargs:
-        delegated_tools = fresh_tools_for_delegate(kwargs["tools"])
-        if isinstance(delegated_tools, (list, tuple)) and any(
-            getattr(tool_obj, "tool_name", None) == "subagent"
-            for tool_obj in delegated_tools
-        ):
-            from strands_code_cli.entry.subagent import build_cli_subagent
-
-            rebound: list[Any] = []
-            for tool_obj in delegated_tools:
-                if getattr(tool_obj, "tool_name", None) == "subagent":
-                    rebound.append(build_cli_subagent(btw_holder, kwargs))
-                else:
-                    rebound.append(tool_obj)
-            kwargs["tools"] = rebound
-        else:
-            kwargs["tools"] = delegated_tools
-    if "model" in kwargs:
-        # Never share the parent's cost side-channel (D-09): a replayed
-        # wrapper gets its own emptied list; anything else passes through.
-        kwargs["model"] = fresh_side_model(kwargs["model"])
-        if isinstance(kwargs["model"], Model) or isinstance(
-            getattr(kwargs["model"], "_strands_model_ref", None), str
-        ):
-            kwargs["caching"] = False
-            kwargs.pop("effort", None)
+def _strip_steering_hook(kwargs: dict[str, Any]) -> None:
+    """Drop the steering hook marker and remove that hook object by identity."""
     steering_hook = kwargs.pop("steering_hook", None)
     if "hooks" in kwargs:
         hooks = list(kwargs["hooks"] or [])
         if steering_hook is not None:
             hooks = [hook for hook in hooks if hook is not steering_hook]
         kwargs["hooks"] = hooks
-    kwargs["session"] = False
-    parent_memory = kwargs.get("memory")
+
+
+def _resolve_btw_memory(parent_memory: Any) -> Any:
+    """Share parent memory stores read-only, or False when parent memory is off."""
     if parent_memory is None or parent_memory is False:
-        kwargs["memory"] = False
-    elif isinstance(parent_memory, Mapping):
-        kwargs["memory"] = resolve_memory(
+        return False
+    if isinstance(parent_memory, Mapping):
+        return resolve_memory(
             stores=parent_memory.get("stores"),
             memory_dir=parent_memory.get("dir"),
             writable=False,
         )
-    else:
-        kwargs["memory"] = resolve_memory(writable=False)
-    kwargs["instructions"] = f"{CODE_AGENT_INSTRUCTIONS}\n{BTW_FRAMING}"
-    kwargs["callback_handler"] = FencedBtwHandler(kwargs["callback_handler"], question)
-    agent = create_harness(**kwargs)
-    btw_holder["agent"] = agent
+    return resolve_memory(writable=False)
+
+
+def _prepare_btw_model(kwargs: dict[str, Any]) -> None:
+    """Clone cost-capturing wrappers and suppress harness caching on Model instances."""
+    if "model" not in kwargs:
+        return
+    from strands_code_cli.cost.reported_cost import fresh_side_model
+
+    # Never share the parent's cost side-channel (D-09): a replayed
+    # wrapper gets its own emptied list; anything else passes through.
+    kwargs["model"] = fresh_side_model(kwargs["model"])
+    if isinstance(kwargs["model"], Model) or isinstance(
+        getattr(kwargs["model"], "_strands_model_ref", None), str
+    ):
+        kwargs["caching"] = False
+        kwargs.pop("effort", None)
+
+
+def _rebind_btw_tools(
+    kwargs: dict[str, Any],
+    btw_holder: dict[str, Any],
+    subagent_parent_config: Mapping[str, Any],
+) -> None:
+    """Isolate REPL tools and rebind ``subagent`` against the side agent holder."""
+    if "tools" not in kwargs:
+        return
+    delegated_tools = fresh_tools_for_delegate(kwargs["tools"])
+    if not isinstance(delegated_tools, (list, tuple)) or not any(
+        getattr(tool_obj, "tool_name", None) == "subagent"
+        for tool_obj in delegated_tools
+    ):
+        kwargs["tools"] = delegated_tools
+        return
+    from strands_code_cli.entry.subagent import build_cli_subagent
+
+    kwargs["tools"] = [
+        build_cli_subagent(btw_holder, subagent_parent_config)
+        if getattr(tool_obj, "tool_name", None) == "subagent"
+        else tool_obj
+        for tool_obj in delegated_tools
+    ]
+
+
+def _configure_btw_agent(
+    agent: Any,
+    kwargs: Mapping[str, Any],
+    *,
+    parent_agent: Any,
+    base_url: str | None,
+    base_url_provider: str | None,
+    api_mode: str | None,
+) -> None:
+    """Attach gate, endpoint metadata, provider hooks, and read-only memory."""
     _register_btw_gate(agent, kwargs.get("interventions"), parent=parent_agent)
+    for attr, val in (
+        ("_base_url", base_url),
+        ("_base_url_provider", base_url_provider),
+        ("_api_mode", api_mode),
+    ):
+        if val is not None:
+            try:
+                setattr(agent, attr, val)
+            except (AttributeError, TypeError):
+                pass
     resolved_model = getattr(agent, "model", None)
     raw_model = kwargs.get("model")
     target_id = (
@@ -551,4 +553,70 @@ def build_btw_agent(
         base_url=scoped_base_url(base_url, base_url_provider, target_id),
     )
     register_memory_plugin(agent, load_memory)
+
+
+def build_btw_agent(
+    parent_kwargs: dict[str, Any], history: list, question: str
+) -> tuple[Any, list]:
+    """Build the side agent via a ``create_harness`` factory rebuild.
+
+    Replays the parent's ``create_harness`` kwargs with the delegate
+    overrides: fresh cost-channel model copy, isolated ``python_repl`` via
+    :func:`fresh_tools_for_delegate`, reconciled ``builtin_tools``,
+    ``session`` forced off, recall-only shared memory, parent hooks minus
+    ``steering_hook``, instructions plus one btw framing line, and the shared
+    callback handler wrapped in :class:`FencedBtwHandler`.
+
+    Args:
+        parent_kwargs: The parent's ``create_harness`` keyword
+            arguments (never mutated); may carry ``hooks`` plus a
+            ``steering_hook`` marker naming the hook object to drop.
+        history: Parent ``agent.messages`` snapshot to fork (D-13).
+        question: The btw question tail (verbatim, unstripped framing).
+
+    Returns:
+        ``(agent, prompt)`` where ``prompt`` is the forked history
+        with the framed question as its trailing user turn — the
+        side invocation prompt, passed as the agent's message list.
+    """
+    prompt = fork_btw_history(history, question)
+    kwargs = dict(parent_kwargs)
+    base_url = kwargs.pop("_base_url", None)
+    base_url_provider = kwargs.pop("_base_url_provider", None)
+    api_mode = kwargs.pop("_api_mode", None)
+    parent_agent = kwargs.pop("_parent_agent", None)
+    _prepare_btw_model(kwargs)
+    _strip_steering_hook(kwargs)
+    if "builtin_tools" in kwargs:
+        kwargs["builtin_tools"] = reconcile_delegate_builtin_tools(
+            kwargs["builtin_tools"],
+            kwargs.get("model"),
+            base_url=base_url,
+            base_url_provider=base_url_provider,
+            api_mode=api_mode,
+        )
+    kwargs["session"] = False
+    kwargs["memory"] = _resolve_btw_memory(kwargs.get("memory"))
+    subagent_parent_config = dict(kwargs)
+    for key, val in (
+        ("_base_url", base_url),
+        ("_base_url_provider", base_url_provider),
+        ("_api_mode", api_mode),
+    ):
+        if val is not None:
+            subagent_parent_config[key] = val
+    btw_holder: dict[str, Any] = {"agent": None}
+    _rebind_btw_tools(kwargs, btw_holder, subagent_parent_config)
+    kwargs["instructions"] = f"{CODE_AGENT_INSTRUCTIONS}\n{BTW_FRAMING}"
+    kwargs["callback_handler"] = FencedBtwHandler(kwargs["callback_handler"], question)
+    agent = create_harness(**kwargs)
+    btw_holder["agent"] = agent
+    _configure_btw_agent(
+        agent,
+        kwargs,
+        parent_agent=parent_agent,
+        base_url=base_url,
+        base_url_provider=base_url_provider,
+        api_mode=api_mode,
+    )
     return agent, prompt

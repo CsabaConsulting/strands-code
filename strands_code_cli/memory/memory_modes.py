@@ -340,9 +340,17 @@ class CurateQueue:
         if fingerprint in self._denied_fingerprints:
             return None
         if proposal_id is None:
-            self._counter += 1
-            proposal_id = f"p{self._counter}"
-        if (
+            while True:
+                self._counter += 1
+                candidate = f"p{self._counter}"
+                if (
+                    candidate not in self._pending
+                    and candidate not in self._approved
+                    and candidate not in self._denied
+                ):
+                    proposal_id = candidate
+                    break
+        elif (
             proposal_id in self._pending
             or proposal_id in self._approved
             or proposal_id in self._denied

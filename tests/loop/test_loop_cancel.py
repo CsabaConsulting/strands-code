@@ -260,3 +260,186 @@ class TestBackgroundCancelAndShutdown:
         assert loop_mod._extract_prompt_usage(
             bdr_res, "google/gemini-2.5-flash", 100, 50
         ) == (100, 20000, 500)
+
+    def test_close_loop_session_runs_cleanup_when_side_pool_shutdown_interrupted(
+        self, tmp_path, monkeypatch
+    ):
+        from concurrent.futures import Future
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
+        from strands_code_cli.session.session_index import SessionIndex
+
+        events: list[Any] = []
+        shutdown_waits: list[bool] = []
+        gate = PolicyGateHandler()
+
+        class _MainAgent:
+            messages: list = []
+
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                events.append(("main-cancel", cancel_background_tasks))
+
+            def shutdown(self) -> None:
+                events.append("main-shutdown")
+
+        class _LiveBtwAgent:
+            messages: list = []
+
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                events.append(("btw-cancel", cancel_background_tasks))
+
+            def shutdown(self) -> None:
+                events.append("btw-shutdown")
+
+        class _InterruptingPool:
+            def shutdown(self, wait: bool = True) -> None:
+                shutdown_waits.append(wait)
+                if wait:
+                    raise KeyboardInterrupt()
+
+        class _PumpCtx:
+            def __exit__(self, *args: Any) -> None:
+                events.append("pump-exit")
+
+        live_btw = _LiveBtwAgent()
+        gate.bind_main_agent(_MainAgent())
+        gate.register_agent(live_btw, "btw")
+        live_btw._policy_gate = gate
+        gate.enter_read_only(live_btw)
+
+        monkeypatch.setattr(
+            loop_mod, "explicit_save", lambda _a: events.append("explicit_save")
+        )
+        monkeypatch.setattr(
+            loop_mod, "flush_memory", lambda _a: events.append("flush_memory")
+        )
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        broker = ApprovalBroker()
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        broker.register_cancel("btw", btw.cancel_event)
+        live_future: Future = Future()
+        btw.attach_live(live_btw, live_future, "still running")
+
+        with pytest.raises(KeyboardInterrupt):
+            loop_mod._close_loop_session(
+                _MainAgent(),
+                btw,
+                broker,
+                "test-model",
+                [],
+                _InterruptingPool(),  # type: ignore[arg-type]
+                _PumpCtx(),
+                index,
+                sid,
+            )
+        assert shutdown_waits == [True, False]
+        assert btw.cancel_event.is_set()
+        assert broker.cancel_for("btw") is None
+        assert not btw.has_live
+        assert "pump-exit" in events
+        assert ("main-cancel", True) in events
+        assert "explicit_save" in events
+        assert "flush_memory" in events
+        assert "main-shutdown" in events
+        assert ("btw-cancel", True) in events
+        assert "btw-shutdown" in events
+        assert id(live_btw) not in gate._agent_tags
+        assert id(live_btw) not in gate._read_only_agents
+        assert any(entry["id"] == sid for entry in index.list_recent())
+
+    def test_close_loop_session_tears_down_live_btw_on_normal_exit(
+        self, tmp_path, monkeypatch
+    ):
+        from concurrent.futures import Future, ThreadPoolExecutor
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.policy.policy_gate import PolicyGateHandler
+        from strands_code_cli.session.session_index import SessionIndex
+
+        btw_events: list[Any] = []
+        gate = PolicyGateHandler()
+
+        class _LiveBtwAgent:
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                btw_events.append(("cancel", cancel_background_tasks))
+
+            def shutdown(self) -> None:
+                btw_events.append("shutdown")
+
+        live_btw = _LiveBtwAgent()
+        gate.bind_main_agent(object())
+        gate.register_agent(live_btw, "btw")
+        live_btw._policy_gate = gate
+        gate.enter_read_only(live_btw)
+
+        monkeypatch.setattr(loop_mod, "explicit_save", lambda _a: None)
+        monkeypatch.setattr(loop_mod, "flush_memory", lambda _a: None)
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint()
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        btw.attach_live(live_btw, Future(), "live side")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            loop_mod._close_loop_session(
+                object(), btw, None, "test-model", [], pool, None, index, sid
+            )
+        assert ("cancel", True) in btw_events
+        assert "shutdown" in btw_events
+        assert id(live_btw) not in gate._agent_tags
+        assert not btw.has_live
+
+    def test_pump_cancel_paths_cancel_btw_background_tasks(self, monkeypatch):
+        from concurrent.futures import Future
+
+        btw_calls: list[bool] = []
+
+        class _BtwAgent:
+            def cancel(self, *, cancel_background_tasks: bool = False) -> None:
+                btw_calls.append(cancel_background_tasks)
+
+        btw_agent = _BtwAgent()
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        monkeypatch.setattr(pump_mod, "_choose_cancel_targets", lambda: ("btw",))
+        action, _triple = pump_mod._pump_handle_interrupt(
+            btw,
+            None,
+            threading.Event(),
+            threading.Event(),
+            btw_agent,
+            Future(),
+            "q",
+            agent=object(),
+        )
+        assert action == pump_mod._PUMP_RESUME
+        assert btw_calls == [True]
+
+        class _InterruptBroker:
+            def unregister_cancel(self, tag: str) -> None:
+                pass
+
+        monkeypatch.setattr(
+            pump_mod,
+            "_poll_live",
+            lambda _b: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+        with pytest.raises(KeyboardInterrupt):
+            pump_mod._pump_drain_side_for_cancel(
+                btw, _InterruptBroker(), None, btw_agent, Future(), "q"
+            )
+        assert btw_calls == [True, True]
