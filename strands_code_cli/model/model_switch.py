@@ -1774,17 +1774,22 @@ def _stamp_model_ref(model: Any, ref: str) -> Any:
 
 
 def _prepare_harness_effort(normalized: str, effort: str | None) -> str | None:
-    """Normalize/clamp OpenAI and Mantle-OpenAI effort before calling resolve_model()."""
+    """Normalize/clamp effort into a valid harness Effort before calling resolve_model()."""
     # Upstream: strands-agents/harness-sdk#6522 (PR #6525) — retire openai/ portion once released
+    if effort is None:
+        return None
+    low = effort.strip().lower()
+    if low == "none":
+        low = "off"
     base_lower = _openai_family_tail(normalized)
-    if effort is None or base_lower is None:
-        return effort
+    if base_lower is None:
+        return low
     if _is_openai_non_reasoning(base_lower):
         return None
-    mapped = _target_openai_effort(base_lower, effort)
-    if mapped == "":
+    mapped = _target_openai_effort(base_lower, low)
+    if mapped in ("", "none"):
         return "off"
-    return mapped or effort
+    return mapped or low
 
 
 def resolve_harness_model(

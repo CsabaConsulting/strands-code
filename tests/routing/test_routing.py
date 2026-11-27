@@ -2446,6 +2446,37 @@ class TestRoutedEffort:
             pick = RoutingPick(model=model_id, effort=effort)
             assert validate_routed_effort(pick, candidates) is True, (model_id, effort)
 
+    def test_validate_holds_unsupported_bedrock_google_and_anthropic_efforts(self):
+        candidates = [
+            RoutingCandidate(id="bedrock/amazon.nova-2-lite-v1:0"),
+            RoutingCandidate(id="bedrock/openai.gpt-oss-120b"),
+            RoutingCandidate(id="google/gemini-2.5-pro"),
+            RoutingCandidate(id="google/gemini-3-flash-preview"),
+            RoutingCandidate(id="anthropic/claude-sonnet-4-6"),
+        ]
+        rejected = [
+            ("bedrock/amazon.nova-2-lite-v1:0", "xhigh"),
+            ("bedrock/openai.gpt-oss-120b", "max"),
+            ("google/gemini-2.5-pro", "minimal"),
+            ("google/gemini-2.5-pro", "xhigh"),
+            ("anthropic/claude-sonnet-4-6", "minimal"),
+        ]
+        for model_id, effort in rejected:
+            pick = RoutingPick(model=model_id, effort=effort)
+            assert validate_routed_effort(pick, candidates) is False, (model_id, effort)
+            assert pick.effort == effort
+
+        accepted = [
+            ("bedrock/amazon.nova-2-lite-v1:0", "high"),
+            ("bedrock/openai.gpt-oss-120b", "high"),
+            ("google/gemini-2.5-pro", "high"),
+            ("google/gemini-3-flash-preview", "minimal"),
+            ("anthropic/claude-sonnet-4-6", "max"),
+        ]
+        for model_id, effort in accepted:
+            pick = RoutingPick(model=model_id, effort=effort)
+            assert validate_routed_effort(pick, candidates) is True, (model_id, effort)
+
     def test_apply_model_action_without_effort_resolves_as_before(self, monkeypatch):
         from types import SimpleNamespace
 

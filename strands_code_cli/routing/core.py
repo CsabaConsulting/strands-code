@@ -2072,12 +2072,24 @@ def _effort_supported_by_target(model_id: str, effort: str) -> bool:
     except ImportError:
         return True
     normalized = normalize_model_ref(model_id)
-    provider, _, tail = normalized.partition("/")
-    for prefix, levels in getattr(harness_models, "_MODEL_LEVELS", {}).get(
-        provider, ()
-    ):
-        if tail.startswith(prefix):
-            return effort in levels
+    split_fn = getattr(harness_models, "_split_provider", None)
+    if callable(split_fn):
+        provider, tail = split_fn(normalized)
+    else:
+        provider, _, tail = normalized.partition("/")
+    if provider == "bedrock":
+        bedrock_levels_fn = getattr(harness_models, "_bedrock_levels", None)
+        if callable(bedrock_levels_fn):
+            return effort in bedrock_levels_fn(tail)
+    prov_cfg = getattr(harness_models, "_PROVIDERS", {}).get(provider)
+    if prov_cfg is not None:
+        model_levels_fn = getattr(harness_models, "_model_levels", None)
+        levels = (
+            model_levels_fn(provider, tail, prov_cfg.thinking_levels)
+            if callable(model_levels_fn)
+            else prov_cfg.thinking_levels
+        )
+        return effort in levels
     return True
 
 

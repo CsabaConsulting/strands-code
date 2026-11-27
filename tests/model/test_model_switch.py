@@ -4093,7 +4093,7 @@ class TestSameProviderSummaryAndOpenAIGuard:
                 f_off = self._fake_openai({"reasoning": {"effort": off_eff}})
                 configure_openai_for_model(mid, f_off)
                 assert f_off.config["params"]["reasoning"]["effort"] == "none"
-                assert _prepare_harness_effort(mid, off_eff) == "none"
+                assert _prepare_harness_effort(mid, off_eff) == "off"
 
         # Non-OpenAI bedrock-mantle model remains untouched by OpenAI family clamping
         assert openai_supported_efforts("bedrock-mantle/google.gemma-4-31b-it") is None
@@ -4104,6 +4104,68 @@ class TestSameProviderSummaryAndOpenAIGuard:
         gemma_fake = self._fake_openai({"reasoning": {"effort": "high"}})
         configure_openai_for_model("bedrock-mantle/google.gemma-4-31b-it", gemma_fake)
         assert gemma_fake.config["params"]["reasoning"]["effort"] == "high"
+
+    def test_resolve_harness_model_real_effort_end_to_end(self, monkeypatch):
+        from strands_code_cli.model.model_switch import (
+            _read_model_config,
+            resolve_harness_model,
+        )
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-dummy")
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA_DUMMY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SECRET_DUMMY")
+
+        for mid in (
+            "openai/gpt-5.1",
+            "openai/gpt-5.2-2026-01-01",
+            "openai/gpt-5.4",
+            "bedrock-mantle/openai.gpt-5.4",
+            "bedrock-mantle/google.gemma-4-31b-it",
+        ):
+            for off_eff in ("off", "none"):
+                m = resolve_harness_model(
+                    mid, mid, effort=off_eff, web_search=False, caching=False
+                )
+                cfg = _read_model_config(m) or {}
+                assert cfg.get("params") == {"reasoning": {"effort": "none"}}, (
+                    mid,
+                    off_eff,
+                )
+
+        m_high = resolve_harness_model(
+            "openai/gpt-5.2-2026-01-01",
+            "openai/gpt-5.2-2026-01-01",
+            effort="HIGH",
+            web_search=False,
+            caching=False,
+        )
+        assert (_read_model_config(m_high) or {}).get("params") == {
+            "reasoning": {"effort": "high"}
+        }
+
+        for strip_mid in (
+            "openai/o1",
+            "openai/gpt-5",
+            "openai/gpt-oss-20b",
+            "openai/gpt-6-astra",
+            "bedrock-mantle/openai.gpt-oss-120b",
+        ):
+            m = resolve_harness_model(
+                strip_mid, strip_mid, effort="off", web_search=False, caching=False
+            )
+            assert (_read_model_config(m) or {}).get("params") == {}, strip_mid
+
+        m_gemma_high = resolve_harness_model(
+            "bedrock-mantle/google.gemma-4-31b-it",
+            "bedrock-mantle/google.gemma-4-31b-it",
+            effort="high",
+            web_search=False,
+            caching=False,
+        )
+        assert (_read_model_config(m_gemma_high) or {}).get("params") == {
+            "reasoning": {"effort": "high"}
+        }
 
 
 class TestLiveOpenAIAndAnthropicDiscovery:
