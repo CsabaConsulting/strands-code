@@ -1,7 +1,8 @@
-"""Slash completer: builtin heads plus local and marketplace skills (SKILL-01, SKILL-03)."""
+"""Slash and inline @file fuzzy completers (SKILL-01, SKILL-03, TOOL-05)."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Iterable
 
 from prompt_toolkit.completion import (
@@ -9,11 +10,14 @@ from prompt_toolkit.completion import (
     Completion,
     DynamicCompleter,
     FuzzyCompleter,
+    merge_completers,
 )
 from prompt_toolkit.document import Document
 
 WordList = list[tuple[str, str]]
 """``(bare, display)`` pairs: bare names match, display text completes."""
+
+_AT_QUERY_RE = re.compile(r'(?:^|[\s(\["\'])@([^\s"\']*)$')
 
 
 class SlashCompleter(Completer):
@@ -48,6 +52,40 @@ class SlashCompleter(Completer):
                 yield Completion(display, start_position=-len(text))
 
 
-def build_completer(get_words: Callable[[], WordList]) -> DynamicCompleter:
-    """Fuzzy slash completer rebuilt from the word callable per keystroke."""
-    return DynamicCompleter(lambda: FuzzyCompleter(SlashCompleter(get_words)))
+class AtFileCompleter(Completer):
+    """Complete inline ``@<path>`` tokens from a refreshable workspace file callable."""
+
+    def __init__(self, get_files: Callable[[], list[str]]) -> None:
+        self._get_files = get_files
+
+    def get_completions(
+        self, document: Document, complete_event
+    ) -> Iterable[Completion]:
+        before = document.text_before_cursor
+        if before.startswith("/") and " " not in before:
+            return
+        match = _AT_QUERY_RE.search(before)
+        if match is None:
+            return
+        query = match.group(1)
+        lowered_q = query.lower()
+        start_pos = -(len(query) + 1)
+        for path in self._get_files():
+            if lowered_q and lowered_q not in path.lower():
+                continue
+            display = f'@"{path}"' if any(c.isspace() for c in path) else f"@{path}"
+            yield Completion(display, start_position=start_pos)
+
+
+def build_completer(
+    get_words: Callable[[], WordList],
+    get_files: Callable[[], list[str]] | None = None,
+) -> DynamicCompleter:
+    """Fuzzy completer rebuilt from live slash words and optional @file candidates."""
+    if get_files is None:
+        return DynamicCompleter(lambda: FuzzyCompleter(SlashCompleter(get_words)))
+    return DynamicCompleter(
+        lambda: FuzzyCompleter(
+            merge_completers([SlashCompleter(get_words), AtFileCompleter(get_files)])
+        )
+    )

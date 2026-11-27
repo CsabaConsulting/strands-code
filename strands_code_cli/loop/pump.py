@@ -45,7 +45,7 @@ _PUMP_RAISE = "raise"
 
 def _invoke_parallel(
     agent: Any,
-    text: str,
+    text: Any,
     kwargs: dict,
     btw: BtwContext,
     broker: Any,

@@ -215,12 +215,23 @@ def _dispatch_model_cmds(
     return None
 
 
+def _file_action(rest: str, cwd: str | Path | None) -> tuple[str, str | None]:
+    """Handle /file picker returning prompt pre-fill or informational reply."""
+    from strands_code_cli.ui.attachments import pick_file_for_prompt
+
+    prefill, reply = pick_file_for_prompt(rest, cwd=cwd)
+    if prefill is not None:
+        return ("prefill", prefill)
+    return ("reply", reply or "No workspace file selected.")
+
+
 def _dispatch_builtin_wins(
     cmd: str,
     rest: str,
     routing: RoutingState | None,
     interface: CodeactState | None,
     skills: SkillIndex | None = None,
+    cwd: str | Path | None = None,
 ) -> tuple[str, str | None] | None:
     """Builtin commands placed before the skills-dynamic branch (shadow-proof)."""
     if cmd == "/btw":
@@ -243,6 +254,8 @@ def _dispatch_builtin_wins(
         return _codeact_route_action(cmd, rest, interface)
     if cmd == "/help":
         return ("reply", help_message(rest, skills))
+    if cmd == "/file":
+        return _file_action(rest, cwd)
     return None
 
 
@@ -364,7 +377,7 @@ def dispatch(
     )
     if handled is not None:
         return handled
-    handled = _dispatch_builtin_wins(cmd, rest, routing, interface, skills)
+    handled = _dispatch_builtin_wins(cmd, rest, routing, interface, skills, cwd)
     if handled is not None:
         return handled
     if skills is not None:
