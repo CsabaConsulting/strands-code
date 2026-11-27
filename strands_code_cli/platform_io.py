@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 _REFUSED_ROOTS: frozenset[Path] = frozenset(
@@ -55,6 +56,38 @@ def refuse_symlink(
         cur = cur.parent
 
 
+def refuse_symlink_under_roots(
+    path: Path | str,
+    roots: Iterable[Path | str],
+    label: str = "path",
+) -> None:
+    """Refuse symlinks on ``path`` and every ancestor down from matching ``roots``."""
+    target = Path(path)
+    if target.is_symlink():
+        raise ValueError(f"Refusing symlink {label}: {target}")
+    stop: set[Path] = set()
+    for root in roots:
+        rpath = Path(root)
+        stop.add(rpath)
+        try:
+            stop.add(Path(os.path.realpath(rpath)))
+        except OSError:
+            pass
+    cur = target.parent
+    checked_parent = False
+    while cur != cur.parent:
+        if cur in stop:
+            break
+        if cur.is_symlink():
+            raise ValueError(f"Refusing symlink parent for {label}: {cur}")
+        checked_parent = True
+        if cur in _REFUSED_ROOTS:
+            break
+        cur = cur.parent
+    if not checked_parent:
+        refuse_symlink(target, label, max_ancestors=1)
+
+
 def ensure_private_dir(
     path: Path | str,
     label: str = "directory",
@@ -83,7 +116,8 @@ def atomic_write_text(
 
     Private state files keep ``mode=0o600`` and ``dir_mode=0o700``; git-tracked
     repo files pass ``mode=None`` to apply process umask-masked standard readable
-    permissions (``0o666 & ~umask``) without mutating global ``os.umask()``.
+    permissions (``0o664 & ~umask``, never world-writable even under ``umask 0o000``)
+    without mutating global ``os.umask()``.
     """
     target = Path(path)
     refuse_symlink(
@@ -98,7 +132,7 @@ def atomic_write_text(
         prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
     )
     tmp_path = Path(tmp_name)
-    file_mode = mode if mode is not None else (0o666 & ~_read_process_umask())
+    file_mode = mode if mode is not None else (0o664 & ~_read_process_umask())
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(content)

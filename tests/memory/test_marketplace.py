@@ -1818,6 +1818,63 @@ class TestPhase18NyquistMarketplaceBranches:
         with pytest.raises(ValueError, match="Non-standard JSON"):
             mp.load_lockfile(rb_ws / "nan.json")
 
+    def test_install_refuses_dest_symlink_before_digest_and_zero_umask_shared_mode(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli import platform_io as pio
+        from strands_code_cli.memory.memory_file import dump_memory_file
+
+        # 1. Symlinked dest_dir <ns>/<skill> raises BEFORE _script_file_digests reads target.
+        repo = tmp_path / "ws"
+        mkt = tmp_path / "local_mkt"
+        (mkt / "demo").mkdir(parents=True)
+        (mkt / "demo" / "SKILL.md").write_text(
+            _skill_md("demo", "Local demo."), encoding="utf-8"
+        )
+        victim = tmp_path / "victim_dir"
+        (victim / "scripts").mkdir(parents=True)
+        (victim / "scripts" / "secret.sh").write_text("SECRET=1\n", encoding="utf-8")
+        ns_dir = repo / ".agent" / "skills-marketplaces" / "acme"
+        ns_dir.mkdir(parents=True)
+        try:
+            (ns_dir / "demo").symlink_to(victim)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+
+        digests_called: list[str] = []
+        orig_digests = mp._script_file_digests
+        monkeypatch.setattr(
+            mp,
+            "_script_file_digests",
+            lambda d: digests_called.append(str(d)) or orig_digests(d),
+        )
+        cat = mp.CatalogSkill(
+            name="demo",
+            description="Local demo.",
+            marketplace="acme",
+            source=str(mkt),
+            repo_url=str(mkt),
+            subdir="demo",
+            ref="local",
+        )
+        with pytest.raises(ValueError, match="Refusing symlink"):
+            mp._install_catalog_skill(cat, cwd=repo, client=None)
+        assert digests_called == []
+
+        # 2. mode=None under umask 0o000 caps at 0o664 (never world-writable 0o666).
+        monkeypatch.setattr(pio, "_read_process_umask", lambda: 0o000)
+        shared = repo / "STRANDS.md"
+        dump_memory_file(shared, {"version": 1}, "notes\n")
+        shared_mode = stat.S_IMODE(os.stat(shared).st_mode)
+        assert shared_mode == 0o664
+        assert (shared_mode & 0o002) == 0
+
+        lock_path = repo / ".agent" / "skills-lock.json"
+        mp.save_lockfile(lock_path, {})
+        lock_mode = stat.S_IMODE(os.stat(lock_path).st_mode)
+        assert lock_mode == 0o664
+        assert (lock_mode & 0o002) == 0
+
 
 @pytest.mark.integration
 def test_live_github_marketplace_browse_install_and_verify(tmp_path):

@@ -33,7 +33,11 @@ from typing import Any, Awaitable, Callable
 
 from strands import tool
 
-from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+from strands_code_cli.platform_io import (
+    atomic_write_text,
+    refuse_symlink,
+    refuse_symlink_under_roots,
+)
 from strands_code_cli.policy.core import (
     _is_protected_skills_or_config_path,
     _is_sensitive_read_path,
@@ -333,18 +337,25 @@ async def _gate_and_apply(
     return f"Applied {op} to {path}."
 
 
-def _validate_stashed_target(target: str, base: Path, op: str) -> str | None:
+def _validate_stashed_target(
+    target: str, base: Path, op: str
+) -> tuple[str, str | None]:
     """Re-verify symlink, scope, and protected-path safety before /diff apply."""
+    resolved = resolve(target, base)
+    extra_roots = _policy_roots(base, op)
     try:
-        refuse_symlink(target, f"stashed {op} target", max_ancestors=1)
-        confine(resolve(target, base), base, _policy_roots(base, op))
-    except ValueError as exc:
-        return f"{target}: {exc}; kept pending."
-    if _is_protected_skills_or_config_path(target, base):
-        return (
-            f"{target}: protected path cannot be auto-applied from stash; kept pending."
+        refuse_symlink_under_roots(
+            resolved, (base, Path("/tmp"), *extra_roots), f"stashed {op} target"
         )
-    return None
+        confine(resolved, base, extra_roots)
+    except ValueError as exc:
+        return str(resolved), f"{target}: {exc}; kept pending."
+    if _is_protected_skills_or_config_path(str(resolved), base):
+        return (
+            str(resolved),
+            f"{target}: protected path cannot be auto-applied from stash; kept pending.",
+        )
+    return str(resolved), None
 
 
 async def apply_stashed(
@@ -374,18 +385,18 @@ async def apply_stashed(
             failed.append(f"{target}: no pending change.")
             continue
         op = str(entry.get("op", "write"))
-        err = _validate_stashed_target(target, base, op)
+        resolved_target, err = _validate_stashed_target(target, base, op)
         if err is not None:
             failed.append(err)
             continue
         read = reader or _fs_read
         write = writer or _fs_write
-        seen = await read(target)
+        seen = await read(resolved_target)
         expected = entry.get("old_text")
         if seen != expected:
             failed.append(f"{target}: file changed since preview; kept pending.")
             continue
-        await write(target, entry["new_text"])
+        await write(resolved_target, entry["new_text"])
         store.pop(target)
         applied.append(target)
     lines = [f"Applied {p}." for p in applied] + failed

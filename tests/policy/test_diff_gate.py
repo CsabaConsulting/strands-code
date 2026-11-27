@@ -599,3 +599,46 @@ class TestGateSubsumption:
         assert new_file.read_text() == "already here"
         assert not prot.exists()
         assert len(store.list()) == 4
+
+    def test_apply_stashed_refuses_grandparent_symlink_and_resolves_relative_against_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        import shutil
+
+        # 1. Swapped grandparent symlink inside repo must be refused (never clobbers target).
+        repo = tmp_path / "repo"
+        (repo / "sub" / "deep").mkdir(parents=True)
+        (repo / "other" / "deep").mkdir(parents=True)
+        orig = repo / "sub" / "deep" / "app.py"
+        other = repo / "other" / "deep" / "app.py"
+        orig.write_text("v1", encoding="utf-8")
+        other.write_text("v1", encoding="utf-8")
+        store = PendingStore(repo / ".agent" / "pending.json")
+        store.stash(str(orig), "v1", "PWNED", "edit")
+        shutil.rmtree(repo / "sub")
+        try:
+            (repo / "sub").symlink_to(repo / "other")
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        res_gp = _run(apply_stashed(store, cwd=repo))
+        assert "symlink" in res_gp
+        assert other.read_text(encoding="utf-8") == "v1"
+        assert str(orig) in store.list()
+
+        # 2. Relative targets resolve/read/write against `cwd`, never process os.getcwd().
+        wrong_cwd = tmp_path / "wrong_cwd"
+        wrong_cwd.mkdir()
+        monkeypatch.chdir(wrong_cwd)
+        (repo / "sub_real").mkdir()
+        (repo / "sub_real" / "target.txt").write_text("keep", encoding="utf-8")
+        (repo / "sub_real" / "link.txt").symlink_to(repo / "sub_real" / "target.txt")
+
+        rel_store = PendingStore(repo / ".agent" / "pending_rel.json")
+        rel_store.stash("new_rel.txt", None, "inside_repo", "write")
+        rel_store.stash("sub_real/link.txt", "keep", "clobber", "edit")
+        res_rel = _run(apply_stashed(rel_store, cwd=repo))
+        assert "Applied new_rel.txt." in res_rel
+        assert (repo / "new_rel.txt").read_text(encoding="utf-8") == "inside_repo"
+        assert not (wrong_cwd / "new_rel.txt").exists()
+        assert "symlink" in res_rel
+        assert (repo / "sub_real" / "target.txt").read_text(encoding="utf-8") == "keep"

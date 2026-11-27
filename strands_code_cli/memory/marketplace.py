@@ -1754,7 +1754,7 @@ def _install_catalog_skill(
 ) -> tuple[LockEntry, dict[str, str], dict[str, str], str | None]:
     ns = validate_namespace(cat_skill.marketplace)
     sname = validate_skill_name(cat_skill.name)
-    _refuse_symlink_chain(cwd, ".agent", "skills-marketplaces")
+    _refuse_symlink_chain(cwd, ".agent", "skills-marketplaces", ns, sname)
     stage_parent = cwd / MARKETPLACES_SKILLS_REL
     stage_parent.mkdir(parents=True, exist_ok=True)
     dest_dir = stage_parent / ns / sname
