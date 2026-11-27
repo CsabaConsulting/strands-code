@@ -730,3 +730,44 @@ class TestGateSubsumption:
         )
         for rendered in (list_out, show_out, apply_out):
             assert "\x1b" not in rendered and "\u202e" not in rendered
+
+    def test_diff_resolve_pending_symlink_and_empty_diff_or_missing_discard(
+        self, tmp_path, monkeypatch
+    ):
+        from pathlib import Path
+
+        from strands_code_cli.dispatch.core import _resolve_pending_key
+        from strands_code_cli.session.session_index import SessionIndex
+
+        real_repo = tmp_path / "real_repo"
+        (real_repo / "sub").mkdir(parents=True)
+        target = real_repo / "sub" / "a.txt"
+        target.write_text("same\n", encoding="utf-8")
+        link_repo = tmp_path / "link_repo"
+        try:
+            link_repo.symlink_to(real_repo)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+
+        store = PendingStore(tmp_path / "sess", session_id="nyq-diff-1")
+        bind_session("nyq-diff-1", store)
+        store.stash(str(target.resolve()), "same\n", "same\n", "write")
+        idx = SessionIndex(tmp_path / "idx")
+
+        show_out = dispatch(
+            "/diff show sub/a.txt", session_id="nyq-diff-1", index=idx, cwd=link_repo
+        )[1]
+        assert "No textual diff for" in show_out
+
+        discard_out = dispatch(
+            "/diff discard missing.txt",
+            session_id="nyq-diff-1",
+            index=idx,
+            cwd=real_repo,
+        )[1]
+        assert "No pending change to" in discard_out
+
+        monkeypatch.setattr(
+            Path, "resolve", lambda self: (_ for _ in ()).throw(OSError("broken"))
+        )
+        assert _resolve_pending_key({"other": {}}, "rel.txt", real_repo) == "rel.txt"

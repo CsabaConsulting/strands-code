@@ -666,3 +666,46 @@ class TestSetupCatalogSanitization:
             ]
             _scripted_input(monkeypatch, [bad, bad])
             assert dispatch_mod._setup_typed_id_list("Candidates") is None
+
+    def test_setup_prompt_interrupt_empty_and_meta_owner_resolution(
+        self, monkeypatch, tmp_path
+    ):
+        import strands_code_cli.dispatch.core as dispatch_mod
+        from strands_code_cli.entry.provider_config import ProviderConfig
+        from strands_code_cli.session.session_index import SessionIndex
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (_ for _ in ()).throw(EOFError())
+        )
+        assert dispatch_mod._setup_prompt_model_id("Model: ") is None
+        assert dispatch_mod._setup_typed_id_list("Candidates") is None
+
+        _scripted_input(monkeypatch, [""])
+        assert dispatch_mod._setup_typed_id_list("Candidates") is None
+        _scripted_input(monkeypatch, [" , , "])
+        assert dispatch_mod._setup_typed_id_list("Candidates") is None
+
+        import strands_code_cli.model.model_switch as switch_mod
+
+        ProviderConfig(
+            model="meta/muse-spark-1.3", base_url="https://meta.example/v1"
+        ).save()
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(switch_mod, "upstream_supports_meta", lambda: False)
+        monkeypatch.setattr(
+            switch_mod,
+            "build_meta_model",
+            lambda target, **kw: seen.update({"target": target, **kw}) or object(),
+        )
+        action, payload = dispatch_mod.dispatch(
+            "/model meta/muse-spark-1.3",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "idx"),
+            current_model="bedrock/amazon.nova-micro-v1:0",
+        )
+        assert (action, payload) == ("model", "meta/muse-spark-1.3")
+        assert seen == {
+            "target": "meta/muse-spark-1.3",
+            "base_url": "https://meta.example/v1",
+        }

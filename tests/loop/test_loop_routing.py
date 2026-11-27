@@ -1883,3 +1883,93 @@ class TestOptInEngineLoopAndBtw:
         out = capsys.readouterr().out
         assert "Routed \u2192" not in out
         assert "Routing held" in out
+
+    def test_apply_routed_pick_effort_reject_resolve_none_and_initial_toggles(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        from strands_code_cli.policy.diff_gate import DiffModeState
+        from strands_code_cli.routing.core import RoutingPick
+
+        strategy = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, tier="small", levels=["low"]),
+                RoutingCandidate(id=NOVA_MICRO, tier="tiny", levels=["low"]),
+            ],
+            directives="trivial asks go cheap",
+            engine=RoutingEngine(order=["native"], native_model="jev-1.13.0"),
+        )
+        agent = SimpleNamespace(messages=[], model="sentinel", _session_manager=None)
+        index = SessionIndex(tmp_path / "index")
+        events: list = []
+
+        bad_effort = RoutingPick(
+            model=NOVA_MICRO,
+            effort="high",
+            model_confidence=0.9,
+            effort_confidence=0.9,
+            tie_break=False,
+        )
+        res_bad = loop_mod._apply_routed_pick(
+            agent,
+            strategy=strategy,
+            pick=bad_effort,
+            engine="native",
+            usage=(30, 5, 0.0004),
+            current_model=HAIKU,
+            rich=None,
+            index=index,
+            session_id=index.mint(),
+            stash_path=None,
+            routing_events=events,
+        )
+        assert res_bad == (HAIKU, False)
+        assert events[-1]["decision_engine"] == "native"
+        assert events[-1]["input_tokens"] == 30
+        assert events[-1]["held"] is True
+
+        monkeypatch.setattr(
+            loop_mod, "apply_model_action", lambda *a, **k: (None, "could not switch")
+        )
+        valid_pick = RoutingPick(
+            model=HAIKU,
+            effort="low",
+            model_confidence=0.9,
+            effort_confidence=0.9,
+            tie_break=False,
+        )
+        res_none = loop_mod._apply_routed_pick(
+            agent,
+            strategy=strategy,
+            pick=valid_pick,
+            engine="native",
+            usage=(50, 10, 0.001),
+            current_model=NOVA_MICRO,
+            rich=None,
+            index=index,
+            session_id=index.mint(),
+            stash_path=None,
+            routing_events=events,
+        )
+        assert res_none == (NOVA_MICRO, False)
+        assert events[-1]["engine"] == "resolve"
+        assert events[-1]["decision_engine"] == "native"
+        assert events[-1]["input_tokens"] == 50
+        assert events[-1]["decision_cost"] == 0.001
+        assert "resolve failed" in capsys.readouterr().out
+
+        monkeypatch.setattr(
+            ProviderConfig,
+            "load",
+            classmethod(lambda cls: (_ for _ in ()).throw(ValueError("tampered"))),
+        )
+        iface, diff_st, mem_st = loop_mod._load_initial_toggles(None, agent)
+        assert (iface.interface, diff_st.mode, mem_st.mode) == (
+            "tool",
+            "on-demand",
+            "curate",
+        )
+
+        existing = DiffModeState(initial="auto")
+        agent_with_diff = SimpleNamespace(_diff_mode=existing)
+        _, diff_st2, _ = loop_mod._load_initial_toggles(None, agent_with_diff)
+        assert diff_st2 is existing

@@ -3158,6 +3158,66 @@ class TestLiveEngines:
         assert result.input_tokens >= 0
 
 
+class TestPhase192NyquistRouting:
+    def test_single_candidate_effort_hold_and_empty_chain_fallback(self, monkeypatch):
+        import strands_code_cli.routing.core as routing_mod
+
+        single = RoutingStrategy(
+            candidates=[RoutingCandidate(id=HAIKU, levels=["low", "high"])],
+            directives="x",
+            engine=RoutingEngine(order=["openrouter"], decision_model="cheap/decider"),
+        )
+        monkeypatch.setattr(
+            routing_mod,
+            "decide_via_openrouter",
+            lambda **kw: EngineResult(
+                answers=None, input_tokens=40, output_tokens=5, cost=0.0005
+            ),
+        )
+        res = decide(single, current_model=NOVA_MICRO, side=False, ask="hi")
+        assert res[:3] == (None, "openrouter", (40, 5, 0.0005))
+
+        multi = RoutingStrategy(
+            candidates=[
+                RoutingCandidate(id=HAIKU, levels=["low"]),
+                RoutingCandidate(id=NOVA_MICRO, levels=["low"]),
+            ],
+            directives="x",
+            engine=RoutingEngine(order=["openrouter"], decision_model="cheap/decider"),
+        )
+        monkeypatch.setattr(routing_mod, "_chain_for", lambda s: [])
+        assert decide(multi, current_model=SONNET, side=False, ask="hi") == (
+            None,
+            "openrouter",
+            (0, 0, None),
+            "openrouter failed",
+        )
+
+    def test_effort_supported_by_target_defensive_fallbacks(self, monkeypatch):
+        import sys
+
+        import strands_harness.models as hm
+
+        from strands_code_cli.routing.core import _effort_supported_by_target
+
+        monkeypatch.setattr(hm, "_split_provider", None)
+        assert (
+            _effort_supported_by_target("anthropic/claude-sonnet-5-5", "high") is True
+        )
+
+        monkeypatch.setattr(hm, "_model_levels", None)
+        assert (
+            _effort_supported_by_target("anthropic/claude-sonnet-5-5", "high") is True
+        )
+
+        assert _effort_supported_by_target("meta/muse-spark-1.3", "high") is True
+
+        monkeypatch.setitem(sys.modules, "strands_harness.models", None)
+        assert (
+            _effort_supported_by_target("anthropic/claude-sonnet-5-5", "high") is True
+        )
+
+
 def _pick_live_llm_model() -> str | None:
     import os
 

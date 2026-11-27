@@ -405,3 +405,31 @@ class TestCliConstructionContract:
         rendered = buf.getvalue()
         assert "\x1b" not in rendered
         assert "[EVIL_ID]" in rendered
+
+    def test_known_index_ids_empty_prefix_and_prebuilt_model_empty_id_base_url(
+        self, tmp_path, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import strands_code_cli.entry.main as main_module
+        from strands_code_cli.session.session_index import resolve_session_prefix
+
+        assert main_module._known_index_ids(object()) == set()
+        assert resolve_session_prefix({"abc123"}, "") == (None, None, [])
+
+        fake_agent = SimpleNamespace(
+            model=object(),
+            messages=[],
+            _session_manager=None,
+            add_hook=lambda *a, **k: None,
+        )
+        monkeypatch.setattr(main_module, "create_harness", lambda **kw: fake_agent)
+        monkeypatch.setattr(main_module, "model_id_of", lambda *a, **k: "")
+        monkeypatch.setattr(main_module, "register_memory_plugin", lambda *a, **k: None)
+        built = main_module.build_agent(
+            model=object(),
+            session_id="s-empty-id",
+            session_dir=tmp_path / "sess",
+            base_url="http://127.0.0.1:4000/v1",
+        )
+        assert getattr(built, "_base_url", None) is None

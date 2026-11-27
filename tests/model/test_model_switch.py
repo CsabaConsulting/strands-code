@@ -5607,3 +5607,94 @@ class TestMetaModelAdapter:
         data_dir = Path(platformdirs.user_data_dir("strands-box"))
         assert not str(data_dir).startswith(str(Path.home()))
         assert data_dir != tmp_path
+
+    def test_discovery_fallbacks_and_scoped_base_url(self, monkeypatch):
+        import sys
+        import types
+
+        from strands_code_cli.entry.provider_config import ProviderConfig
+        from strands_code_cli.model import model_switch as ms
+
+        fake_boto3 = types.ModuleType("boto3")
+        fake_boto3.client = lambda svc, **kw: types.SimpleNamespace(
+            list_foundation_models=lambda: {"modelSummaries": []},
+            list_inference_profiles=lambda: {"inferenceProfileSummaries": []},
+        )
+        monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+        monkeypatch.setitem(sys.modules, "botocore.config", None)
+        assert ms._discover_bedrock_models(region="us-west-2") == ([], True)
+
+        genai_stub = types.SimpleNamespace(
+            types=types.SimpleNamespace(
+                HttpRetryOptions=lambda **k: (_ for _ in ()).throw(TypeError("bad")),
+                HttpOptions=lambda **k: (_ for _ in ()).throw(TypeError("bad")),
+            )
+        )
+        assert ms._google_discovery_client_kwargs(genai_stub) == {
+            "http_options": {"timeout": 5_000, "retry_options": {"attempts": 1}}
+        }
+
+        ProviderConfig(
+            model="openai/gpt-6.2-sol", base_url="http://127.0.0.1:8080/v1/"
+        ).save()
+        assert ms._scoped_discovery_base_url("openai") == "http://127.0.0.1:8080/v1"
+
+        monkeypatch.setattr(
+            ProviderConfig,
+            "load",
+            classmethod(
+                lambda cls: ProviderConfig(
+                    model=None, base_url="http://127.0.0.1:8080/v1/"
+                )
+            ),
+        )
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        assert ms._scoped_discovery_base_url("openai") == "http://127.0.0.1:8080/v1"
+
+        assert ms._target_openai_effort("gpt-99-unknown", "off") == ""
+        assert ms._target_openai_effort("gpt-99-unknown", "none") == ""
+
+    def test_litellm_base_url_and_openai_chat_env_base_url_paths(self, monkeypatch):
+        import types
+
+        import strands_harness.models as hm
+
+        from strands_code_cli.model import model_switch as ms
+
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        stub = types.SimpleNamespace(client_args={})
+        ms.configure_base_url_for_model(
+            "litellm/openrouter/foo", stub, base_url="http://127.0.0.1:4000/v1"
+        )
+        assert stub.client_args == {
+            "base_url": "http://127.0.0.1:4000/v1",
+            "api_key": "not-required",
+        }
+
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")
+        chat_m = ms.resolve_harness_model(
+            "openai/gpt-6.2-sol", api_mode="chat", base_url=None
+        )
+        assert chat_m.client_args["base_url"] == "http://127.0.0.1:8080/v1"
+        wf_m = ms._custom_web_fetch_model(
+            "openai/gpt-6.2-sol", base_url=None, api_mode="chat"
+        )
+        assert wf_m is not None
+        assert wf_m.client_args["base_url"] == "http://127.0.0.1:8080/v1"
+
+        monkeypatch.setenv("OPENAI_BASE_URL", "ftp://invalid.example/v1")
+        monkeypatch.setattr(
+            hm, "resolve_model", lambda *a, **k: types.SimpleNamespace(config={})
+        )
+        fallback_m = ms.resolve_harness_model(
+            "openai/gpt-6.2-sol", api_mode="chat", base_url=None
+        )
+        assert getattr(fallback_m, "_strands_model_ref", None) == "openai/gpt-6.2-sol"
+        assert (
+            ms._custom_web_fetch_model(
+                "openai/gpt-6.2-sol", base_url=None, api_mode="chat"
+            )
+            is None
+        )

@@ -1599,3 +1599,22 @@ class TestPhase18NyquistSkillsAndDispatch:
                 1
             ]
         )
+
+    def test_skills_extra_positional_args_return_usage(self, tmp_path):
+        s_idx = _session_index(tmp_path)
+        assert (
+            dispatch("/skills marketplace list extra", session_id="s1", index=s_idx)[1]
+            == "Usage: /skills marketplace list"
+        )
+        assert (
+            dispatch("/skills marketplace update a b", session_id="s1", index=s_idx)[1]
+            == "Usage: /skills marketplace update [name]"
+        )
+        assert (
+            dispatch("/skills sync extra", session_id="s1", index=s_idx)[1]
+            == "Usage: /skills sync"
+        )
+        assert (
+            dispatch("/skills reload extra", session_id="s1", index=s_idx)[1]
+            == "Usage: /skills reload"
+        )

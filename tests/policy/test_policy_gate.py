@@ -1424,3 +1424,46 @@ class TestWave2HardeningInvariants:
         fifo = repo / "pipe.fifo"
         os.mkfifo(fifo)
         assert _read_regular_utf8_nofollow(fifo, 1024) is None
+
+    def test_diff_preview_toctou_growth_second_symlink_and_gate_fallbacks(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+        import stat
+        from types import SimpleNamespace
+
+        import strands_code_cli.platform_io as pio
+        from strands_code_cli.policy.policy_gate import (
+            _read_regular_utf8_nofollow,
+            _safe_existing_text_for_preview,
+        )
+
+        grow = tmp_path / "grow.txt"
+        grow.write_text("a" * 32, encoding="utf-8")
+        monkeypatch.setattr(
+            os,
+            "fstat",
+            lambda fd: SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_size=4),
+        )
+        assert _read_regular_utf8_nofollow(grow, 16) is None
+
+        ok = tmp_path / "ok.txt"
+        ok.write_text("hi", encoding="utf-8")
+        calls = {"n": 0}
+
+        def _second_raises(*a, **k):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise ValueError("toctou")
+
+        monkeypatch.setattr(pio, "refuse_symlink_under_roots", _second_raises)
+        assert _safe_existing_text_for_preview("ok.txt", tmp_path, []) is None
+
+        gate = PolicyGateHandler()
+        monkeypatch.setattr(
+            gate,
+            "_current_policy",
+            lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        assert gate._preview_roots(tmp_path, "write") == []
+        assert gate._render_mutation_diff("write", {"path": ""}) is None

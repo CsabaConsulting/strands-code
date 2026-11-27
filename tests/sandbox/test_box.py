@@ -1422,3 +1422,10 @@ def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
                 env=self_env,
             )
             _assert_box_run_clean(box_bin, self_res.box_toml, self_repo, self_env)
+
+
+def test_provider_from_model_id_unwraps_litellm_gemini():
+    from strands_code_cli.sandbox.box import _provider_from_model_id
+
+    assert _provider_from_model_id("gemini/gemini-2.5-pro") == "google"
+    assert _provider_from_model_id("litellm/gemini/gemini-2.5-pro") is None
