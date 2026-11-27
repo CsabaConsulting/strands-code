@@ -1,19 +1,16 @@
 ---
-status: testing
+status: complete
 phase: 20-monty-python-vm-for-python-repl-codeact
 source: [20-01-SUMMARY.md, 20-02-SUMMARY.md, 20-03-SUMMARY.md, 20-VERIFICATION.md]
 started: 2026-11-27T21:44:00Z
-updated: 2026-11-27T21:46:00Z
+updated: 2026-11-27T22:41:00Z
 ---
 
 # Phase 20 User Acceptance Testing (`SANDBOX-02`)
 
 ## Current Test
 
-number: 4
-name: Strands Box `monty` Exec Grant (`[agent.filesystem].exec`) & Omitted `[tool.python]` (`D-10`, `D-11`)
-expected: `resolve_runtime_paths()` and `strands-code box init` discover the canonical non-root `monty` binary realpath (`MONTY_BIN` with control-char rejection, `.venv/bin/monty`, `PATH`, `sysconfig` scripts) into `[agent.filesystem].exec` (and non-root parent dir into `read`), refuse `/` and control-char `MONTY_BIN` overrides, and intentionally omit `[tool.python]` / `python:execute`.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -55,7 +52,7 @@ evidence: |
 
 ### 4. Strands Box `monty` Exec Grant (`[agent.filesystem].exec`) & Omitted `[tool.python]` (`D-10`, `D-11`)
 expected: `resolve_runtime_paths()` and `strands-code box init` discover the canonical non-root `monty` binary realpath (`MONTY_BIN` with control-char rejection, `.venv/bin/monty`, `PATH`, `sysconfig` scripts) into `[agent.filesystem].exec` (and non-root parent dir into `read`), refuse `/` and control-char `MONTY_BIN` overrides, and intentionally omit `[tool.python]` / `python:execute`.
-result: pending
+result: pass
 evidence: |
   - Functional probe on `HEAD` `533e587`:
     - `init_box_config()` resolves custom `MONTY_BIN` into `[agent.filesystem].exec` and parent dir into `[agent.filesystem].read`, refuses symlinked `MONTY_BIN` pointing into `/tmp` (`monty_bin is None`, `/tmp` excluded from `read`), rejects `\n` control chars in `MONTY_BIN`, and intentionally omits `[tool.python]` and `python:execute`.
@@ -67,20 +64,33 @@ evidence: |
 
 ### 5. Live `strands-box 0.3.1` (`CLONE_NEWUSER`) Execution of `MontyPythonInterpreter` (`D-10`)
 expected: Inside a live Strands Box `CLONE_NEWUSER` container using generated `box.toml` / `policy.dw`, Python executes `MontyPythonInterpreter` (`import math, json; print(json.dumps({"r": math.isqrt(144)}))` -> `{"r": 12}`) cleanly with zero `EACCES`, Dogwood policy refusal, or missing-binary errors.
-result: pending
+result: pass
+evidence: |
+  - Functional & live container probe on `HEAD` `80ab751` (`Gaps found: None`):
+    - `.venv/bin/pytest -m integration tests/sandbox/test_box.py -rs -q` (`BypassSandbox: true`, live `strands-box 0.3.1`): `1 passed, 30 deselected in 9.58s` (ran real `MontyPythonInterpreter` inside `CLONE_NEWUSER` returning `{"r": 12}`).
+    - Live adversarial `CLONE_NEWUSER` probe on `HEAD` `80ab751` with custom external `MONTY_BIN` copied outside `.venv`/`PATH` (`STRANDS_BOX=1`, `MONTY_BIN=<ext>/monty-custom`): `RC: 0`; `CodeactStint` computed `{"r": 12}`, blocked `import os`, refused `read('.env')` (`Refused read: sensitive path '.env'`), refused `read('/etc/passwd')` (outside allowed roots), read `pyproject.toml` (`3712` bytes), and tore down cleanly.
 
 ### 6. Documentation (`docs/QUICKSTART.md`), Full Test Suite, Rig Contracts & All 6 CI Gates (`D-11`, `D-24`)
 expected: `docs/QUICKSTART.md` (`## Monty Python VM (python_repl & CodeAct)`) accurately documents stdlib/limits/crash salvage/CodeAct callbacks/Box `monty` exec grant and the `[tool.python]` evaluation; `tests/rig/` (`44/44`), full non-integration suite + loopback stub, `@pytest.mark.integration` live Box+Monty probe, restricted-module grep, `uv lock --check`, `ruff format --check`, `ruff check`, `xenon --max-absolute C`, `lint-imports`, and empty `git diff ee42ea2 -- strands_code_agent/` all pass on `HEAD`.
-result: pending
+result: pass
+evidence: |
+  - Functional & full CI verification on `HEAD` `80ab751` (`Gaps found: None`):
+    - `docs/QUICKSTART.md` (`## Monty Python VM (python_repl & CodeAct)`, lines 352–386) matches shipped 3-site pool, pure-Rust stdlib + denied imports, `256 MiB`/`60s`/`200`/`4 MiB` limits, crash/timeout salvage + teardown, hardened CodeAct callbacks, Box `monty` exec grant, and omitted `[tool.python]` evaluation.
+    - Restricted-module grep clean; zero `SandboxedPythonInterpreter` in `strands_code_cli/**/*.py`.
+    - Static CI gates: `uv lock --check` (`142 packages`), `ruff format --check` (`137 files`), `ruff check`, `xenon --max-absolute C --max-modules C --max-average C`, `lint-imports` (`47 files, 147 deps, 1 kept / 0 broken`), and empty `git diff ee42ea2 -- strands_code_agent/`.
+    - `tests/rig/`: `44 passed in 0.23s`.
+    - Full non-integration suite (`TERM=xterm-256color GITHUB_ACTIONS=true`): `2012 passed, 16 deselected in 73.29s`.
+    - Standalone loopback stub (`test_stub_server_systemone_decision_routes`, `BypassSandbox: true`): `1 passed, 202 deselected in 2.25s` (`2013` total default tests).
+    - Live `strands-box 0.3.1` integration (`tests/sandbox/test_box.py -m integration`, `BypassSandbox: true`): `1 passed, 30 deselected in 9.58s`.
 
 ## Summary
 
 total: 6
-passed: 3
+passed: 6
 issues: 0
-pending: 3
+pending: 0
 skipped: 0
 
 ## Gaps
 
-None open so far — Test 1 (`ea35d49`), Test 2 (`12d9a28`), Test 3 (`533e587`), and Test 4 (`MONTY_BIN` `[agent.env]` forwarding, `_valid_monty_candidate` `os.X_OK`, and `Cc`/`Cf` C1/Bidi blocking in `box.py` + `monty.py`) fixed and re-verified on `HEAD`.
+None open — all 10 adversarial pre-check gaps discovered across Tests 1–4 were fixed and re-verified on `HEAD` `80ab751` (commits `ea35d49`, `12d9a28`, `533e587`, `80ab751`).
