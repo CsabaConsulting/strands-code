@@ -274,3 +274,4 @@ Before running `/gsd-discuss-phase` or `/gsd-plan-phase`, follow [GEMINI.md](GEM
 - Present a Peer Parity Matrix before asking questions on any recurring cross-cutting axis (providers, routing engines, protected paths, persistence, `/cost`, CLI surface).
 - Ask atomic, single-axis questions and justify any parity break explicitly.
 - Apply the Horizontal Backport Rule when hardening shared patterns, and respect all static repo invariants (`strands_code_agent/` immutability, no `os.environ` in restricted modules, `xenon <= C`, `lint-imports`).
+- Before asking the user to pass/fail any UAT test in `/gsd-verify-work`, run the mandatory **Adversarial Pre-Check Loop** in [GEMINI.md](GEMINI.md) and [.planning/INVARIANTS.md](.planning/INVARIANTS.md) (check probe realism, bypass/edge inputs, sibling/peer parity, and cross-phase drift) and surface any gaps first.

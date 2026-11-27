@@ -31,3 +31,18 @@ Apply these rules in every `/gsd-discuss-phase`, `/gsd-plan-phase`, design revie
 - **Restricted-module hygiene:** Zero `os.environ`/`os.getenv` tokens and zero unnegated `"budget"`, `"enforce"`, `"quota"`, or `"halt"` substrings in `entry/main.py`, `dispatch/core.py`, `loop/core.py`, `loop/pump.py`, `model/model_switch.py`, or `cost/cost_context.py`.
 - **Static CI gates:** Every code change must pass `ruff format --check`, `ruff check`, `xenon --max-absolute C` (`CC <= 20`), `lint-imports`, and `uv lock --check`.
 - **No unilateral shifts in pre-decided anchors:** Never bury parity breaks or cross-phase overrides inside "pre-decided / not re-asked" preambles; surface them explicitly.
+
+## 3. Mandatory UAT Adversarial Pre-Check Gate (`/gsd-verify-work`)
+
+During `/gsd-verify-work`, before asking the user to `pass` or `fail` **any** UAT test, run an extra **Adversarial Pre-Check Loop** against both the live code on `HEAD` and the UAT probe itself — never present a happy-path probe straight to user sign-off.
+
+Check all 5 angles for every UAT item before presenting it:
+
+1. **Probe realism & non-mocked seams:** Verify no mock, fixture, or stub masked real production behavior (e.g., bare unprefixed `model_id_of()`, missing `ProviderConfig.base_url`/`api_mode`, TTY `radio_choice` vs non-TTY paths, `/tmp` allowed-root false positives in `scope.effective_roots()`, or unasserted gate denials where voluntary model compliance masked whether the gate actually fired).
+2. **Adversarial / bypass / boundary inputs:** Actively probe quote/escaping inversions (`sh -c`), non-BMP Unicode/TOML surrogates, `~` tilde expansion, relative vs absolute globs, unsafe `curl`/tool flags & non-HTTP schemes (`file://`, `$VAR`), ancestor & intermediate symlinks, corrupt/symlinked repo configs vs home defaults, ANSI/OSC escape injection, decompression/payload bounds, and unhandled exceptions (`EOFError`, `StopIteration`, event-loop retry across closed loops).
+3. **Sibling-tool & peer-parity symmetry:** Cross-check every sibling tool (`read`/`search`/`write`/`edit`/`shell`/`python_repl`/`subagent`/`skills`), sibling command (`install`/`update`/`sync`/`remove`, `box init`/`doctor`/`run`), and active call site (`main`, `/model`, `/route`, `/btw`, `subagent`, `--session-id` resume).
+4. **Cross-phase drift & interaction check:** Verify earlier guarantees still hold after later refactors (and vice versa), and execute post-switch / multi-hop turns rather than stopping after a `/model` banner.
+5. **Transparent pre-pass disclosure:** Every UAT presentation MUST include an explicit **`### Adversarial Pre-Check (Pre-Pass Loop)`** block listing either:
+   - **Gaps Found** (`Code/Security Gap` vs `Probe Blind Spot`, exact `file:line` + live repro, offering to fix/tighten before `pass`), or
+   - **Cleared Checks** (1-line summary of the concrete adversarial checks actually executed and passed on `HEAD`),
+   before asking the user to reply `pass` or describe an issue. See [.planning/INVARIANTS.md](.planning/INVARIANTS.md) § 5 for the checklist and response template.

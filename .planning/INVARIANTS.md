@@ -79,3 +79,34 @@ sweep **all existing peer functions** across `strands_code_cli/` in the same pha
 - Zero `os.environ` / `os.getenv` tokens in `model/model_switch.py`, `cost/cost_context.py`, `dispatch/core.py`, `loop/core.py`, `loop/pump.py`, or `entry/main.py`.
 - Zero unnegated `"budget"`, `"enforce"`, `"quota"`, or `"halt"` substrings in those modules.
 - `xenon --max-absolute C strands_code_cli tests scripts` (`CC <= 20`) and `lint-imports` pass.
+
+---
+
+## 5. Mandatory UAT Adversarial Pre-Check Protocol (`/gsd-verify-work`)
+
+Never ask the user to `pass` or `fail` a UAT test straight from a happy-path probe. Before presenting each UAT item in `/gsd-verify-work`, execute this adversarial loop on `HEAD` and surface its findings first.
+
+### A. 5-Angle Adversarial Verification Checklist
+
+| Angle | What to Attack / Verify | Common False-Pass Trap to Reject |
+|---|---|---|
+| **1. Probe Realism & Non-Mocked Seams** | Inspect mocks, fixtures, temp roots, TTY vs non-TTY paths, and real SDK objects (`model_id_of()`, `AnthropicModel`/`OpenAIResponsesModel`/`GeminiModel`, `Agent`). | Mock objects returning synthetic IDs (`"openai/gpt-5"` instead of bare `"gpt-5"`), `/tmp` allowed-root masking symlink escapes, or model instruction compliance masking unexecuted gates. |
+| **2. Adversarial / Bypass / Boundary Inputs** | Test `sh -c` quote inversion, non-BMP Unicode/TOML surrogates, `~` expansion, relative vs absolute globs, `curl`/`tool` exfil & write flags (`file://`, `$VAR`, `-H @file`), intermediate/ancestor symlinks, corrupt/symlinked repo configs vs home defaults, ANSI/OSC escapes, tar decompression/JSON bounds, and unhandled exceptions (`EOFError`, `StopIteration`, closed-loop retries). | Testing ASCII-only strings, leaf-only `.is_symlink()`, happy `200 OK` without retry, or checking clean repo TOML without corrupt repo overriding home `[[deny]]`. |
+| **3. Sibling-Tool & Peer-Parity Symmetry** | Sweep all sibling tools (`read`/`search`/`write`/`edit`/`shell`/`python_repl`/`subagent`/`skills`), sibling subcommands (`install`/`update`/`sync`/`remove`, `box init`/`doctor`/`run`), and all call sites (`main`, `/model`, `/route`, `/btw`, `subagent`, `--session-id` resume). | Fixing/probing `read` while missing `search` (`file_glob`/bare fallback) or fixing `sync` while missing `update`, or fixing `write`/`edit` `.env*` while missing `~/.ssh/` & `~/.aws/`. |
+| **4. Cross-Phase Drift & Multi-Hop Interaction** | Run post-switch turns (never stop at a `/model` banner), multi-hop away-tail restores (`A -> B -> C -> A`), and verify later phases (e.g., Phase 19.1 `/btw`, `subagent`, `PolicyGateHandler`) didn't break earlier UAT guarantees. | Asserting switch message text without sending a follow-up turn, or running switch-back with 0 away-model turns. |
+| **5. Pre-Pass Disclosure & Artifact Sync** | Tighten and re-run probes for any probe blind spot; surface any real code/security gap with exact `file:line` + live repro before asking for sign-off. | Silently passing known blind spots or omitting unverified gaps from `{phase}-UAT.md` evidence. |
+
+### B. Mandatory Pre-Pass Response Template
+
+Every UAT prompt presented to the user MUST contain this block right above the `pass` / issue prompt:
+
+```markdown
+### Adversarial Pre-Check (Pre-Pass Loop)
+- **Gaps found:** *(list each `[Code/Security Gap]` or `[Probe Blind Spot]` with exact `file:line` + live repro; write `None` only after running checks across Angles 1–4)*
+- **Cleared checks:** *(1-line summary of the concrete adversarial/boundary checks executed on `HEAD` that passed)*
+```
+
+### C. UAT Artifact Rule (`{phase}-UAT.md`)
+- Every passed or pending entry's `evidence:` in `{phase}-UAT.md` MUST record both the functional probe result and the adversarial pre-check findings/clearances on `HEAD`.
+- If the loop uncovers a **probe blind spot**, tighten and re-run the probe before asking for `pass`.
+- If the loop uncovers a **real code or security gap**, present the `file:line` + live repro upfront and let the user choose whether to fix now or record it in `## Gaps` before signing off.
