@@ -9,6 +9,8 @@ from typing import Any
 
 import typer
 
+from strands_code_cli.model.provider_id import provider_of
+
 logger = logging.getLogger(__name__)
 
 BEDROCK_SETUP_POINTER = (
@@ -114,6 +116,11 @@ def has_meta_credentials(env: Mapping[str, str] | None = None) -> bool:
     return _nonempty("MODEL_API_KEY", env) or _nonempty("META_API_KEY", env)
 
 
+def has_litellm_credentials(env: Mapping[str, str] | None = None) -> bool:
+    """Return True when any recognized LiteLLM/OpenRouter backend key is set."""
+    return any(_nonempty(key, env) for key in _LITELLM_ANY_KEYS)
+
+
 def meta_api_key(env: Mapping[str, str] | None = None) -> str | None:
     """Return configured Meta API key (MODEL_API_KEY primary, META_API_KEY fallback)."""
     source = os.environ if env is None else env
@@ -198,18 +205,7 @@ def disable_cwd_dotenv() -> None:
 
 
 def _provider_of(model: str) -> str:
-    if model.startswith("arn:") or "/" not in model:
-        return "bedrock"
-    prefix, _, rest = model.partition("/")
-    low = prefix.lower()
-    if low != "litellm":
-        return low
-    sub = rest.partition("/")[0].lower()
-    if sub in ("ollama", "ollama_chat"):
-        return "ollama"
-    if sub == "openrouter":
-        return "openrouter"
-    return "litellm"
+    return provider_of(model, unwrap_litellm=True)
 
 
 def _default_probe() -> None:

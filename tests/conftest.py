@@ -18,12 +18,25 @@ _PROVIDER_ENV_VARS = (
     "META_BASE_URL",
     "OPENROUTER_API_KEY",
     "LITELLM_API_KEY",
+    "LITELLM_BASE_URL",
+    "OLLAMA_HOST",
+    "OLLAMA_API_KEY",
+    "OLLAMA_TEST_MODEL",
     "TYPESAFE_API_KEY",
     "JEV_API_KEY",
     "STRANDS_BOX",
     "STRANDS_BOX_BIN",
     "EXPERIMENTAL_X86_SUPPORT",
     "AWS_BEARER_TOKEN_BEDROCK",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
     "GITHUB_TOKEN",
     "GH_TOKEN",
 )
@@ -42,11 +55,15 @@ def _no_live_pricing(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_provider_env(monkeypatch, request):
-    """Strip ambient provider credentials so host env keys never leak into tests."""
+def _hermetic_provider_env(monkeypatch, request, tmp_path_factory):
+    """Strip ambient provider creds & redirect XDG/cache dirs outside tmp_path."""
     if request.node.get_closest_marker("integration") is not None:
         yield
         return
     for name in _PROVIDER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    xdg_root = tmp_path_factory.mktemp("xdg")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_root / "config"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(xdg_root / "cache"))
+    monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(xdg_root / "strands_cache"))
     yield

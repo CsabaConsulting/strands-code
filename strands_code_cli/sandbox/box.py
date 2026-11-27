@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,12 +20,8 @@ from typing import Any
 import platformdirs
 import typer
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python 3.10 compatibility
-    tomllib = None  # type: ignore[assignment]
-
 from strands_code_cli.entry.provider_config import ProviderConfig
+from strands_code_cli.model.provider_id import provider_of
 from strands_code_cli.platform_io import (
     _REFUSED_ROOTS,
 )
@@ -48,6 +45,7 @@ _TRUTHY = frozenset({"1", "true", "yes"})
 
 CORE_PROVIDERS: tuple[str, ...] = (
     "bedrock",
+    "bedrock-mantle",
     "google",
     "anthropic",
     "openai",
@@ -240,21 +238,18 @@ def default_box_data_dir(repo_root: Path, *, home: Path | None = None) -> Path:
     return base / _REPOS_DIR / repo_config_id(repo_root)
 
 
+_EGRESS_MODEL_PROVIDERS = frozenset(
+    {"bedrock", "bedrock-mantle", "google", "anthropic", "openai", "meta", "openrouter"}
+)
+
+
 def _provider_from_model_id(model_id: str | None) -> str | None:
     if not isinstance(model_id, str) or not model_id.strip():
         return None
-    cleaned = model_id.strip()
-    if cleaned.startswith("arn:") or "/" not in cleaned:
-        return "bedrock"
-    prefix, _, rest = cleaned.partition("/")
-    low = prefix.lower()
-    if low in ("bedrock", "google", "anthropic", "openai", "meta", "openrouter"):
-        return low
-    if low == "litellm":
-        sub = rest.partition("/")[0].lower()
-        if sub == "openrouter":
-            return "openrouter"
-    return None
+    prov = provider_of(model_id, unwrap_litellm=True)
+    if prov == "gemini":
+        prov = "google"
+    return prov if prov in _EGRESS_MODEL_PROVIDERS else None
 
 
 def _strategy_engines(strategy: RoutingStrategy | None) -> list[str]:
@@ -666,23 +661,28 @@ _STATIC_EGRESS_SPECS: dict[str, EgressSpec] = {
 
 
 def _bedrock_egress_spec(
-    aws_region: str, aws_profile: str | None, env: Mapping[str, str]
+    aws_region: str,
+    aws_profile: str | None,
+    env: Mapping[str, str],
+    *,
+    section: str = "bedrock",
+    host: str | None = None,
 ) -> EgressSpec:
-    dest = (f"bedrock-runtime.{aws_region}.amazonaws.com",)
+    dest = (host or f"bedrock-runtime.{aws_region}.amazonaws.com",)
     if aws_profile:
-        return EgressSpec("bedrock", dest, secret_ref=f"aws://{aws_profile}")
+        return EgressSpec(section, dest, secret_ref=f"aws://{aws_profile}")
     if _nonempty("AWS_BEARER_TOKEN_BEDROCK", env) and not _nonempty(
         "AWS_ACCESS_KEY_ID", env
     ):
         return EgressSpec(
-            "bedrock",
+            section,
             dest,
             secret_ref="env://AWS_BEARER_TOKEN_BEDROCK",
             placement="header",
             header="Authorization",
             prefix="Bearer",
         )
-    return EgressSpec("bedrock", dest, secret_ref="aws://")
+    return EgressSpec(section, dest, secret_ref="aws://")
 
 
 def _github_egress_specs(env: Mapping[str, str]) -> list[EgressSpec]:
@@ -724,6 +724,16 @@ def _egress_specs_for_providers(
                 )
         elif name == "bedrock":
             specs.append(_bedrock_egress_spec(aws_region, aws_profile, env))
+        elif name == "bedrock-mantle":
+            specs.append(
+                _bedrock_egress_spec(
+                    aws_region,
+                    aws_profile,
+                    env,
+                    section="bedrock_mantle",
+                    host=f"bedrock-mantle.{aws_region}.api.aws",
+                )
+            )
         elif name == "google":
             g_var = (
                 "GEMINI_API_KEY"
@@ -808,7 +818,7 @@ def _render_agent_env(
             and not _is_refused_root(cand)
         ):
             out[key] = cleaned
-    if "bedrock" in providers:
+    if "bedrock" in providers or "bedrock-mantle" in providers:
         out["AWS_REGION"] = aws_region
     return out
 
@@ -1115,6 +1125,7 @@ def _collect_box_warnings(
     config: ProviderConfig,
     strategy: RoutingStrategy | None,
     env_map: Mapping[str, str],
+    selected: Sequence[str] = (),
 ) -> tuple[list[str], bool]:
     warnings: list[str] = []
     self_tamper_risk = False
@@ -1150,7 +1161,10 @@ def _collect_box_warnings(
             "Note: local Ollama model/engine detected — loopback 127.0.0.1:11434 is "
             "unreachable inside Strands Box's isolated network namespace."
         )
-    if any(r.lower().startswith("bedrock-mantle/") for r in refs):
+    if (
+        any(r.lower().startswith("bedrock-mantle/") for r in refs)
+        and "bedrock-mantle" not in selected
+    ):
         warnings.append(
             "Note: bedrock-mantle model detected — default bedrock profile permits "
             "bedrock-runtime.<region>.amazonaws.com only, not bedrock-mantle endpoints."
@@ -1233,15 +1247,14 @@ def init_box_config(
         egress_specs=egress_specs,
         agent_env=agent_env,
     )
-    if tomllib is not None:
-        tomllib.loads(toml_text)
+    tomllib.loads(toml_text)
     dw_text = render_policy_dw(egress_specs)
 
     box_toml = _atomic_write_text(cfg_dir / "box.toml", toml_text)
     policy_dw = _atomic_write_text(cfg_dir / "policy.dw", dw_text)
 
     warnings, self_tamper_risk = _collect_box_warnings(
-        cfg_dir, out_dir, runtime, cfg, strategy, env_map
+        cfg_dir, out_dir, runtime, cfg, strategy, env_map, selected
     )
 
     return BoxInitResult(
@@ -1402,7 +1415,7 @@ def _check_box_config(cfg_toml: Path, cfg_dw: Path) -> BoxDoctorCheck:
         )
     try:
         content = cfg_toml.read_text(encoding="utf-8")
-        parsed_cfg = tomllib.loads(content) if tomllib is not None else {}
+        parsed_cfg = tomllib.loads(content)
         custom_pol = _resolve_custom_policy_path(cfg_toml, parsed_cfg)
         active_pol = custom_pol if custom_pol is not None else cfg_dw
         _refuse_symlink(active_pol, "policy", max_ancestors=3)
@@ -1536,8 +1549,6 @@ def _validate_launch_config(cfg_toml: Path) -> None:
         raise ValueError(
             f"Box config not found: {cfg_toml}. Run `strands-code box init` first."
         )
-    if tomllib is None:
-        return
     try:
         parsed_cfg = tomllib.loads(cfg_toml.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

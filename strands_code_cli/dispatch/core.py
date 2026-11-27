@@ -77,11 +77,14 @@ _SESSION_DELETE_CONFIRM = "delete-session-confirmed"
 
 _SDK_EXTRA_HINTS = {
     "litellm": "litellm",
+    "openrouter": "litellm",
     "bedrock": "agentcore",
+    "bedrock-mantle": "openai",
     "google": "gemini",
     "openai": "openai",
     "anthropic": "anthropic",
     "meta": "meta",
+    "ollama": "ollama",
 }
 """Optional-extra install hints keyed by provider prefix."""
 
@@ -90,9 +93,10 @@ def _sdk_hint(selection: str) -> str:
     """Install hint for a missing provider SDK (ImportError path).
 
     Bare ids and ARNs resolve through Bedrock (boto3, ``agentcore``
-    extra); ``litellm/``, ``google/``, ``openai/``, ``anthropic/``, and
-    ``meta/`` ids map to their matching extras. Anything else keeps the
-    generic pointer.
+    extra); ``litellm/``, ``openrouter/``, ``bedrock-mantle/``,
+    ``google/``, ``openai/``, ``anthropic/``, ``meta/``, and ``ollama/``
+    ids map to their matching extras. Anything else keeps the generic
+    pointer.
     """
     if selection.startswith("arn:") or "/" not in selection:
         provider = "bedrock"
@@ -670,6 +674,7 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
         scoped_base_url,
         upstream_supports_meta,
     )
+    from strands_code_cli.model.provider_id import provider_of
 
     if not rest:
         configured = [current_model] if current_model else []
@@ -687,7 +692,9 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
             try:
                 cfg = ProviderConfig.load()
                 owner = (
-                    _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+                    provider_of(normalize_model_ref(cfg.model), unwrap_litellm=True)
+                    if cfg.model
+                    else None
                 )
                 scoped_url = scoped_base_url(cfg.base_url, owner, target)
             except ValueError:

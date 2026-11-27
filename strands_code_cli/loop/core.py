@@ -2599,8 +2599,13 @@ def _close_loop_session(
 
 def _clear_agent_base_url_on_provider_change(agent: Any, new_model: str) -> None:
     """Drop in-memory custom base_url/api_mode when switching to another provider."""
+    from strands_code_cli.model.provider_id import provider_of
+
     owner = getattr(agent, "_base_url_provider", None)
-    if not owner or _provider_of(normalize_model_ref(new_model)) == owner:
+    if (
+        not owner
+        or provider_of(normalize_model_ref(new_model), unwrap_litellm=True) == owner
+    ):
         return
     agent._base_url = None
     agent._base_url_provider = None

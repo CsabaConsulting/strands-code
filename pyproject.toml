@@ -8,7 +8,7 @@ version = "0.6.0"
 description = "Deny-first coding agent on the Strands Harness SDK with session-sticky Plan/Act, skills, memory, and a /btw side channel"
 readme = "README.md"
 license = "MIT-0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Emilio Monti" },
 ]
@@ -18,7 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -27,6 +26,7 @@ classifiers = [
 dependencies = [
     "strands-agents>=1.66.0",
     "strands-harness>=0.5.0",
+    "httpx>=0.27",
     "mcp>=1.30.0",
     "smolagents>=1.24.0",
     "jinja2>=3.0",
@@ -44,6 +44,7 @@ gemini = ["strands-agents[gemini]"]
 openai = ["strands-agents[openai]", "openai>=2.0.0"]
 anthropic = ["strands-agents[anthropic]"]
 meta = ["strands-agents[openai]", "openai>=2.0.0"]
+ollama = ["strands-agents[ollama]"]
 
 [project.scripts]
 strands-code = "strands_code_cli.entry.main:main"
@@ -76,7 +77,7 @@ markers = [
 addopts = "-m 'not integration'"
 
 [tool.ruff]
-target-version = "py310"          # matches requires-python >=3.10
+target-version = "py311"          # matches requires-python >=3.11
 force-exclude = true              # REQUIRED for D-24: explicit paths (pre-commit) bypass exclude otherwise
 exclude = [
     "strands_code_agent",          # inherited upstream code stays byte-pristine (D-24); the one fork-added file (search_tool.py) is enforced by review

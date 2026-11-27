@@ -25,6 +25,8 @@ from strands_code_agent.python_environments.local_sandboxed import (
 from strands_code_cli.dispatch.core import show_picker
 from strands_code_cli.entry.first_run import (
     BEDROCK_SETUP_POINTER,
+    has_litellm_credentials,
+    has_openai_credentials,
     openai_base_url,
     preflight_credentials,
 )
@@ -36,7 +38,7 @@ from strands_code_cli.loop.steering import register_steering_hook
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.memory.skills import discover_plugin_sources
 from strands_code_cli.model.model_switch import (
-    _provider_of,
+    _custom_web_fetch_model,
     _stamp_model_ref,
     build_meta_model,
     configure_base_url_for_model,
@@ -45,10 +47,10 @@ from strands_code_cli.model.model_switch import (
     configure_streaming_for_model,
     model_id_of,
     normalize_model_ref,
-    resolve_harness_model,
     scoped_base_url,
     upstream_supports_meta,
 )
+from strands_code_cli.model.provider_id import provider_of
 from strands_code_cli.platform_io import ensure_private_dir
 from strands_code_cli.policy.diff_gate import (
     PendingStore,
@@ -154,9 +156,13 @@ def model_for_config(
             from strands.models.openai import OpenAIModel
 
             chat_id = rest if prefix == "openai" else model
-            resolved = OpenAIModel(
-                model_id=chat_id, client_args={"base_url": eff_base_url}
-            )
+            client_args: dict[str, Any] = {"base_url": eff_base_url}
+            if prefix == "litellm":
+                if not has_litellm_credentials():
+                    client_args["api_key"] = "not-required"
+            elif not has_openai_credentials():
+                client_args["api_key"] = "not-required"
+            resolved = OpenAIModel(model_id=chat_id, client_args=client_args)
             resolved._strands_model_ref = model
             return resolved
         except ImportError:
@@ -164,21 +170,26 @@ def model_for_config(
     return model
 
 
-def _build_web_fetch_model(
-    model: str, base_url: str | None, api_mode: str | None
-) -> Any:
-    """Resolve web_fetch summarizer with the custom base_url when possible."""
-    try:
-        return resolve_harness_model(
-            model,
-            effort="off",
-            base_url=base_url,
-            api_mode=api_mode,
-            web_search=False,
-            caching=False,
-        )
-    except Exception:
-        return model
+def _apply_custom_web_fetch(
+    kwargs: dict[str, Any],
+    model: Any,
+    base_url: str | None,
+    api_mode: str | None,
+) -> None:
+    model_ref = (
+        model if isinstance(model, str) else getattr(model, "_strands_model_ref", None)
+    )
+    if not isinstance(model_ref, str) or not model_ref:
+        return
+    owner = provider_of(normalize_model_ref(model_ref), unwrap_litellm=True)
+    wf_model = _custom_web_fetch_model(
+        model_ref,
+        base_url=base_url,
+        base_url_provider=owner if base_url else None,
+        api_mode=api_mode,
+    )
+    if wf_model is not None:
+        kwargs["builtin_tools"]["web_fetch"] = {"model": wf_model}
 
 
 def build_agent(
@@ -250,16 +261,7 @@ def build_agent(
         "skills": skills_plugin,
         "memory": True,
     }
-    model_ref = (
-        model if isinstance(model, str) else getattr(model, "_strands_model_ref", None)
-    )
-    if isinstance(model_ref, str) and (
-        model_ref.partition("/")[0].lower() == "meta"
-        or (base_url and model_ref.partition("/")[0].lower() in ("openai", "anthropic"))
-    ):
-        wf_model = _build_web_fetch_model(model_ref, base_url, api_mode)
-        if not isinstance(wf_model, str):
-            kwargs["builtin_tools"]["web_fetch"] = {"model": wf_model}
+    _apply_custom_web_fetch(kwargs, model, base_url, api_mode)
     if model is not None:
         kwargs["model"] = model
         if isinstance(getattr(model, "_strands_model_ref", None), str):
@@ -274,7 +276,11 @@ def build_agent(
         _stamp_model_ref(resolved_model, normalize_model_ref(model))
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     if base_url:
-        owner = _provider_of(normalize_model_ref(target_id)) if target_id else None
+        owner = (
+            provider_of(normalize_model_ref(target_id), unwrap_litellm=True)
+            if target_id
+            else None
+        )
         if owner is not None:
             kwargs["_base_url"] = base_url
             kwargs["_base_url_provider"] = owner
@@ -361,7 +367,7 @@ def _root(
         normalize_model_ref(raw_model) if isinstance(raw_model, str) else raw_model
     )
     owner_provider = (
-        _provider_of(normalize_model_ref(config.model))
+        provider_of(normalize_model_ref(config.model), unwrap_litellm=True)
         if config.model is not None
         else None
     )

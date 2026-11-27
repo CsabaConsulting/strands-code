@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 import platformdirs
 import yaml
 
+from strands_code_cli.model.provider_id import provider_of
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 from strands_code_cli.policy.codeact import CodeactState
 
@@ -29,10 +30,8 @@ def default_config_path() -> Path:
 
 
 def _provider_of_model(model: str) -> str:
-    """Normalized provider owning ``model`` (empty/ARN/bare -> bedrock)."""
-    if model.startswith("arn:") or "/" not in model:
-        return "bedrock"
-    return model.partition("/")[0].lower()
+    """Normalized provider owning ``model`` (unwrapping openrouter/ollama under litellm)."""
+    return provider_of(model, unwrap_litellm=True)
 
 
 def _validate_base_url(base_url: str) -> None:

@@ -56,13 +56,13 @@ import os
 import re
 import shlex
 import threading
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import platformdirs
-import tomllib
 
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 

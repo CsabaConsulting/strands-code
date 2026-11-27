@@ -27,6 +27,7 @@ except ImportError:  # harness predates supports_thinking: static fallback below
 
 import strands_code_cli.cost.reported_cost as reported_cost
 import strands_code_cli.model.model_capabilities as model_capabilities
+from strands_code_cli.model.provider_id import provider_of
 
 MODEL_REFUSAL = "Model switches apply at the idle prompt — wait for the turn to finish."
 
@@ -106,13 +107,14 @@ _CONVERT_FITS_PCT = 70.0
 def _vendor_of(entry: str) -> str:
     """Vendor owning an id: provider prefix, else the id's first segment.
 
-    ``anthropic/claude-x`` → ``anthropic``; ``bedrock/global.anthropic.x``
-    and bare/profile ids normalize through :func:`_base_key` first.
+    ``anthropic/claude-x`` → ``anthropic``; ``bedrock/global.anthropic.x``,
+    ``bedrock-mantle/openai.x``, and bare/profile ids normalize through
+    :func:`_base_key` first.
     """
     if "/" in entry and not entry.startswith("arn:"):
         provider, _, rest = entry.partition("/")
         low_prov = provider.lower()
-        if low_prov == "bedrock":
+        if low_prov in ("bedrock", "bedrock-mantle"):
             entry = rest
         elif rest.lower().startswith(_OPENROUTER_PREFIX):
             return rest[len(_OPENROUTER_PREFIX) :].split("/", 1)[0].lower()
@@ -122,13 +124,8 @@ def _vendor_of(entry: str) -> str:
 
 
 def _provider_of(entry: str) -> str:
-    """Provider owning an id: ``bedrock`` for ARNs and bare ids (resolve
-    contract), else the ``provider/`` prefix."""
-    if entry.startswith("arn:"):
-        return "bedrock"
-    if "/" in entry:
-        return entry.partition("/")[0].lower()
-    return "bedrock"
+    """Provider owning an id (preserving ``litellm`` wrapper for rule matching)."""
+    return provider_of(entry, unwrap_litellm=False)
 
 
 def _rule_matches(
@@ -545,7 +542,7 @@ def _append_bedrock_profiles(
         return  # profiles are additive; foundation models still count as online
     for entry in profiles:
         arn = entry.get("inferenceProfileArn")
-        if not isinstance(arn, str):
+        if not isinstance(arn, str) or not arn.strip() or _has_unsafe_model_chars(arn):
             continue
         refs = _profile_model_ids(entry)
         if refs and all(ref in non_chat_ids or _looks_non_chat(ref) for ref in refs):
@@ -561,13 +558,25 @@ def _discover_bedrock_models(region: str | None) -> tuple[list[str], bool]:
         client_kwargs: dict[str, Any] = {}
         if region is not None:
             client_kwargs["region_name"] = region
+        try:
+            from botocore.config import Config
+
+            client_kwargs["config"] = Config(
+                connect_timeout=5, read_timeout=5, retries={"max_attempts": 0}
+            )
+        except ImportError:
+            pass
         client = boto3.client("bedrock", **client_kwargs)
         summaries = client.list_foundation_models().get("modelSummaries", [])
         options: list[str] = []
         non_chat_ids: set[str] = set()
         for entry in summaries:
             model_id = entry.get("modelId")
-            if not isinstance(model_id, str):
+            if (
+                not isinstance(model_id, str)
+                or not model_id.strip()
+                or _has_unsafe_model_chars(model_id)
+            ):
                 continue
             if _is_chat_model(entry):
                 if "ON_DEMAND" in entry.get("inferenceTypesSupported", []):
@@ -591,8 +600,13 @@ def _is_google_chat_model(entry: Any) -> str | None:
         raw.split("/models/", 1)[1]
         if "/models/" in raw
         else raw.removeprefix("models/")
-    )
-    if not short.lower().startswith("gemini-") or _looks_non_chat(short):
+    ).strip()
+    if (
+        not short
+        or _has_unsafe_model_chars(short)
+        or not short.lower().startswith("gemini-")
+        or _looks_non_chat(short)
+    ):
         return None
     actions = getattr(entry, "supported_actions", None)
     if actions is None:
@@ -604,6 +618,18 @@ def _is_google_chat_model(entry: Any) -> str | None:
     return short
 
 
+def _google_discovery_client_kwargs(genai_mod: Any) -> dict[str, Any]:
+    """Build bounded-timeout kwargs for ``genai.Client``."""
+    types_mod = getattr(genai_mod, "types", None)
+    http_cls = getattr(types_mod, "HttpOptions", None) if types_mod else None
+    if callable(http_cls):
+        try:
+            return {"http_options": http_cls(timeout=5_000)}
+        except Exception:
+            pass
+    return {"http_options": {"timeout": 5_000}}
+
+
 def _discover_google_models() -> tuple[list[str], bool]:
     """List live Gemini chat models when Google credentials exist."""
     from strands_code_cli.entry.first_run import has_google_credentials
@@ -613,7 +639,10 @@ def _discover_google_models() -> tuple[list[str], bool]:
     try:
         from google import genai  # lazy: optional [gemini] extra
 
-        client = genai.Client()
+        try:
+            client = genai.Client(**_google_discovery_client_kwargs(genai))
+        except TypeError:
+            client = genai.Client()
         found = [
             f"google/{short}"
             for entry in itertools.islice(client.models.list(), 500)
@@ -692,9 +721,12 @@ _OPENAI_NON_CHAT_TOKENS: tuple[str, ...] = (
 
 def _is_openai_chat_model(model_id: str) -> bool:
     """True for Responses-capable OpenAI chat/reasoning model ids."""
-    if not isinstance(model_id, str) or not model_id.strip():
+    if not isinstance(model_id, str):
         return False
-    lowered = model_id.strip().lower()
+    stripped = model_id.strip()
+    if not stripped or _has_unsafe_model_chars(stripped):
+        return False
+    lowered = stripped.lower()
     if any(token in lowered for token in _OPENAI_NON_CHAT_TOKENS):
         return False
     return lowered in ("o1", "o3") or lowered.startswith(
@@ -710,7 +742,11 @@ def _scoped_discovery_base_url(provider: str) -> str | None:
     try:
         cfg = ProviderConfig.load()
         if cfg.base_url:
-            owner = _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+            owner = (
+                provider_of(normalize_model_ref(cfg.model), unwrap_litellm=True)
+                if cfg.model
+                else None
+            )
             scoped = scoped_base_url(cfg.base_url, owner, f"{provider}/_")
             if scoped:
                 return scoped.rstrip("/")
@@ -735,7 +771,7 @@ def _discover_openai_models() -> tuple[list[str], bool]:
     try:
         import openai  # lazy: optional [openai] extra
 
-        client_kw: dict[str, Any] = {}
+        client_kw: dict[str, Any] = {"timeout": 5.0, "max_retries": 0}
         if custom_url:
             client_kw["base_url"] = custom_url
             if not has_creds:
@@ -771,9 +807,12 @@ def _serialize_capabilities(raw_caps: Any) -> dict[str, Any] | None:
 def _extract_anthropic_model_meta(item: Any) -> dict[str, Any] | None:
     """Extract JSON-safe Anthropic /v1/models metadata from one SDK item."""
     raw_id = getattr(item, "id", None)
-    if not isinstance(raw_id, str) or not raw_id.strip():
+    if not isinstance(raw_id, str):
         return None
-    meta: dict[str, Any] = {"id": raw_id.strip()}
+    stripped = raw_id.strip()
+    if not stripped or _has_unsafe_model_chars(stripped):
+        return None
+    meta: dict[str, Any] = {"id": stripped}
     for field in ("max_input_tokens", "max_tokens", "line"):
         val = getattr(item, field, None)
         if val is not None:
@@ -802,7 +841,7 @@ def _discover_anthropic_models() -> tuple[list[str], bool]:
 
         import strands_code_cli.cost.live_pricing as live_pricing
 
-        client_kw: dict[str, Any] = {}
+        client_kw: dict[str, Any] = {"timeout": 5.0, "max_retries": 0}
         if custom_url:
             client_kw["base_url"] = custom_url
             if not has_creds:
@@ -1552,11 +1591,13 @@ def scoped_base_url(
         return None
     if not owner_provider or not target_model:
         return base_url
-    return (
-        base_url
-        if _provider_of(normalize_model_ref(target_model)) == owner_provider
-        else None
+    norm = normalize_model_ref(target_model)
+    target_prov = (
+        provider_of(norm, unwrap_litellm=False)
+        if owner_provider == "litellm"
+        else provider_of(norm, unwrap_litellm=True)
     )
+    return base_url if target_prov == owner_provider else None
 
 
 def _configure_openai_or_meta_base_url(
@@ -1573,6 +1614,11 @@ def _configure_openai_or_meta_base_url(
         from strands_code_cli.entry.first_run import has_openai_credentials
 
         if not has_openai_credentials() and not client_args.get("api_key"):
+            client_args["api_key"] = "not-required"
+    elif provider == "litellm":
+        from strands_code_cli.entry.first_run import has_litellm_credentials
+
+        if not has_litellm_credentials() and not client_args.get("api_key"):
             client_args["api_key"] = "not-required"
 
 
@@ -1610,7 +1656,7 @@ def configure_base_url_for_model(
     _validate_base_url(base_url)
     cleaned = base_url.rstrip("/")
     provider = _provider_of(normalize_model_ref(model_id))
-    if provider in ("openai", "meta"):
+    if provider in ("openai", "meta", "litellm"):
         _configure_openai_or_meta_base_url(provider, resolved, cleaned)
     elif provider == "anthropic":
         _configure_anthropic_base_url(resolved, cleaned)
@@ -1618,17 +1664,26 @@ def configure_base_url_for_model(
 
 
 def _build_openai_chat_model(normalized: str, base_url: str) -> Any:
-    """Build legacy Chat Completions OpenAIModel when api_mode=='chat'."""
+    """Build legacy Chat Completions OpenAIModel for custom endpoints."""
     from strands.models.openai import OpenAIModel
 
-    from strands_code_cli.entry.first_run import has_openai_credentials
+    from strands_code_cli.entry.first_run import (
+        has_litellm_credentials,
+        has_openai_credentials,
+    )
     from strands_code_cli.entry.provider_config import _validate_base_url
 
     _validate_base_url(base_url)
     client_args: dict[str, Any] = {"base_url": base_url.rstrip("/")}
-    if not has_openai_credentials():
-        client_args["api_key"] = "not-required"
-    chat_id = normalized.split("/", 1)[1]
+    provider = _provider_of(normalized)
+    if provider == "litellm":
+        if not has_litellm_credentials():
+            client_args["api_key"] = "not-required"
+        chat_id = normalized
+    else:
+        if not has_openai_credentials():
+            client_args["api_key"] = "not-required"
+        chat_id = normalized.split("/", 1)[1]
     resolved = OpenAIModel(model_id=chat_id, client_args=client_args)
     resolved._strands_model_ref = normalized
     return resolved
@@ -1677,7 +1732,8 @@ def resolve_harness_model(
     from strands_harness.models import resolve_model, supports_web_search
 
     normalized = normalize_model_ref(model_ref)
-    if _provider_of(normalized) == "meta" and not upstream_supports_meta():
+    provider = _provider_of(normalized)
+    if provider == "meta" and not upstream_supports_meta():
         return _stamp_model_ref(
             build_meta_model(
                 normalized,
@@ -1688,9 +1744,19 @@ def resolve_harness_model(
             ),
             normalized,
         )
-    if base_url and _provider_of(normalized) == "openai" and api_mode == "chat":
+    eff_base_url = base_url
+    if eff_base_url is None and provider == "openai" and api_mode == "chat":
+        from strands_code_cli.entry.first_run import openai_base_url
+
+        try:
+            eff_base_url = openai_base_url()
+        except ValueError:
+            eff_base_url = None
+    if eff_base_url and (
+        provider == "litellm" or (provider == "openai" and api_mode == "chat")
+    ):
         return _stamp_model_ref(
-            _build_openai_chat_model(normalized, base_url), normalized
+            _build_openai_chat_model(normalized, eff_base_url), normalized
         )
     target_default = default or normalized
     kwargs: dict[str, Any] = {
@@ -1780,8 +1846,15 @@ def _custom_web_fetch_model(
     normalized = normalize_model_ref(target_ref)
     provider = _provider_of(normalized)
     scoped = scoped_base_url(base_url, base_url_provider, normalized)
+    if scoped is None and provider == "openai" and api_mode == "chat":
+        from strands_code_cli.entry.first_run import openai_base_url
+
+        try:
+            scoped = openai_base_url()
+        except ValueError:
+            scoped = None
     if provider != "meta" and not (
-        scoped is not None and provider in ("openai", "anthropic")
+        scoped is not None and provider in ("openai", "anthropic", "litellm")
     ):
         return None
     try:

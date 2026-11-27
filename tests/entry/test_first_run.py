@@ -596,6 +596,16 @@ class TestProviderConfigPersistence:
         assert cross_provider.base_url is None
         assert cross_provider.api_mode is None
 
+        or_cfg = ProviderConfig(
+            model="litellm/openrouter/anthropic/claude-sonnet-4.6",
+            base_url="http://127.0.0.1:4000/v1",
+            api_mode="chat",
+        )
+        or_cfg.save_model_choice("litellm/anthropic/claude-sonnet-4-6", path)
+        switched_lt = ProviderConfig.load(path)
+        assert switched_lt.base_url is None
+        assert switched_lt.api_mode is None
+
     def test_provider_config_field_types_and_tmp_symlink_rejection(self, tmp_path):
         from strands_code_cli.entry.provider_config import _provider_of_model
 

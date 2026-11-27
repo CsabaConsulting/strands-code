@@ -1014,16 +1014,20 @@ def _llm_scoped_endpoint(target_model: str) -> tuple[str | None, str | None]:
     """Return scoped ``(base_url, api_mode)`` from ProviderConfig for ``target_model``."""
     from strands_code_cli.entry.provider_config import ProviderConfig
     from strands_code_cli.model.model_switch import (
-        _provider_of,
         normalize_model_ref,
         scoped_base_url,
     )
+    from strands_code_cli.model.provider_id import provider_of
 
     try:
         cfg = ProviderConfig.load()
     except ValueError:
         return None, None
-    owner = _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+    owner = (
+        provider_of(normalize_model_ref(cfg.model), unwrap_litellm=True)
+        if cfg.model
+        else None
+    )
     scoped_url = scoped_base_url(cfg.base_url, owner, target_model)
     if scoped_url is None:
         return None, None

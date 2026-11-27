@@ -506,6 +506,11 @@ class TestSdkHints:
         assert "strands-code-agent[meta]" in _sdk_hint(
             "meta/muse-spark-1.3-contributor"
         )
+        assert "strands-code-agent[ollama]" in _sdk_hint("ollama/qwen3:8b")
+        assert "strands-code-agent[openai]" in _sdk_hint(
+            "bedrock-mantle/openai.gpt-6.2-sol"
+        )
+        assert "strands-code-agent[litellm]" in _sdk_hint("openrouter/openai/gpt-4o")
 
     def test_model_dispatch_openai_and_anthropic_import_errors_show_hints(
         self, tmp_path

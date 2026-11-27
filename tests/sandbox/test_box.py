@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 import stat
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import tomllib
 
 from strands_code_cli.entry.provider_config import ProviderConfig
 from strands_code_cli.routing.core import (
@@ -455,7 +455,37 @@ class TestBoxConfigGenerationAndEgress:
         assert "GOOGLE_GENAI_USE_VERTEXAI" in joined
         assert "custom base_url" in joined
         assert "Ollama" in joined
-        assert "bedrock-mantle" in joined
+        assert "bedrock-mantle" in res_warn.providers
+
+    def test_bedrock_mantle_egress_profile(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(tmp_path / "cfg" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir", lambda app: str(tmp_path / "data" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(tmp_path / "cache" / app)
+        )
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        res_mantle_warn = init_box_config(
+            repo,
+            providers=["bedrock"],
+            config=ProviderConfig(model="bedrock-mantle/openai.gpt-6.2-sol"),
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        )
+        assert any("bedrock-mantle" in w for w in res_mantle_warn.warnings)
+        mantle_only = init_box_config(
+            repo,
+            providers=["bedrock-mantle"],
+            aws_region="eu-central-1",
+            env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        )
+        parsed_mantle = tomllib.loads(mantle_only.box_toml.read_text(encoding="utf-8"))
+        assert parsed_mantle["egress"]["bedrock_mantle"]["destinations"] == [
+            "bedrock-mantle.eu-central-1.api.aws"
+        ]
 
     def test_tool_sections_use_valid_canonical_paths(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
@@ -1210,8 +1240,10 @@ class TestBoxNyquistEdgeBranches:
                 env={"HOME": str(tmp_path)},
             )
 
-        monkeypatch.setattr(sandbox_box, "tomllib", None)
-        assert sandbox_box._validate_launch_config(res.box_toml) is None
+        bad_cfg = abs_cfg_dir / "bad_box.toml"
+        bad_cfg.write_text("[broken\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Invalid"):
+            sandbox_box._validate_launch_config(bad_cfg)
 
     def test_wave3_box_toml_utf8_xdg_defaults_litellm_apparmor_and_symlinks(
         self, tmp_path, monkeypatch

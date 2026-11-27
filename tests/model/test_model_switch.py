@@ -2009,8 +2009,12 @@ class TestCascadePicker:
             "/model some-bare-id", session_id=index.mint(), index=index
         )
         assert "strands-code-agent[agentcore]" in bedrock_msg
-        _, other_msg = dispatch(
+        _, ollama_msg = dispatch(
             "/model ollama/llama3", session_id=index.mint(), index=index
+        )
+        assert "strands-code-agent[ollama]" in ollama_msg
+        _, other_msg = dispatch(
+            "/model customprov/llama3", session_id=index.mint(), index=index
         )
         assert "provider SDK not installed" in other_msg
 
@@ -2386,7 +2390,10 @@ class TestModelPersistence:
         assert built_args == [
             {
                 "model_id": "nemotron-70b",
-                "client_args": {"base_url": "https://proxy.local/v1"},
+                "client_args": {
+                    "base_url": "https://proxy.local/v1",
+                    "api_key": "not-required",
+                },
             }
         ]
 
@@ -4775,23 +4782,28 @@ class TestMetaModelAdapter:
         )
         wf_meta = captured["builtin_tools"]["web_fetch"]["model"]
         assert wf_meta.client_args["base_url"] == "https://meta-proxy.local/v1"
+
+        import strands_code_cli.model.model_switch as ms
+
         assert (
-            entry_main._build_web_fetch_model(
-                "meta/muse-spark-1.3-contributor", "https://meta-proxy.local/v1", None
+            ms._custom_web_fetch_model(
+                "litellm/custom/foo",
+                base_url="http://127.0.0.1:4000/v1",
+                base_url_provider="litellm",
             )
-            != "meta/muse-spark-1.3-contributor"
-            or True
+            is not None
         )
         monkeypatch.setattr(
-            entry_main,
+            ms,
             "resolve_harness_model",
             lambda *_a, **_kw: (_ for _ in ()).throw(ImportError("missing sdk")),
         )
         assert (
-            entry_main._build_web_fetch_model(
-                "meta/muse-spark-1.3-contributor", "https://meta-proxy.local/v1", None
+            ms._custom_web_fetch_model(
+                "meta/muse-spark-1.3-contributor",
+                base_url="https://meta-proxy.local/v1",
             )
-            == "meta/muse-spark-1.3-contributor"
+            is None
         )
 
     def test_resolve_harness_model_can_suppress_web_search_and_caching(
@@ -5294,3 +5306,83 @@ class TestMetaModelAdapter:
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no key")),
         )
         assert ms._custom_web_fetch_model("meta/muse-spark-1.3-contributor") is None
+
+    def test_parity_mantle_vendor_keyless_base_url_and_discovery_guards(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+
+        import strands_code_cli.entry.main as entry_main
+        import strands_code_cli.model.model_switch as ms
+
+        # 1. bedrock-mantle _vendor_of normalizes vendor for media & reasoning helpers.
+        assert ms._vendor_of("bedrock-mantle/openai.gpt-6.2-sol") == "openai"
+        assert ms._vendor_of("bedrock-mantle/deepseek.v3-v1:0") == "deepseek"
+        assert ms.supports_media("bedrock-mantle/deepseek.v3-v1:0") is False
+
+        # 2. Keyless litellm/ and openai chat base_url parity in model_for_config & resolve_harness_model.
+        lt_m = entry_main.model_for_config(
+            "litellm/custom/foo", base_url="http://127.0.0.1:4000/v1"
+        )
+        assert lt_m.client_args["api_key"] == "not-required"
+        assert lt_m.client_args["base_url"] == "http://127.0.0.1:4000/v1"
+
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")
+        oai_m = entry_main.model_for_config("openai/gpt-6.2-sol", api_mode="chat")
+        assert oai_m.client_args["api_key"] == "not-required"
+        assert oai_m.client_args["base_url"] == "http://127.0.0.1:8080/v1"
+
+        lt_sw = ms.resolve_harness_model(
+            "litellm/custom/foo", base_url="http://127.0.0.1:4000/v1"
+        )
+        assert lt_sw.client_args["base_url"] == "http://127.0.0.1:4000/v1"
+        assert lt_sw.client_args["api_key"] == "not-required"
+
+        # 3. Horizontal discovery timeout / retry / unsafe-char checks.
+        seen_kw: dict = {}
+        monkeypatch.setenv("OPENAI_API_KEY", "k-oai")
+        fake_oai = types.ModuleType("openai")
+        fake_oai.OpenAI = lambda **kw: (
+            seen_kw.update({"openai": kw})
+            or types.SimpleNamespace(
+                models=types.SimpleNamespace(
+                    list=lambda: iter(
+                        [
+                            types.SimpleNamespace(id="gpt-6.2-sol"),
+                            types.SimpleNamespace(id="gpt-4o\nevil"),
+                        ]
+                    )
+                )
+            )
+        )
+        monkeypatch.setitem(sys.modules, "openai", fake_oai)
+        oai_list, oai_ok = ms._discover_openai_models()
+        assert oai_ok is True
+        assert oai_list == ["openai/gpt-6.2-sol"]
+        assert seen_kw["openai"]["timeout"] == 5.0
+        assert seen_kw["openai"]["max_retries"] == 0
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "k-ant")
+        fake_ant = types.ModuleType("anthropic")
+        fake_ant.Anthropic = lambda **kw: (
+            seen_kw.update({"anthropic": kw})
+            or types.SimpleNamespace(
+                models=types.SimpleNamespace(
+                    list=lambda: iter(
+                        [
+                            types.SimpleNamespace(id="claude-sonnet-5-5"),
+                            types.SimpleNamespace(id="claude-5\x1b[31m"),
+                        ]
+                    )
+                )
+            )
+        )
+        monkeypatch.setitem(sys.modules, "anthropic", fake_ant)
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path / "cache"))
+        ant_list, ant_ok = ms._discover_anthropic_models()
+        assert ant_ok is True
+        assert ant_list == ["anthropic/claude-sonnet-5-5"]
+        assert seen_kw["anthropic"]["timeout"] == 5.0
+        assert seen_kw["anthropic"]["max_retries"] == 0
