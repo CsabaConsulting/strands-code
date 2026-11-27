@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: "19.2"
 current_phase_name: CLI, Routing/Cost, Provider & Packaging Parity
 current_plan: 0
-status: discussed
-stopped_at: Phase 19.2 context gathered (`19.2-CONTEXT.md`) — ready for `/gsd-plan-phase 19.2`
-last_updated: "2026-11-27T07:16:00Z"
+status: planned
+stopped_at: Phase 19.2 planned (`19.2-01..04-PLAN.md`, `19.2-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19.2`
+last_updated: "2026-11-27T07:32:00Z"
 last_activity: 2026-11-26
-last_activity_desc: Completed Phase 19.2 design discussion (`19.2-CONTEXT.md` `D-01`..`D-08` & `19.2-DISCUSSION-LOG.md`)
-state_head: 871bc3f
+last_activity_desc: Created Phase 19.2 research, patterns, 4 wave plans, validation strategy, and plan-check (`PASS`)
+state_head: 4dfabce
 progress:
   total_phases: 13
   completed_phases: 8
-  total_plans: 24
+  total_plans: 28
   completed_plans: 24
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.2 Discussed (`PARITY-01`, `19.2-CONTEXT.md` `D-01`–`D-08`) — ready for `/gsd-plan-phase 19.2`
+**Current focus:** Milestone `v2.0` · Phase 19.2 Planned (`PARITY-01`, `19.2-01..04-PLAN.md`, `19.2-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19.2`
 
 ## Current Position
 
-Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — Discussed (`19.2-CONTEXT.md` `D-01`–`D-08`)
-Plan: 0 of TBD in Phase 19.2
-Status: Ready for planning (`19.2-CONTEXT.md` & `19.2-DISCUSSION-LOG.md` captured)
-Last activity: 2026-11-26 — Completed Phase 19.2 design discussion (`19.2-CONTEXT.md` `D-01`–`D-08` & `19.2-DISCUSSION-LOG.md`)
+Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — Planned (`4` wave plans, `19.2-PLAN-CHECK.md` PASS)
+Plan: 0 of 4 in Phase 19.2
+Status: Planned (`19.2-RESEARCH.md`, `19.2-PATTERNS.md`, `19.2-01..04-PLAN.md`, `19.2-VALIDATION.md`, `19.2-PLAN-CHECK.md`)
+Last activity: 2026-11-26 — Created Phase 19.2 research, patterns, 4 wave plans, validation strategy, and plan-check (`PASS`)
 
 Progress: [██████░░░░] 62%
 
@@ -95,10 +95,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19.1 security audit (`19.1-SECURITY.md` `20/20 closed`, `threats_open: 0`, `status: verified`, `2863167`, 2026-11-26): remediated `T-19.1-17` HIGH (`trust_delegated` outside-scope `read`/`search` bypass via `_is_outside_scope_prompt`), `T-19.1-18` HIGH (`_derive_rule` glob-metachar wildcard persistence), `T-19.1-19` HIGH (`_is_safe_git_fetch_args` blocking `ext::`/mutating flags + `curl --etag-compare` + `apply_stashed` repo `[[deny]]` & atomic `_fs_write`), and `T-19.1-20` MEDIUM (ANSI/control/Bidi sanitization in gate tag/tool names, `/btw` receipts/errors, and steering echoes); verified `1948 + 1 = 1949` unit suite + `44/44` rig + `1` live host `strands-box 0.3.1` integration + all 6 CI gates green.
 - Phase 19.1 Nyquist validation (`19.1-VALIDATION.md` `validated`, `nyquist_compliant: true`, 2026-11-26): audited Phase 19.1 modules via `sys.monitoring` (`100.0%` on `platform_io.py`, `ui/console.py`, `loop/btw.py`, `diff_gate.py [345..415]`, and `model_switch.py [1750..1840]`; `99.4%` `policy_gate.py`, `99.0%` `memory_modes.py`, `98.6%` `policy/scope.py`, `98.4%` `entry/subagent.py`, `97.1%` `policy/core.py [680..1150]`) and filled all reachable edge branches across 9 test files with zero runtime edits (`1956 + 1 = 1957` unit suite + `44/44` rig + `1` live host `strands-box 0.3.1` integration + all 6 CI gates green).
 - Phase 19.2 discussion (`19.2-CONTEXT.md` `D-01`–`D-08`, `19.2-DISCUSSION-LOG.md`, 2026-11-26): locked session-sticky in-memory toggles across all 5 toggles (`/mode`, `/route on|off`, `/memory mode`, `/codeact`, `/diff on-demand|auto`) with clean-break `config.yaml` direct defaults (`codeact`, `diff_mode`, `memory_mode`, retiring `diff.yaml`, `memory.yaml`, and `codeact_remember`); retired `/diff approve-each` + `_default_ask` with per-`session_id` `PendingStore` and bounded `unified_diff` previews in both HITL `write`/`edit` prompts and `/diff show`; explicit `--codeact tool|code|both` retiring `_expand_bare_codeact`, unique prefix resolution for `/resume` & `--session-id`, and `/skills`/alias cleanup; retired `engine.primary` (`engine.order` sole schema), 5-engine `/route setup` (auto-detecting `native` + `decisions_api`, exposing `llm` in builder, auto-enabling `RoutingState`), `_route_pre_turn` double-record fix, and `OPENROUTER_API_KEY` skip note; preserved `/cost` held/`Uncertain` spend with `native` estimated & `decisions_api` `cost n/a` + `refresh_report` decisions status; unified `provider_of()`, Mantle `_vendor_of`, keyless `base_url`, discovery hardening backport, and full OpenAI effort table for `openai/` + `bedrock-mantle/openai.*` (`#6525` bridge + aligned `validate_routed_effort()`); and `requires-python >=3.11`, direct `httpx`, `ollama` extra, `_SDK_EXTRA_HINTS`, CI `--all-extras`, and full XDG/AWS `conftest.py` isolation.
+- Phase 19.2 planning (`19.2-RESEARCH.md`, `19.2-PATTERNS.md`, `19.2-01..04-PLAN.md`, `19.2-VALIDATION.md`, `19.2-PLAN-CHECK.md` PASS): structured Waves 1–4 around canonical dependency-free `model/provider_id.py` + `tmp_path_factory.mktemp("xdg")` hermetic `conftest.py` (outside `tmp_path` to avoid `test_first_run.py:458` & protected-path collisions), preserving `make_safe_search_tool` in `diff_gate.py`, safe confined `write` diff previews, shared prefix resolver + mocked `SessionIndex` guard, sole `engine.order` (`order: []` disables cleanly), dict-driven 5-engine `/route setup`, `(model, applied)` switch + `decision_engine` in `/cost`, and declarative OpenAI/`bedrock-mantle/openai.*` capability guards while respecting `CC <= 20` ceilings, `lint-imports`, restricted modules, and `D-24`.
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM) — includes rolled-in OpenAI/`#6525` reasoning-effort guard fixes, `validate_routed_effort()` pre-`resolve_model()` alignment, and `bedrock-mantle/` OpenAI `effort="off"` parity.
+- Run `/gsd-execute-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM) — executes `19.2-01..04-PLAN.md` across Waves 1–4.
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -111,6 +112,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T07:16:00Z
-Stopped at: Phase 19.2 context gathered (`19.2-CONTEXT.md`) — ready for `/gsd-plan-phase 19.2`
-Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-CONTEXT.md
+Last session: 2026-11-27T07:32:00Z
+Stopped at: Phase 19.2 planned (`19.2-01..04-PLAN.md`, `19.2-PLAN-CHECK.md` PASS) — ready for `/gsd-execute-phase 19.2`
+Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-01-PLAN.md
