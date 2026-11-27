@@ -8,6 +8,7 @@ leak into other tests.
 from __future__ import annotations
 
 import importlib
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import patch
@@ -512,7 +513,10 @@ class TestFirstRunCli:
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(main_module.app, ["--model", "   "])
         assert result.exit_code != 0
-        assert "invalid --model" in result.output
+        # Strip ANSI: typer's OptionHighlighter emits mid-word style spans
+        # when color is forced (GITHUB_ACTIONS), splitting "--model".
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "invalid --model" in plain
         assert not (tmp_path / ".agent").exists()
 
 
