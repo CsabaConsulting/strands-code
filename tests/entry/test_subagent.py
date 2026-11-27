@@ -560,3 +560,22 @@ class TestCliSubagentWiring:
         sub_mod.close_agent_repls(SimpleNamespace(_subagent_tool=fake_tool))
         assert interp_pending._session is None
         assert children == []
+
+    def test_configure_child_agent_ignores_readonly_delegate_attr(self, monkeypatch):
+        import strands_code_cli.entry.subagent as sub_mod
+
+        class _SlottedChild:
+            __slots__ = ("model",)
+
+            def __init__(self):
+                self.model = None
+
+        monkeypatch.setattr(sub_mod, "register_memory_plugin", lambda *a: None)
+        repl_tool = SimpleNamespace(tool_name="python_repl")
+        sub_mod._configure_child_agent(
+            _SlottedChild(),
+            None,
+            {"tools": [repl_tool], "interventions": []},
+            None,
+            None,
+        )

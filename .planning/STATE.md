@@ -4,12 +4,12 @@ milestone: v2.0
 current_phase: "20"
 current_phase_name: Monty Python VM for python_repl & CodeAct
 current_plan: 3
-status: secured
-stopped_at: Phase 20 security audit verified (20-SECURITY.md 12/12 closed, threats_open 0, 2013 + 1 + 44 rig + live Box+Monty + 6/6 CI gates) — ready for /gsd-validate-phase 20
-last_updated: "2026-11-27T22:48:00Z"
+status: validated
+stopped_at: Phase 20 validated (20-VALIDATION.md 594/596 = 99.7%, 2018 + 1 + 44 rig + live Box+Monty + 6/6 CI gates) — ready for Phase 21 (/gsd-discuss-phase 21)
+last_updated: "2026-11-27T22:58:00Z"
 last_activity: 2026-11-27
-last_activity_desc: Completed /gsd-secure-phase 20 (20-SECURITY.md 12/12 closed; closed T-20-10/T-20-11/T-20-12 in codeact.py; 2013 + 1 + 44 rig + live Box+Monty + 6/6 CI gates green)
-state_head: d813b0a
+last_activity_desc: Completed /gsd-validate-phase 20 (sys.monitoring 594/596 = 99.7% / 100.0% reachable, zero runtime edits, 2018 + 1 + 44 rig + live Box+Monty + 6/6 CI gates)
+state_head: ae685fc
 progress:
   total_phases: 13
   completed_phases: 10
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 20 Secured (`20-SECURITY.md` `12/12` closed, `threats_open: 0`) — ready for `/gsd-validate-phase 20`
+**Current focus:** Milestone `v2.0` · Phase 20 Validated (`20-VALIDATION.md` `594/596 = 99.7%`, `nyquist_compliant: true`) — ready for Phase 21 (`/gsd-discuss-phase 21`)
 
 ## Current Position
 
-Phase: 20 of 23 (Monty Python VM for `python_repl` & CodeAct) — Secured (`20-SECURITY.md` verified)
+Phase: 20 of 23 (Monty Python VM for `python_repl` & CodeAct) — Validated (`20-VALIDATION.md` `nyquist_compliant: true`)
 Plan: 3 of 3 in Phase 20
-Status: Secured (ready for `/gsd-validate-phase 20`)
-Last activity: 2026-11-27 — Completed `/gsd-secure-phase 20` (`20-SECURITY.md` `12/12` closed, `threats_open: 0`; closed `T-20-10`–`T-20-12` in `codeact.py`; `2013 + 1 = 2014` default tests, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty integration, all 6 CI gates green)
+Status: Validated (ready for Phase 21)
+Last activity: 2026-11-27 — Completed `/gsd-validate-phase 20` (`594/596` = `99.7%` total / `100.0%` reachable, `0` runtime edits, `2018 + 1 = 2019` default tests, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty integration, all 6 CI gates green)
 
 Progress: [████████░░] 77%
 
@@ -105,10 +105,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 20 (`bc28c40`, `1d082de`, `20-VERIFICATION.md` `11/11` PASS, `20-VALIDATION.md` verified): delivered `SANDBOX-02` by adding core `pydantic-monty` dep (`uv.lock`) and `MONTY_BIN` scrub in `tests/conftest.py`, building `strands_code_cli/sandbox/monty.py` (`MontyPythonInterpreter` with stateful `feed_run` sessions, pure-Rust stdlib + `ascii` builtin, AST + `os=None` denial of `os`/`pathlib`/`subprocess`/`__import__`/`importlib`, `256 MiB` RAM / `60s` timeout / `200` recursion / `4 MiB` stdout bounds, fail-closed startup, `MontyCrashedError` stdout salvage + worker replacement + reset notice, and lazy shared `Monty()` pool with deterministic teardown), migrating all 3 CLI `python_repl` sites (`entry/main.py`, `policy/codeact.py` `CodeactStint`, `loop/btw.py` `fresh_tools_for_delegate` / `entry/subagent.py` + `_close_loop_session`, `_teardown_btw_agent`, `_wrap_subagent_cleanup`) leaving zero `SandboxedPythonInterpreter` in `strands_code_cli/`, backporting Phase 19.1 symlink/`O_NOFOLLOW`/`atomic_write_text`/sensitive-read/protected-path + active `PolicyConfig` `[[deny]]` enforcement into `codeact_read`/`write`/`edit`/`shell`, adding `_resolve_monty_binary()` (`[agent.filesystem].exec` grant while keeping `[tool.python]` omitted) in `sandbox/box.py`, documenting in `docs/QUICKSTART.md`, and verifying `2011 + 1 = 2012` default tests, `44/44` rig, live `strands-box 0.3.1` Monty execution inside `CLONE_NEWUSER` (`1 passed`), and all 6 CI gates with `strands_code_agent/` untouched (`D-24`).
 - Phase 20 UAT (`20-UAT.md` `6/6` passed on `80ab751`; mid-UAT adversarial fixes `ea35d49`, `12d9a28`, `533e587`, `80ab751`): closed 10 adversarial pre-check gaps across Tests 1–4 (`TimeoutError` cumulative-session poisoning reset + `os.X_OK`/non-destructive `_SHARED_POOL` swap + dynamic stdout truncation label in `monty.py`; pending unresumed `subagent` child Monty session cleanup across `_wrap_subagent_cleanup` / `close_agent_repls` / `entry/main.py` / `loop/btw.py`; un-collapsed symlink-`..` walk, symlinked `cwd` support, and basename/`env` shell `[[deny]]` matching in `policy/codeact.py`; and custom `MONTY_BIN` `[agent.env]` forwarding, `os.X_OK` candidate validation, and `Cc`/`Cf` C1/Bidi blocking in `box.py` + `monty.py`); verified `2012 + 1 = 2013` default suite under CI env, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty + `CodeactStint` integration, and all 6 CI gates green on `80ab751`.
 - Phase 20 security audit (`20-SECURITY.md` `12/12 closed`, `threats_open: 0`, `status: verified`, 2026-11-27): remediated `T-20-10` HIGH (`CODEACT_MAX_FILE_BYTES = 4 MiB` cap in `_read_regular_file_utf8()` preventing huge-file OOM via `codeact_read`/`codeact_edit`), `T-20-11` HIGH (`_unwrap_env_wrapper()`/`_unwrap_exec_wrapper()`/`_codeact_shell_deny_candidates()` blocking `env -u`/`-C`/`-S` and `nice`/`timeout`/`nohup`/`stdbuf`/`command`/`exec` `[[deny]]` shell bypasses), and `T-20-12` MEDIUM (`_cap_shell_output()` capping `codeact_shell` stdout/stderr at `CODEACT_MAX_SHELL_OUTPUT_BYTES = 4 MiB`); verified `2013 + 1 = 2014` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
+- Phase 20 Nyquist validation (`20-VALIDATION.md` `validated`, `nyquist_compliant: true`, 2026-11-27): audited all 7 Phase 20 modified runtime modules via `sys.monitoring` (`594/596 = 99.7% total / 100.0% reachable`; `100.0%` on `entry/main.py`, `entry/subagent.py`, `loop/btw.py`, `loop/core.py`, and `sandbox/monty.py`; `99.7%` on `policy/codeact.py`; `96.4%` on `sandbox/box.py`) and closed remaining edge branches across `tests/sandbox/test_monty.py`, `tests/policy/test_codeact.py`, `tests/sandbox/test_box.py`, `tests/entry/test_subagent.py`, and `tests/loop/test_btw.py` with zero runtime edits (`2018 + 1 = 2019` default suite under CI env + `44/44` rig + `1/1` live host `strands-box 0.3.1` integration + all 6 CI gates green).
 
 ### Pending Todos
 
-- Run `/gsd-validate-phase 20`.
+- Run `/gsd-discuss-phase 21` (`LOOP-06` `/help`, `TOOL-05` `@file`/`/file`, `REVIEW-01` `/review`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -121,6 +122,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T22:48:00Z
-Stopped at: Phase 20 security audit verified (20-SECURITY.md 12/12 closed, threats_open 0) — ready for /gsd-validate-phase 20
-Resume file: .planning/phases/20-monty-python-vm-for-python-repl-codeact/20-SECURITY.md
+Last session: 2026-11-27T22:58:00Z
+Stopped at: Phase 20 validated (20-VALIDATION.md 594/596 = 99.7%, nyquist_compliant true) — ready for /gsd-discuss-phase 21
+Resume file: .planning/phases/20-monty-python-vm-for-python-repl-codeact/20-VALIDATION.md

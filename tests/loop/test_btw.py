@@ -1930,6 +1930,7 @@ class TestBtwTest5Hardening:
         agent_obj, _ = build_btw_agent(
             {
                 "model": "anthropic/claude-sonnet-4-5",
+                "tools": [SimpleNamespace(tool_name="python_repl")],
                 "memory": False,
                 "session": False,
                 "callback_handler": object(),

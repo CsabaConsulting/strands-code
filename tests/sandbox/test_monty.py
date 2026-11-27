@@ -241,3 +241,84 @@ class TestMontyPythonInterpreter:
         close_repl_tool(b.get_tool())
         assert b._session is None
         shutdown_shared_pool()
+
+    def test_nyquist_monty_edge_branches(self, monkeypatch):
+        from strands_code_agent.python_environments.base import PythonInterpreter
+        from strands_code_cli.sandbox.monty import (
+            _check_denied_imports,
+            _close_pool_instance,
+            _close_tool_children,
+            _is_monty_timeout,
+            _StdoutCollector,
+            _wrap_callback,
+        )
+
+        # _StdoutCollector empty chunk, exact fill, and post-truncation skip.
+        col = _StdoutCollector(max_bytes=4)
+        col("stdout", "")
+        col("stdout", "abcd")
+        col("stdout", "e")
+        assert col.truncated is True
+        assert "[stdout truncated at 4 bytes]" in col.text
+
+        # Dynamic import non-string arg and safe __import__('math').
+        assert _check_denied_imports("__import__(dyn)") is None
+        assert _check_denied_imports("__import__('math')") is None
+
+        # Pool close exception, timeout helper edge, non-callable callback.
+        class _BadPool:
+            def __exit__(self, *a):
+                raise RuntimeError("pool close boom")
+
+        _close_pool_instance(_BadPool())
+
+        class _BadExc(Exception):
+            def exception(self):
+                raise RuntimeError("broken exception()")
+
+        assert _is_monty_timeout(_BadExc()) is False
+        assert _wrap_callback(42) == 42  # type: ignore[arg-type]
+
+        # state_initialization failing discards session.
+        bad_init = MontyPythonInterpreter(state_initialization="import os")
+        assert "not allowed" in bad_init.execute_code("print(1)")[1]
+        assert bad_init._session is None
+
+        # _session is None fallback & unexpected feed_run RuntimeError.
+        plain = MontyPythonInterpreter()
+        assert "no active session" in plain._run_snippet_unlocked("print(1)")[1]
+
+        class _BoomSession:
+            def feed_run(self, *a, **kw):
+                raise RuntimeError("unexpected host failure")
+
+        plain._session = _BoomSession()
+        assert plain._run_snippet_unlocked("print(1)") == (
+            "",
+            "unexpected host failure",
+        )
+        plain._session = None
+
+        # _session_ctx.__exit__ error tolerated on discard.
+        class _BadCtx:
+            def __exit__(self, *a):
+                raise RuntimeError("ctx exit boom")
+
+        plain._session_ctx = _BadCtx()
+        plain.clear_state()
+
+        # get_tool read-only return, close_repl_tool & _close_tool_children error safety.
+        ro = object()
+        monkeypatch.setattr(PythonInterpreter, "get_tool", lambda self: ro)
+        assert plain.get_tool() is ro
+
+        class _BadClose:
+            def close(self):
+                raise RuntimeError("close boom")
+
+        close_repl_tool(types.SimpleNamespace(_interpreter=_BadClose()))
+        _close_tool_children(
+            types.SimpleNamespace(
+                _close_children=lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+            )
+        )

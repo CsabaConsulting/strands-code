@@ -1035,6 +1035,96 @@ class TestCodeactInteriorFunctions:
         assert "[output truncated at 4 MiB]" in capped
         assert len(capped.encode("utf-8")) <= CODEACT_MAX_SHELL_OUTPUT_BYTES + 64
 
+    def test_nyquist_codeact_read_write_edit_edge_branches(self, tmp_path, monkeypatch):
+        import os
+        from types import SimpleNamespace
+
+        from strands_code_cli.policy.codeact import (
+            _read_regular_file_utf8,
+            codeact_edit,
+            codeact_read,
+            codeact_write,
+        )
+
+        ws = tmp_path / "ws"
+        (ws / "sub").mkdir(parents=True)
+        (ws / "hello.txt").write_text("hi\n", encoding="utf-8")
+        assert codeact_read(ws, str(ws / "hello.txt")) == "hi\n"
+        assert codeact_read(ws, "./sub/../hello.txt") == "hi\n"
+        t_tmp = codeact_read(ws, f"/tmp/nonexistent_{tmp_path.name}")
+        assert "File not found" in t_tmp
+
+        unreadable = ws / "no_perm.txt"
+        unreadable.write_text("x", encoding="utf-8")
+        monkeypatch.setattr(
+            os, "open", lambda *a, **k: (_ for _ in ()).throw(PermissionError("denied"))
+        )
+        assert "Could not read" in (
+            _read_regular_file_utf8(unreadable, "no_perm.txt")[1] or ""
+        )
+        monkeypatch.undo()
+
+        (ws / "bad_utf8.bin").write_bytes(b"\xff\xfe")
+        assert "Could not read" in codeact_read(ws, "bad_utf8.bin")
+        monkeypatch.setattr(
+            os,
+            "fstat",
+            lambda _fd: SimpleNamespace(st_mode=0o100644, st_size=0),
+        )
+        monkeypatch.setattr(os, "read", lambda _fd, _n: b"A" * 32)
+        assert "exceeds 16 byte limit" in (
+            _read_regular_file_utf8(ws / "hello.txt", "hello.txt", max_bytes=16)[1]
+            or ""
+        )
+        monkeypatch.undo()
+
+        assert "Could not write" in codeact_write(ws, "sur.txt", "bad\ud800")
+        assert "Could not write" in codeact_edit(ws, "hello.txt", "hi", "bad\ud800")
+
+    def test_nyquist_codeact_shell_wrapper_edge_branches(self, tmp_path, monkeypatch):
+        import subprocess
+        from types import SimpleNamespace
+
+        import strands_code_cli.policy.codeact as codeact_mod
+        from strands_code_cli.policy.codeact import (
+            _unwrap_env_wrapper,
+            _unwrap_exec_wrapper,
+            codeact_shell,
+        )
+
+        assert _unwrap_env_wrapper(["env", "-x", "--", "rm", "x"]) == ["rm", "x"]
+        assert _unwrap_env_wrapper(["env", "-S", "'unclosed", "x"]) == [
+            "'unclosed",
+            "x",
+        ]
+        assert _unwrap_env_wrapper(["env", "--split-string=rm -f"]) == ["rm", "-f"]
+        assert _unwrap_env_wrapper(["env", "--split-string='unclosed"]) == []
+        assert _unwrap_exec_wrapper("nice", ["nice", "--flag", "--", "rm"]) == ["rm"]
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("c", 60)),
+        )
+        assert "timed out" in codeact_shell(tmp_path, ["echo", "1"])
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("exec boom")),
+        )
+        assert "shell failed" in codeact_shell(tmp_path, ["echo", "1"])
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: SimpleNamespace(returncode=2, stdout="", stderr="err_msg"),
+        )
+        res_err = codeact_shell(tmp_path, ["echo", "1"])
+        assert "err_msg" in res_err and "exit code: 2" in res_err
+        monkeypatch.setattr(
+            codeact_mod, "_load_codeact_policy", lambda _b: (None, "Refused policy")
+        )
+        assert codeact_shell(tmp_path, ["echo", "1"]) == "Refused policy"
+
 
 class _FakeRegistry:
     """ToolRegistry double exposing replace plus a registry mapping."""

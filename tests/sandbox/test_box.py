@@ -1638,6 +1638,31 @@ class TestMontyBinaryBoxGrant:
         assert paths["monty_bin"] == path_monty.resolve()
         assert path_monty.resolve() in paths["exec"]
 
+    def test_resolve_runtime_paths_when_monty_absent(self, tmp_path, monkeypatch):
+        import sysconfig
+
+        home = tmp_path / "home"
+        uv_py = tmp_path / "uv" / "cpython" / "bin" / "python"
+        uv_py.parent.mkdir(parents=True)
+        uv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+        monkeypatch.setattr(sysconfig, "get_path", lambda _name: str(empty_dir))
+
+        paths = resolve_runtime_paths(
+            repo, python_executable=uv_py, home=home, env={"PATH": str(empty_dir)}
+        )
+        assert paths["monty_bin"] is None
+
 
 def test_provider_from_model_id_unwraps_litellm_gemini():
     from strands_code_cli.sandbox.box import _provider_from_model_id

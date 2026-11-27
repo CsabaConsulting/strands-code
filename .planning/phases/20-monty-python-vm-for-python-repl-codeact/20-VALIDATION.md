@@ -1,11 +1,12 @@
 ---
 phase: "20"
 slug: "monty-python-vm-for-python-repl-codeact"
-status: verified
+status: validated
 nyquist_compliant: true
 wave_0_complete: true
 created: "2026-11-27"
 verified: "2026-11-27"
+audited: "2026-11-27"
 ---
 
 # Phase 20 — Validation Strategy
@@ -72,4 +73,21 @@ verified: "2026-11-27"
 - [x] Fast feedback latency (`< 30s` per targeted verification run)
 - [x] `nyquist_compliant: true` audited post-execution
 
-**Approval:** verified (Phase 20 complete: `2011 + 1 = 2012` default tests, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty integration, all 6 CI gates green; ready for `/gsd-verify-work 20`)
+## Post-Audit Nyquist Coverage (`sys.monitoring`)
+
+Audited on `2026-11-27` across all 7 Phase 20 modified runtime modules with zero runtime edits (`git diff ae685fc -- strands_code_cli/` empty, `git diff ee42ea2 -- strands_code_agent/` empty), closing remaining edge branches across [test_monty.py](file:///home/csaba/repos/AWS/strands-code/tests/sandbox/test_monty.py), [test_codeact.py](file:///home/csaba/repos/AWS/strands-code/tests/policy/test_codeact.py), [test_box.py](file:///home/csaba/repos/AWS/strands-code/tests/sandbox/test_box.py), [test_subagent.py](file:///home/csaba/repos/AWS/strands-code/tests/entry/test_subagent.py), and [test_btw.py](file:///home/csaba/repos/AWS/strands-code/tests/loop/test_btw.py):
+
+| Module | Covered / Executable Lines | Coverage | Remaining Gaps |
+| :--- | :---: | :---: | :--- |
+| `strands_code_cli/entry/main.py` | `7 / 7` | `100.0%` | None |
+| `strands_code_cli/entry/subagent.py` | `25 / 25` | `100.0%` | None |
+| `strands_code_cli/loop/btw.py` | `7 / 7` | `100.0%` | None |
+| `strands_code_cli/loop/core.py` | `6 / 6` | `100.0%` | None |
+| `strands_code_cli/sandbox/monty.py` | `230 / 230` | `100.0%` | None |
+| `strands_code_cli/policy/codeact.py` | `292 / 293` | `99.7%` | Defensive `""` / `"."` `Path.parts` skip (`L205`) |
+| `strands_code_cli/sandbox/box.py` | `27 / 28` | `96.4%` | Multi-line `if` header `L473` (branches at `L474–478` executed); `L504` now covered (`monty` absent) |
+| **Total (Phase 20 delta)** | **`594 / 596`** | **`99.7%` (`100.0%` reachable)** | Target slice `288 passed, 2 deselected` |
+
+- **Post-audit full suite (`2026-11-27`):** `TERM=xterm-256color GITHUB_ACTIONS=true .venv/bin/pytest tests/ -k "not test_stub_server_systemone_decision_routes" -rs -q` → `2018 passed, 16 deselected`; loopback stub → `1 passed, 202 deselected` (`2019` default unit tests); `tests/rig/` → `44 passed`; live host `strands-box 0.3.1` integration → `1 passed, 31 deselected`; `uv lock --check` (`142 packages`), `ruff format --check` (`137 files`), `ruff check`, `xenon --max-absolute C`, `lint-imports` (`47 files, 147 deps, 1 kept / 0 broken`), and empty `git diff ee42ea2 -- strands_code_agent/` all green.
+
+**Approval:** validated (Nyquist audit complete `594/596` = `99.7%`, `2018 + 1 = 2019` default tests, `44/44` rig, `1/1` live `strands-box 0.3.1` Monty integration, all 6 CI gates green; ready for Phase 21)
