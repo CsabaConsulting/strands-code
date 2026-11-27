@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import socket
 import time
 import urllib.error
 from collections.abc import Awaitable, Callable
@@ -168,8 +169,26 @@ def ollama_base(local_base_url: str | None) -> str:
     return local_base_url or os.environ.get("OLLAMA_HOST") or OLLAMA_DEFAULT_HOST
 
 
+def _is_ip_loopback_or_unspecified(folded: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(folded)
+        if addr.is_loopback or addr.is_unspecified:
+            return True
+        mapped = getattr(addr, "ipv4_mapped", None)
+        return bool(
+            mapped is not None and (mapped.is_loopback or mapped.is_unspecified)
+        )
+    except ValueError:
+        try:
+            packed = socket.inet_aton(folded)
+        except OSError:
+            return False
+        ipv4 = ipaddress.IPv4Address(packed)
+        return bool(ipv4.is_loopback or ipv4.is_unspecified)
+
+
 def _is_loopback_host(base: str) -> bool:
-    """True when URL resolves to loopback (fail-closed on malformed URL)."""
+    """True when URL resolves to loopback/unspecified (fail-closed on malformed URL)."""
     try:
         host = urlsplit(base).hostname
     except ValueError:
@@ -179,20 +198,15 @@ def _is_loopback_host(base: str) -> bool:
     folded = host.rstrip(".").lower()
     if folded == "localhost" or folded.endswith(".localhost"):
         return True
-    try:
-        addr = ipaddress.ip_address(folded)
-    except ValueError:
-        return False
-    if addr.is_loopback:
-        return True
-    mapped = getattr(addr, "ipv4_mapped", None)
-    return bool(mapped is not None and mapped.is_loopback)
+    return _is_ip_loopback_or_unspecified(folded)
 
 
 def ollama_headers(base: str) -> dict[str, str]:
-    """Local daemon headers; bearer key attaches on non-loopback proxies only."""
+    """Local daemon headers; bearer key attaches on HTTPS non-loopback proxies only."""
     headers = {"Content-Type": "application/json", "User-Agent": "strands-code"}
     if not valid_base_url(base):
+        return headers
+    if urlsplit(base).scheme.lower() != "https":
         return headers
     api_key = read_env_api_key("OLLAMA_API_KEY")
     if api_key and not _is_loopback_host(base):
@@ -212,7 +226,11 @@ def _count(value: object) -> int:
 def _cost(value: object) -> float | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+    if (
+        isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and float(value) >= 0.0
+    ):
         return float(value)
     return None
 
@@ -315,24 +333,46 @@ def run_decision_sync(
     raise AssertionError("unreachable")
 
 
-def fit_decision_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def _truncate_ask_binary(
+    ask: str, measure_bytes: Callable[[str], int], max_bytes: int
+) -> str:
+    """Binary-search longest Unicode prefix of ``ask`` fitting within ``max_bytes``."""
+    if measure_bytes("") > max_bytes:
+        return ""
+    lo = 0
+    hi = len(ask)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if measure_bytes(ask[:mid]) <= max_bytes:
+            lo = mid
+        else:
+            hi = mid - 1
+    return ask[:lo]
+
+
+def fit_decision_payload(
+    payload: dict[str, Any], *, strict: bool = False
+) -> tuple[dict[str, Any], bool]:
     """Shrink state.ask until serialized bytes fit DECISION_BODY_MAX_BYTES."""
     body = json.dumps(payload).encode("utf-8")
     if len(body) <= DECISION_BODY_MAX_BYTES:
         return payload, False
     state = payload.get("state")
-    if not isinstance(state, dict):
+    ask = state.get("ask") if isinstance(state, dict) else None
+    if not isinstance(state, dict) or not isinstance(ask, str) or not ask:
+        if strict:
+            raise ValueError("Decision payload exceeds size limit")
         return payload, False
-    ask = state.get("ask")
-    if not isinstance(ask, str) or not ask:
-        return payload, False
-    over = len(body) - DECISION_BODY_MAX_BYTES
-    ask = ask[: max(0, len(ask) - over - 16)]
+
+    def _measure(cand: str) -> int:
+        trial = {**payload, "state": {**state, "ask": cand}}
+        return len(json.dumps(trial).encode("utf-8"))
+
+    fitted_ask = _truncate_ask_binary(ask, _measure, DECISION_BODY_MAX_BYTES)
+    if strict and _measure(fitted_ask) > DECISION_BODY_MAX_BYTES:
+        raise ValueError("Decision payload exceeds size limit")
     shrunk = dict(payload)
-    shrunk["state"] = {**state, "ask": ask}
-    while ask and len(json.dumps(shrunk).encode("utf-8")) > DECISION_BODY_MAX_BYTES:
-        ask = ask[: len(ask) // 2]
-        shrunk["state"] = {**state, "ask": ask}
+    shrunk["state"] = {**state, "ask": fitted_ask}
     return shrunk, True
 
 
@@ -378,6 +418,7 @@ def build_folded_state_and_questions(
     model_id: str | None = None,
     uncertainty: bool = False,
     max_bytes: int = DECISION_BODY_MAX_BYTES,
+    strict: bool = False,
 ) -> tuple[str, dict[str, Question], bool]:
     """Fold ``{ask, directives, side}`` + criteria into SDK ``(state_str, questions)``."""
     questions: dict[str, Question] = {}
@@ -404,29 +445,34 @@ def build_folded_state_and_questions(
     envelope: dict[str, Any] = {"state": state_str, "questions": wire_questions}
     if model_id is not None:
         envelope["model"] = model_id
-    raw_bytes = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode(
-        "utf-8"
-    )
-    if len(raw_bytes) <= max_bytes:
+
+    def _envelope_size(cand_envelope: dict[str, Any]) -> int:
+        compact = json.dumps(
+            cand_envelope, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        default = json.dumps(cand_envelope).encode("utf-8")
+        return max(len(compact), len(default))
+
+    if _envelope_size(envelope) <= max_bytes:
         return state_str, questions, False
 
     ask = compact_state.get("ask")
     if not isinstance(ask, str) or not ask:
+        if strict:
+            raise ValueError("Decision payload exceeds size limit")
         return state_str, questions, False
-    over = len(raw_bytes) - max_bytes
-    ask = ask[: max(0, len(ask) - over - 32)]
-    while True:
-        compact_state = {**compact_state, "ask": ask}
-        state_str = json.dumps(compact_state, ensure_ascii=False, separators=(",", ":"))
-        envelope["state"] = state_str
-        size = len(
-            json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode(
-                "utf-8"
-            )
+
+    def _measure(cand: str) -> int:
+        cand_state = json.dumps(
+            {**compact_state, "ask": cand}, ensure_ascii=False, separators=(",", ":")
         )
-        if size <= max_bytes or not ask:
-            break
-        ask = ask[: len(ask) // 2]
+        return _envelope_size({**envelope, "state": cand_state})
+
+    fitted_ask = _truncate_ask_binary(ask, _measure, max_bytes)
+    compact_state = {**compact_state, "ask": fitted_ask}
+    state_str = json.dumps(compact_state, ensure_ascii=False, separators=(",", ":"))
+    if strict and _measure(fitted_ask) > max_bytes:
+        raise ValueError("Decision payload exceeds size limit")
     return state_str, questions, True
 
 
@@ -466,8 +512,10 @@ def _parse_probabilities_table(raw_probs: Any, q_id: str) -> dict[str, float]:
         probs[str(label)] = float(prob)
     vals = probs.values()
     rounded = all(abs(p * 1e4 - round(p * 1e4)) < 1e-6 for p in vals)
-    tol = _PROBABILITY_TOLERANCE + (
-        len(probs) * _PROBABILITY_ROUNDING_TOLERANCE if rounded else 0.0
+    tol = min(
+        0.01,
+        _PROBABILITY_TOLERANCE
+        + (len(probs) * _PROBABILITY_ROUNDING_TOLERANCE if rounded else 0.0),
     )
     if abs(sum(vals) - 1.0) > tol:
         raise StructuredOutputException(
@@ -496,7 +544,7 @@ def _parse_custom_choice_answer(
     if (
         not allow_unlisted_choices
         and isinstance(choices, list)
-        and choice not in choices
+        and (choice not in choices or any(k not in choices for k in probs))
     ):
         raise StructuredOutputException(
             f"invalid table: choice {choice!r} outside allowed set for id=<{q_id}>"
@@ -618,7 +666,7 @@ class _SystemOneCustomDecisionModel(DecisionModel):
             "questions": wire_questions,
             **self._extra_payload,
         }
-        fitted, truncated = fit_decision_payload(payload)
+        fitted, truncated = fit_decision_payload(payload, strict=True)
         self.last_truncated = truncated
         body = json.dumps(fitted).encode("utf-8")
 
@@ -738,6 +786,8 @@ def decision_result_to_engine_result(
     conf_map = result.metadata.confidence or {}
     answers: dict[str, Any] = {}
     for q_id in raw_questions:
+        if q_id not in result.answers:
+            return EngineResult(answers=None, error="invalid body", truncated=truncated)
         val = result.answers[q_id]
         if llm_mode:
             answers[q_id] = {"type": "llm_choice", "choice": val}
@@ -861,7 +911,7 @@ def _run_folded_system_one(
 ) -> EngineResult:
     try:
         state_str, sdk_questions, truncated = build_folded_state_and_questions(
-            state, questions, model_id=model_id, uncertainty=False
+            state, questions, model_id=model_id, uncertainty=False, strict=True
         )
     except ValueError:
         return EngineResult(answers=None, error="invalid body")
@@ -960,6 +1010,26 @@ def _estimate_llm_cost(llm_model: str, in_tok: int, out_tok: int) -> float | Non
         return None
 
 
+def _llm_scoped_endpoint(target_model: str) -> tuple[str | None, str | None]:
+    """Return scoped ``(base_url, api_mode)`` from ProviderConfig for ``target_model``."""
+    from strands_code_cli.entry.provider_config import ProviderConfig
+    from strands_code_cli.model.model_switch import (
+        _provider_of,
+        normalize_model_ref,
+        scoped_base_url,
+    )
+
+    try:
+        cfg = ProviderConfig.load()
+    except ValueError:
+        return None, None
+    owner = _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+    scoped_url = scoped_base_url(cfg.base_url, owner, target_model)
+    if scoped_url is None:
+        return None, None
+    return scoped_url, cfg.api_mode
+
+
 def run_llm_decision(
     *,
     llm_model: str,
@@ -970,31 +1040,35 @@ def run_llm_decision(
     """Execute one closed decision via upstream ``LLMDecisionModel``."""
     from strands.decisions import LLMDecisionModel
 
-    from strands_code_cli.model.model_switch import resolve_harness_model
+    import strands_code_cli.model.model_switch as switch_mod
 
     if not isinstance(llm_model, str) or not llm_model.strip():
         return EngineResult(answers=None)
     if not valid_model_id(llm_model):
         return EngineResult(answers=None, error="invalid body")
     target_model = llm_model
-    try:
-        resolved_model = resolve_harness_model(
-            target_model,
-            target_model,
-            effort="off",
-            web_search=False,
-            caching=False,
-        )
-    except Exception as exc:
-        return EngineResult(answers=None, error=failure_reason(exc))
+    scoped_url, scoped_mode = _llm_scoped_endpoint(target_model)
+    llm_kwargs: dict[str, Any] = {
+        "effort": "off",
+        "web_search": False,
+        "caching": False,
+    }
+    if scoped_url is not None:
+        llm_kwargs["base_url"] = scoped_url
+        if scoped_mode is not None:
+            llm_kwargs["api_mode"] = scoped_mode
     try:
         state_str, sdk_questions, truncated = build_folded_state_and_questions(
-            state, questions, model_id=target_model, uncertainty=True
+            state, questions, model_id=target_model, uncertainty=True, strict=True
         )
     except ValueError:
         return EngineResult(answers=None, error="invalid body")
 
     async def _invoke() -> DecisionResult:
+        # Resolve per attempt so retry on a fresh event loop never reuses a closed HTTP pool.
+        resolved_model = switch_mod.resolve_harness_model(
+            target_model, target_model, **llm_kwargs
+        )
         dm = LLMDecisionModel(model=resolved_model)
         return await asyncio.wait_for(dm.ask(state_str, sdk_questions), timeout=timeout)
 

@@ -1215,3 +1215,167 @@ class TestPhase17NyquistBranches:
             lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         assert transports._estimate_llm_cost("openai/gpt-4o-mini", 100, 20) is None
+
+    def test_wave4_routing_security_convergence(self, tmp_path, monkeypatch):
+        from strands.decisions import DecisionResult
+        from strands.decisions.types import DecisionMetadata
+        from strands.types.exceptions import ModelThrottledException
+
+        import strands_code_cli.entry.provider_config as provider_cfg
+        import strands_code_cli.model.model_switch as switch_mod
+        import strands_code_cli.routing.core as rc
+
+        # 1. Unlisted probability keys rejected by BOTH core and custom wire parser (no StopIteration).
+        cands = [
+            rc.RoutingCandidate(id="m1", criteria="c1"),
+            rc.RoutingCandidate(id="m2", criteria="c2"),
+        ]
+        assert (
+            rc.validate_choice_answer(
+                {
+                    "type": "choice",
+                    "choice": "m1",
+                    "probabilities": {"m1": 0.1, "evil/ghost": 0.9},
+                },
+                cands,
+            )
+            is None
+        )
+        with pytest.raises(StructuredOutputException):
+            transports._parse_custom_choice_answer(
+                {
+                    "type": "choice",
+                    "choice": "m1",
+                    "probabilities": {"m1": 0.5, "evil/ghost": 0.5},
+                },
+                ["m1", "m2"],
+                "pick_model",
+                allow_unlisted_choices=False,
+            )
+
+        # 2. Tolerance bounded <= 0.01 (20k zero keys fail closed).
+        zero_probs = {f"k{i}": 0.0 for i in range(20_000)}
+        zero_probs["k0"] = 0.0
+        assert (
+            rc._validate_choice_shape(
+                {"type": "choice", "choice": "k0", "probabilities": zero_probs}
+            )
+            is None
+        )
+        with pytest.raises(StructuredOutputException):
+            transports._parse_probabilities_table(zero_probs, "pick_model")
+
+        # 3. Ollama bearer suppressed on http:// and 0.0.0.0 / :: / 127.1 / 2130706433.
+        monkeypatch.setenv("OLLAMA_API_KEY", "secret-ollama")
+        for blocked in (
+            "http://remote.example:11434",
+            "https://0.0.0.0:11434",
+            "https://[::]:11434",
+            "https://127.1:11434",
+            "https://2130706433:11434",
+        ):
+            assert "Authorization" not in transports.ollama_headers(blocked), blocked
+        assert (
+            transports.ollama_headers("https://remote.example:11434")["Authorization"]
+            == "Bearer secret-ollama"
+        )
+
+        # 4. Repo routing.yaml non-loopback local_base_url cleared with warning.
+        repo_yaml = tmp_path / "repo_routing.yaml"
+        repo_yaml.write_text(
+            "candidates:\n  - id: openai/gpt-5\n"
+            "engine:\n  primary: local\n  local_base_url: https://evil.example:11434\n",
+            encoding="utf-8",
+        )
+        with pytest.warns(UserWarning, match="non-loopback"):
+            strat = rc.load_strategy(
+                global_path=tmp_path / "absent_global.yaml", repo_path=repo_yaml
+            )
+        assert strat is not None and strat.engine.local_base_url is None
+
+        # 5. run_llm_decision re-resolves model per retry attempt & forwards ProviderConfig base_url/api_mode.
+        monkeypatch.setattr(
+            provider_cfg.ProviderConfig,
+            "load",
+            classmethod(
+                lambda _cls: provider_cfg.ProviderConfig(
+                    model="anthropic/claude-haiku-4-5",
+                    base_url="https://anth.proxy/v1",
+                    api_mode="responses",
+                )
+            ),
+        )
+        seen_resolve: list[dict] = []
+        attempts = {"n": 0}
+
+        def _resolve(_m, _d=None, **kw):
+            seen_resolve.append(dict(kw))
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return _FakeLLMModel(
+                    lambda *_a: (_ for _ in ()).throw(ModelThrottledException("429"))
+                )
+            return _FakeLLMModel(lambda *_a: {"pick_model": {"answer": "a/1"}})
+
+        monkeypatch.setattr(switch_mod, "resolve_harness_model", _resolve)
+        llm_res = run_llm_decision(
+            llm_model="anthropic/claude-haiku-4-5",
+            state={"ask": "hi", "directives": "d", "side": False},
+            questions=_model_raw_questions(),
+        )
+        assert llm_res.answers == {
+            "pick_model": {"type": "llm_choice", "choice": "a/1"}
+        }
+        assert len(seen_resolve) == 2
+        assert seen_resolve[0]["base_url"] == "https://anth.proxy/v1"
+
+        # 6. UTF-8 emoji ask binary search fits accurately + strict transport rejects non-ask overflow + negative cost + criteria cap + missing q_id.
+        emoji_fit, trunc_emoji = transports.fit_decision_payload(
+            {
+                "model": "m",
+                "state": {"ask": "😀" * 20_000},
+                "questions": _model_raw_questions(),
+            }
+        )
+        assert trunc_emoji is True
+        emoji_bytes = len(json.dumps(emoji_fit).encode("utf-8"))
+        assert DECISION_BODY_MAX_BYTES - 128 <= emoji_bytes <= DECISION_BODY_MAX_BYTES
+
+        _patch_httpx(
+            monkeypatch,
+            lambda _req: (_ for _ in ()).throw(AssertionError("overflow sent HTTP")),
+        )
+        monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
+        monkeypatch.setenv("TYPESAFE_API_KEY", "ts-key")
+        oversized_q = {
+            "pick_model": {
+                "type": "choice",
+                "instructions": "pick",
+                "criteria": {"a/1": "x" * 70_000},
+            }
+        }
+        assert (
+            run_openrouter_decision(
+                decision_model="cheap/m", state={"ask": "hi"}, questions=oversized_q
+            ).error
+            == "invalid body"
+        )
+        assert (
+            run_typesafe_decision(
+                native_model="jev-1.13.0", state={"ask": "hi"}, questions=oversized_q
+            ).error
+            == "invalid body"
+        )
+
+        assert transports._cost(-5.0) is None
+        assert (
+            len(rc._criteria_text(rc.RoutingCandidate(id="m", criteria="z" * 900)))
+            == 500
+        )
+        missing_q = transports.decision_result_to_engine_result(
+            DecisionResult(answers={}, metadata=DecisionMetadata(latency_ms=1)),
+            raw_questions=_model_raw_questions(),
+            cost=None,
+            truncated=False,
+        )
+        assert missing_q.answers is None and missing_q.error == "invalid body"

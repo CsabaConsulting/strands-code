@@ -18,6 +18,7 @@ import json  # noqa: F401 — kept for test & facade callers
 import logging
 import math
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +41,7 @@ from strands_code_cli.routing.transports import (
     OLLAMA_TIMEOUT_SECONDS,
     TRUNCATION_MARKER,
     EngineResult,
+    _is_loopback_host,
     ollama_base,
     ollama_headers,
     preflight_get,
@@ -469,7 +471,15 @@ def load_strategy(
     repo = Path(repo_path) if repo_path is not None else default_repo_strategy_path()
     strategies = _load_one(repo)
     if strategies is not None:
-        return None if strategies.engine.primary == "off" else strategies
+        if strategies.engine.primary == "off":
+            return None
+        local_url = strategies.engine.local_base_url
+        if local_url and not _is_loopback_host(local_url):
+            msg = f"Ignoring non-loopback engine.local_base_url {local_url!r} in repo strategy {repo}"
+            logger.warning(msg)
+            warnings.warn(msg, stacklevel=2)
+            strategies.engine.local_base_url = None
+        return strategies
     home = (
         Path(global_path) if global_path is not None else default_global_strategy_path()
     )
@@ -1112,8 +1122,8 @@ def _criteria_text(candidate: RoutingCandidate) -> str:
     """
     for text in (candidate.criteria, candidate.note, candidate.tier):
         if isinstance(text, str) and text.strip():
-            return text
-    return candidate.id
+            return text.strip()[:500]
+    return candidate.id[:500]
 
 
 def build_model_question(
@@ -1386,7 +1396,7 @@ def _validate_choice_shape(answer: object) -> dict[str, Any] | None:
             return None
     vals = probs.values()
     rounded = all(abs(p * 1e4 - round(p * 1e4)) < 1e-6 for p in vals)
-    tol = 1e-6 + (len(probs) * 5e-5 if rounded else 0.0)
+    tol = min(0.01, 1e-6 + (len(probs) * 5e-5 if rounded else 0.0))
     if abs(sum(vals) - 1.0) > tol:
         return None
     choice = answer.get("choice")
@@ -1411,7 +1421,13 @@ def validate_choice_answer(
         return None
     live = {candidate.id for candidate in candidates}
     choice = answer.get("choice")
-    if not isinstance(choice, str) or choice not in live:
+    probs = answer.get("probabilities")
+    if (
+        not isinstance(choice, str)
+        or choice not in live
+        or not isinstance(probs, dict)
+        or not set(probs).issubset(live)
+    ):
         return None
     return answer
 

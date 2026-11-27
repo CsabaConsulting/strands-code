@@ -1163,6 +1163,8 @@ class TestEngineChain:
         assert result.truncated is False
 
     def test_oversized_criteria_routes_with_marker(self, monkeypatch):
+        import strands_code_cli.routing.transports as transports
+
         posts: list = []
 
         def _fake(request):
@@ -1187,8 +1189,19 @@ class TestEngineChain:
         )
         assert pick is not None and pick.model == HAIKU
         assert engine == "openrouter"
-        assert detail == TRUNCATION_MARKER  # flagged once, never doubled
-        assert posts[0]["state"]["ask"] == ""  # ask fully absorbed first
+        assert len(posts[0]["questions"]["pick_model"]["criteria"][HAIKU]) == 500
+        assert detail == ""
+
+        baseline_bytes = len(json.dumps(posts[0]).encode("utf-8"))
+        monkeypatch.setattr(transports, "DECISION_BODY_MAX_BYTES", baseline_bytes + 100)
+        posts.clear()
+        pick2, engine2, _, detail2 = decide(
+            strategy, current_model=SONNET, side=False, ask="x" * 1500
+        )
+        assert pick2 is not None and pick2.model == HAIKU
+        assert engine2 == "openrouter"
+        assert detail2 == TRUNCATION_MARKER  # flagged once, never doubled
+        assert len(posts[0]["state"]["ask"]) < 1500
 
     def test_normal_ask_routes_without_marker(self, monkeypatch):
         def _fake(request):
@@ -1485,25 +1498,38 @@ class TestLocalEngine:
         )
         assert usage == (120, 16, None)  # both local calls summed, still costless
 
-    def test_proxied_host_carries_bearer_key(self, monkeypatch):
+    def test_proxied_host_carries_bearer_key_over_https_only(self, monkeypatch):
         monkeypatch.setenv("OLLAMA_API_KEY", "proxy-secret")
-        seen: dict = {}
+        seen: list[dict] = []
 
         def _fake(request):
-            seen["url"] = str(request.url)
-            seen["auth"] = request.headers.get("authorization")
+            seen.append(
+                {
+                    "url": str(request.url),
+                    "auth": request.headers.get("authorization"),
+                }
+            )
             return _json_response(self._local_payload())
 
         _mock_httpx(monkeypatch, _fake)
-        result = decide_via_ollama(
+        result_https = decide_via_ollama(
+            local_model="nimble",
+            local_base_url="https://gpu-box.example:11434",
+            state={},
+            questions=_sample_questions(),
+        )
+        assert result_https.answers is not None
+        assert seen[0]["url"] == "https://gpu-box.example:11434/v1/systemone"
+        assert seen[0]["auth"] == "Bearer " + "proxy-secret"
+
+        result_http = decide_via_ollama(
             local_model="nimble",
             local_base_url="http://gpu-box.example:11434",
             state={},
             questions=_sample_questions(),
         )
-        assert result.answers is not None
-        assert seen["url"] == "http://gpu-box.example:11434/v1/systemone"
-        assert seen["auth"] == "Bearer " + "proxy-secret"
+        assert result_http.answers is not None
+        assert seen[1]["auth"] is None
 
     def test_invalid_base_url_at_call_time_fails_soft(self, monkeypatch):
         def _boom(request):
