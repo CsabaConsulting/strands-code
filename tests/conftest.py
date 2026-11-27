@@ -64,6 +64,7 @@ def _hermetic_provider_env(monkeypatch, request, tmp_path_factory):
         monkeypatch.delenv(name, raising=False)
     xdg_root = tmp_path_factory.mktemp("xdg")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_root / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg_root / "data"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(xdg_root / "cache"))
     monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(xdg_root / "strands_cache"))
     yield

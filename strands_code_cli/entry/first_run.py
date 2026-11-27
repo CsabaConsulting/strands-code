@@ -248,6 +248,34 @@ _KNOWN_EXPLICIT_PROVIDERS = frozenset(
 )
 
 
+_ENV_BASE_URL_VARS: dict[str, str] = {
+    "openai": "OPENAI_BASE_URL",
+    "anthropic": "ANTHROPIC_BASE_URL",
+    "meta": "META_BASE_URL",
+    "litellm": "LITELLM_BASE_URL",
+}
+
+
+def _env_custom_base_url(provider: str) -> str | None:
+    """Return validated custom env base_url for ``provider`` (excluding default Meta URL)."""
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    env_name = _ENV_BASE_URL_VARS.get(provider)
+    if not env_name:
+        return None
+    raw = (os.environ.get(env_name) or "").strip()
+    if not raw:
+        return None
+    try:
+        _validate_base_url(raw)
+    except ValueError as exc:
+        _fail_preflight(f"Invalid {env_name}: {exc}")
+    cleaned = raw.rstrip("/")
+    if provider == "meta" and cleaned == META_DEFAULT_BASE_URL:
+        return None
+    return cleaned
+
+
 def _validate_meta_env() -> None:
     """Fail fast with exit code 2 when META_BASE_URL is malformed."""
     try:
@@ -293,9 +321,8 @@ def _check_explicit_provider(
             )
         return
     if provider in _PROVIDER_ENV_KEYS:
-        if provider == "meta" and base_url is None:
-            _validate_meta_env()
-        if provider in ("openai", "anthropic", "meta", "openrouter") and base_url:
+        effective_url = base_url or _env_custom_base_url(provider)
+        if provider in ("openai", "anthropic", "meta", "openrouter") and effective_url:
             return
         if provider == "openrouter" and _is_truthy("STRANDS_BOX"):
             return
@@ -307,6 +334,7 @@ def _check_explicit_provider(
     if provider == "litellm":
         if (
             base_url
+            or _env_custom_base_url("litellm")
             or _is_truthy("STRANDS_BOX")
             or any(_nonempty(key) for key in _LITELLM_ANY_KEYS)
         ):

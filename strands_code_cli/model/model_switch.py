@@ -15,6 +15,7 @@ import hashlib
 import itertools
 import json
 import re
+import unicodedata
 import warnings
 from collections.abc import Mapping
 from pathlib import Path
@@ -620,15 +621,22 @@ def _is_google_chat_model(entry: Any) -> str | None:
 
 
 def _google_discovery_client_kwargs(genai_mod: Any) -> dict[str, Any]:
-    """Build bounded-timeout kwargs for ``genai.Client``."""
+    """Build bounded-timeout, zero-retry kwargs for ``genai.Client``."""
     types_mod = getattr(genai_mod, "types", None)
     http_cls = getattr(types_mod, "HttpOptions", None) if types_mod else None
-    if callable(http_cls):
+    retry_cls = getattr(types_mod, "HttpRetryOptions", None) if types_mod else None
+    retry_val: Any = {"attempts": 1}
+    if callable(retry_cls):
         try:
-            return {"http_options": http_cls(timeout=5_000)}
+            retry_val = retry_cls(attempts=1)
         except Exception:
             pass
-    return {"http_options": {"timeout": 5_000}}
+    if callable(http_cls):
+        try:
+            return {"http_options": http_cls(timeout=5_000, retry_options=retry_val)}
+        except Exception:
+            pass
+    return {"http_options": {"timeout": 5_000, "retry_options": retry_val}}
 
 
 def _discover_google_models() -> tuple[list[str], bool]:
@@ -866,8 +874,8 @@ def _discover_anthropic_models() -> tuple[list[str], bool]:
 
 
 def _has_unsafe_model_chars(value: str) -> bool:
-    """True when value contains whitespace or ASCII control characters."""
-    return any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    """True when value contains whitespace, C0/C1 controls, or Bidi/format chars."""
+    return any(ch.isspace() or unicodedata.category(ch) in ("Cc", "Cf") for ch in value)
 
 
 def _meta_openai_client_args(

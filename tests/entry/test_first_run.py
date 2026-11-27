@@ -750,3 +750,30 @@ class TestCwdDotenvGuard:
         # openai_base_url validates & normalizes trailing slash.
         monkeypatch.setenv("OPENAI_BASE_URL", "https://oai.example/v1/")
         assert first_run.openai_base_url() == "https://oai.example/v1"
+
+    def test_keyless_env_base_url_preflight_parity(self, monkeypatch, capsys):
+        from strands_code_cli.entry import first_run
+
+        for model, env_var in (
+            ("openai/gpt-6.2-sol", "OPENAI_BASE_URL"),
+            ("anthropic/claude-sonnet-5-5", "ANTHROPIC_BASE_URL"),
+            ("meta/muse-spark-1.3-contributor", "META_BASE_URL"),
+            ("litellm/custom/foo", "LITELLM_BASE_URL"),
+        ):
+            monkeypatch.setenv(env_var, "http://127.0.0.1:8080/v1/")
+            first_run.preflight_credentials(probe=_no_creds, model=model)
+            monkeypatch.delenv(env_var)
+
+        # Default Meta URL still requires MODEL_API_KEY, and invalid env URLs fail loudly.
+        monkeypatch.setenv("META_BASE_URL", first_run.META_DEFAULT_BASE_URL)
+        with pytest.raises(typer.Exit):
+            first_run.preflight_credentials(
+                probe=_no_creds, model="meta/muse-spark-1.3-contributor"
+            )
+        capsys.readouterr()
+        monkeypatch.delenv("META_BASE_URL")
+
+        monkeypatch.setenv("OPENAI_BASE_URL", "ftp://bad.example/v1")
+        with pytest.raises(typer.Exit):
+            first_run.preflight_credentials(probe=_no_creds, model="openai/gpt-6.2-sol")
+        assert "Invalid OPENAI_BASE_URL" in capsys.readouterr().err

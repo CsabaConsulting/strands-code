@@ -5521,3 +5521,27 @@ class TestMetaModelAdapter:
         assert ant_list == ["anthropic/claude-sonnet-5-5"]
         assert seen_kw["anthropic"]["timeout"] == 5.0
         assert seen_kw["anthropic"]["max_retries"] == 0
+
+    def test_discovery_rejects_c1_bidi_google_retries_and_isolates_xdg_data_home(
+        self, tmp_path
+    ):
+        import types
+        from pathlib import Path
+
+        import platformdirs
+        from google.genai import types as gtypes
+
+        from strands_code_cli.model import model_switch as ms
+
+        for bad in ("gpt-5\x9b31m", "gpt-5\u202etest", "gemini-3\x85evil"):
+            assert ms._has_unsafe_model_chars(bad) is True, repr(bad)
+        assert ms._is_openai_chat_model("gpt-5\x9b31m") is False
+        assert ms._is_meta_chat_model("muse-1\u202ebad") is False
+
+        kw = ms._google_discovery_client_kwargs(types.SimpleNamespace(types=gtypes))
+        assert kw["http_options"].timeout == 5_000
+        assert kw["http_options"].retry_options.attempts == 1
+
+        data_dir = Path(platformdirs.user_data_dir("strands-box"))
+        assert not str(data_dir).startswith(str(Path.home()))
+        assert data_dir != tmp_path
