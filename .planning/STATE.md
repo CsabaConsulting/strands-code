@@ -5,11 +5,11 @@ current_phase: "19.2"
 current_phase_name: CLI, Routing/Cost, Provider & Packaging Parity
 current_plan: 4
 status: verified
-stopped_at: Phase 19.2 executed & verified (`990d7b8`, `3f376f2`, `fa6f94d`, `e8a0409`) — ready for `/gsd-verify-work 19.2`
-last_updated: "2026-11-27T17:02:00Z"
+stopped_at: Phase 19.2 UAT complete (19.2-UAT.md 6/6 passed on c45d70e) — ready for /gsd-secure-phase 19.2 & /gsd-validate-phase 19.2
+last_updated: "2026-11-27T19:25:00Z"
 last_activity: 2026-11-27
-last_activity_desc: Executed Waves 1–4 of Phase 19.2 and verified all CI gates, unit/rig suites (`1975 + 1 = 1976` + `44`), and live host Box probe
-state_head: e8a0409
+last_activity_desc: Completed Phase 19.2 UAT (6/6 passed) with 5 mid-UAT adversarial fix commits (32ac69b..c45d70e), verified 1984 + 1 = 1985 default suite, 44/44 rig, 1/1 live strands-box 0.3.1 integration, and all 6 CI gates
+state_head: c45d70e
 progress:
   total_phases: 13
   completed_phases: 9
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 19.2 Verified (`PARITY-01`, `19.2-VERIFICATION.md` `12/12 PASS`) — ready for `/gsd-verify-work 19.2`
+**Current focus:** Milestone `v2.0` · Phase 19.2 UAT Complete (`19.2-UAT.md` `6/6` passed on `c45d70e`) — ready for `/gsd-secure-phase 19.2` & `/gsd-validate-phase 19.2`
 
 ## Current Position
 
-Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — Verified (`4/4` wave plans complete, `19.2-VERIFICATION.md` `12/12 PASS`)
+Phase: 19.2 of 23 (CLI, Routing/Cost, Provider & Packaging Parity) — UAT Complete (`4/4` wave plans, `19.2-VERIFICATION.md` `12/12 PASS`, `19.2-UAT.md` `6/6` passed on `c45d70e`)
 Plan: 4 of 4 in Phase 19.2
-Status: Verified (`990d7b8`, `3f376f2`, `fa6f94d`, `e8a0409`)
-Last activity: 2026-11-27 — Executed Waves 1–4 (`PARITY-01`) and verified `1975 + 1 = 1976` default suite, `44/44` rig, `1/1` host Box integration, and all 6 CI gates
+Status: UAT Complete (`19.2-UAT.md` `6/6` passed on `c45d70e`; mid-UAT fixes `32ac69b`..`c45d70e`)
+Last activity: 2026-11-27 — Completed Phase 19.2 UAT (`6/6` passed, 11 adversarial pre-check gaps fixed across `32ac69b`, `6dfef6d`, `3f86388`, `eb44a5b`, `c45d70e`), verified `1984 + 1 = 1985` default suite, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates
 
 Progress: [███████░░░] 69%
 
@@ -97,10 +97,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 19.2 discussion (`19.2-CONTEXT.md` `D-01`–`D-08`, `19.2-DISCUSSION-LOG.md`, 2026-11-26): locked session-sticky in-memory toggles across all 5 toggles (`/mode`, `/route on|off`, `/memory mode`, `/codeact`, `/diff on-demand|auto`) with clean-break `config.yaml` direct defaults (`codeact`, `diff_mode`, `memory_mode`, retiring `diff.yaml`, `memory.yaml`, and `codeact_remember`); retired `/diff approve-each` + `_default_ask` with per-`session_id` `PendingStore` and bounded `unified_diff` previews in both HITL `write`/`edit` prompts and `/diff show`; explicit `--codeact tool|code|both` retiring `_expand_bare_codeact`, unique prefix resolution for `/resume` & `--session-id`, and `/skills`/alias cleanup; retired `engine.primary` (`engine.order` sole schema), 5-engine `/route setup` (auto-detecting `native` + `decisions_api`, exposing `llm` in builder, auto-enabling `RoutingState`), `_route_pre_turn` double-record fix, and `OPENROUTER_API_KEY` skip note; preserved `/cost` held/`Uncertain` spend with `native` estimated & `decisions_api` `cost n/a` + `refresh_report` decisions status; unified `provider_of()`, Mantle `_vendor_of`, keyless `base_url`, discovery hardening backport, and full OpenAI effort table for `openai/` + `bedrock-mantle/openai.*` (`#6525` bridge + aligned `validate_routed_effort()`); and `requires-python >=3.11`, direct `httpx`, `ollama` extra, `_SDK_EXTRA_HINTS`, CI `--all-extras`, and full XDG/AWS `conftest.py` isolation.
 - Phase 19.2 planning (`19.2-RESEARCH.md`, `19.2-PATTERNS.md`, `19.2-01..04-PLAN.md`, `19.2-VALIDATION.md`, `19.2-PLAN-CHECK.md` PASS): structured Waves 1–4 around canonical dependency-free `model/provider_id.py` + `tmp_path_factory.mktemp("xdg")` hermetic `conftest.py` (outside `tmp_path` to avoid `test_first_run.py:458` & protected-path collisions), preserving `make_safe_search_tool` in `diff_gate.py`, safe confined `write` diff previews, shared prefix resolver + mocked `SessionIndex` guard, sole `engine.order` (`order: []` disables cleanly), dict-driven 5-engine `/route setup`, `(model, applied)` switch + `decision_engine` in `/cost`, and declarative OpenAI/`bedrock-mantle/openai.*` capability guards while respecting `CC <= 20` ceilings, `lint-imports`, restricted modules, and `D-24`.
 - Phase 19.2 (`990d7b8`, `3f376f2`, `fa6f94d`, `e8a0409`, `19.2-VERIFICATION.md` `12/12 PASS`): delivered `PARITY-01` across Waves 1–4: added dependency-free `model/provider_id.py` + Mantle `_vendor_of` + keyless `base_url` + discovery hardening + `requires-python >=3.11` / `httpx` / `ollama` extra / `_SDK_EXTRA_HINTS` / CI `--all-extras` / hermetic `conftest.py` (`990d7b8`); unified session-sticky toggles + consolidated `config.yaml` (`codeact`, `diff_mode`, `memory_mode`; retired `diff.yaml`, `memory.yaml`, `diff_config.py`, `codeact_remember`, `approve-each`, `_default_ask`, `/models`, `/skill`, `/skills refresh|uninstall`), added session-scoped `PendingStore`, bounded sanitized `unified_diff` previews in HITL `write`/`edit` & `/diff show`, `--codeact tool|code|both`, `resolve_session_prefix`, and strict `--flag` rejection (`3f376f2`); retired `engine.primary` (`engine.order` sole schema), expanded `/route setup` to all 5 engines with active-session auto-enable + `OPENROUTER_API_KEY` skip note, fixed `_route_pre_turn` double-record, preserved held/`Uncertain` paid tokens/cost, and aligned `/cost` lanes & `refresh_report` (`fa6f94d`); and unified per-model OpenAI + `bedrock-mantle/openai.*` effort guards (`#6522` / `PR #6525` bridge) + `validate_routed_effort()` alignment incl. Gemma-4 (`e8a0409`). Verified `1975 + 1 = 1976` default suite, `44/44` rig, `1/1` live Box integration, and all 6 CI gates (`strands_code_agent/` untouched per `D-24`).
+- Phase 19.2 UAT (`19.2-UAT.md` `6/6` passed on `c45d70e`; mid-UAT adversarial fixes `32ac69b`, `6dfef6d`, `3f86388`, `eb44a5b`, `c45d70e`): closed 11 adversarial pre-check gaps across Tests 1–5 (env `base_url` preflight, Google discovery retry cap, C1/Bidi model/transport char guards, `XDG_DATA_HOME` test isolation, clean code-2 startup exit on invalid `config.yaml`, strict `/skills` flags + relative `/diff` pending path resolution + display sanitization, `/route setup` manual prompt validation + retired `engine.primary` validation note, and real `resolve_harness_model()` `off`/`none`/case effort normalization + cross-provider `validate_routed_effort()` alignment); verified `1984 + 1 = 1985` default suite under CI env, `44/44` rig, `1/1` live host `strands-box 0.3.1` integration, and all 6 CI gates green.
 
 ### Pending Todos
 
-- Run `/gsd-verify-work 19.2` (`PARITY-01` UAT) before starting Phase 20 (`SANDBOX-02` Monty Python VM).
+- Run `/gsd-secure-phase 19.2` and `/gsd-validate-phase 19.2` before starting Phase 20 (`SANDBOX-02` Monty Python VM).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -113,6 +114,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T17:02:00Z
-Stopped at: Phase 19.2 executed & verified (`990d7b8`, `3f376f2`, `fa6f94d`, `e8a0409`) — ready for `/gsd-verify-work 19.2`
-Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-VERIFICATION.md
+Last session: 2026-11-27T19:25:00Z
+Stopped at: Phase 19.2 UAT complete (19.2-UAT.md 6/6 passed on c45d70e) — ready for /gsd-secure-phase 19.2 & /gsd-validate-phase 19.2
+Resume file: .planning/phases/19.2-cli-routing-cost-provider-packaging-parity/19.2-UAT.md
