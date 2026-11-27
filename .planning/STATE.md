@@ -4,16 +4,16 @@ milestone: v2.0
 current_phase: "21"
 current_phase_name: CLI Ergonomics (/help, @file / /file, /review)
 current_plan: 0
-status: discussed
-stopped_at: Phase 21 discussed (21-CONTEXT.md D-01..D-11, 21-DISCUSSION-LOG.md) — ready for /gsd-plan-phase 21
-last_updated: "2026-11-27T23:20:00Z"
+status: planned
+stopped_at: Phase 21 planned (21-01..03-PLAN.md, 21-PLAN-CHECK.md PASS) — ready for /gsd-execute-phase 21
+last_updated: "2026-11-27T23:30:00Z"
 last_activity: 2026-11-27
-last_activity_desc: Completed /gsd-discuss-phase 21 (locked D-01..D-11 across /help, @file & /file, document switch, CVE-2026-18830 hook, and /review)
-state_head: da05423
+last_activity_desc: Completed /gsd-plan-phase 21 (21-RESEARCH.md, 21-PATTERNS.md, 21-01..03-PLAN.md, 21-VALIDATION.md, 21-PLAN-CHECK.md PASS)
+state_head: 1915520
 progress:
   total_phases: 13
   completed_phases: 10
-  total_plans: 31
+  total_plans: 34
   completed_plans: 31
 ---
 
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 21 Discussed (`21-CONTEXT.md` `D-01`–`D-11`) — ready for `/gsd-plan-phase 21`
+**Current focus:** Milestone `v2.0` · Phase 21 Planned (`21-01..03-PLAN.md`, `21-PLAN-CHECK.md PASS`) — ready for `/gsd-execute-phase 21`
 
 ## Current Position
 
-Phase: 21 of 23 (CLI Ergonomics — `/help`, `@file` / `/file`, `/review`) — Discussed (`21-CONTEXT.md` `D-01`–`D-11`)
-Plan: 0 of TBD in Phase 21
-Status: Discussed (ready for `/gsd-plan-phase 21`)
-Last activity: 2026-11-27 — Completed `/gsd-discuss-phase 21` (locked `D-01`–`D-11` across `LOOP-06` `/help`, `TOOL-05` `@file` / `/file` + `"document"` conversion + `CVE-2026-18830`, and `REVIEW-01` `/review`)
+Phase: 21 of 23 (CLI Ergonomics — `/help`, `@file` / `/file`, `/review`) — Planned (3 waves, `21-PLAN-CHECK.md PASS`)
+Plan: 0 of 3 in Phase 21
+Status: Planned (ready for `/gsd-execute-phase 21`)
+Last activity: 2026-11-27 — Completed `/gsd-plan-phase 21` (`21-RESEARCH.md`, `21-PATTERNS.md`, `21-01..03-PLAN.md`, `21-VALIDATION.md`, `21-PLAN-CHECK.md PASS`)
 
 Progress: [████████░░] 77%
 
@@ -108,10 +108,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 20 Nyquist validation (`20-VALIDATION.md` `validated`, `nyquist_compliant: true`, 2026-11-27): audited all 7 Phase 20 modified runtime modules via `sys.monitoring` (`594/596 = 99.7% total / 100.0% reachable`; `100.0%` on `entry/main.py`, `entry/subagent.py`, `loop/btw.py`, `loop/core.py`, and `sandbox/monty.py`; `99.7%` on `policy/codeact.py`; `96.4%` on `sandbox/box.py`) and closed remaining edge branches across `tests/sandbox/test_monty.py`, `tests/policy/test_codeact.py`, `tests/sandbox/test_box.py`, `tests/entry/test_subagent.py`, and `tests/loop/test_btw.py` with zero runtime edits (`2018 + 1 = 2019` default suite under CI env + `44/44` rig + `1/1` live host `strands-box 0.3.1` integration + all 6 CI gates green).
 
 - Phase 21 discussion (`21-CONTEXT.md` `D-01`–`D-11`, `21-DISCUSSION-LOG.md`, 2026-11-27): locked single declarative command table in `dispatch/help.py` backing `USAGE_HINT` + `BUILTIN_SLASH_HEADS` (`+help, file, review`) + built-in & skill `/help <name>` resolution; gitignore-aware `ui/completer.py` `@file` fuzzy completion & `/file` TTY picker pre-fill (`default=buf`); real-file-only `@token` resolution injecting UTF-8 text inline fenced vs binary `ImageContent`/`DocumentContent` under `read`/`codeact_read` fail-closed security floor (`effective_roots`, symlink/`O_NOFOLLOW`, `.env*`/`.ssh`/`.aws`, `[[deny]]`, `4 MiB`/`16 MiB`/`8`-file caps); post-routing `supports_media` abort gate & allowlisted `list[ContentBlock]` + `model_switch.py` `"document"` conversion + fail-closed `RejectCallerToolUseHook` (`BeforeInvocationEvent.cancel`) across all 3 agent sites; and validated `/review` (`HEAD`/`--staged`/`<base-ref>` + optional focus prompt, `256 KiB` `<untrusted_git_diff>` framing, sanitized `/route` `ask_text`, turn-scoped read-only Plan gate + `turn_interface = "tool"`).
+- Phase 21 planning (`21-RESEARCH.md`, `21-PATTERNS.md`, `21-01..03-PLAN.md`, `21-VALIDATION.md`, `21-PLAN-CHECK.md` PASS, 2026-11-27): structured Waves 1–3 with 6 Wave 0 TDD suites (`test_help.py`, `test_tool_use_guard.py`, `test_attachments.py`, `test_loop_attachments.py`, `test_review.py`, `test_loop_review.py`), `dispatch/help.py`, `policy/tool_use_guard.py`, `"document"` `model_switch.py`/`cost_context.py` parity, `ui/attachments.py` + `AtFileCompleter`, and `dispatch/review.py` + extracted `loop/core.py` helpers keeping `run_loop <= C (18)`, zero `os.environ`/restricted words, `lint-imports` clean, and `D-24` pristine `strands_code_agent/`.
 
 ### Pending Todos
 
-- Run `/gsd-plan-phase 21` (`LOOP-06` `/help`, `TOOL-05` `@file` / `/file` + `"document"` switch + `CVE-2026-18830` hook, `REVIEW-01` `/review`).
+- Run `/gsd-execute-phase 21` (Waves 1–3: `21-01-PLAN.md`, `21-02-PLAN.md`, `21-03-PLAN.md`).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
@@ -124,6 +125,6 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ## Session Continuity
 
-Last session: 2026-11-27T23:20:00Z
-Stopped at: Phase 21 discussed (21-CONTEXT.md D-01..D-11, 21-DISCUSSION-LOG.md) — ready for /gsd-plan-phase 21
-Resume file: .planning/phases/21-cli-ergonomics-help-file-review/21-CONTEXT.md
+Last session: 2026-11-27T23:30:00Z
+Stopped at: Phase 21 planned (21-01..03-PLAN.md, 21-PLAN-CHECK.md PASS) — ready for /gsd-execute-phase 21
+Resume file: .planning/phases/21-cli-ergonomics-help-file-review/21-01-PLAN.md

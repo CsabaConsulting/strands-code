@@ -295,9 +295,19 @@ Plans:
   2. `@file` and `/file` (`ui/attachments.py`) provide gitignore-filtered fuzzy selection confined to `effective_roots`, leave non-file `@tokens` (`@dataclass`, `@pytest.mark`) untouched, attach `ImageContent`/`DocumentContent` when `supports_media(current_model)` holds after `/route`, construct `list[ContentBlock]` strictly from allowlisted `text`/`image`/`document` shapes (never caller-supplied `"toolUse"` blocks; CVE-2026-18830 / CoreBreak boundary), and `model_switch.py` converts `"document"` blocks safely across model switches
   3. `/review` (`dispatch/review.py`) pre-collects uncommitted, `--staged`, or validated `<base-ref>` git diffs in Python inside an untrusted-diff frame and runs under a turn-scoped read-only Plan gate with `turn_interface = "tool"` without mutating sticky `ModeState`
 
-**Plans**: TBD
+**Plans**: 3 plans
 
-### Phase 22: Strands Evals & Red-Team Suite
+**Wave 1**
+
+- [ ] `21-01-PLAN.md` — Tracer: declarative `dispatch/help.py` command table driving `/help [name]` (built-ins + skills) and `USAGE_HINT` + `BUILTIN_SLASH_HEADS` (`help`, `file`, `review`), 3-site `RejectCallerToolUseHook` (`policy/tool_use_guard.py`, CVE-2026-18830), and `model_switch.py` / `cost_context.py` `"document"` conversion parity
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] `21-02-PLAN.md` — `@file` / `/file` gitignore-aware fuzzy picker (`ui/attachments.py`, `ui/completer.py`), `/file` `default=buf` pre-fill, real-file-only `@token` resolution + `read`/`codeact_read` fail-closed security floor, and post-routing `supports_media` abort gate in `loop/core.py` + `loop/pump.py`
+
+**Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
+
+- [ ] `21-03-PLAN.md` — Read-only `/review` (`dispatch/review.py`), strict `<base-ref>` validation & `256 KiB` `<untrusted_git_diff>` frame, sanitized `/route` `ask_text`, turn-scoped `PolicyGateHandler.enter_read_only`/`exit_read_only` + `turn_interface = "tool"`, `docs/QUICKSTART.md`, and complete CI/suite verification
 
 **Goal**: Establish continuous agent behavioral evaluation and adversarial prompt-injection red-teaming on `strands-agents-evals` covering Plan/Act, CodeAct, `/review`, `/route`, and skills/memory defenses
 **Depends on**: Phases 17, 18, 19, 20, 21
