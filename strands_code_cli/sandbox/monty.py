@@ -31,7 +31,6 @@ MONTY_MAX_STDOUT_BYTES = 4 * 1024 * 1024
 MONTY_DENIED_IMPORTS: frozenset[str] = frozenset({"os", "pathlib", "subprocess"})
 """Host-OS modules explicitly denied inside Monty (D-04)."""
 
-_STDOUT_TRUNCATED_NOTE = "\n[stdout truncated at 4 MiB]"
 _DEFAULT_REQUEST_TIMEOUT_GRACE = 5.0
 _MISSING_BUILTINS: dict[str, Any] = {"ascii": ascii}
 
@@ -73,7 +72,12 @@ class _StdoutCollector:
     def text(self) -> str:
         out = "".join(self._parts)
         if self.truncated:
-            out = f"{out.rstrip()}{_STDOUT_TRUNCATED_NOTE}"
+            limit_label = (
+                "4 MiB"
+                if self._max_bytes == MONTY_MAX_STDOUT_BYTES
+                else f"{self._max_bytes} bytes"
+            )
+            out = f"{out.rstrip()}\n[stdout truncated at {limit_label}]"
         return out.strip()
 
 
@@ -152,8 +156,14 @@ def _resolve_monty_binary_path(explicit: str | None) -> str:
     from pydantic_monty._binary import find_monty_binary
 
     found = find_monty_binary(explicit)
+    if any(
+        ord(ch) < 32 or ord(ch) == 127 or 0xD800 <= ord(ch) <= 0xDFFF for ch in found
+    ):
+        raise ValueError("Invalid control character in Monty worker binary path")
     if not os.path.isfile(found):
         raise FileNotFoundError(f"Monty worker binary not found: {found}")
+    if not os.access(found, os.X_OK):
+        raise PermissionError(f"Monty worker binary is not executable: {found}")
     return found
 
 
@@ -163,15 +173,10 @@ def _get_shared_pool(binary_path: str | None = None) -> Any:
     import pydantic_monty as pm
 
     resolved_bin = _resolve_monty_binary_path(binary_path)
-    stale_pool: Any = None
     with _POOL_LOCK:
         _ensure_atexit_registered()
         if _SHARED_POOL is not None and _SHARED_POOL_BIN == resolved_bin:
             return _SHARED_POOL
-        stale_pool = _SHARED_POOL
-        _SHARED_POOL = None
-        _SHARED_POOL_BIN = None
-    _close_pool_instance(stale_pool)
 
     pool = pm.Monty(
         binary_path=resolved_bin,
@@ -179,14 +184,31 @@ def _get_shared_pool(binary_path: str | None = None) -> Any:
         request_timeout=MONTY_DEFAULT_TIMEOUT_SECONDS + _DEFAULT_REQUEST_TIMEOUT_GRACE,
     )
     pool.__enter__()
+    stale_pool: Any = None
+    extra_pool: Any = None
     with _POOL_LOCK:
-        if _SHARED_POOL is None:
+        if _SHARED_POOL is not None and _SHARED_POOL_BIN == resolved_bin:
+            extra_pool = pool
+            chosen = _SHARED_POOL
+        else:
+            stale_pool = _SHARED_POOL
             _SHARED_POOL = pool
             _SHARED_POOL_BIN = resolved_bin
-            return _SHARED_POOL
-        chosen = _SHARED_POOL
-    _close_pool_instance(pool)
+            chosen = pool
+    _close_pool_instance(extra_pool)
+    _close_pool_instance(stale_pool)
     return chosen
+
+
+def _is_monty_timeout(exc: BaseException) -> bool:
+    inner_fn = getattr(exc, "exception", None)
+    if callable(inner_fn):
+        try:
+            if isinstance(inner_fn(), TimeoutError):
+                return True
+        except Exception:
+            pass
+    return isinstance(exc, TimeoutError) or str(exc).startswith("TimeoutError:")
 
 
 def _wrap_callback(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -305,6 +327,12 @@ class MontyPythonInterpreter(PythonInterpreter):
                 f"Monty VM crashed ({exc}); REPL state was reset.",
             )
         except pm.MontyError as exc:
+            if _is_monty_timeout(exc):
+                self._discard_session_unlocked()
+                return (
+                    collector.text,
+                    f"{exc} (REPL state was reset after time limit.)",
+                )
             return (collector.text, str(exc))
         except Exception as exc:
             return (collector.text, str(exc))

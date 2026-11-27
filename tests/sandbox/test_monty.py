@@ -108,13 +108,39 @@ class TestMontyPythonInterpreter:
         assert err2 == ""
         assert out2 == "10"
 
-    def test_fails_closed_when_monty_missing_or_binary_unavailable(self, monkeypatch):
+    def test_fails_closed_when_monty_missing_or_binary_unavailable(
+        self, monkeypatch, tmp_path
+    ):
         import sys
+
+        import strands_code_cli.sandbox.monty as monty_mod
+
+        healthy = MontyPythonInterpreter()
+        assert healthy.execute_code("keep_alive = 123") == ("", "")
+        healthy_pool = monty_mod._SHARED_POOL
+        assert healthy_pool is not None
 
         interp = MontyPythonInterpreter(binary_path="/nonexistent/path/to/monty")
         out, err = interp.execute_code("print(1 + 1)")
         assert out == ""
         assert "Monty Python VM unavailable" in err
+        assert monty_mod._SHARED_POOL is healthy_pool
+
+        not_exec = tmp_path / "not_exec_monty"
+        not_exec.write_text("not executable", encoding="utf-8")
+        not_exec.chmod(0o644)
+        _, err_nx = MontyPythonInterpreter(binary_path=str(not_exec)).execute_code(
+            "print(1)"
+        )
+        assert "not executable" in err_nx
+        assert monty_mod._SHARED_POOL is healthy_pool
+
+        _, err_ctrl = MontyPythonInterpreter(
+            binary_path="/tmp/bad\nmonty"
+        ).execute_code("print(1)")
+        assert "control character" in err_ctrl
+        assert monty_mod._SHARED_POOL is healthy_pool
+        assert healthy.execute_code("print(keep_alive)") == ("123", "")
 
         interp2 = MontyPythonInterpreter()
         monkeypatch.setitem(sys.modules, "pydantic_monty", None)
@@ -123,10 +149,16 @@ class TestMontyPythonInterpreter:
         assert "Monty Python VM unavailable" in err2
 
     def test_stdout_cap_and_resource_limits(self):
+        from strands_code_cli.sandbox.monty import _StdoutCollector
+
+        default_collector = _StdoutCollector()
+        default_collector("stdout", "a" * (MONTY_MAX_STDOUT_BYTES + 16))
+        assert "[stdout truncated at 4 MiB]" in default_collector.text
+
         capped = MontyPythonInterpreter(max_stdout_bytes=64)
         out, err = capped.execute_code("print('x' * 200)")
         assert err == ""
-        assert "[stdout truncated at 4 MiB]" in out
+        assert "[stdout truncated at 64 bytes]" in out
         assert len(out.encode("utf-8")) < 200
 
         timed = MontyPythonInterpreter(timeout_seconds=0.05)
@@ -135,6 +167,9 @@ class TestMontyPythonInterpreter:
         )
         assert out_t == "before timeout"
         assert "TimeoutError" in err_t
+        assert "REPL state was reset" in err_t
+        assert timed._session is None
+        assert timed.execute_code("print('recovered')") == ("recovered", "")
 
         bounded_mem = MontyPythonInterpreter(max_memory_bytes=1024 * 1024)
         out_m, err_m = bounded_mem.execute_code(
