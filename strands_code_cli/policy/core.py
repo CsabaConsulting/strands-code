@@ -155,6 +155,7 @@ _CURL_UNSAFE_LONG_FLAGS = frozenset(
         "--expand-header",
         "--stderr",
         "--libcurl",
+        "--etag-compare",
         "--etag-save",
         "--write-out",
         "--alt-svc",
@@ -186,7 +187,19 @@ _CURL_UNSAFE_SHORT_CHARS = frozenset(
     {"F", "T", "d", "o", "O", "I", "K", "c", "D", ":", "b", "w", "Q", "E", "n"}
 )
 _SHELL_RAW_META_CHARS = frozenset({";", "|", "&", "`", "\n", "\r", ">", "<"})
-_FETCH_DISALLOWED_GIT_FLAGS = ("--upload-pack", "--exec")
+_FETCH_DISALLOWED_GIT_FLAGS = (
+    "--upload-pack",
+    "--exec",
+    "-u",
+    "--update-head-ok",
+    "-f",
+    "--force",
+    "--prune",
+    "--prune-tags",
+    "--config",
+    "-c",
+    "--recurse-submodules",
+)
 
 # `sh -c "..."` / `bash -c '...'` / `sh -lc "..."` one-level unwrap (resolved item 3).
 _SHELL_PATTERN = re.compile(r"^(sh|bash)\s+(.*)$", re.DOTALL)
@@ -746,6 +759,19 @@ def _is_safe_curl_args(args: Sequence[str]) -> bool:
     return True
 
 
+def _is_safe_git_fetch_args(args: Sequence[str]) -> bool:
+    """True when ``git fetch`` args carry no remote-helper RCE or mutating flags."""
+    for tok in args:
+        low = tok.lower()
+        if "::" in tok or low.startswith("file:"):
+            return False
+        if any(
+            low == f or low.startswith(f + "=") for f in _FETCH_DISALLOWED_GIT_FLAGS
+        ):
+            return False
+    return True
+
+
 def is_fetch_get(command: str) -> bool:
     """True for isolated GET-shaped fetches (D-02): ``curl`` without upload,
     write, or mutating flags, or exact ``git fetch``."""
@@ -759,11 +785,7 @@ def is_fetch_get(command: str) -> bool:
     if not tokens:
         return False
     if tokens[0] == "git" and len(tokens) >= 2 and tokens[1] == "fetch":
-        return not any(
-            t.lower() == f or t.lower().startswith(f + "=")
-            for t in tokens[2:]
-            for f in _FETCH_DISALLOWED_GIT_FLAGS
-        )
+        return _is_safe_git_fetch_args(tokens[2:])
     if tokens[0] == "curl":
         return _is_safe_curl_args(tokens[1:])
     return False

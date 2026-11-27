@@ -103,6 +103,14 @@ def _is_protected_prompt(
     return False
 
 
+def _is_outside_scope_prompt(tool_name: str, verdict: Prompt) -> bool:
+    """True when unboxed read/search triggered an outside-allowed-roots prompt."""
+    return (
+        tool_name in ("read", "search")
+        and "is outside the allowed roots:" in verdict.reason
+    )
+
+
 def tag_for(agent: Any, main_agent: Any) -> str:
     """Compat helper: ``"main"`` when unset or equal to ``main_agent``, else ``"btw"``."""
     if agent is None or agent is main_agent:
@@ -338,9 +346,12 @@ def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
                 if Path(expanded).is_absolute()
                 else str(Path(os.getcwd()) / expanded)
             )
-            return Rule(tool=tool_name, path=os.path.realpath(absolute))
+            real = os.path.realpath(absolute)
+            if any(ch in real for ch in ("*", "?", "[", "]")):
+                return None
+            return Rule(tool=tool_name, path=real)
         if tool_name == "search" and str(tool_input.get("file_glob", "")).strip():
-            return Rule(tool="search")
+            return Rule(tool=tool_name)
         return None
     if tool_name in TOOL_ONLY_TOOLS:
         return Rule(tool=tool_name)
@@ -366,11 +377,13 @@ _DIALOG_DETAIL_CHARS = 60
 
 def _dialog_title(tag: str, tool_name: str, tool_input: dict[str, Any]) -> str:
     """Sanitized self-identifying dialog title carrying agent tag, tool, and detail."""
+    safe_tag = sanitize_display(tag, max_len=40)
+    safe_tool = sanitize_display(tool_name, max_len=80)
     raw = _detail_line(tool_name, tool_input)
     detail = sanitize_display(raw, max_len=_DIALOG_DETAIL_CHARS)
     if not detail:
-        return f"Approve? [{tag}] {tool_name}"
-    return f"Approve? [{tag}] {tool_name} — {detail}"
+        return f"Approve? [{safe_tag}] {safe_tool}"
+    return f"Approve? [{safe_tag}] {safe_tool} — {detail}"
 
 
 def _user_deny_action(
@@ -571,18 +584,22 @@ class PolicyGateHandler(InterventionHandler):
             verdict.rule.describe() if verdict.rule is not None else verdict.reason,
             max_len=400,
         )
+        safe_tag = sanitize_line(tag, max_len=40)
+        safe_tool = sanitize_line(tool_name, max_len=80)
         refusal = f"Denied by policy rule [deny {rule_text}] — skipped, continuing."
         if tool_name == "python_repl":
             refusal += f" {REVISE_HINT}"
         _emit(refusal)
-        self._batch.record(f"[{tag}] denied {tool_name} [{rule_text}]")
+        self._batch.record(f"[{safe_tag}] denied {safe_tool} [{rule_text}]")
         return InterventionDeny(reason=refusal)
 
     def _render_prompt_header(
         self, tag: str, tool_name: str, tool_input: dict[str, Any], verdict: Prompt
     ) -> None:
+        safe_tag = sanitize_line(tag, max_len=40)
+        safe_tool = sanitize_line(tool_name, max_len=80)
         with RENDER_LOCK:
-            print_plain(console, f"Approval needed: [{tag}] {tool_name}")
+            print_plain(console, f"Approval needed: [{safe_tag}] {safe_tool}")
             if tool_name == "python_repl":
                 safe_code = sanitize_multiline(tool_input.get("code", ""))
                 console.print(Syntax(safe_code, "python"))
@@ -647,9 +664,11 @@ class PolicyGateHandler(InterventionHandler):
             else:
                 PolicyConfig().append_rule(kind, derived)
         except (OSError, ValueError) as exc:
-            _emit(f"Could not append standing rule: {exc}")
+            _emit(f"Could not append standing rule: {sanitize_line(exc, max_len=300)}")
             return False
-        _emit(f"Appended standing rule [{kind} {derived.describe()}].")
+        _emit(
+            f"Appended standing rule [{kind} {sanitize_line(derived.describe(), max_len=300)}]."
+        )
         return True
 
     def _record_one_shot(
@@ -661,12 +680,15 @@ class PolicyGateHandler(InterventionHandler):
         signature: tuple[str, ...],
         label: str,
     ) -> InterventionProceed | InterventionDeny:
+        entry = (
+            f"[{sanitize_line(tag, max_len=40)}] {label} "
+            f"{sanitize_line(tool_name, max_len=80)}: "
+            f"{sanitize_line(reason, max_len=400)}"
+        )
         if approve:
-            self._batch.mark(
-                signature, f"[{tag}] {label} {tool_name}: {reason}", tag=tag
-            )
+            self._batch.mark(signature, entry, tag=tag)
             return InterventionProceed()
-        self._batch.record(f"[{tag}] {label} {tool_name}: {reason}")
+        self._batch.record(entry)
         return _user_deny_action(tool_name)
 
     def _apply_answer(
@@ -716,7 +738,11 @@ class PolicyGateHandler(InterventionHandler):
         kind = "allow" if approve else "deny"
         if not self._append_standing_rule(kind, derived):
             return InterventionProceed() if approve else _user_deny_action(tool_name)
-        desc = f"[{tag}] {answer} {tool_name} [{derived.describe()}]"
+        desc = (
+            f"[{sanitize_line(tag, max_len=40)}] {answer} "
+            f"{sanitize_line(tool_name, max_len=80)} "
+            f"[{sanitize_line(derived.describe(), max_len=300)}]"
+        )
         if approve:
             self._batch.mark(signature, desc, tag=tag)
             return InterventionProceed()
@@ -739,9 +765,12 @@ class PolicyGateHandler(InterventionHandler):
             agent = getattr(event, "agent", None)
             tag = self.tag_for(agent)
             if self.is_read_only(agent) and tool_name in PLAN_MUTATING_TOOLS:
-                reason = PLAN_DENY_TEMPLATE.format(tool=tool_name)
+                safe_tool = sanitize_line(tool_name, max_len=80)
+                reason = PLAN_DENY_TEMPLATE.format(tool=safe_tool)
                 _emit(reason)
-                self._batch.record(f"[{tag}] plan-mode denied {tool_name}")
+                self._batch.record(
+                    f"[{sanitize_line(tag, max_len=40)}] plan-mode denied {safe_tool}"
+                )
                 return InterventionDeny(reason=reason)
             return self._evaluate_act_call(agent, tag, tool_name, tool_input)
         except (TurnCancelled, KeyboardInterrupt):
@@ -766,12 +795,16 @@ class PolicyGateHandler(InterventionHandler):
         if isinstance(verdict, Deny):
             return self._handle_deny(tag, tool_name, verdict)
         protected = _is_protected_prompt(tool_name, tool_input)
+        outside_scope = _is_outside_scope_prompt(tool_name, verdict)
         if (
             policy.options.trust_delegated
             and self.is_delegated(agent)
             and not protected
+            and not outside_scope
         ):
-            _emit(f"Auto-trusted delegated call ({tool_name}) — trust_delegated is on.")
+            _emit(
+                f"Auto-trusted delegated call ({sanitize_line(tool_name, max_len=80)}) — trust_delegated is on."
+            )
             return InterventionProceed(reason="delegated-trusted")
         signature = _input_signature(tool_name, tool_input, verdict)
         if self._batch.is_covered(signature, tag=tag):

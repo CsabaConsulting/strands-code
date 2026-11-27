@@ -1894,3 +1894,23 @@ class TestBtwTest5Hardening:
         assert events_cancel == [("cancel", True), "shutdown"]
         assert id(side_cancel) not in gate._agent_tags
         assert id(side_cancel) not in gate._read_only_agents
+
+    def test_btw_and_steering_sanitize_ansi_and_bidi_output(self, capsys):
+        from strands_code_cli.loop.steering import _default_on_line, _default_on_refusal
+
+        poison = "hi\x1b]0;pwn\x07\x1b[31m\u202ebody"
+        render_btw_error(poison, ValueError("bad \x1b[2Amsg\x07"))
+        ctx = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        ctx.submit(poison)
+        _default_on_line(poison)
+        _default_on_refusal("/bad\x1b[31m", "denied \x1b]0;x\x07")
+        out = capsys.readouterr().out
+        assert "\x1b" not in out
+        assert "\u202e" not in out
+        assert "btw failed (ValueError): bad msg" in out
+        assert "> /btw hibody" in out

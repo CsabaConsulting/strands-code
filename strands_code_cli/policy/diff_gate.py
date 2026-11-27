@@ -227,9 +227,15 @@ async def _fs_read(path: str) -> str | None:
 
 
 async def _fs_write(path: str, content: str) -> None:
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(target.write_text, content, encoding="utf-8")
+    await asyncio.to_thread(
+        atomic_write_text,
+        Path(path),
+        content,
+        mode=None,
+        dir_mode=None,
+        refuse_ancestors=0,
+        label="target file",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -340,9 +346,16 @@ async def _gate_and_apply(
 def _validate_stashed_target(
     target: str, base: Path, op: str
 ) -> tuple[str, str | None]:
-    """Re-verify symlink, scope, and protected-path safety before /diff apply."""
+    """Re-verify symlink, scope, protected-path, and policy deny before /diff apply."""
+    from strands_code_cli.policy.core import Deny, PolicyConfig, decide
+    from strands_code_cli.policy.scope import effective_roots
+
     resolved = resolve(target, base)
-    extra_roots = _policy_roots(base, op)
+    try:
+        policy = PolicyConfig.load(repo_path=base / ".agent" / "policy.toml")
+    except ValueError as exc:
+        return str(resolved), f"{target}: {exc}; kept pending."
+    extra_roots = list(effective_roots(base, policy, tool_name=op))
     try:
         refuse_symlink_under_roots(
             resolved, (base, Path("/tmp"), *extra_roots), f"stashed {op} target"
@@ -355,6 +368,9 @@ def _validate_stashed_target(
             str(resolved),
             f"{target}: protected path cannot be auto-applied from stash; kept pending.",
         )
+    verdict = decide(op, {"path": str(resolved)}, policy, cwd=base)
+    if isinstance(verdict, Deny):
+        return str(resolved), f"{target}: {verdict.reason}; kept pending."
     return str(resolved), None
 
 

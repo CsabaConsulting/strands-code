@@ -1185,3 +1185,77 @@ class TestWave2HardeningInvariants:
         stale_token = object()
         gate._cleanup_agent_id(id(fake), token=stale_token)
         assert gate.tag_for(fake) == "main"
+
+    def test_trust_delegated_prompts_outside_scope_read_and_search(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        main_agent, sub_agent = _FakeAgent(), _FakeAgent()
+        prompts: list[str] = []
+        monkeypatch.setattr(
+            "builtins.input", lambda *a: (prompts.append("ask"), "n")[1]
+        )
+        cfg = PolicyConfig(options=PolicyOptions(trust_delegated=True))
+        gate = PolicyGateHandler(policy_loader=lambda: cfg)
+        gate.bind_main_agent(main_agent)
+        gate.register_agent(sub_agent, "subagent")
+
+        res_read = _run(
+            gate, _event("read", {"path": "/etc/hosts"}, agent=sub_agent, uid="td-r")
+        )
+        res_search = _run(
+            gate,
+            _event(
+                "search",
+                {"pattern": "root", "path": "/etc"},
+                agent=sub_agent,
+                uid="td-s",
+            ),
+        )
+        res_shell = _run(
+            gate,
+            _event("shell", {"command": "pytest -q"}, agent=sub_agent, uid="td-sh"),
+        )
+        assert isinstance(res_read, HitlDeny)
+        assert isinstance(res_search, HitlDeny)
+        assert len(prompts) == 2
+        assert (
+            isinstance(res_shell, Proceed) and res_shell.reason == "delegated-trusted"
+        )
+
+    def test_derive_rule_refuses_glob_metachar_paths(self, tmp_path, monkeypatch):
+        from strands_code_cli.policy.policy_gate import _derive_rule
+
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".agent").mkdir()
+        repo_policy = tmp_path / ".agent" / "policy.toml"
+        for glob_path in ("*", "src/*.py", "a?.txt", "foo[1].py"):
+            assert _derive_rule("write", {"path": glob_path}) is None
+
+        handler = PolicyGateHandler(
+            policy_loader=PolicyConfig.load, append_path=repo_policy
+        )
+        monkeypatch.setattr("builtins.input", lambda *a: "always")
+        res = _run(handler, _event("write", {"path": "*"}, uid="glob-always"))
+        assert isinstance(res, Proceed)
+        assert not repo_policy.exists()
+
+    def test_gate_sanitizes_tool_name_and_tag_in_output_and_logs(self, monkeypatch):
+        from strands_code_cli.policy.policy_gate import _dialog_title
+
+        buf = _capture_console(monkeypatch)
+        gate = PolicyGateHandler(
+            policy_loader=lambda: PolicyConfig(
+                allow=[Rule(tool="read", path="*")],
+            )
+        )
+        monkeypatch.setattr("builtins.input", lambda *a: "n")
+        poison_tool = "evil\x1b]0;pwn\x07\x1b[31mtool"
+        _run(gate, _event(poison_tool, {"arg": "v"}, uid="esc-tool"))
+        out = buf.getvalue()
+        assert "\x1b" not in out
+        assert "Approval needed: [main] eviltool" in out
+        assert all("\x1b" not in item for item in gate.last_covered())
+        assert "\x1b" not in _dialog_title(
+            "main\x1b[31m", poison_tool, {"path": "a\x07b"}
+        )

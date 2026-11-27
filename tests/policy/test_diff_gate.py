@@ -642,3 +642,35 @@ class TestGateSubsumption:
         assert not (wrong_cwd / "new_rel.txt").exists()
         assert "symlink" in res_rel
         assert (repo / "sub_real" / "target.txt").read_text(encoding="utf-8") == "keep"
+
+    def test_apply_stashed_enforces_repo_deny_and_atomic_fs_write(self, tmp_path):
+        from strands_code_cli.policy.diff_gate import _fs_write
+
+        repo = tmp_path / "repo"
+        (repo / ".agent").mkdir(parents=True)
+        (repo / ".agent" / "policy.toml").write_text(
+            '[[deny]]\ntool = "write"\npath = "*.pem"\n',
+            encoding="utf-8",
+        )
+        store = PendingStore(repo / ".agent" / "pending_deny.json")
+        store.stash(str(repo / "secret.pem"), None, "PRIVATE", "write")
+        store.stash(str(repo / "notes.txt"), None, "hello\n", "write")
+
+        report = _run(apply_stashed(store, cwd=repo))
+        assert "Denied by policy rule" in report
+        assert "Applied" in report
+        assert not (repo / "secret.pem").exists()
+        assert (repo / "notes.txt").read_text(encoding="utf-8") == "hello\n"
+        assert list(store.list()) == [str(repo / "secret.pem")]
+
+        # Direct _fs_write helper writes atomically and refuses symlink targets.
+        real_target = repo / "real.txt"
+        real_target.write_text("orig", encoding="utf-8")
+        sym_target = repo / "sym.txt"
+        try:
+            sym_target.symlink_to(real_target)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        with pytest.raises(ValueError, match="Refusing symlink"):
+            _run(_fs_write(str(sym_target), "clobber"))
+        assert real_target.read_text(encoding="utf-8") == "orig"

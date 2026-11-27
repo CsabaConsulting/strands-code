@@ -49,7 +49,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
-from strands_code_cli.ui.console import RENDER_LOCK, console
+from strands_code_cli.ui.console import RENDER_LOCK, console, sanitize_line
 from strands_code_cli.ui.output import print_plain
 
 STEERING_NOTED = "Steering noted — applies at the next step."
@@ -235,14 +235,14 @@ def _default_on_line(line: str) -> None:
     """Echo a captured line under RENDER_LOCK: plain print lands in transcript."""
     with RENDER_LOCK:
         print_plain(console, STEERING_NOTED)
-        print_plain(console, f"> {line}")
+        print_plain(console, f"> {sanitize_line(line)}")
 
 
 def _default_on_refusal(line: str, reply: str) -> None:
     """Echo a refused slash line plus the refusal under RENDER_LOCK."""
     with RENDER_LOCK:
-        print_plain(console, f"> {line}")
-        print_plain(console, reply)
+        print_plain(console, f"> {sanitize_line(line)}")
+        print_plain(console, sanitize_line(reply))
 
 
 STEERING_HOOK_ORDER = -100

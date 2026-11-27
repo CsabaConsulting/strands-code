@@ -45,7 +45,7 @@ from strands_code_cli.model.model_switch import (
     reconcile_delegate_builtin_tools,
     scoped_base_url,
 )
-from strands_code_cli.ui.console import RENDER_LOCK, console
+from strands_code_cli.ui.console import RENDER_LOCK, console, sanitize_line
 from strands_code_cli.ui.output import print_plain
 
 BTW_QUESTION_CHARS = 60
@@ -87,8 +87,8 @@ BTW_INFLIGHT_MARKER = (
 
 
 def _fence_title(question: str) -> str:
-    """Single-line fence title: first 60 chars of the question."""
-    return " ".join(question.split())[:BTW_QUESTION_CHARS]
+    """Single-line sanitized fence title: first 60 chars of the question."""
+    return sanitize_line(" ".join(question.split()))[:BTW_QUESTION_CHARS]
 
 
 class LockedHandler:
@@ -146,7 +146,10 @@ def render_btw_error(question: str, exc: BaseException) -> None:
     """
     with RENDER_LOCK:
         print_plain(console, f"--- btw: {_fence_title(question)} ---")
-        print_plain(console, f"btw failed ({type(exc).__name__}): {exc}")
+        print_plain(
+            console,
+            f"btw failed ({type(exc).__name__}): {sanitize_line(exc, max_len=500)}",
+        )
         print_plain(console, "--- end btw ---")
 
 
@@ -407,7 +410,7 @@ class BtwContext:
         depth = self.spawn_queue.put(question)
         cleaned = question.strip()
         with RENDER_LOCK:
-            print_plain(console, f"> /btw {cleaned}")
+            print_plain(console, f"> /btw {sanitize_line(cleaned)}")
             if self.running.is_set():
                 print_plain(console, BTW_QUEUED_TEMPLATE.format(depth=depth))
             else:
