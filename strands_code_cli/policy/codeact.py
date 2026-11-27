@@ -156,6 +156,12 @@ CODEACT_TIMEOUT_SECONDS = 60
 CODEACT_SHELL_TIMEOUT_SECONDS = 60
 """Interior shell timeout, matching the interpreter bound (D-12)."""
 
+CODEACT_MAX_FILE_BYTES = 4 * 1024 * 1024
+"""Maximum bytes read from one CodeAct target file (4 MiB)."""
+
+CODEACT_MAX_SHELL_OUTPUT_BYTES = 4 * 1024 * 1024
+"""Maximum UTF-8 bytes returned per CodeAct shell stream (4 MiB)."""
+
 
 def _load_codeact_policy(base: Path) -> tuple[Any | None, str | None]:
     """Load active home + repo policy fail-closed (returns error note on tamper)."""
@@ -252,9 +258,13 @@ def _prepare_codeact_path(
 
 
 def _read_regular_file_utf8(
-    target: Path, raw_path: str, op: str = "read"
+    target: Path,
+    raw_path: str,
+    op: str = "read",
+    *,
+    max_bytes: int = CODEACT_MAX_FILE_BYTES,
 ) -> tuple[str | None, str | None]:
-    """Read UTF-8 text from ``target`` with ``O_NOFOLLOW | O_NONBLOCK``."""
+    """Read UTF-8 text from ``target`` with ``O_NOFOLLOW | O_NONBLOCK`` and byte cap."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(target, flags)
@@ -266,11 +276,20 @@ def _read_regular_file_utf8(
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return (None, f"Refused {op}: {raw_path!r} is not a regular file")
+        if st.st_size > max_bytes:
+            return (None, f"Refused {op}: {raw_path!r} exceeds {max_bytes} byte limit")
         chunks: list[bytes] = []
+        total = 0
         while True:
             chunk = os.read(fd, 65536)
             if not chunk:
                 break
+            total += len(chunk)
+            if total > max_bytes:
+                return (
+                    None,
+                    f"Refused {op}: {raw_path!r} exceeds {max_bytes} byte limit",
+                )
             chunks.append(chunk)
         return (b"".join(chunks).decode("utf-8", errors="strict"), None)
     except (OSError, UnicodeDecodeError) as exc:
@@ -343,24 +362,108 @@ def _codeact_shell_cmd(argv: list[str] | tuple[str, ...]) -> list[str]:
     return cmd
 
 
-def _codeact_shell_deny_candidates(cmd_parts: list[str]) -> list[str]:
-    cands: list[str] = [shlex.join(cmd_parts)]
-    head_base = os.path.basename(cmd_parts[0])
-    if head_base and head_base != cmd_parts[0]:
-        cands.append(shlex.join([head_base, *cmd_parts[1:]]))
-    if head_base == "env":
-        idx = 1
-        while idx < len(cmd_parts) and (
-            cmd_parts[idx].startswith("-") or "=" in cmd_parts[idx]
-        ):
+_ENV_ARG_FLAGS = frozenset(
+    {
+        "-u",
+        "--unset",
+        "-C",
+        "--chdir",
+        "--argv0",
+        "--block-signal",
+        "--default-signal",
+        "--ignore-signal",
+    }
+)
+_EXEC_WRAPPER_ARG_FLAGS: dict[str, frozenset[str]] = {
+    "nice": frozenset({"-n", "--adjustment"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "stdbuf": frozenset({"-i", "--input", "-o", "--output", "-e", "--error"}),
+    "nohup": frozenset(),
+    "command": frozenset(),
+    "exec": frozenset(),
+}
+
+
+def _unwrap_env_wrapper(parts: list[str]) -> list[str] | None:
+    idx = 1
+    while idx < len(parts):
+        tok = parts[idx]
+        if tok == "--":
             idx += 1
-        if idx < len(cmd_parts):
-            rest = cmd_parts[idx:]
-            cands.append(shlex.join(rest))
-            rest_base = os.path.basename(rest[0])
-            if rest_base and rest_base != rest[0]:
-                cands.append(shlex.join([rest_base, *rest[1:]]))
+            break
+        if tok in ("-S", "--split-string") and idx + 1 < len(parts):
+            try:
+                return [*shlex.split(parts[idx + 1]), *parts[idx + 2 :]]
+            except ValueError:
+                return parts[idx + 1 :]
+        if tok.startswith("--split-string="):
+            try:
+                return [*shlex.split(tok.split("=", 1)[1]), *parts[idx + 1 :]]
+            except ValueError:
+                return parts[idx + 1 :]
+        if tok in _ENV_ARG_FLAGS:
+            idx += 2
+            continue
+        if tok.startswith("-") or "=" in tok:
+            idx += 1
+            continue
+        break
+    return parts[idx:] if idx < len(parts) else None
+
+
+def _unwrap_exec_wrapper(head: str, parts: list[str]) -> list[str] | None:
+    arg_flags = _EXEC_WRAPPER_ARG_FLAGS.get(head)
+    if arg_flags is None:
+        return None
+    idx = 1
+    while idx < len(parts):
+        tok = parts[idx]
+        if tok == "--":
+            idx += 1
+            break
+        if tok in arg_flags:
+            idx += 2
+            continue
+        if tok.startswith("-"):
+            idx += 1
+            continue
+        break
+    if head == "timeout" and idx < len(parts):
+        idx += 1
+    return parts[idx:] if idx < len(parts) else None
+
+
+def _codeact_shell_deny_candidates(cmd_parts: list[str]) -> list[str]:
+    cands: list[str] = []
+    cur = list(cmd_parts)
+    for _ in range(4):
+        joined = shlex.join(cur)
+        if joined not in cands:
+            cands.append(joined)
+        head_base = os.path.basename(cur[0])
+        if head_base and head_base != cur[0]:
+            base_joined = shlex.join([head_base, *cur[1:]])
+            if base_joined not in cands:
+                cands.append(base_joined)
+        nxt = (
+            _unwrap_env_wrapper(cur)
+            if head_base == "env"
+            else _unwrap_exec_wrapper(head_base, cur)
+        )
+        if not nxt or nxt == cur:
+            break
+        cur = nxt
     return cands
+
+
+def _cap_shell_output(
+    text: str, max_bytes: int = CODEACT_MAX_SHELL_OUTPUT_BYTES
+) -> str:
+    raw = text.encode("utf-8", errors="replace")
+    if len(raw) <= max_bytes:
+        return text
+    clipped = raw[:max_bytes].decode("utf-8", errors="ignore").rstrip()
+    return f"{clipped}\n[output truncated at 4 MiB]"
 
 
 def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
@@ -396,9 +499,9 @@ def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
         return f"shell failed: {exc}"
     parts = []
     if proc.stdout:
-        parts.append(f"{STDOUT_LABEL}{proc.stdout.rstrip()}")
+        parts.append(f"{STDOUT_LABEL}{_cap_shell_output(proc.stdout.rstrip())}")
     if proc.stderr:
-        parts.append(f"{STDERR_LABEL}{proc.stderr.rstrip()}")
+        parts.append(f"{STDERR_LABEL}{_cap_shell_output(proc.stderr.rstrip())}")
     if proc.returncode != 0:
         parts.append(f"exit code: {proc.returncode}")
     return "\n".join(parts) if parts else "Command ran with no output."

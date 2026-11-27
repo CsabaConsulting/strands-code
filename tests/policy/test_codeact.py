@@ -992,6 +992,49 @@ class TestCodeactInteriorFunctions:
         assert "Denied by policy" in codeact_shell(ws, ["/bin/sh", "-c", "rm -rf x"])
         assert "Denied by policy" in codeact_shell(ws, ["/usr/bin/git", "push"])
 
+    def test_security_audit_file_cap_wrapper_shell_deny_and_output_cap(self, tmp_path):
+        from strands_code_cli.policy.codeact import (
+            CODEACT_MAX_FILE_BYTES,
+            CODEACT_MAX_SHELL_OUTPUT_BYTES,
+            _cap_shell_output,
+            codeact_edit,
+            codeact_read,
+            codeact_shell,
+        )
+
+        # T-20-10: Over-cap files fail closed before buffering into host memory.
+        sparse = tmp_path / "sparse.txt"
+        with open(sparse, "wb") as fh:
+            fh.truncate(CODEACT_MAX_FILE_BYTES + 1)
+        assert "limit" in codeact_read(tmp_path, "sparse.txt").lower()
+        assert "limit" in codeact_edit(tmp_path, "sparse.txt", "a", "b").lower()
+
+        # T-20-11: env flag values (-u/-C/-S) and exec wrappers cannot bypass [[deny]].
+        (tmp_path / ".agent").mkdir()
+        (tmp_path / ".agent" / "policy.toml").write_text(
+            '[[deny]]\ntool = "shell"\ncommand = "rm"\n'
+            '[[deny]]\ntool = "shell"\ncommand = "git push"\n',
+            encoding="utf-8",
+        )
+        for argv in (
+            ["env", "-u", "FOO", "rm", "-f", "x"],
+            ["env", "-C", str(tmp_path), "rm", "-f", "x"],
+            ["env", "-S", "rm -f x"],
+            ["env", "-u", "HOME", "/usr/bin/git", "push"],
+            ["nice", "-n", "10", "rm", "-f", "x"],
+            ["timeout", "5", "/bin/rm", "-f", "x"],
+            ["nohup", "rm", "-f", "x"],
+            ["stdbuf", "-o", "0", "rm", "-f", "x"],
+            ["command", "rm", "-f", "x"],
+            ["env", "-u", "X", "timeout", "5", "nice", "/bin/rm", "-f", "x"],
+        ):
+            assert "Denied by policy" in codeact_shell(tmp_path, argv), argv
+
+        # T-20-12: Large shell outputs truncate cleanly at 4 MiB.
+        capped = _cap_shell_output("A" * (CODEACT_MAX_SHELL_OUTPUT_BYTES + 128))
+        assert "[output truncated at 4 MiB]" in capped
+        assert len(capped.encode("utf-8")) <= CODEACT_MAX_SHELL_OUTPUT_BYTES + 64
+
 
 class _FakeRegistry:
     """ToolRegistry double exposing replace plus a registry mapping."""
