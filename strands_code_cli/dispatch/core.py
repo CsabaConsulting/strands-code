@@ -2344,7 +2344,10 @@ def _policy_message(rest: str, *, agent: Any = None) -> str:
         except ValueError as exc:
             return f"Policy config error: {exc}"
         lines = ["Effective policy (deny-wins across home + repo union):"]
-        lines.append("Builtins: allow read, search; allow GET-shaped fetch, git fetch.")
+        lines.append(
+            "Builtins: allow read, search, web_fetch, web_search, skills, subagent; "
+            "allow GET-shaped fetch, git fetch (sensitive paths prompt)."
+        )
         for rule in config.allow:
             lines.append(f"  allow {rule.describe()}")
         for rule in config.deny:

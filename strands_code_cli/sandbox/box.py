@@ -133,14 +133,16 @@ def is_in_strands_box(env: Mapping[str, str] | None = None) -> bool:
 
 
 def _reject_control_chars(value: str, label: str) -> str:
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
-        raise ValueError(f"Invalid control character in {label}")
+    if any(
+        ord(ch) < 32 or ord(ch) == 127 or 0xD800 <= ord(ch) <= 0xDFFF for ch in value
+    ):
+        raise ValueError(f"Invalid control or surrogate character in {label}")
     return value
 
 
 def _toml_str(value: str, label: str = "value") -> str:
     _reject_control_chars(value, label)
-    return json.dumps(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _toml_list(values: Sequence[str], label: str = "list") -> str:
@@ -295,7 +297,7 @@ def _providers_from_env(env: Mapping[str, str]) -> set[str]:
         ("anthropic", ("ANTHROPIC_API_KEY",)),
         ("openai", ("OPENAI_API_KEY",)),
         ("meta", ("MODEL_API_KEY", "META_API_KEY")),
-        ("openrouter", ("OPENROUTER_API_KEY",)),
+        ("openrouter", ("OPENROUTER_API_KEY", "LITELLM_API_KEY")),
         ("typesafe", ("TYPESAFE_API_KEY",)),
         ("decisions_api", ("JEV_API_KEY",)),
     )
@@ -625,8 +627,8 @@ _STATIC_EGRESS_SPECS: dict[str, EgressSpec] = {
         ("api.anthropic.com",),
         "env://ANTHROPIC_API_KEY",
         "header",
-        "x-api-key",
-        "",
+        "Authorization",
+        "Bearer",
     ),
     "openai": EgressSpec(
         "openai",
@@ -788,12 +790,18 @@ def _render_agent_env(
     raw_ct = env.get("COLORTERM")
     if isinstance(raw_ct, str) and raw_ct.strip():
         out["COLORTERM"] = _reject_control_chars(raw_ct.strip(), "COLORTERM")
-    for key in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+    xdg_defaults = {
+        "XDG_CONFIG_HOME": runtime["code_cfg"].parent,
+        "XDG_CACHE_HOME": runtime["code_cache"].parent,
+    }
+    for key, default_dir in xdg_defaults.items():
         val = env.get(key)
         if not isinstance(val, str) or not val.strip():
-            continue
-        cleaned = _reject_control_chars(val.strip(), key)
-        cand = Path(cleaned)
+            cand = default_dir
+            cleaned = _reject_control_chars(str(cand), key)
+        else:
+            cleaned = _reject_control_chars(val.strip(), key)
+            cand = Path(cleaned)
         if (
             cand.is_absolute()
             and cand not in _REFUSED_ROOTS
@@ -973,7 +981,26 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         '    || context.input.path like "*/.env.*"',
         '    || context.input.path like "*/.ssh/*"',
         '    || context.input.path like "*/.aws/*"',
+        '    || context.input.path like "*/.git/config"',
+        '    || context.input.path like "*/.netrc"',
+        '    || context.input.path like "*/.npmrc"',
+        '    || context.input.path like "*/.pypirc"',
         "};",
+        "",
+        '@id("allow_fs_read")',
+        'permit (principal, action == Box::Action::"fs:read", resource);',
+        "",
+        '@id("allow_fs_write")',
+        'permit (principal, action == Box::Action::"fs:write", resource);',
+        "",
+        '@id("allow_fs_delete")',
+        'permit (principal, action == Box::Action::"fs:delete", resource);',
+        "",
+        '@id("allow_fs_move")',
+        'permit (principal, action == Box::Action::"fs:move", resource);',
+        "",
+        '@id("allow_shell_exec")',
+        'permit (principal, action == Box::Action::"shell:exec", resource);',
         "",
         '@id("forbid_box_config_write")',
         'forbid (principal, action == Box::Action::"fs:write", resource)',
@@ -999,7 +1026,17 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         '@id("allow_dev_tools")',
         'permit (principal, action == Box::Action::"shell:spawn", resource)',
         "when {",
-        '    ["pytest", "rg", "ruff", "uv", "python", "git"].contains(context.input.program)',
+        '    ["pytest", "rg", "ruff", "uv", "git"].contains(context.input.program)',
+        "};",
+        "",
+        '@id("forbid_uv_git_push")',
+        'forbid (principal, action == Box::Action::"shell:spawn", resource)',
+        "when {",
+        '    context.input.program == "uv"',
+        "    && (",
+        '        context.input.command like "*git *push*"',
+        '        || context.input.command like "*git -c *"',
+        "    )",
         "};",
         "",
         '@id("push_requires_recent_tests")',
@@ -1009,14 +1046,36 @@ def render_policy_dw(egress_specs: Sequence[EgressSpec]) -> str:
         "    && (",
         '        (context.input has arg1 && context.input.arg1 == "push")',
         '        || (context.input has arg2 && context.input.arg2 == "push")',
-        '        || context.input.command like "* push"',
-        '        || context.input.command like "* push *"',
+        '        || (context.input has arg1 && context.input.arg1 == "-c" && context.input.command like "*push*")',
+        "        || (",
+        "            context.input has arg1",
+        '            && !(["commit", "log", "grep", "show", "diff"].contains(context.input.arg1))',
+        '            && (context.input.command like "* push" || context.input.command like "* push *")',
+        "        )",
         "    )",
         "}",
         "unless temporal {",
         "    formerly within 900s (",
         '        Box::Action::"shell:spawn"::response {',
         '            input.program: "pytest",',
+        "            output.status: 0",
+        "        }",
+        '        && !Box::Action::"shell:spawn"::response {',
+        '            input.program: "pytest",',
+        '            input.arg1: "--version"',
+        "        }",
+        '        && !Box::Action::"shell:spawn"::response {',
+        '            input.program: "pytest",',
+        '            input.arg1: "--help"',
+        "        }",
+        "    )",
+        "}",
+        "unless temporal {",
+        "    formerly within 900s (",
+        '        Box::Action::"shell:spawn"::response {',
+        '            input.program: "uv",',
+        '            input.arg1: "run",',
+        '            input.arg2: "pytest",',
         "            output.status: 0",
         "        }",
         "    )",
@@ -1248,6 +1307,14 @@ def _check_linux_arch(
     return BoxDoctorCheck("linux_arch", True, f"Linux {machine} (GA supported).")
 
 
+def _apparmor_has_userns(text: str) -> bool:
+    for line in text.splitlines():
+        stripped = line.split("#", 1)[0].strip()
+        if re.search(r"(?<![A-Za-z0-9_])userns(?![A-Za-z0-9_])", stripped):
+            return True
+    return False
+
+
 def _check_apparmor(sysctl_path: Path, profile_path: Path) -> BoxDoctorCheck:
     if not sysctl_path.exists():
         return BoxDoctorCheck(
@@ -1255,7 +1322,15 @@ def _check_apparmor(sysctl_path: Path, profile_path: Path) -> BoxDoctorCheck:
             True,
             "No Ubuntu AppArmor userns sysctl restriction detected.",
         )
-    val = sysctl_path.read_text(encoding="utf-8").strip()
+    try:
+        val = sysctl_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return BoxDoctorCheck(
+            "apparmor_userns",
+            False,
+            f"Cannot read {sysctl_path}: {exc}",
+            f"Inspect {sysctl_path} permissions or install {profile_path}.",
+        )
     if val != "1":
         return BoxDoctorCheck(
             "apparmor_userns",
@@ -1263,6 +1338,22 @@ def _check_apparmor(sysctl_path: Path, profile_path: Path) -> BoxDoctorCheck:
             f"AppArmor userns restriction disabled ({sysctl_path.name}={val}).",
         )
     if profile_path.is_file():
+        try:
+            profile_text = profile_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return BoxDoctorCheck(
+                "apparmor_userns",
+                False,
+                f"Cannot read AppArmor profile {profile_path}: {exc}",
+                f"Ensure {profile_path} is readable and allows `userns,`.",
+            )
+        if not _apparmor_has_userns(profile_text):
+            return BoxDoctorCheck(
+                "apparmor_userns",
+                False,
+                f"AppArmor profile {profile_path} is missing `userns,` rule.",
+                f"Update {profile_path} with:\n{APPARMOR_PROFILE_SNIPPET}",
+            )
         return BoxDoctorCheck(
             "apparmor_userns",
             True,
@@ -1276,15 +1367,32 @@ def _check_apparmor(sysctl_path: Path, profile_path: Path) -> BoxDoctorCheck:
     )
 
 
+def _resolve_custom_policy_path(
+    cfg_toml: Path, parsed_cfg: dict[str, Any]
+) -> Path | None:
+    pol_val = parsed_cfg.get("policy")
+    if isinstance(pol_val, str) and pol_val.strip():
+        cleaned_pol = _reject_control_chars(pol_val.strip(), "policy")
+        return (
+            Path(cleaned_pol)
+            if Path(cleaned_pol).is_absolute()
+            else cfg_toml.parent / cleaned_pol
+        )
+    return None
+
+
 def _check_box_config(cfg_toml: Path, cfg_dw: Path) -> BoxDoctorCheck:
-    if cfg_toml.is_symlink() or cfg_dw.is_symlink() or cfg_toml.parent.is_symlink():
+    try:
+        _refuse_symlink(cfg_toml, "box.toml", max_ancestors=3)
+        _refuse_symlink(cfg_dw, "policy.dw", max_ancestors=3)
+    except ValueError as exc:
         return BoxDoctorCheck(
             "box_config",
             False,
-            f"Symlink refused in Box config path: {cfg_toml.parent}",
+            f"Symlink refused in Box config path: {exc}",
             "Remove symlinks and re-run `strands-code box init`.",
         )
-    if not cfg_toml.is_file() or not cfg_dw.is_file():
+    if not cfg_toml.is_file():
         return BoxDoctorCheck(
             "box_config",
             False,
@@ -1293,14 +1401,23 @@ def _check_box_config(cfg_toml: Path, cfg_dw: Path) -> BoxDoctorCheck:
         )
     try:
         content = cfg_toml.read_text(encoding="utf-8")
-        if tomllib is not None:
-            tomllib.loads(content)
+        parsed_cfg = tomllib.loads(content) if tomllib is not None else {}
+        custom_pol = _resolve_custom_policy_path(cfg_toml, parsed_cfg)
+        active_pol = custom_pol if custom_pol is not None else cfg_dw
+        _refuse_symlink(active_pol, "policy", max_ancestors=3)
     except Exception as exc:
         return BoxDoctorCheck(
             "box_config",
             False,
             f"Invalid {cfg_toml.name}: {exc}",
             "Re-run `strands-code box init` to regenerate box.toml.",
+        )
+    if not active_pol.is_file():
+        return BoxDoctorCheck(
+            "box_config",
+            False,
+            f"Policy not found: {active_pol}",
+            "Run `strands-code box init` to generate box.toml and policy.dw.",
         )
     return BoxDoctorCheck("box_config", True, f"Valid config at {cfg_toml}")
 
@@ -1412,8 +1529,8 @@ def _validate_launch_box_dir(raw_box_dir: str) -> None:
 
 
 def _validate_launch_config(cfg_toml: Path) -> None:
-    _refuse_symlink(cfg_toml, "box.toml")
-    _refuse_symlink(cfg_toml.parent / "policy.dw", "policy.dw")
+    _refuse_symlink(cfg_toml, "box.toml", max_ancestors=3)
+    _refuse_symlink(cfg_toml.parent / "policy.dw", "policy.dw", max_ancestors=3)
     if not cfg_toml.is_file():
         raise ValueError(
             f"Box config not found: {cfg_toml}. Run `strands-code box init` first."
@@ -1424,15 +1541,9 @@ def _validate_launch_config(cfg_toml: Path) -> None:
         parsed_cfg = tomllib.loads(cfg_toml.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise ValueError(f"Invalid {cfg_toml.name}: {exc}") from exc
-    pol_val = parsed_cfg.get("policy")
-    if isinstance(pol_val, str) and pol_val.strip():
-        cleaned_pol = _reject_control_chars(pol_val, "policy")
-        pol_path = (
-            Path(cleaned_pol)
-            if Path(cleaned_pol).is_absolute()
-            else cfg_toml.parent / cleaned_pol
-        )
-        _refuse_symlink(pol_path, "policy")
+    pol_path = _resolve_custom_policy_path(cfg_toml, parsed_cfg)
+    if pol_path is not None:
+        _refuse_symlink(pol_path, "policy", max_ancestors=3)
     box_dir_val = parsed_cfg.get("box_dir")
     if isinstance(box_dir_val, str) and box_dir_val.strip():
         _validate_launch_box_dir(box_dir_val)

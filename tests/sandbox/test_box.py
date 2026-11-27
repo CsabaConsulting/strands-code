@@ -325,8 +325,8 @@ class TestBoxConfigGenerationAndEgress:
             "header": "x-goog-api-key",
             "prefix": "",
         }
-        assert egress["anthropic"]["secret"]["header"] == "x-api-key"
-        assert egress["anthropic"]["secret"]["prefix"] == ""
+        assert egress["anthropic"]["secret"]["header"] == "Authorization"
+        assert egress["anthropic"]["secret"]["prefix"] == "Bearer"
         assert egress["openai"]["destinations"] == ["api.openai.com"]
         assert egress["meta"]["destinations"] == ["api.meta.ai"]
         assert egress["openrouter"]["destinations"] == [
@@ -573,29 +573,40 @@ class TestBoxConfigGenerationAndEgress:
             repo, providers=["openrouter"], env={"HOME": str(tmp_path)}
         )
         dw = res.policy_dw.read_text(encoding="utf-8")
-        assert 'action == Box::Action::"net:connect"' in dw
-        assert 'action == Box::Action::"http:request"' in dw
-        assert 'context.input.path like "/api/v1/chat/*"' in dw
-        assert 'context.input.path like "*/.env"' in dw
-        assert 'context.input.path like "*/.env.*"' in dw
-        assert 'context.input.path like "*/.ssh/*"' in dw
-        assert 'context.input.path like "*/.aws/*"' in dw
-        assert (
-            '["pytest", "rg", "ruff", "uv", "python", "git"].contains(context.input.program)'
-            in dw
-        )
-        assert (
-            'forbid (principal, action == Box::Action::"shell:spawn", resource)' in dw
-        )
-        assert 'context.input.program == "git"' in dw
-        assert "context.input has arg1" in dw
-        assert 'context.input.arg1 == "push"' in dw
-        assert "unless temporal {" in dw
-        assert "formerly within 900s" in dw
-        assert 'Box::Action::"shell:spawn"::response' in dw
-        assert 'input.program: "pytest"' in dw
-        assert "output.status: 0" in dw
-        assert "scoped revisit of v1.0 D-05" in dw
+        for expected in (
+            'action == Box::Action::"net:connect"',
+            'action == Box::Action::"http:request"',
+            'context.input.path like "/api/v1/chat/*"',
+            'context.input.path like "*/.env"',
+            'context.input.path like "*/.env.*"',
+            'context.input.path like "*/.ssh/*"',
+            'context.input.path like "*/.aws/*"',
+            'context.input.path like "*/.git/config"',
+            'context.input.path like "*/.netrc"',
+            'context.input.path like "*/.npmrc"',
+            'context.input.path like "*/.pypirc"',
+            '@id("allow_fs_read")',
+            '@id("allow_fs_write")',
+            '@id("allow_fs_delete")',
+            '@id("allow_fs_move")',
+            '@id("allow_shell_exec")',
+            '["pytest", "rg", "ruff", "uv", "git"].contains(context.input.program)',
+            '@id("forbid_uv_git_push")',
+            'forbid (principal, action == Box::Action::"shell:spawn", resource)',
+            'context.input.program == "git"',
+            "context.input has arg1",
+            'context.input.arg1 == "push"',
+            "unless temporal {",
+            "formerly within 900s",
+            'Box::Action::"shell:spawn"::response',
+            'input.program: "pytest"',
+            'input.arg1: "--version"',
+            'input.arg1: "run"',
+            'input.arg2: "pytest"',
+            "output.status: 0",
+            "scoped revisit of v1.0 D-05",
+        ):
+            assert expected in dw
 
 
 class TestSandboxSecurityAndDiagnostics:
@@ -758,6 +769,25 @@ class TestSandboxSecurityAndDiagnostics:
         assert "userns," in rendered_bad
 
         profile.write_text("profile strands-box {}\n", encoding="utf-8")
+        missing_userns_rep = run_box_doctor(
+            repo,
+            config_path=res.box_toml,
+            box_bin=full / "box",
+            env={
+                "HOME": str(tmp_path),
+                "PATH": str(full),
+                "EXPERIMENTAL_X86_SUPPORT": "TRUE",
+            },
+            system_name="Linux",
+            machine="x86_64",
+            apparmor_sysctl_path=sysctl,
+            apparmor_profile_path=profile,
+        )
+        assert {c.name: c for c in missing_userns_rep.checks}[
+            "apparmor_userns"
+        ].ok is False
+
+        profile.write_text("profile strands-box {\n  userns,\n}\n", encoding="utf-8")
         good_rep = run_box_doctor(
             repo,
             config_path=res.box_toml,
@@ -1181,6 +1211,57 @@ class TestBoxNyquistEdgeBranches:
 
         monkeypatch.setattr(sandbox_box, "tomllib", None)
         assert sandbox_box._validate_launch_config(res.box_toml) is None
+
+    def test_wave3_box_toml_utf8_xdg_defaults_litellm_apparmor_and_symlinks(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.sandbox import box as sandbox_box
+
+        # Non-BMP TOML serialization succeeds while surrogates fail closed.
+        rendered = sandbox_box._toml_str("/tmp/🚀-repo")
+        assert tomllib.loads(f"v = {rendered}")["v"] == "/tmp/🚀-repo"
+        with pytest.raises(ValueError, match="surrogate"):
+            sandbox_box._toml_str("/tmp/\ud800bad")
+
+        # LITELLM_API_KEY activates openrouter egress profile.
+        assert "openrouter" in sandbox_box._providers_from_env(
+            {"LITELLM_API_KEY": "sk-lt"}
+        )
+
+        # Unset XDG_CONFIG_HOME / XDG_CACHE_HOME default to host config/cache parents.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        rt = resolve_runtime_paths(repo, home=tmp_path)
+        env_default = sandbox_box._render_agent_env(
+            runtime=rt,
+            providers=["anthropic"],
+            aws_region="us-west-2",
+            env={"PATH": "/usr/bin:/bin"},
+        )
+        assert env_default["XDG_CONFIG_HOME"] == str(rt["code_cfg"].parent)
+        assert env_default["XDG_CACHE_HOME"] == str(rt["code_cache"].parent)
+
+        # AppArmor sysctl OSError fails closed.
+        bad_sysctl = tmp_path / "sysctl_dir"
+        bad_sysctl.mkdir()
+        chk = sandbox_box._check_apparmor(bad_sysctl, tmp_path / "missing_prof")
+        assert chk.ok is False
+
+        # 3-ancestor symlink in strands-box root & custom policy symlink caught by box doctor & run.
+        real_root = tmp_path / "real_sbx"
+        real_root.mkdir()
+        sym_root = tmp_path / "strands-box"
+        sym_root.symlink_to(real_root)
+        nested = sym_root / "repos" / "demo-1234"
+        nested.mkdir(parents=True)
+        cfg_toml = nested / "box.toml"
+        cfg_dw = nested / "policy.dw"
+        cfg_dw.write_text("", encoding="utf-8")
+        cfg_toml.write_text('name = "demo"\n', encoding="utf-8")
+        doc_chk = sandbox_box._check_box_config(cfg_toml, cfg_dw)
+        assert doc_chk.ok is False and "Symlink" in doc_chk.detail
+        with pytest.raises(ValueError, match="Refusing symlink parent"):
+            sandbox_box._validate_launch_config(cfg_toml)
 
 
 def _assert_box_run_clean(

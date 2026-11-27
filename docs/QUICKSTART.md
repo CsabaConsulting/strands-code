@@ -411,7 +411,7 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
 | :--- | :--- | :--- | :--- |
 | `bedrock` | `bedrock-runtime.<region>.amazonaws.com` | `aws://<profile>` or `aws://` SigV4 (or `env://AWS_BEARER_TOKEN_BEDROCK` Bearer) | Never opens `sts.amazonaws.com` |
 | `google` | `generativelanguage.googleapis.com` | `env://GOOGLE_API_KEY` or `GEMINI_API_KEY` via `x-goog-api-key` | Auto-detected from config / routing / env |
-| `anthropic` | `api.anthropic.com` | `env://ANTHROPIC_API_KEY` via `x-api-key` | Auto-detected |
+| `anthropic` | `api.anthropic.com` | `env://ANTHROPIC_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `openai` | `api.openai.com` | `env://OPENAI_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `meta` | `api.meta.ai` | `env://MODEL_API_KEY` or `META_API_KEY` via `Authorization: Bearer` | Auto-detected |
 | `openrouter` | `openrouter.ai/api/v1/chat/*`, `openrouter.ai/api/alpha/decisions` (+ unauth `openrouter.ai/api/v1/models*`) | `env://OPENROUTER_API_KEY` via `Authorization: Bearer` (policy-only on `/api/v1/models*`) | Path-scoped; keeps `/cost` & `/route setup` catalog fetches working |
