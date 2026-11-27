@@ -43,6 +43,7 @@ from strands.types.exceptions import EventLoopException
 
 from strands_code_cli.loop.steering import stdin_guard as gate_open
 from strands_code_cli.policy.core import (
+    TOOL_ONLY_TOOLS,
     Allow,
     Deny,
     PolicyConfig,
@@ -59,6 +60,7 @@ from strands_code_cli.ui.console import (
     console,
     sanitize_display,
     sanitize_line,
+    sanitize_multiline,
 )
 from strands_code_cli.ui.output import print_plain
 
@@ -192,6 +194,9 @@ class _ApprovalRequest:
         """Execute the prompt in the pump thread (KeyboardInterrupt propagates)."""
         try:
             self.answer = self._prompt()
+        except Exception as exc:
+            logger.warning("Approval prompt failed; defaulting to deny: %s", exc)
+            self.answer = "n"
         finally:
             self._done.set()
 
@@ -218,6 +223,7 @@ class ApprovalBroker:
     def __init__(self) -> None:
         self._queue: queue.Queue[_ApprovalRequest] = queue.Queue()
         self._pumping = threading.Event()
+        self._pump_lock = threading.Lock()
         self._cancel: threading.Event | None = None
         self._pump_ident: int | None = None
         self._depth = 0
@@ -227,19 +233,29 @@ class ApprovalBroker:
     @contextmanager
     def pump(self, cancel: threading.Event) -> Iterator["ApprovalBroker"]:
         """Serve prompts on this thread until the turn or session ends."""
-        old_cancel, old_ident = self._cancel, self._pump_ident
-        self._cancel = cancel
-        self._pump_ident = threading.get_ident()
-        self._depth += 1
-        self._pumping.set()
+        with self._pump_lock:
+            old_cancel, old_ident = self._cancel, self._pump_ident
+            self._cancel = cancel
+            self._pump_ident = threading.get_ident()
+            self._depth += 1
+            self._pumping.set()
         try:
             yield self
         finally:
-            self._cancel = old_cancel
-            self._pump_ident = old_ident
-            self._depth = max(0, self._depth - 1)
-            if self._depth == 0:
-                self._pumping.clear()
+            to_abort: list[_ApprovalRequest] = []
+            with self._pump_lock:
+                self._cancel = old_cancel
+                self._pump_ident = old_ident
+                self._depth = max(0, self._depth - 1)
+                if self._depth == 0:
+                    self._pumping.clear()
+                    while True:
+                        try:
+                            to_abort.append(self._queue.get_nowait())
+                        except queue.Empty:
+                            break
+            for orphan in to_abort:
+                orphan.abort()
 
     def register_cancel(self, tag: str, event: threading.Event) -> None:
         """Bind a worker cancel event under ``tag``."""
@@ -260,12 +276,20 @@ class ApprovalBroker:
         self, prompt: Callable[[], str], cancel: threading.Event | None = None
     ) -> str:
         """Run ``prompt`` on the pump thread (inline if already on pump/no pump)."""
-        if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
+        req: _ApprovalRequest | None = None
+        wait_cancel = cancel
+        with self._pump_lock:
+            if not self._pumping.is_set() or threading.get_ident() == self._pump_ident:
+                req = None
+            else:
+                req = _ApprovalRequest(prompt, cancel)
+                if wait_cancel is None:
+                    wait_cancel = self._cancel
+                self._queue.put(req)
+        if req is None:
             return prompt()
-        req = _ApprovalRequest(prompt, cancel)
-        self._queue.put(req)
         try:
-            return req.wait_answer(cancel if cancel is not None else self._cancel)
+            return req.wait_answer(wait_cancel)
         except TurnCancelled:
             self.discard(req)
             raise
@@ -296,19 +320,30 @@ def _derive_rule(tool_name: str, tool_input: dict[str, Any]) -> Rule | None:
     if tool_name == "shell":
         command = tool_input.get("command", "")
         if isinstance(command, str) and command.strip():
-            return Rule(tool="shell", command=normalise_command(command))
+            cleaned = command.replace("\r\n", "\n").replace("\r", "\n")
+            return Rule(tool="shell", command=normalise_command(cleaned))
         return None
     if tool_name == "python_repl":
         code = tool_input.get("code", "")
         if isinstance(code, str) and code.strip():
-            return Rule(tool="python_repl", command=normalise_command(code)[:500])
+            cleaned = code.replace("\r\n", "\n").replace("\r", "\n")
+            return Rule(tool="python_repl", command=normalise_command(cleaned)[:500])
         return None
     if tool_name in ("write", "edit", "read", "search"):
         raw = tool_input.get("path", "")
         if isinstance(raw, str) and raw:
-            absolute = raw if Path(raw).is_absolute() else str(Path(os.getcwd()) / raw)
+            expanded = os.path.expanduser(raw)
+            absolute = (
+                expanded
+                if Path(expanded).is_absolute()
+                else str(Path(os.getcwd()) / expanded)
+            )
             return Rule(tool=tool_name, path=os.path.realpath(absolute))
+        if tool_name == "search" and str(tool_input.get("file_glob", "")).strip():
+            return Rule(tool="search")
         return None
+    if tool_name in TOOL_ONLY_TOOLS:
+        return Rule(tool=tool_name)
     return None
 
 
@@ -365,13 +400,14 @@ class PolicyGateHandler(InterventionHandler):
         self._batch = batch if batch is not None else BatchState()
         self._append_path = append_path
         self._broker = broker if broker is not None else ApprovalBroker()
-        self._state_lock = threading.Lock()
+        self._state_lock = threading.RLock()
         self._mode = mode
         self._main_agent_id: int | None = None
         self._main_bound = False
         self._agent_tags: dict[int, str] = {}
         self._read_only_agents: set[int] = set()
         self._finalizers: dict[int, weakref.finalize] = {}
+        self._finalizer_tokens: dict[int, object] = {}
 
     @property
     def name(self) -> str:
@@ -388,11 +424,14 @@ class PolicyGateHandler(InterventionHandler):
         """Main-thread prompt broker owned by this gate."""
         return self._broker
 
-    def _cleanup_agent_id(self, agent_id: int) -> None:
+    def _cleanup_agent_id(self, agent_id: int, token: object | None = None) -> None:
         with self._state_lock:
+            if token is not None and self._finalizer_tokens.get(agent_id) is not token:
+                return
             self._agent_tags.pop(agent_id, None)
             self._read_only_agents.discard(agent_id)
             self._finalizers.pop(agent_id, None)
+            self._finalizer_tokens.pop(agent_id, None)
             if self._main_agent_id == agent_id:
                 self._main_agent_id = None
                 self._main_bound = False
@@ -400,12 +439,14 @@ class PolicyGateHandler(InterventionHandler):
     def _attach_finalizer_locked(self, agent: Any, agent_id: int) -> None:
         if agent_id in self._finalizers:
             return
+        token = object()
         try:
+            self._finalizer_tokens[agent_id] = token
             self._finalizers[agent_id] = weakref.finalize(
-                agent, self._cleanup_agent_id, agent_id
+                agent, self._cleanup_agent_id, agent_id, token
             )
         except TypeError:
-            pass  # non-weakrefable test doubles (e.g., SimpleNamespace)
+            self._finalizer_tokens.pop(agent_id, None)  # non-weakrefable test doubles
 
     def bind_main_agent(self, agent: Any) -> None:
         """Register the primary session agent as ``"main"``."""
@@ -435,6 +476,7 @@ class PolicyGateHandler(InterventionHandler):
         with self._state_lock:
             self._agent_tags.pop(agent_id, None)
             self._read_only_agents.discard(agent_id)
+            self._finalizer_tokens.pop(agent_id, None)
             fin = self._finalizers.pop(agent_id, None)
             if fin is not None:
                 fin.detach()
@@ -514,12 +556,20 @@ class PolicyGateHandler(InterventionHandler):
         try:
             return self._loader()
         except Exception as exc:
-            logger.warning("Policy load failed; prompting for everything: %s", exc)
+            logger.warning(
+                "Policy load failed; preserving home defaults if available: %s", exc
+            )
+            if (
+                getattr(self._loader, "__func__", None) is PolicyConfig.load.__func__
+                and getattr(self._loader, "__self__", None) is PolicyConfig
+            ):
+                return PolicyConfig.load_home_only()
             return PolicyConfig()
 
     def _handle_deny(self, tag: str, tool_name: str, verdict: Deny) -> InterventionDeny:
-        rule_text = (
-            verdict.rule.describe() if verdict.rule is not None else verdict.reason
+        rule_text = sanitize_line(
+            verdict.rule.describe() if verdict.rule is not None else verdict.reason,
+            max_len=400,
         )
         refusal = f"Denied by policy rule [deny {rule_text}] — skipped, continuing."
         if tool_name == "python_repl":
@@ -534,10 +584,13 @@ class PolicyGateHandler(InterventionHandler):
         with RENDER_LOCK:
             print_plain(console, f"Approval needed: [{tag}] {tool_name}")
             if tool_name == "python_repl":
-                console.print(Syntax(str(tool_input.get("code", "")), "python"))
+                safe_code = sanitize_multiline(tool_input.get("code", ""))
+                console.print(Syntax(safe_code, "python"))
             else:
                 print_plain(console, f"  Detail: {_detail_line(tool_name, tool_input)}")
-            print_plain(console, f"  Risk: {verdict.reason}")
+            print_plain(
+                console, f"  Risk: {sanitize_line(verdict.reason, max_len=500)}"
+            )
 
     def _prompt_user(
         self,

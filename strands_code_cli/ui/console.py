@@ -60,3 +60,24 @@ def sanitize_line(value: object, max_len: int | None = None) -> str:
             else cleaned[:max_len]
         )
     return cleaned
+
+
+def sanitize_multiline(value: object, max_len: int | None = None) -> str:
+    """Strip ANSI CSI/OSC & unsafe control chars while preserving newlines and tabs."""
+    text = str(value) if value is not None else ""
+    text = _ANSI_OSC_RE.sub("", text)
+    text = _ANSI_CSI_RE.sub("", text)
+    text = _ANSI_ESC_RE.sub("", text)
+    cleaned_chars: list[str] = []
+    for ch in text:
+        code = ord(ch)
+        if ch in ("\n", "\t") or (code >= 32 and not (127 <= code <= 159)):
+            cleaned_chars.append(ch)
+    cleaned = "".join(cleaned_chars)
+    if max_len is not None and len(cleaned) > max_len:
+        return (
+            cleaned[: max_len - 3].rstrip() + "..."
+            if max_len > 3
+            else cleaned[:max_len]
+        )
+    return cleaned

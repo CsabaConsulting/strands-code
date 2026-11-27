@@ -34,7 +34,11 @@ from typing import Any, Awaitable, Callable
 from strands import tool
 
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
-from strands_code_cli.policy.core import _is_protected_skills_or_config_path
+from strands_code_cli.policy.core import (
+    _is_protected_skills_or_config_path,
+    _is_sensitive_read_path,
+    _is_sensitive_search_input,
+)
 from strands_code_cli.policy.diff_config import DEFAULT_MODE, MODES, DiffConfig
 from strands_code_cli.policy.scope import confine, resolve
 
@@ -512,3 +516,62 @@ def make_gated_edit(
         )
 
     return gated_edit
+
+
+def _filter_sensitive_search_hits(output: str, base: Path) -> str:
+    """Filter sensitive secret/git-config paths from unapproved bare search hits."""
+    kept: list[str] = []
+    omitted = 0
+    for line in output.splitlines():
+        path_part = line.partition(":")[0]
+        if path_part and (
+            _is_sensitive_read_path(path_part, base)
+            or Path(path_part).as_posix().endswith("/.git/config")
+            or path_part == ".git/config"
+        ):
+            omitted += 1
+            continue
+        kept.append(line)
+    if omitted:
+        kept.append(
+            f"[{omitted} match(es) in sensitive files omitted; specify explicit path to request approval]"
+        )
+    return "\n".join(kept) if kept else "No matches found."
+
+
+def make_safe_search_tool(*, cwd: str | Path):
+    """Build CLI ``search`` wrapper guarding fallback dotfile scans (D-24 bridge).
+
+    # Upstream: aws-samples/sample-strands-code-agent — _fallback_search rglob
+    # walks dotfiles (.env, .git/config) when rg is absent or returns exit 2.
+    """
+    from strands_code_agent.search_tool import run_search
+
+    base = Path(cwd)
+
+    @tool(name="search")
+    def safe_search(
+        pattern: str,
+        path: str | None = None,
+        file_glob: str | None = None,
+        limit: int = 50,
+    ) -> str:
+        """Lexical code search over the repo (ripgrep, stdlib fallback, no index).
+
+        Args:
+            pattern: Regex to search for (required, non-empty).
+            path: File or directory to search under (default: working directory).
+            file_glob: Optional glob limiting filenames (e.g. "*.py").
+            limit: Maximum hits returned (default 50).
+        """
+        output = run_search(
+            pattern, path=path, file_glob=file_glob, limit=limit, cwd=base
+        )
+        explicit_sensitive = _is_sensitive_search_input(
+            {"path": path or "", "file_glob": file_glob or ""}, base
+        )
+        if explicit_sensitive or output in ("No matches found.", "search timed out."):
+            return output
+        return _filter_sensitive_search_hits(output, base)
+
+    return safe_search

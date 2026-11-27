@@ -55,6 +55,7 @@ import logging
 import os
 import re
 import shlex
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,7 @@ import tomllib
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 
 logger = logging.getLogger(__name__)
+_APPEND_LOCK = threading.Lock()
 
 _CONFIG_DIR_NAME = "strands-code"
 _CONFIG_FILE_NAME = "policy.toml"
@@ -139,14 +141,41 @@ _CURL_UNSAFE_LONG_FLAGS = frozenset(
         "--remote-name-all",
         "--head",
         "--config",
+        "--cookie",
         "--cookie-jar",
         "--dump-header",
         "--trace",
         "--trace-ascii",
         "--next",
+        "--url-query",
+        "--variable",
+        "--expand-url",
+        "--expand-data",
+        "--expand-header",
+        "--stderr",
+        "--libcurl",
+        "--etag-save",
+        "--write-out",
+        "--alt-svc",
+        "--hsts",
+        "--quote",
+        "--mail-from",
+        "--mail-rcpt",
+        "--netrc-file",
+        "--key",
+        "--cert",
+        "--cacert",
+        "--proxy-header",
+        "--telnet-option",
+        "--upload-flags",
+        "--proto",
+        "--proto-default",
+        "--proto-redir",
     }
 )
-_CURL_UNSAFE_SHORT_CHARS = frozenset({"F", "T", "d", "o", "O", "I", "K", "c", "D", ":"})
+_CURL_UNSAFE_SHORT_CHARS = frozenset(
+    {"F", "T", "d", "o", "O", "I", "K", "c", "D", ":", "b", "w", "Q"}
+)
 _SHELL_RAW_META_CHARS = frozenset({";", "|", "&", "`", "\n", "\r", ">", "<"})
 _FETCH_DISALLOWED_GIT_FLAGS = ("--upload-pack", "--exec")
 
@@ -201,6 +230,23 @@ class PolicyConfig:
     deny: list[Rule] = field(default_factory=list)
 
     @classmethod
+    def load_home_only(cls, home_path: str | Path | None = None) -> PolicyConfig:
+        """Load only home policy defaults (preserving denies if repo fails)."""
+        home = (
+            Path(home_path) if home_path is not None else default_policy_config_path()
+        )
+        try:
+            refuse_symlink(home, "home policy", max_ancestors=1)
+            home_cfg = _load_one(home)
+        except (PolicySchemaError, tomllib.TOMLDecodeError, OSError, ValueError) as exc:
+            logger.warning(
+                "Ignoring home policy config, falling back to prompt-all defaults: %s",
+                exc,
+            )
+            return cls()
+        return home_cfg if home_cfg is not None else cls()
+
+    @classmethod
     def load(
         cls,
         home_path: str | Path | None = None,
@@ -208,10 +254,10 @@ class PolicyConfig:
     ) -> PolicyConfig:
         """Load the layered union (home defaults + repo overlay), fail-closed.
 
-        Missing files yield built-in defaults. Any parse/schema violation
-        in either file warns and returns built-in defaults
-        (prompt-all-mutating, never allow-all). Symlinked paths raise
-        ``ValueError`` fail-loud.
+        Missing files yield built-in defaults. Parse/schema violations in
+        home fail closed to built-in defaults; parse/schema violations in
+        the untrusted repo overlay drop only the repo layer so home deny
+        rules remain intact. Symlinked paths raise ``ValueError`` fail-loud.
         """
         home = (
             Path(home_path) if home_path is not None else default_policy_config_path()
@@ -221,33 +267,22 @@ class PolicyConfig:
             refuse_symlink(candidate, label, max_ancestors=1)
         try:
             home_cfg = _load_one(home)
+        except (PolicySchemaError, tomllib.TOMLDecodeError, OSError, ValueError) as exc:
+            logger.warning(
+                "Ignoring home policy config, falling back to prompt-all defaults: %s",
+                exc,
+            )
+            return cls()
+        try:
             repo_cfg = _load_one(repo)
         except (PolicySchemaError, tomllib.TOMLDecodeError, OSError, ValueError) as exc:
             logger.warning(
-                "Ignoring policy config, falling back to prompt-all defaults: %s", exc
-            )
-            return cls()
-        merged = cls()
-        for single in (home_cfg, repo_cfg):
-            if single is None:
-                continue
-            merged.allow.extend(single.allow)
-            merged.deny.extend(single.deny)
-        # trust_delegated is strictly home-only (D-04): untrusted repos cannot opt in.
-        if home_cfg is not None:
-            merged.options.trust_delegated = home_cfg.options.trust_delegated
-        if repo_cfg is not None and repo_cfg.options.trust_delegated:
-            logger.warning(
-                "Ignoring untrusted trust_delegated = true in repo policy %s; only home policy may enable it.",
+                "Ignoring invalid repo policy config %s; keeping home defaults: %s",
                 repo,
+                exc,
             )
-        # Repo rules first for explanation order only (deny-wins is order-free).
-        if repo_cfg is not None:
-            merged.allow = list(repo_cfg.allow) + list(
-                home_cfg.allow if home_cfg else []
-            )
-            merged.deny = list(repo_cfg.deny) + list(home_cfg.deny if home_cfg else [])
-        return merged
+            repo_cfg = None
+        return _merge_policy_layers(home_cfg, repo_cfg, repo)
 
     def append_rule(
         self,
@@ -268,25 +303,51 @@ class PolicyConfig:
         resolved = (
             Path(repo_path) if repo_path is not None else default_repo_policy_path()
         )
-        refuse_symlink(resolved, "policy file", max_ancestors=1)
-        existing = ""
-        if resolved.exists():
-            existing = resolved.read_text(encoding="utf-8")
-            if existing and not existing.endswith("\n"):
-                existing += "\n"
-        candidate_text = existing + _serialise_rule(kind, rule)
-        tomllib.loads(candidate_text)
-        atomic_write_text(
-            resolved,
-            candidate_text,
-            mode=0o600,
-            dir_mode=0o700,
-            refuse_ancestors=1,
-            label="policy file",
-        )
-        target = self.allow if kind == "allow" else self.deny
-        target.append(rule)
+        with _APPEND_LOCK:
+            refuse_symlink(resolved, "policy file", max_ancestors=1)
+            existing = ""
+            if resolved.exists():
+                existing = resolved.read_text(encoding="utf-8")
+                if existing and not existing.endswith("\n"):
+                    existing += "\n"
+            candidate_text = existing + _serialise_rule(kind, rule)
+            tomllib.loads(candidate_text)
+            atomic_write_text(
+                resolved,
+                candidate_text,
+                mode=0o600,
+                dir_mode=0o700,
+                refuse_ancestors=1,
+                label="policy file",
+            )
+            target = self.allow if kind == "allow" else self.deny
+            target.append(rule)
         return resolved
+
+
+def _merge_policy_layers(
+    home_cfg: PolicyConfig | None,
+    repo_cfg: PolicyConfig | None,
+    repo: Path,
+) -> PolicyConfig:
+    """Merge validated home + repo configs (home trust_delegated, deny-wins)."""
+    merged = PolicyConfig()
+    if home_cfg is not None:
+        merged.options.trust_delegated = home_cfg.options.trust_delegated
+    if repo_cfg is not None and repo_cfg.options.trust_delegated:
+        logger.warning(
+            "Ignoring untrusted trust_delegated = true in repo policy %s; only home policy may enable it.",
+            repo,
+        )
+    merged.allow = [
+        *(repo_cfg.allow if repo_cfg else []),
+        *(home_cfg.allow if home_cfg else []),
+    ]
+    merged.deny = [
+        *(repo_cfg.deny if repo_cfg else []),
+        *(home_cfg.deny if home_cfg else []),
+    ]
+    return merged
 
 
 class PolicySchemaError(ValueError):
@@ -381,9 +442,14 @@ def _validate_rule(rule: Rule) -> None:
 
 
 def _toml_rule_str(value: str, field_name: str) -> str:
-    if any((ord(ch) < 32 and ch not in ("\t", "\n")) or ord(ch) == 127 for ch in value):
+    if any(
+        (ord(ch) < 32 and ch not in ("\t", "\n"))
+        or ord(ch) == 127
+        or 0xD800 <= ord(ch) <= 0xDFFF
+        for ch in value
+    ):
         raise ValueError(f"Disallowed control character in policy rule {field_name}")
-    return json.dumps(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _serialise_rule(kind: str, rule: Rule) -> str:
@@ -402,12 +468,33 @@ def _serialise_rule(kind: str, rule: Rule) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_single_quoted_shell_arg(inner: str) -> str | None:
+    """Return contents iff ``inner`` is wrapped by one matching outer quote pair."""
+    if len(inner) < 2 or inner[0] not in ("'", '"') or inner[-1] != inner[0]:
+        return None
+    quote = inner[0]
+    escaped = False
+    for idx in range(1, len(inner)):
+        ch = inner[idx]
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote == '"':
+            escaped = True
+            continue
+        if ch == quote:
+            return inner[1:-1] if idx == len(inner) - 1 else None
+    return None
+
+
 def normalise_command(cmd: str) -> str:
     """Strip, then unwrap ONE ``sh -c``/``bash -c``/``sh -lc`` quote level.
 
     Unwrapping is single-shot, not recursive (resolved item 3): allow
     rules match on PREFIX of the result, network detection scans the
-    result for SUBSTRING binary names.
+    result for SUBSTRING binary names. Quote-inversion trailing payloads
+    (``"cmd" && evil "1"``) stay wrapped so metacharacter detection rejects
+    them cleanly.
     """
     text = cmd.strip()
     shell = _SHELL_PATTERN.match(text)
@@ -420,8 +507,11 @@ def normalise_command(cmd: str) -> str:
             return text
         if "c" in flag.group(1)[1:]:
             inner = flag.group(2).strip()
-            if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in ("'", '"'):
-                return inner[1:-1]
+            unwrapped = _unwrap_single_quoted_shell_arg(inner)
+            if unwrapped is not None:
+                return unwrapped
+            if len(inner) >= 2 and inner[0] in ("'", '"'):
+                return text
             return inner
         rest = flag.group(2).strip()
 
@@ -461,9 +551,9 @@ def _has_unquoted_shell_metachars(text: str) -> bool:
 
 
 def _has_shell_metachars(text: str, *, allow_quoted: bool = False) -> bool:
-    """Detect shell metacharacters, subshells, and multiline control tokens."""
+    """Detect shell metacharacters, subshells, env expansions, and control tokens."""
     if not allow_quoted:
-        return "$(" in text or any(ch in _SHELL_RAW_META_CHARS for ch in text)
+        return "$" in text or any(ch in _SHELL_RAW_META_CHARS for ch in text)
     return _has_unquoted_shell_metachars(text)
 
 
@@ -487,6 +577,17 @@ def _canonical_allow_pattern(pattern: str) -> str:
     return dir_part + rem + tail
 
 
+def _rel_candidate(real_abs: str, base: Path) -> str | None:
+    """Relative path when ``real_abs`` lies within canonical ``base``, else None."""
+    try:
+        rel = os.path.relpath(real_abs, os.path.realpath(base))
+    except (OSError, ValueError):
+        return None
+    if rel != ".." and not rel.startswith(f"..{os.sep}") and not rel.startswith("../"):
+        return rel
+    return None
+
+
 def _match_path_rule(
     pattern: str,
     tool_name: str,
@@ -500,26 +601,30 @@ def _match_path_rule(
         raw = "."
     if not isinstance(raw, str) or not raw:
         return False
-    absolute = raw if Path(raw).is_absolute() else str(base / raw)
+    expanded_raw = os.path.expanduser(raw)
+    expanded_pattern = os.path.expanduser(pattern)
+    absolute = (
+        expanded_raw if Path(expanded_raw).is_absolute() else str(base / expanded_raw)
+    )
     candidates: list[str] = []
     if not is_allow:
-        candidates.extend((raw, os.path.normpath(absolute)))
+        candidates.extend((raw, expanded_raw, os.path.normpath(absolute)))
     try:
         real_abs = os.path.realpath(absolute)
-        candidates.append(real_abs)
     except OSError:
         real_abs = os.path.normpath(absolute)
-    try:
-        rel = os.path.relpath(real_abs, os.path.realpath(base))
-        if (
-            rel != ".."
-            and not rel.startswith(f"..{os.sep}")
-            and not rel.startswith("../")
-        ):
-            candidates.append(rel)
-    except (OSError, ValueError):
-        pass
-    target_pattern = _canonical_allow_pattern(pattern) if is_allow else pattern
+    rel_cand = _rel_candidate(real_abs, base)
+    is_abs_or_broad = Path(expanded_pattern).is_absolute() or expanded_pattern in (
+        "*",
+        "**",
+    )
+    if not is_allow or is_abs_or_broad:
+        candidates.append(real_abs)
+    if rel_cand is not None:
+        candidates.append(rel_cand)
+    target_pattern = (
+        _canonical_allow_pattern(expanded_pattern) if is_allow else expanded_pattern
+    )
     return any(fnmatch.fnmatch(cand, target_pattern) for cand in candidates)
 
 
@@ -581,12 +686,35 @@ def _curl_short_flags_unsafe(tok: str) -> bool:
     return "X" in body or any(ch in _CURL_UNSAFE_SHORT_CHARS for ch in body)
 
 
+def _curl_token_has_unsafe_scheme_or_file_ref(tok: str) -> bool:
+    """True when curl arg reads an ``@file`` payload or uses a non-HTTP(S) scheme."""
+    if tok.startswith("@") or "=@" in tok:
+        return True
+    low = tok.lower()
+    if low.startswith("-h") and "@" in tok:
+        return True
+    candidate = tok.split("=", 1)[-1] if tok.startswith("--") and "=" in tok else tok
+    cand_low = candidate.lower()
+    if cand_low.startswith(("file:", "@")):
+        return True
+    prefix = cand_low.split("?", 1)[0].split("#", 1)[0]
+    if "://" in prefix:
+        scheme = prefix.split("://", 1)[0]
+        return scheme not in ("http", "https")
+    return False
+
+
 def _is_safe_curl_args(args: Sequence[str]) -> bool:
     idx = 0
     while idx < len(args):
         tok = args[idx]
+        if _curl_token_has_unsafe_scheme_or_file_ref(tok):
+            return False
         if tok == "--":
-            break
+            return not any(
+                _curl_token_has_unsafe_scheme_or_file_ref(rem)
+                for rem in args[idx + 1 :]
+            )
         if tok in ("-X", "--request"):
             if idx + 1 >= len(args) or args[idx + 1].upper() not in ("GET", "HEAD"):
                 return False
@@ -796,14 +924,50 @@ def _is_sensitive_read_path(raw: object, base: Path) -> bool:
     )
 
 
+_BRACE_GLOB_RE = re.compile(r"\{([^{}]+)\}")
+_SEARCH_SECRET_CANARIES = (
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".aws/credentials",
+    "id_rsa",
+    "id_ed25519",
+    "credentials",
+)
+
+
+def _expand_brace_glob(pattern: str) -> tuple[str, ...]:
+    match = _BRACE_GLOB_RE.search(pattern)
+    if not match:
+        return (pattern,)
+    prefix = pattern[: match.start()]
+    suffix = pattern[match.end() :]
+    parts = [p.strip() for p in match.group(1).split(",") if p.strip()]
+    return tuple(f"{prefix}{part}{suffix}" for part in parts) or (pattern,)
+
+
+def _glob_matches_secret(raw_glob: str) -> bool:
+    for variant in _expand_brace_glob(raw_glob.strip().lower()):
+        if any(token in variant for token in (".env", ".ssh", ".aws")):
+            return True
+        stripped = variant.lstrip("./")
+        for canary in _SEARCH_SECRET_CANARIES:
+            if fnmatch.fnmatch(canary, variant) or (
+                stripped and fnmatch.fnmatch(canary, stripped)
+            ):
+                return True
+    return False
+
+
 def _is_sensitive_search_input(tool_input: dict[str, Any], base: Path) -> bool:
     """True when ``search`` targets sensitive secret paths or secret globs (D-03)."""
     if _is_sensitive_read_path(tool_input.get("path", ""), base):
         return True
     raw_glob = tool_input.get("file_glob", "")
-    if isinstance(raw_glob, str):
-        lowered = raw_glob.lower()
-        return any(token in lowered for token in (".env", ".ssh", ".aws"))
+    if isinstance(raw_glob, str) and raw_glob.strip():
+        return _glob_matches_secret(raw_glob)
     return False
 
 
@@ -813,8 +977,11 @@ def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
     if not candidates:
         return False
 
+    home = Path.home()
     protected_dirs: list[Path] = []
     for raw_dir in (
+        home / ".ssh",
+        home / ".aws",
         platformdirs.user_config_dir("strands-code"),
         platformdirs.user_cache_dir("strands-code"),
         os.environ.get("STRANDS_CODE_CACHE_DIR", "").strip(),
@@ -832,7 +999,10 @@ def _is_protected_skills_or_config_path(raw: object, base: Path) -> bool:
     dirs_tuple = tuple(protected_dirs)
     files_tuple = tuple(protected_files)
     return any(
-        _is_env_filename(cand) or _path_matches_protected(cand, dirs_tuple, files_tuple)
+        _is_env_filename(cand)
+        or ".ssh" in cand.parts
+        or ".aws" in cand.parts
+        or _path_matches_protected(cand, dirs_tuple, files_tuple)
         for cand in candidates
     )
 

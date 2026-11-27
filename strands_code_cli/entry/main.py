@@ -53,6 +53,7 @@ from strands_code_cli.policy.diff_gate import (
     bind_session,
     make_gated_edit,
     make_gated_write,
+    make_safe_search_tool,
 )
 from strands_code_cli.policy.policy_gate import build_interventions
 from strands_code_cli.sandbox.box import box_app
@@ -201,14 +202,10 @@ def build_agent(
     skills_plugin = AgentSkills(
         skills=discover_plugin_sources(Path(DEFAULT_SKILLS_DIR))
     )
-    # Deferred: search_tool imports strands_code_cli at module level, so a
-    # top-level import here would cycle (cli root -> main -> search_tool).
-    from strands_code_agent.search_tool import search as search_tool
-
     kwargs: dict[str, Any] = {
         "tools": [
             interpreter.get_tool(),
-            search_tool,
+            make_safe_search_tool(cwd=cwd),
             make_gated_write(cwd=cwd, store=store, gate_active=True),
             make_gated_edit(cwd=cwd, store=store, gate_active=True),
         ],

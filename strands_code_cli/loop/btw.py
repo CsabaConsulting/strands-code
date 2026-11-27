@@ -483,8 +483,24 @@ def build_btw_agent(
     base_url_provider = kwargs.pop("_base_url_provider", None)
     kwargs.pop("_api_mode", None)
     parent_agent = kwargs.pop("_parent_agent", None)
+    btw_holder: dict[str, Any] = {"agent": None}
     if "tools" in kwargs:
-        kwargs["tools"] = fresh_tools_for_delegate(kwargs["tools"])
+        delegated_tools = fresh_tools_for_delegate(kwargs["tools"])
+        if isinstance(delegated_tools, (list, tuple)) and any(
+            getattr(tool_obj, "tool_name", None) == "subagent"
+            for tool_obj in delegated_tools
+        ):
+            from strands_code_cli.entry.subagent import build_cli_subagent
+
+            rebound: list[Any] = []
+            for tool_obj in delegated_tools:
+                if getattr(tool_obj, "tool_name", None) == "subagent":
+                    rebound.append(build_cli_subagent(btw_holder, kwargs))
+                else:
+                    rebound.append(tool_obj)
+            kwargs["tools"] = rebound
+        else:
+            kwargs["tools"] = delegated_tools
     if "model" in kwargs:
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
@@ -512,6 +528,7 @@ def build_btw_agent(
     kwargs["instructions"] = f"{CODE_AGENT_INSTRUCTIONS}\n{BTW_FRAMING}"
     kwargs["callback_handler"] = FencedBtwHandler(kwargs["callback_handler"], question)
     agent = create_harness(**kwargs)
+    btw_holder["agent"] = agent
     _register_btw_gate(agent, kwargs.get("interventions"), parent=parent_agent)
     resolved_model = getattr(agent, "model", None)
     raw_model = kwargs.get("model")

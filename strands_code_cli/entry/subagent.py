@@ -194,6 +194,11 @@ def build_cli_subagent(
         _select_child_tools(
             spec, parent_builtin, consumer_by_name, mcp_clients_by_name, child_config
         )
+        if (
+            isinstance(child_config.get("model"), Model)
+            and child_config.get("builtin_tools", {}).get("web_search") is True
+        ):
+            child_config["builtin_tools"]["web_search"] = False
         child_config["memory"] = _resolve_child_memory(parent_config.get("memory"))
         child_config["session"] = False
         child_config["callback_handler"] = None

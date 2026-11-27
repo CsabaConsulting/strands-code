@@ -245,3 +245,32 @@ class TestCliSubagentWiring:
         assert captured["tools"] == []
         assert captured["memory"] is False
         assert base_urls[-1] == ("anthropic/claude-sonnet-4-5", None)
+
+    def test_read_only_btw_spawning_subagent_inherits_read_only_posture(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.loop.btw import build_btw_agent
+
+        monkeypatch.chdir(tmp_path)
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        main_agent = main_module.build_agent(
+            str(uuid.uuid4()),
+            tmp_path / "sessions",
+            model=_ReplayModel("anthropic/claude-sonnet-4-5"),
+        )
+        gate = main_agent._policy_gate
+        side_agent, _prompt = build_btw_agent(
+            {**main_agent._harness_kwargs, "_parent_agent": main_agent},
+            [],
+            "check",
+        )
+        gate.enter_read_only(side_agent)
+        sub_tool = next(
+            t
+            for t in side_agent.tool_registry.registry.values()
+            if t.tool_name == "subagent"
+        )
+        child = sub_tool._builder(AgentSpec(task="inspect"))
+        assert gate.is_read_only(main_agent) is False
+        assert gate.is_read_only(side_agent) is True
+        assert gate.is_read_only(child) is True

@@ -26,7 +26,7 @@ from strands_harness.interventions import resolve_interventions
 
 import strands_code_cli.policy.policy_gate as gate_module
 from strands_code_cli.loop.steering import SteeringState, register_steering_hook
-from strands_code_cli.policy.core import PolicyConfig, PolicyOptions, Rule
+from strands_code_cli.policy.core import PolicyConfig, PolicyOptions, Prompt, Rule
 from strands_code_cli.policy.policy_gate import (
     ApprovalBroker,
     BatchState,
@@ -1095,3 +1095,68 @@ class TestWave2HardeningInvariants:
         assert len(reloaded.deny) == 1
         assert reloaded.deny[0].tool == "search"
         assert reloaded.deny[0].path == str((tmp_path / ".env").resolve())
+
+    def test_broker_eof_symlink_repo_home_deny_derive_tool_only_and_ansi_sanitize(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.policy.policy_gate import _ApprovalRequest, _derive_rule
+
+        # 1. EOFError in ApprovalRequest.run_prompt defaults to 'n' cleanly.
+        req = _ApprovalRequest(lambda: (_ for _ in ()).throw(EOFError("stdin closed")))
+        req.run_prompt()
+        assert req.wait_answer(None) == "n"
+
+        # 2. Symlinked repo policy preserves home [[deny]] rules via load_home_only.
+        cfg_dir = tmp_path / "cfg" / "strands-code"
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / "policy.toml").write_text(
+            '[[deny]]\ntool = "shell"\ncommand = "rm"\n', encoding="utf-8"
+        )
+        monkeypatch.setattr("platformdirs.user_config_dir", lambda _app: str(cfg_dir))
+        repo = tmp_path / "repo"
+        (repo / ".agent").mkdir(parents=True)
+        evil = tmp_path / "evil.toml"
+        evil.write_text('[[allow]]\ntool = "shell"\ncommand = "rm"\n', encoding="utf-8")
+        try:
+            (repo / ".agent" / "policy.toml").symlink_to(evil)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        monkeypatch.chdir(repo)
+        gate = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        res = _run(gate, _event("shell", {"command": "rm -rf /"}, uid="sym-home-deny"))
+        assert isinstance(res, HitlDeny)
+        assert "rm" in res.reason
+
+        # 3. _derive_rule supports search glob, tool-only tools, tilde & CRLF.
+        assert _derive_rule("search", {"pattern": "X", "file_glob": ".env*"}) == Rule(
+            tool="search"
+        )
+        assert _derive_rule("subagent", {"task": "t"}) == Rule(tool="subagent")
+        assert _derive_rule("shell", {"command": "echo hi\r\necho two"}) == Rule(
+            tool="shell", command="echo hi\necho two"
+        )
+        home_sub = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home_sub))
+        tilde_rule = _derive_rule("read", {"path": "~/.env"})
+        assert tilde_rule == Rule(tool="read", path=str((home_sub / ".env").resolve()))
+
+        # 4. Syntax & Risk header strip OSC/CSI escape sequences.
+        buf = _capture_console(monkeypatch)
+        gate._render_prompt_header(
+            "main",
+            "python_repl",
+            {"code": "\x1b]52;c;cHdu\x07print('\x1b[2Ahi')"},
+            Prompt(reason="Python \x1b]0;spoof\x07run"),
+        )
+        rendered = buf.getvalue()
+        assert "\x1b]" not in rendered
+        assert "\x1b[2A" not in rendered
+        assert "print('hi')" in rendered
+        assert "Risk: Python run" in rendered
+
+        # 5. Recycled id() finalizer token check ignores stale token.
+        fake = _FakeAgent()
+        gate.bind_main_agent(fake)
+        stale_token = object()
+        gate._cleanup_agent_id(id(fake), token=stale_token)
+        assert gate.tag_for(fake) == "main"

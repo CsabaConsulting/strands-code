@@ -72,6 +72,8 @@ def _rule_base_dir(pattern: str) -> Path | None:
         base = Path(head or "/")
     else:
         base = Path(head).parent
+    if base == Path("/"):
+        return None
     return base
 
 
