@@ -26,7 +26,6 @@ from typing import Any
 from strands_code_agent.python_environments.base import STDERR_LABEL, STDOUT_LABEL
 from strands_code_cli.platform_io import (
     atomic_write_text,
-    refuse_symlink,
     refuse_symlink_under_roots,
 )
 from strands_code_cli.policy.scope import confine, resolve
@@ -168,6 +167,45 @@ def _load_codeact_policy(base: Path) -> tuple[Any | None, str | None]:
         return (None, f"Refused by policy: {exc}")
 
 
+def _raw_walk_start(
+    expanded: Path, base: Path, real_base: Path
+) -> tuple[Path, tuple[str, ...]]:
+    real_tmp = Path(os.path.realpath("/tmp"))
+    if not expanded.is_absolute():
+        return (real_base, expanded.parts)
+    for root in (base, real_base):
+        if expanded == root or root in expanded.parents:
+            return (real_base, expanded.parts[len(root.parts) :])
+    tmp_raw = Path("/tmp")
+    for root in (tmp_raw, real_tmp):
+        if expanded == root or root in expanded.parents:
+            return (real_tmp, expanded.parts[len(root.parts) :])
+    return (Path(expanded.anchor), expanded.parts[1:])
+
+
+def _refuse_raw_symlink_traversal(
+    raw_path: str, base: Path, real_base: Path, label: str
+) -> Path:
+    """Walk un-collapsed segments to catch ``symlink/../`` escapes while allowing symlinked ``cwd``."""
+    expanded = Path(os.path.expanduser(raw_path))
+    cur, parts = _raw_walk_start(expanded, base, real_base)
+    resolved_input = (
+        real_base / expanded
+        if not expanded.is_absolute()
+        else (cur / Path(*parts) if cur == real_base else expanded)
+    )
+    for part in parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            cur = cur.parent
+            continue
+        cur = cur / part
+        if cur.is_symlink():
+            raise ValueError(f"Refusing symlink for {label}: {cur}")
+    return resolved_input
+
+
 def _prepare_codeact_path(
     cwd: str | Path, raw_path: str, op: str
 ) -> tuple[Path | None, str | None]:
@@ -180,35 +218,34 @@ def _prepare_codeact_path(
     )
 
     base = Path(cwd)
-    policy, pol_err = _load_codeact_policy(base)
+    real_base = Path(os.path.realpath(base))
+    policy, pol_err = _load_codeact_policy(real_base)
     if pol_err is not None or policy is None:
         return (None, pol_err or "Refused by policy")
 
-    expanded = Path(os.path.expanduser(raw_path))
-    pre_path = Path(
-        os.path.normpath(str(expanded if expanded.is_absolute() else base / expanded))
-    )
-    roots = (base, base.resolve(), Path("/tmp"))
+    real_tmp = Path(os.path.realpath("/tmp"))
+    roots = (real_base, real_tmp)
     try:
-        refuse_symlink(pre_path, f"codeact {op} target", max_ancestors=1)
-        refuse_symlink_under_roots(pre_path, roots, f"codeact {op} target")
-        target = confine(resolve(raw_path, base), base)
+        rebased = _refuse_raw_symlink_traversal(
+            raw_path, base, real_base, f"codeact {op} target"
+        )
+        target = confine(resolve(rebased, real_base), real_base)
         refuse_symlink_under_roots(target, roots, f"codeact {op} target")
     except ValueError as exc:
         return (None, str(exc))
 
     if op in ("read", "edit") and (
-        _is_sensitive_read_path(raw_path, base)
-        or _is_sensitive_read_path(str(target), base)
+        _is_sensitive_read_path(raw_path, real_base)
+        or _is_sensitive_read_path(str(target), real_base)
     ):
         return (None, f"Refused {op}: sensitive path {raw_path!r}")
     if op in ("write", "edit") and (
-        _is_protected_skills_or_config_path(raw_path, base)
-        or _is_protected_skills_or_config_path(str(target), base)
+        _is_protected_skills_or_config_path(raw_path, real_base)
+        or _is_protected_skills_or_config_path(str(target), real_base)
     ):
         return (None, f"Refused {op}: protected path {raw_path!r}")
 
-    verdict = decide(op, {"path": str(target)}, policy, cwd=base)
+    verdict = decide(op, {"path": str(target)}, policy, cwd=real_base)
     if isinstance(verdict, Deny):
         return (None, verdict.reason)
     return (target, None)
@@ -306,6 +343,26 @@ def _codeact_shell_cmd(argv: list[str] | tuple[str, ...]) -> list[str]:
     return cmd
 
 
+def _codeact_shell_deny_candidates(cmd_parts: list[str]) -> list[str]:
+    cands: list[str] = [shlex.join(cmd_parts)]
+    head_base = os.path.basename(cmd_parts[0])
+    if head_base and head_base != cmd_parts[0]:
+        cands.append(shlex.join([head_base, *cmd_parts[1:]]))
+    if head_base == "env":
+        idx = 1
+        while idx < len(cmd_parts) and (
+            cmd_parts[idx].startswith("-") or "=" in cmd_parts[idx]
+        ):
+            idx += 1
+        if idx < len(cmd_parts):
+            rest = cmd_parts[idx:]
+            cands.append(shlex.join(rest))
+            rest_base = os.path.basename(rest[0])
+            if rest_base and rest_base != rest[0]:
+                cands.append(shlex.join([rest_base, *rest[1:]]))
+    return cands
+
+
 def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
     """Run one argv command under ``cwd`` after evaluating ``[[deny]]`` rules."""
     if isinstance(argv, str) or not isinstance(argv, (list, tuple)):
@@ -314,14 +371,15 @@ def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
         return "shell expects a non-empty argv list"
     from strands_code_cli.policy.core import Deny, decide
 
-    base = Path(cwd)
-    policy, pol_err = _load_codeact_policy(base)
+    real_base = Path(os.path.realpath(Path(cwd)))
+    policy, pol_err = _load_codeact_policy(real_base)
     if pol_err is not None or policy is None:
         return pol_err or "Refused shell"
-    cmd_str = shlex.join([str(part) for part in argv])
-    verdict = decide("shell", {"command": cmd_str}, policy, cwd=base)
-    if isinstance(verdict, Deny):
-        return verdict.reason
+    cmd_parts = [str(part) for part in argv]
+    for cand in _codeact_shell_deny_candidates(cmd_parts):
+        verdict = decide("shell", {"command": cand}, policy, cwd=real_base)
+        if isinstance(verdict, Deny):
+            return verdict.reason
     try:
         proc = subprocess.run(
             _codeact_shell_cmd(argv),

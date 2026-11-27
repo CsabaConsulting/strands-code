@@ -10,9 +10,9 @@ updated: 2026-11-27T21:46:00Z
 
 ## Current Test
 
-number: 2
-name: All 3 CLI `python_repl` Peer Sites Migrated & Deterministic Worker Teardown (`D-02`, `D-03`, `D-09`)
-expected: Main REPL (`entry/main.py`), `CodeactStint` (`policy/codeact.py`), and `/btw` + `subagent` delegates (`loop/btw.py`, `entry/subagent.py`) all run `MontyPythonInterpreter` with isolated worker state and deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close()`, `_wrap_subagent_cleanup`, `atexit`), with zero `SandboxedPythonInterpreter` remaining in `strands_code_cli/`.
+number: 3
+name: Hardened CodeAct Host Callbacks (`read`/`write`/`edit`/`shell`) & `PolicyConfig` `[[deny]]` Enforcement (`D-07`, `D-08`)
+expected: CodeAct host callbacks enforce Phase 19.1 symlink refusal (leaf & intermediate ancestors), `O_NOFOLLOW | O_NONBLOCK` regular-file UTF-8 reads (blocking FIFOs/devices), `atomic_write_text`, sensitive-read refusal (`.env*`, `.ssh/*`, `.aws/*`), protected-path blocks (`.agent/**`, `.git/**`, `STRANDS.md`, `~/.config/strands-code/**`, `~/.config/strands-box/**`), and non-interactive active `PolicyConfig` `[[deny]]` rules (failing closed on symlinked `.agent/policy.toml`), both directly and inside `CodeactStint` VM calls.
 awaiting: user response
 
 ## Tests
@@ -31,7 +31,7 @@ evidence: |
 
 ### 2. All 3 CLI `python_repl` Peer Sites Migrated & Deterministic Worker Teardown (`D-02`, `D-03`, `D-09`)
 expected: Main REPL (`entry/main.py`), `CodeactStint` (`policy/codeact.py`), and `/btw` + `subagent` delegates (`loop/btw.py`, `entry/subagent.py`) all run `MontyPythonInterpreter` with isolated worker state and deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close()`, `_wrap_subagent_cleanup`, `atexit`), with zero `SandboxedPythonInterpreter` remaining in `strands_code_cli/`.
-result: pending
+result: pass
 evidence: |
   - Functional probe on `HEAD` `ea35d49` (`TEST2_BASE_PROBE_OK` + `ZERO_SMOLAGENTS_CLI`):
     - Zero `SandboxedPythonInterpreter` references across `strands_code_cli/**/*.py`.
@@ -44,6 +44,14 @@ evidence: |
 ### 3. Hardened CodeAct Host Callbacks (`read`/`write`/`edit`/`shell`) & `PolicyConfig` `[[deny]]` Enforcement (`D-07`, `D-08`)
 expected: CodeAct host callbacks enforce Phase 19.1 symlink refusal (leaf & intermediate ancestors), `O_NOFOLLOW | O_NONBLOCK` regular-file UTF-8 reads (blocking FIFOs/devices), `atomic_write_text`, sensitive-read refusal (`.env*`, `.ssh/*`, `.aws/*`), protected-path blocks (`.agent/**`, `.git/**`, `STRANDS.md`, `~/.config/strands-code/**`, `~/.config/strands-box/**`), and non-interactive active `PolicyConfig` `[[deny]]` rules (failing closed on symlinked `.agent/policy.toml`), both directly and inside `CodeactStint` VM calls.
 result: pending
+evidence: |
+  - Functional probe on `HEAD` `12d9a28`:
+    - Blocked 3-level intermediate symlink `a/b/c/...`, all 12 sensitive/protected write paths (`.env`, `.env.local`, `.envrc`, `.ssh/authorized_keys`, `.aws/credentials`, `.git/config`, `.git/hooks/pre-commit`, `STRANDS.md`, `.agent/policy.toml`, `.agent/routing.yaml`, `.agent/MEMORY.md`, `.agent/skills/evil/SKILL.md`), directory/binary/FIFO/`\x00` targets, non-string VM callback args (`int` / string shell), relative glob/wildcard `[[deny]]` rules on `read`/`write`/`edit`/`shell` (`rm`, `git push`), and `STRANDS_BOX=1` metacharacter quoting (`$(touch pwned); echo hi`).
+  - Adversarial pre-check gaps found on `12d9a28` & fixed in `strands_code_cli/policy/codeact.py` + `tests/policy/test_codeact.py`:
+    1. `[Code/Security Gap]` Added `_raw_walk_start()` + `_refuse_raw_symlink_traversal()` walking un-collapsed path segments so `a/../outside/...` symlink escapes are blocked before lexical `..` normalization.
+    2. `[Code/Bug Gap]` Anchored raw walk and `confine()` against `real_base = realpath(cwd)` so legitimate files inside a symlinked workspace (`ws_link -> ws`) succeed cleanly without false-positive parent symlink refusals.
+    3. `[Code/Security Gap]` Added `_codeact_shell_deny_candidates()` in `codeact_shell()` checking full argv, basename head (`/bin/rm` -> `rm`), and `env` wrapper targets (`/usr/bin/env FOO=1 /bin/rm`) against active `PolicyConfig` `[[deny]]` rules.
+  - Re-verified on fix `HEAD` (`Gaps found: None`): `359 passed` (`tests/policy/` + `tests/sandbox/test_monty.py`), all 6 CI gates green, plus live re-probe (`1_SYMLINKED_CWD_READ: 'hello\n'`, `2_DOTDOT_SYM_READ: Refusing symlink`, `5_DENY_SHELL_ABSPATH_RM / ENV_RM / SH_RM / GIT_PUSH: Denied by policy`).
 
 ### 4. Strands Box `monty` Exec Grant (`[agent.filesystem].exec`) & Omitted `[tool.python]` (`D-10`, `D-11`)
 expected: `resolve_runtime_paths()` and `strands-code box init` discover the canonical non-root `monty` binary realpath (`MONTY_BIN` with control-char rejection, `.venv/bin/monty`, `PATH`, `sysconfig` scripts) into `[agent.filesystem].exec` (and non-root parent dir into `read`), refuse `/` and control-char `MONTY_BIN` overrides, and intentionally omit `[tool.python]` / `python:execute`.
@@ -60,11 +68,11 @@ result: pending
 ## Summary
 
 total: 6
-passed: 1
+passed: 2
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 
 ## Gaps
 
-None open so far — Test 1 (`ea35d49`: cumulative `TimeoutError` session reset, `os.X_OK`/control-char check + non-destructive `_SHARED_POOL` swap, dynamic truncation label) and Test 2 (pending `subagent` child Monty session cleanup across `close_agent_repls()`) fixed and re-verified on `HEAD`.
+None open so far — Test 1 (`ea35d49` timeout reset / pool swap / truncation label), Test 2 (`12d9a28` pending `subagent` child cleanup), and Test 3 (CodeAct un-collapsed symlink-`..` walk, symlinked `cwd` support, and basename/`env` shell `[[deny]]` matching) fixed and re-verified on `HEAD`.

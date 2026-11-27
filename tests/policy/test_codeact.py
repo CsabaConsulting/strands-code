@@ -950,6 +950,48 @@ class TestCodeactInteriorFunctions:
         except OSError:
             pass
 
+    def test_symlink_dotdot_escape_symlinked_cwd_and_abspath_shell_deny(self, tmp_path):
+        from strands_code_cli.policy.codeact import (
+            codeact_read,
+            codeact_shell,
+            codeact_write,
+        )
+
+        ws = tmp_path / "ws"
+        ws.mkdir()
+        (ws / "hello.txt").write_text("hello\n", encoding="utf-8")
+        ws_link = tmp_path / "ws_link"
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("OUTSIDE_SECRET\n", encoding="utf-8")
+        try:
+            ws_link.symlink_to(ws)
+            (ws / "a").symlink_to(outside)
+        except OSError:
+            pytest.skip("symlinks unavailable")
+
+        # Symlinked cwd works normally for in-workspace files.
+        assert codeact_read(ws_link, "hello.txt") == "hello\n"
+        assert "Wrote" in codeact_write(ws_link, "new.txt", "ok\n")
+
+        # Symlink/../ outside traversal is blocked before normpath collapse.
+        assert "symlink" in codeact_read(ws, "a/../outside/secret.txt").lower()
+        assert "symlink" in codeact_write(ws, "a/../outside/pwn.txt", "x").lower()
+
+        # Absolute binary paths, env wrappers, and /bin/sh -c obey [[deny]] rules.
+        (ws / ".agent").mkdir()
+        (ws / ".agent" / "policy.toml").write_text(
+            '[[deny]]\ntool = "shell"\ncommand = "rm"\n'
+            '[[deny]]\ntool = "shell"\ncommand = "git push"\n',
+            encoding="utf-8",
+        )
+        assert "Denied by policy" in codeact_shell(ws, ["/bin/rm", "-f", "x"])
+        assert "Denied by policy" in codeact_shell(
+            ws, ["/usr/bin/env", "FOO=1", "/bin/rm", "-f", "x"]
+        )
+        assert "Denied by policy" in codeact_shell(ws, ["/bin/sh", "-c", "rm -rf x"])
+        assert "Denied by policy" in codeact_shell(ws, ["/usr/bin/git", "push"])
+
 
 class _FakeRegistry:
     """ToolRegistry double exposing replace plus a registry mapping."""
