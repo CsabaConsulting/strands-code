@@ -2137,9 +2137,11 @@ def _skills_update_cmd(
         msg = f"Updated {rec.entry.namespaced} ({rec.old_sha[:7]} -> {rec.new_sha[:7]})"
         details: list[str] = []
         if rec.added_scripts:
-            details.append(f"added scripts: {', '.join(rec.added_scripts)}")
+            joined = ", ".join(sanitize_display(s) for s in rec.added_scripts)
+            details.append(f"added scripts: {joined}")
         if rec.changed_scripts:
-            details.append(f"changed scripts: {', '.join(rec.changed_scripts)}")
+            joined = ", ".join(sanitize_display(s) for s in rec.changed_scripts)
+            details.append(f"changed scripts: {joined}")
         if details:
             msg += " [" + "; ".join(details) + "]"
         lines.append(msg)
@@ -2186,28 +2188,40 @@ def _skills_show_cmd(name: str, skills: SkillIndex | None) -> str:
         if matches:
             return f"Ambiguous skill {name!r} — use {', '.join(m.namespaced for m in matches)}."
         return f"Unknown skill {name!r}."
-    tools = " ".join(entry.allowed_tools) if entry.allowed_tools else "none"
+    tools = (
+        " ".join(sanitize_display(t) for t in entry.allowed_tools)
+        if entry.allowed_tools
+        else "none"
+    )
     lines = [
-        f"{entry.name} ({entry.namespaced})",
-        f"Description: {entry.description}",
+        f"{sanitize_display(entry.name)} ({sanitize_display(entry.namespaced)})",
+        f"Description: {sanitize_display(entry.description)}",
     ]
     if entry.source != SKILLS_SOURCE:
-        short_sha = entry.commit_sha[:7] if entry.commit_sha else "unknown"
-        origin = entry.source_url or entry.source
+        short_sha = (
+            sanitize_display(entry.commit_sha[:7]) if entry.commit_sha else "unknown"
+        )
+        origin = sanitize_display(entry.source_url or entry.source)
         lines.append(f"Source: {origin} @ {short_sha}")
         lines.append("Status: verified (skills-lock.json)")
-        scripts_str = ", ".join(entry.script_files) if entry.script_files else "none"
+        scripts_str = (
+            ", ".join(sanitize_display(s) for s in entry.script_files)
+            if entry.script_files
+            else "none"
+        )
         lines.append(f"Scripts: {scripts_str} (never auto-executed)")
     lines.append(f"Allowed tools: {tools}")
     if entry.source != SKILLS_SOURCE:
         lines.append("Allowed tools policy: informational only (never enforced)")
-    lines.append(f"Path: {entry.path}")
+    lines.append(f"Path: {sanitize_display(entry.path)}")
     return "\n".join(lines)
 
 
 def _skills_remove_cmd(
     name: str, skills: SkillIndex | None, harness_refresh: Any
 ) -> str:
+    from strands_code_cli.memory.marketplace import valid_namespace, valid_skill_name
+
     if skills is None or not name:
         return f"Unknown skill {name!r}."
     entry = skills.resolve(name)
@@ -2217,16 +2231,22 @@ def _skills_remove_cmd(
             return f"Ambiguous skill {name!r} — use {', '.join(m.namespaced for m in matches)}."
         if ":" in name and not name.startswith("local:"):
             ns, _, sname = name.partition(":")
-            skill_dir = skills.marketplaces_dir / ns / sname
-            if skill_dir.is_symlink():
-                return f"Refused to remove symlinked skill '{name}'."
+            if valid_namespace(ns) and valid_skill_name(sname):
+                ns_dir = skills.marketplaces_dir / ns
+                skill_dir = ns_dir / sname
+                if ns_dir.is_symlink() or skill_dir.is_symlink():
+                    return f"Refused to remove symlinked skill '{name}'."
             if skills.remove(name):
-                _skills_reload(skills, harness_refresh)
+                reload_msg = _skills_reload(skills, harness_refresh)
+                if reload_msg.startswith("Skills reload failed"):
+                    return f"Removed skill '{name}'.\n{sanitize_display(reload_msg)}"
                 return f"Removed skill '{name}'."
         return f"Unknown skill {name!r}."
     if skills.remove(entry.namespaced):
         if harness_refresh is not None:
-            _skills_reload(skills, harness_refresh)
+            reload_msg = _skills_reload(skills, harness_refresh)
+            if reload_msg.startswith("Skills reload failed"):
+                return f"Removed skill '{entry.namespaced}'.\n{sanitize_display(reload_msg)}"
         return f"Removed skill '{entry.namespaced}'."
     return (
         f"Refused to remove skill '{entry.namespaced}':"

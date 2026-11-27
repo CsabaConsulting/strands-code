@@ -103,7 +103,19 @@ def discover_plugin_sources(
         local_root, marketplaces_dir, lockfile_path
     )
     verified, _warnings = verify_installed_marketplace_skills(mp_dir, lk_path)
-    return [*(str(item.path) for item in verified), str(local_root)]
+    counts: dict[str, int] = {}
+    for item in verified:
+        counts[item.name] = counts.get(item.name, 0) + 1
+    sources: list[str] = [
+        str(item.path) for item in verified if counts.get(item.name, 0) == 1
+    ]
+    try:
+        if not local_root.is_symlink():
+            refuse_symlink(local_root, "skills dir", max_ancestors=1)
+            sources.append(str(local_root))
+    except ValueError:
+        pass
+    return sources
 
 
 class SkillIndex:
@@ -249,6 +261,9 @@ class SkillIndex:
 
     def reload(self) -> int:
         """Drop the cache and rescan local + verified marketplace skills."""
+        if self.skills_dir.is_symlink():
+            raise ValueError(f"Skills dir must not be a symlink: {self.skills_dir}")
+        refuse_symlink(self.skills_dir, "skills dir", max_ancestors=1)
         self._entries = None
         self._drift_warnings = []
         self._ensure_loaded()

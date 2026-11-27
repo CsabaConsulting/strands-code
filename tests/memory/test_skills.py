@@ -1501,3 +1501,44 @@ class TestPhase18NyquistSkillsAndDispatch:
             SkillIndex(skills_dir=linked_agent / "skills")
         assert remove_skill(linked_agent / "skills", "demo") is False
         assert (real_agent / "skills" / "demo").exists()
+
+    def test_discover_plugin_sources_skips_symlinks_ambiguous_and_sanitizes_show(
+        self, tmp_path
+    ):
+        from strands_code_cli.memory.skills import discover_plugin_sources
+
+        # Symlinked local skills dir is omitted from discover_plugin_sources.
+        real_skills = tmp_path / "real_sk"
+        _write_skill(real_skills, "demo")
+        ws = tmp_path / "ws"
+        (ws / ".agent").mkdir(parents=True)
+        (ws / ".agent" / "skills").symlink_to(real_skills)
+        assert discover_plugin_sources(ws / ".agent" / "skills") == []
+
+        # Ambiguous marketplace bare names are excluded from AgentSkills sources.
+        ws2 = tmp_path / "ws_amb"
+        _write_locked_marketplace_skill(ws2, "alpha", "lint")
+        _write_locked_marketplace_skill(ws2, "beta", "lint")
+        uniq_dir = _write_locked_marketplace_skill(ws2, "gamma", "unique")
+        sources = discover_plugin_sources(ws2 / ".agent" / "skills")
+        assert str(uniq_dir) in sources
+        assert all("alpha" not in s and "beta" not in s for s in sources)
+
+        # /skills remove validates ns/sname and surfaces reload errors; show sanitizes ANSI.
+        s_idx = _session_index(ws2)
+        idx = SkillIndex(skills_dir=ws2 / ".agent" / "skills")
+        assert (
+            dispatch(
+                "/skills remove alpha:../etc", session_id="s1", index=s_idx, skills=idx
+            )[1]
+            == "Unknown skill 'alpha:../etc'."
+        )
+        msg = dispatch(
+            "/skills remove gamma:unique",
+            session_id="s1",
+            index=s_idx,
+            skills=idx,
+            harness_skills_refresh=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+        )[1]
+        assert "Removed skill 'gamma:unique'." in msg
+        assert "Skills reload failed" in msg

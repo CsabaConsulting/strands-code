@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import bz2
 import errno
 import hashlib
 import io
 import json
+import lzma
 import os
 import re
 import shutil
 import stat
 import tarfile
 import tempfile
+import zlib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -38,6 +43,10 @@ SKILLS_LOCK_REL = Path(".agent") / "skills-lock.json"
 LOCKFILE_VERSION = 1
 
 MAX_TARBALL_BYTES = 25 * 1024 * 1024
+MAX_TARBALL_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+MAX_TARBALL_MEMBERS = 4096
+MAX_CATALOG_SCAN_BYTES = 20 * 1024 * 1024
+MAX_CATALOG_SCAN_FILES = 1024
 MAX_API_JSON_BYTES = 2 * 1024 * 1024
 MAX_SKILL_FILES = 256
 MAX_SKILL_BYTES = 5 * 1024 * 1024
@@ -179,7 +188,7 @@ def _utc_now_iso() -> str:
 
 
 def _has_control_chars(text: str) -> bool:
-    return any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+    return any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in text)
 
 
 def read_github_token() -> str | None:
@@ -328,6 +337,23 @@ def _refuse_symlink_chain(root: Path, *segments: str) -> None:
             raise ValueError(f"Refusing symlink path: {curr}")
 
 
+def _resolve_confined_no_symlinks(root: Path, rel: PurePosixPath | None = None) -> Path:
+    """Resolve ``root / rel`` refusing symlinks at every segment & confining to root."""
+    if root.is_symlink():
+        raise ValueError(f"Refusing symlink directory: {root}")
+    curr = root
+    if rel is not None and rel != PurePosixPath("."):
+        for seg in rel.parts:
+            curr = curr / seg
+            if curr.is_symlink():
+                raise ValueError(f"Refusing symlink path: {curr}")
+    real_root = Path(os.path.realpath(root))
+    real_curr = Path(os.path.realpath(curr))
+    if real_curr != real_root and real_root not in real_curr.parents:
+        raise ValueError(f"Path escapes local root {root}: {curr}")
+    return curr
+
+
 def _atomic_write_text(
     path: Path,
     content: str,
@@ -419,13 +445,18 @@ def load_cached_catalog(name: str, cache_dir: Path | None = None) -> list[Catalo
     if not path.exists():
         return []
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(
+            path.read_text(encoding="utf-8"), parse_constant=_reject_json_constant
+        )
     except (OSError, ValueError):
         return []
     if not isinstance(raw, dict):
         return []
+    skills_raw = raw.get("skills", [])
+    if not isinstance(skills_raw, list):
+        return []
     out: list[CatalogSkill] = []
-    for item in raw.get("skills", []):
+    for item in skills_raw:
         if not isinstance(item, dict):
             continue
         sname = item.get("name")
@@ -502,18 +533,19 @@ def _reject_json_constant(token: str) -> Any:
 
 def _github_get_json(client: httpx.Client, url: str) -> dict[str, Any]:
     try:
-        resp = client.get(url, headers=_api_headers(read_github_token()))
+        with client.stream(
+            "GET", url, headers=_api_headers(read_github_token())
+        ) as resp:
+            if 300 <= resp.status_code < 400:
+                raise ValueError(f"Unexpected GitHub API redirect ({resp.status_code})")
+            if resp.status_code >= 400:
+                raise ValueError(
+                    f"GitHub API request failed ({resp.status_code}) for {url}"
+                )
+            raw_bytes = _read_bounded_response(resp, MAX_API_JSON_BYTES)
     except httpx.HTTPError:
         raise ValueError("GitHub network error (offline or unreachable)") from None
-    if 300 <= resp.status_code < 400:
-        raise ValueError(f"Unexpected GitHub API redirect ({resp.status_code})")
-    if resp.status_code >= 400:
-        raise ValueError(f"GitHub API request failed ({resp.status_code}) for {url}")
-    if len(resp.content) > MAX_API_JSON_BYTES:
-        raise ValueError(
-            f"GitHub API JSON exceeds size limit ({MAX_API_JSON_BYTES} bytes)"
-        )
-    data = json.loads(resp.text, parse_constant=_reject_json_constant)
+    data = json.loads(raw_bytes.decode("utf-8"), parse_constant=_reject_json_constant)
     if not isinstance(data, dict):
         raise ValueError(f"Unexpected JSON payload from GitHub API: {url}")
     return data
@@ -632,7 +664,7 @@ def download_github_tarball(
 
 
 def _normalize_rel_posix(raw_name: str) -> PurePosixPath:
-    if not raw_name or "\x00" in raw_name or "\\" in raw_name:
+    if not raw_name or _has_control_chars(raw_name) or "\\" in raw_name:
         raise ValueError(f"Illegal archive member path: {raw_name!r}")
     cleaned = raw_name
     while cleaned.startswith("./"):
@@ -652,7 +684,7 @@ def _validate_tar_member(member: tarfile.TarInfo) -> PurePosixPath | None:
     ):
         return None
     pure = _normalize_rel_posix(member.name)
-    if pure.name == ".gitmodules":
+    if pure.name.lower() == ".gitmodules":
         raise ValueError("Git submodules (.gitmodules) are rejected")
     if member.issym() or member.islnk() or member.linkname:
         raise ValueError(f"Symlink/hardlink rejected in archive: {member.name!r}")
@@ -704,13 +736,99 @@ def _select_strip_prefix(
     return top
 
 
+def _drain_decompressor(
+    decomp: Any, chunk: bytes, out: bytearray, max_bytes: int
+) -> None:
+    """Feed ``chunk`` and drain any unconsumed buffer without exceeding ``max_bytes``."""
+    pending = chunk
+    while True:
+        limit = max(1, max_bytes - len(out) + 1)
+        piece = decomp.decompress(pending, limit)
+        out.extend(piece)
+        if len(out) > max_bytes:
+            raise ValueError(
+                f"Tarball decompressed size exceeds limit ({max_bytes} bytes)"
+            )
+        if decomp.eof:
+            break
+        if hasattr(decomp, "unconsumed_tail"):
+            pending = decomp.unconsumed_tail
+            if not pending:
+                break
+        elif hasattr(decomp, "needs_input"):
+            if decomp.needs_input:
+                break
+            pending = b""
+        else:
+            break
+
+
+def _decompress_bounded(data: bytes, make_decomp: Any, max_bytes: int) -> bytes:
+    """Stream-decompress ``data`` with an additive uncompressed-byte cap."""
+    out = bytearray()
+    rem = data
+    while rem:
+        decomp = make_decomp()
+        pos = 0
+        while pos < len(rem) and not decomp.eof:
+            chunk = rem[pos : pos + 65536]
+            pos += len(chunk)
+            _drain_decompressor(decomp, chunk, out, max_bytes)
+        if not decomp.eof:
+            flush_fn = getattr(decomp, "flush", None)
+            if callable(flush_fn):
+                tail = flush_fn()
+                out.extend(tail)
+                if len(out) > max_bytes:
+                    raise ValueError(
+                        f"Tarball decompressed size exceeds limit ({max_bytes} bytes)"
+                    )
+            break
+        nxt = decomp.unused_data + rem[pos:]
+        if not nxt or len(nxt) >= len(rem):
+            break
+        rem = nxt
+    return bytes(out)
+
+
+def _open_bounded_tar(tar_bytes: bytes) -> tarfile.TarFile:
+    """Bound uncompressed payload before constructing the TarFile reader."""
+    if tar_bytes[:2] == b"\x1f\x8b":
+        raw_tar = _decompress_bounded(
+            tar_bytes,
+            lambda: zlib.decompressobj(16 + zlib.MAX_WBITS),
+            MAX_TARBALL_UNCOMPRESSED_BYTES,
+        )
+    elif tar_bytes[:3] == b"BZh":
+        raw_tar = _decompress_bounded(
+            tar_bytes, bz2.BZ2Decompressor, MAX_TARBALL_UNCOMPRESSED_BYTES
+        )
+    elif tar_bytes[:6] == b"\xfd7zXZ\x00":
+        raw_tar = _decompress_bounded(
+            tar_bytes, lzma.LZMADecompressor, MAX_TARBALL_UNCOMPRESSED_BYTES
+        )
+    else:
+        if len(tar_bytes) > MAX_TARBALL_UNCOMPRESSED_BYTES:
+            raise ValueError(
+                f"Tarball decompressed size exceeds limit ({MAX_TARBALL_UNCOMPRESSED_BYTES} bytes)"
+            )
+        raw_tar = tar_bytes
+    return tarfile.open(fileobj=io.BytesIO(raw_tar), mode="r:")
+
+
 def _validate_tarball_stream(
     tar_bytes: bytes, preferred_subdir: str | None = None
 ) -> tuple[tarfile.TarFile, list[tuple[tarfile.TarInfo, PurePosixPath]]]:
-    tf = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*")
+    tf = _open_bounded_tar(tar_bytes)
     try:
         raw_members: list[tuple[tarfile.TarInfo, PurePosixPath]] = []
-        for member in tf.getmembers():
+        count = 0
+        while (member := tf.next()) is not None:
+            count += 1
+            if count > MAX_TARBALL_MEMBERS:
+                raise ValueError(
+                    f"Tarball exceeds maximum member count ({MAX_TARBALL_MEMBERS})"
+                )
             pure = _validate_tar_member(member)
             if pure is not None:
                 raw_members.append((member, pure))
@@ -764,7 +882,11 @@ def _write_staged_files(
     target_dir = staging_dir / skill_name
     target_dir.mkdir(parents=True, exist_ok=True)
     for rel, data in items:
-        if rel == PurePosixPath(".") or ".." in rel.parts or rel.name == ".gitmodules":
+        if (
+            rel == PurePosixPath(".")
+            or ".." in rel.parts
+            or rel.name.lower() == ".gitmodules"
+        ):
             raise ValueError(f"Illegal skill relative file path: {rel}")
         dest = target_dir / Path(*rel.parts)
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -830,8 +952,12 @@ def copy_local_dir_safe(
     staging_dir: Path,
     max_files: int = MAX_SKILL_FILES,
     max_bytes: int = MAX_SKILL_BYTES,
+    source_root: Path | None = None,
+    subdir_rel: PurePosixPath | None = None,
 ) -> tuple[Path, list[str]]:
     """Copy a local skill directory into staging_dir refusing symlinks, special files & bloat."""
+    if source_root is not None:
+        _resolve_confined_no_symlinks(source_root, subdir_rel)
     if src_dir.is_symlink() or not src_dir.is_dir():
         raise ValueError(f"Local skill source is invalid or a symlink: {src_dir}")
     collected: list[tuple[PurePosixPath, bytes]] = []
@@ -852,7 +978,7 @@ def copy_local_dir_safe(
             st = fpath.lstat()
             if not stat.S_ISREG(st.st_mode):
                 raise ValueError(f"Refusing non-regular file in local skill: {fpath}")
-            if fname == ".gitmodules":
+            if fname.lower() == ".gitmodules":
                 raise ValueError("Git submodules (.gitmodules) are rejected")
             if len(collected) >= max_files:
                 raise ValueError(f"Skill exceeds file count limit ({max_files})")
@@ -922,6 +1048,9 @@ def _parse_lock_entry(key: Any, val: Any) -> LockEntry:
     subdir = (
         "." if subdir_raw in ("", ".", "./") else str(_normalize_rel_posix(subdir_raw))
     )
+    raw_scripts = val.get("script_files", [])
+    if not isinstance(raw_scripts, list):
+        raise ValueError(f"Invalid lockfile script_files for '{key}'")
     return LockEntry(
         namespace=ns,
         name=name,
@@ -932,7 +1061,7 @@ def _parse_lock_entry(key: Any, val: Any) -> LockEntry:
         commit_sha=commit_sha,
         computed_hash=computed_hash,
         has_scripts=bool(val.get("has_scripts", False)),
-        script_files=[str(p) for p in val.get("script_files", [])],
+        script_files=[str(p) for p in raw_scripts],
         installed_at=str(val.get("installed_at", "")),
     )
 
@@ -942,7 +1071,10 @@ def load_lockfile(lockfile_path: Path) -> dict[str, LockEntry]:
     _refuse_symlink(lockfile_path, "skills lockfile")
     if not lockfile_path.exists():
         return {}
-    raw = json.loads(lockfile_path.read_text(encoding="utf-8"))
+    raw = json.loads(
+        lockfile_path.read_text(encoding="utf-8"),
+        parse_constant=_reject_json_constant,
+    )
     if not isinstance(raw, dict) or raw.get("version") != LOCKFILE_VERSION:
         raise ValueError(f"Unsupported lockfile schema in {lockfile_path}")
     skills_raw = raw.get("skills", {})
@@ -1064,12 +1196,14 @@ def _expand_plugin_subpath(
     commit_sha: str | None,
     fallback_desc: str,
 ) -> list[CatalogSkill]:
-    target = (
-        root
-        if rel_subdir == "."
-        else root / Path(*_normalize_rel_posix(rel_subdir).parts)
+    rel_norm = (
+        PurePosixPath(".") if rel_subdir == "." else _normalize_rel_posix(rel_subdir)
     )
-    if target.is_symlink() or not target.is_dir():
+    try:
+        target = _resolve_confined_no_symlinks(root, rel_norm)
+    except ValueError:
+        return []
+    if not target.is_dir():
         return []
     if _find_skill_md_in_dir(target) is not None:
         fallback = target.name if rel_subdir != "." else marketplace
@@ -1292,10 +1426,16 @@ def discover_catalog_from_tree(
     if root.is_symlink() or not root.is_dir():
         raise ValueError(f"Catalog root is missing or a symlink: {root}")
     for rel_manifest in _MANIFEST_CANDIDATES:
-        mpath = root / Path(*rel_manifest.parts)
-        if mpath.is_symlink() or not mpath.is_file():
+        try:
+            mpath = _resolve_confined_no_symlinks(root, rel_manifest)
+        except ValueError:
             continue
-        data = json.loads(mpath.read_text(encoding="utf-8"))
+        if not mpath.is_file():
+            continue
+        data = json.loads(
+            mpath.read_text(encoding="utf-8"),
+            parse_constant=_reject_json_constant,
+        )
         if not isinstance(data, dict):
             raise ValueError(f"Malformed marketplace manifest: {mpath}")
         if isinstance(data.get("plugins"), list):
@@ -1343,11 +1483,18 @@ def discover_catalog_from_tarball(
     try:
         with tempfile.TemporaryDirectory(prefix="sc_cat_") as tmp:
             root = Path(tmp)
+            scan_files = 0
+            scan_bytes = 0
             for member, rel in members:
                 if not member.isreg() or rel == PurePosixPath("."):
                     continue
                 if rel.name not in ("marketplace.json", "SKILL.md", "skill.md"):
                     continue
+                scan_files += 1
+                if scan_files > MAX_CATALOG_SCAN_FILES:
+                    raise ValueError(
+                        f"Catalog archive exceeds metadata file limit ({MAX_CATALOG_SCAN_FILES})"
+                    )
                 handle = tf.extractfile(member)
                 if handle is None:
                     continue
@@ -1356,6 +1503,11 @@ def discover_catalog_from_tarball(
                 data = handle.read(MAX_SKILL_BYTES + 1)
                 if len(data) > MAX_SKILL_BYTES:
                     raise ValueError(f"Catalog metadata file exceeds limit: {rel}")
+                scan_bytes += len(data)
+                if scan_bytes > MAX_CATALOG_SCAN_BYTES:
+                    raise ValueError(
+                        f"Catalog archive exceeds metadata byte limit ({MAX_CATALOG_SCAN_BYTES} bytes)"
+                    )
                 dest.write_bytes(data)
             return discover_catalog_from_tree(
                 root,
@@ -1537,12 +1689,13 @@ def _replace_dir(src: Path, dst: Path) -> None:
         shutil.move(str(src), str(dst))
 
 
-def _atomic_swap_skill_dir(staged_dir: Path, dest_dir: Path) -> None:
-    root = (
-        dest_dir.parent.parent.parent
-    )  # cwd when dest is <cwd>/.agent/skills-marketplaces/<ns>/<skill>
+@contextmanager
+def _staged_swap_transaction(
+    staged_dir: Path, dest_dir: Path, *, cwd: Path
+) -> Iterator[None]:
+    """Swap staged_dir into dest_dir, rolling back if post-swap commit fails."""
     _refuse_symlink_chain(
-        root,
+        cwd,
         ".agent",
         "skills-marketplaces",
         dest_dir.parent.name,
@@ -1559,13 +1712,26 @@ def _atomic_swap_skill_dir(staged_dir: Path, dest_dir: Path) -> None:
         os.replace(dest_dir, backup)
     try:
         _replace_dir(staged_dir, dest_dir)
+        yield
     except Exception:
+        if dest_dir.exists() and not dest_dir.is_symlink():
+            shutil.rmtree(dest_dir, ignore_errors=True)
         if backup is not None and backup.exists() and not dest_dir.exists():
             os.replace(backup, dest_dir)
         raise
     finally:
         if backup_root is not None:
             shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def _atomic_swap_skill_dir(
+    staged_dir: Path, dest_dir: Path, *, cwd: Path | None = None
+) -> None:
+    root = (
+        cwd if cwd is not None else dest_dir.parent.parent.parent.parent
+    )  # cwd when dest is <cwd>/.agent/skills-marketplaces/<ns>/<skill>
+    with _staged_swap_transaction(staged_dir, dest_dir, cwd=root):
+        pass
 
 
 def _script_file_digests(skill_dir: Path) -> dict[str, str]:
@@ -1602,13 +1768,18 @@ def _install_catalog_skill(
         staging_dir = Path(tmp)
         repo_path = Path(cat_skill.repo_url)
         if not cat_skill.repo_url.startswith("https://"):
-            src_dir = (
-                repo_path
+            rel_sub = (
+                PurePosixPath(".")
                 if cat_skill.subdir == "."
-                else repo_path / Path(*_normalize_rel_posix(cat_skill.subdir).parts)
+                else _normalize_rel_posix(cat_skill.subdir)
             )
+            src_dir = _resolve_confined_no_symlinks(repo_path, rel_sub)
             staged_dir, script_files = copy_local_dir_safe(
-                src_dir, skill_name=sname, staging_dir=staging_dir
+                src_dir,
+                skill_name=sname,
+                staging_dir=staging_dir,
+                source_root=repo_path,
+                subdir_rel=rel_sub,
             )
             computed_hash = compute_skill_dir_hash(staged_dir)
             commit_sha = computed_hash.removeprefix("sha256:")[:40]
@@ -1634,28 +1805,27 @@ def _install_catalog_skill(
         if expected_hash is not None and computed_hash != expected_hash:
             raise ValueError(f"Hash mismatch restoring pinned {key} at {commit_sha}")
         new_scripts = _script_file_digests(staged_dir)
-        _atomic_swap_skill_dir(staged_dir, dest_dir)
-
-    lock_entry = LockEntry(
-        namespace=cat_skill.marketplace,
-        name=cat_skill.name,
-        source=cat_skill.source,
-        repo_url=cat_skill.repo_url,
-        subdir=cat_skill.subdir,
-        ref=ref_val,
-        commit_sha=commit_sha,
-        computed_hash=computed_hash,
-        has_scripts=bool(script_files),
-        script_files=script_files,
-        installed_at=_utc_now_iso(),
-    )
-    existing_lock[key] = lock_entry
-    save_lockfile(lockfile_path, existing_lock)
+        lock_entry = LockEntry(
+            namespace=cat_skill.marketplace,
+            name=cat_skill.name,
+            source=cat_skill.source,
+            repo_url=cat_skill.repo_url,
+            subdir=cat_skill.subdir,
+            ref=ref_val,
+            commit_sha=commit_sha,
+            computed_hash=computed_hash,
+            has_scripts=bool(script_files),
+            script_files=script_files,
+            installed_at=_utc_now_iso(),
+        )
+        existing_lock[key] = lock_entry
+        with _staged_swap_transaction(staged_dir, dest_dir, cwd=cwd):
+            save_lockfile(lockfile_path, existing_lock)
     return lock_entry, old_scripts, new_scripts, old_sha
 
 
 def _scripts_warning(entry: LockEntry) -> str:
-    joined = ", ".join(entry.script_files)
+    joined = ", ".join(sanitize_display(p) for p in entry.script_files)
     return (
         f"Warning: '{entry.namespaced}' bundles scripts ({joined}). "
         "Scripts never auto-execute and remain gated by shell/python_repl HITL approval."
@@ -1779,6 +1949,7 @@ def _refresh_entry_from_sources(
         for cand in catalog:
             if cand.name == lock_entry.name:
                 return cand
+    _validate_sync_source(lock_entry, marketplaces_path)
     return CatalogSkill(
         name=lock_entry.name,
         description="",
@@ -1904,7 +2075,18 @@ def sync_installed_skills(
             root / MARKETPLACES_SKILLS_REL / lock_entry.namespace / lock_entry.name
         )
         needs_restore = True
-        if dest_dir.exists() and not dest_dir.is_symlink():
+        try:
+            _refuse_symlink_chain(
+                root,
+                ".agent",
+                "skills-marketplaces",
+                lock_entry.namespace,
+                lock_entry.name,
+            )
+            dest_safe = True
+        except ValueError:
+            dest_safe = False
+        if dest_safe and dest_dir.exists() and not dest_dir.is_symlink():
             try:
                 if compute_skill_dir_hash(dest_dir) == lock_entry.computed_hash:
                     verified.append(key)

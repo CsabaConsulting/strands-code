@@ -1632,6 +1632,192 @@ class TestPhase18NyquistMarketplaceBranches:
         assert sym_outcome.removed is False
         assert "symlinked skill" in sym_outcome.message
 
+    def test_audit_hardening_swap_update_tar_bomb_local_symlink_rollback_and_json(
+        self, tmp_path, monkeypatch
+    ):
+        # 1. Symlinked namespace <ns> dir is refused by _atomic_swap_skill_dir (4-hop cwd).
+        ws = tmp_path / "swap_ws"
+        victim = tmp_path / "victim"
+        (victim / "demo").mkdir(parents=True)
+        (victim / "demo" / "keep.txt").write_text("KEEP", encoding="utf-8")
+        mp_root = ws / ".agent" / "skills-marketplaces"
+        mp_root.mkdir(parents=True)
+        (mp_root / "acme").symlink_to(victim)
+        staged = ws / ".agent" / "staged"
+        staged.mkdir()
+        (staged / "SKILL.md").write_text(_skill_md("demo", "V1."), encoding="utf-8")
+        with pytest.raises(ValueError, match="symlink path"):
+            mp._atomic_swap_skill_dir(staged, mp_root / "acme" / "demo")
+        assert (victim / "demo" / "keep.txt").read_text(encoding="utf-8") == "KEEP"
+
+        # 2. update_installed_skills refuses unregistered local repo_url in skills-lock.json.
+        secret_src = tmp_path / "host_secret_skill"
+        secret_src.mkdir()
+        (secret_src / "SKILL.md").write_text(
+            _skill_md("stolen", "Secret."), encoding="utf-8"
+        )
+        bad_ws = tmp_path / "bad_upd_ws"
+        bad_ws.mkdir()
+        fake_hash = mp.compute_skill_dir_hash(secret_src)
+        mp.save_lockfile(
+            bad_ws / mp.SKILLS_LOCK_REL,
+            {
+                "evil:stolen": mp.LockEntry(
+                    namespace="evil",
+                    name="stolen",
+                    source="evil",
+                    repo_url=str(secret_src),
+                    subdir=".",
+                    ref="local",
+                    commit_sha="0" * 40,
+                    computed_hash=fake_hash,
+                )
+            },
+        )
+        with pytest.raises(ValueError, match="unregistered local path"):
+            mp.update_installed_skills(
+                cwd=bad_ws,
+                marketplaces_path=tmp_path / "empty_mp.yaml",
+                cache_dir=tmp_path / "empty_cache",
+            )
+
+        # 3. Tarball decompression bomb & member-count cap & .GITMODULES & ANSI names.
+        monkeypatch.setattr(mp, "MAX_TARBALL_UNCOMPRESSED_BYTES", 2048)
+        bomb_tar = _build_tar_gz(
+            [("skills/demo/SKILL.md", "A" * 4096)], prefix="acme-skills-123"
+        )
+        with pytest.raises(ValueError, match="decompressed size exceeds limit"):
+            mp._validate_tarball_stream(bomb_tar)
+
+        monkeypatch.setattr(mp, "MAX_TARBALL_UNCOMPRESSED_BYTES", 50 * 1024 * 1024)
+        case_gitmod = _build_tar_gz(
+            [
+                ("skills/demo/.GITMODULES", "[submodule]"),
+                ("skills/demo/SKILL.md", _skill_md("demo", "ok")),
+            ],
+            prefix="acme-skills-123",
+        )
+        with pytest.raises(ValueError, match="submodules"):
+            mp._validate_tarball_stream(case_gitmod)
+
+        ansi_tar = _build_tar_gz(
+            [
+                ("skills/demo/scripts/\x1b]0;pwn\x07run.sh", "echo 1"),
+                ("skills/demo/SKILL.md", _skill_md("demo", "ok")),
+            ],
+            prefix="acme-skills-123",
+        )
+        with pytest.raises(ValueError, match="Illegal archive member path"):
+            mp._validate_tarball_stream(ansi_tar)
+
+        # 3b. Valid multi-chunk (>64 KiB compressed) gzip tarball decompresses cleanly.
+        large_payload = os.urandom(90 * 1024).hex()
+        big_tar = _build_tar_gz(
+            [
+                ("skills/demo/SKILL.md", _skill_md("demo", "ok")),
+                ("skills/demo/references/big.txt", large_payload),
+            ],
+            prefix="acme-skills-123",
+        )
+        assert len(big_tar) > 65536
+        tf_big, members_big = mp._validate_tarball_stream(big_tar)
+        try:
+            member_map = {str(rel): m for m, rel in members_big}
+            assert (
+                tf_big.extractfile(member_map["skills/demo/references/big.txt"])
+                .read()
+                .decode("utf-8")
+                == large_payload
+            )
+        finally:
+            tf_big.close()
+
+        # 4. Intermediate-component symlink escape in local catalog & copy refused.
+        outside = tmp_path / "outside_cat"
+        (outside / "pwn").mkdir(parents=True)
+        (outside / "pwn" / "SKILL.md").write_text(
+            _skill_md("pwn", "Escaped."), encoding="utf-8"
+        )
+        cat_root = tmp_path / "local_cat"
+        (cat_root / ".agent-plugin").mkdir(parents=True)
+        (cat_root / ".agent-plugin" / "marketplace.json").write_text(
+            json.dumps({"skills": ["escape/pwn"]}), encoding="utf-8"
+        )
+        (cat_root / "escape").symlink_to(outside)
+        assert (
+            mp.discover_catalog_from_tree(
+                cat_root, marketplace="localc", source="local", repo_url=str(cat_root)
+            )
+            == []
+        )
+        with pytest.raises(ValueError, match="symlink path"):
+            mp.copy_local_dir_safe(
+                outside / "pwn",
+                skill_name="pwn",
+                staging_dir=tmp_path / "st",
+                source_root=cat_root,
+                subdir_rel=PurePosixPath("escape/pwn"),
+            )
+
+        # 5. Lockfile failure rolls back upgraded skill directory to v1.
+        rb_ws = tmp_path / "rb_ws"
+        rb_cache = tmp_path / "rb_cache"
+        rb_mp = tmp_path / "rb_cfg" / "marketplaces.yaml"
+        tar_v1 = _build_tar_gz(
+            [("skills/demo/SKILL.md", _skill_md("demo", "V1_KEEP"))],
+            prefix=f"acme-skills-{_SHA_V1[:7]}",
+        )
+        tar_v2 = _build_tar_gz(
+            [("skills/demo/SKILL.md", _skill_md("demo", "V2_FAIL"))],
+            prefix=f"acme-skills-{_SHA_V2[:7]}",
+        )
+        t1 = _github_mock_transport(
+            {("acme", "skills", "main"): _SHA_V1},
+            {("acme", "skills", _SHA_V1): tar_v1},
+        )
+        with httpx.Client(transport=t1, follow_redirects=False) as client:
+            install_skill(
+                "acme/skills",
+                cwd=rb_ws,
+                marketplaces_path=rb_mp,
+                cache_dir=rb_cache,
+                client=client,
+            )
+        monkeypatch.setattr(
+            mp,
+            "save_lockfile",
+            lambda *_a, **_kw: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        t2 = _github_mock_transport(
+            {("acme", "skills", "main"): _SHA_V2},
+            {("acme", "skills", _SHA_V2): tar_v2},
+        )
+        with httpx.Client(transport=t2, follow_redirects=False) as client:
+            with pytest.raises(OSError, match="disk full"):
+                install_skill(
+                    "acme/skills",
+                    cwd=rb_ws,
+                    marketplaces_path=rb_mp,
+                    cache_dir=rb_cache,
+                    client=client,
+                )
+        restored_md = (
+            rb_ws / mp.MARKETPLACES_SKILLS_REL / "acme--skills" / "demo" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert "V1_KEEP" in restored_md
+        assert "V2_FAIL" not in restored_md
+
+        # 6. Cache {"skills": null} returns [] and NaN JSON rejected.
+        cdir2 = tmp_path / "cdir2"
+        cdir2.mkdir()
+        (cdir2 / "acme.json").write_text('{"skills": null}', encoding="utf-8")
+        assert mp.load_cached_catalog("acme", cdir2) == []
+        (rb_ws / "nan.json").write_text(
+            '{"version": 1, "skills": {}, "x": NaN}', encoding="utf-8"
+        )
+        with pytest.raises(ValueError, match="Non-standard JSON"):
+            mp.load_lockfile(rb_ws / "nan.json")
+
 
 @pytest.mark.integration
 def test_live_github_marketplace_browse_install_and_verify(tmp_path):
