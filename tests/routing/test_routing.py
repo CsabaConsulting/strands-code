@@ -2392,6 +2392,60 @@ class TestRoutedEffort:
         pick = RoutingPick(model="ghost/1", effort="low")
         assert validate_routed_effort(pick, _candidates()) is False
 
+    def test_validate_holds_unsupported_openai_mantle_and_gemma_efforts(self):
+        candidates = [
+            RoutingCandidate(id="openai/o3"),
+            RoutingCandidate(id="openai/gpt-5.1"),
+            RoutingCandidate(id="openai/gpt-5-pro"),
+            RoutingCandidate(id="openai/gpt-5.2"),
+            RoutingCandidate(id="openai/gpt-4o"),
+            RoutingCandidate(id="bedrock-mantle/openai.gpt-oss-120b"),
+            RoutingCandidate(id="bedrock-mantle/openai.gpt-6.2-sol"),
+            RoutingCandidate(id="bedrock-mantle/google.gemma-4-31b-it"),
+        ]
+        rejected = [
+            ("openai/o3", "minimal"),
+            ("openai/o3", "xhigh"),
+            ("openai/o3", "none"),
+            ("openai/o3", "max"),
+            ("openai/gpt-5.1", "minimal"),
+            ("openai/gpt-5.1", "xhigh"),
+            ("openai/gpt-5-pro", "low"),
+            ("openai/gpt-5.2", "max"),
+            ("openai/gpt-4o", "high"),
+            ("bedrock-mantle/openai.gpt-oss-120b", "minimal"),
+            ("bedrock-mantle/openai.gpt-oss-120b", "xhigh"),
+            ("bedrock-mantle/openai.gpt-oss-120b", "none"),
+            ("bedrock-mantle/openai.gpt-6.2-sol", "minimal"),
+            ("bedrock-mantle/openai.gpt-6.2-sol", "max"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "medium"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "low"),
+        ]
+        for model_id, effort in rejected:
+            pick = RoutingPick(model=model_id, effort=effort)
+            assert validate_routed_effort(pick, candidates) is False, (model_id, effort)
+            assert pick.effort == effort  # never mutates/coerces Pick.effort
+
+        accepted = [
+            ("openai/o3", "low"),
+            ("openai/o3", "off"),
+            ("openai/o3", "auto"),
+            ("openai/gpt-5.1", "none"),
+            ("openai/gpt-5-pro", "medium"),
+            ("openai/gpt-5.2", "xhigh"),
+            ("openai/gpt-4o", "off"),
+            ("bedrock-mantle/openai.gpt-oss-120b", "high"),
+            ("bedrock-mantle/openai.gpt-oss-120b", "off"),
+            ("bedrock-mantle/openai.gpt-6.2-sol", "xhigh"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "high"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "none"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "off"),
+            ("bedrock-mantle/google.gemma-4-31b-it", "auto"),
+        ]
+        for model_id, effort in accepted:
+            pick = RoutingPick(model=model_id, effort=effort)
+            assert validate_routed_effort(pick, candidates) is True, (model_id, effort)
+
     def test_apply_model_action_without_effort_resolves_as_before(self, monkeypatch):
         from types import SimpleNamespace
 

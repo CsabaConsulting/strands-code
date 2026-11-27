@@ -187,7 +187,8 @@ def supports_reasoning(model_id: str) -> bool:
         "meta",
     ):
         return False
-    if provider == "openai" and _is_openai_non_reasoning(_base_key(model_id).lower()):
+    tail = _openai_family_tail(normalize_model_ref(model_id))
+    if tail is not None and _is_openai_non_reasoning(tail):
         return False
     if provider == "meta" and not upstream_supports_meta():
         return _is_meta_chat_model(_base_key(model_id))
@@ -1283,43 +1284,107 @@ def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
     return resolved
 
 
-_OPENAI_NON_REASONING_PREFIXES = (
+_OPENAI_NON_REASONING_EXACT_OR_DASH = (
+    "o1-mini",
+    "o1-preview",
+    "gpt-4.5",
     "gpt-4o",
     "gpt-4.1",
     "gpt-4-turbo",
-    "gpt-4-",
-    "chatgpt-4o",
+    "gpt-4",
     "gpt-3.5",
 )
 
 
+def _openai_family_tail(normalized: str) -> str | None:
+    """Return lowercase OpenAI model tail for ``openai/`` or ``bedrock-mantle/openai.*``."""
+    provider = _provider_of(normalized)
+    tail = _base_key(normalized).lower()
+    if provider == "openai":
+        return tail
+    if provider == "bedrock-mantle" and tail.startswith("openai."):
+        return tail[len("openai.") :]
+    return None
+
+
 def _is_openai_non_reasoning(base_key: str) -> bool:
     """True for OpenAI chat models that reject Responses reasoning.effort."""
-    return (
-        base_key == "gpt-4"
-        or "chat-latest" in base_key
-        or base_key.startswith(_OPENAI_NON_REASONING_PREFIXES)
+    if "chat-latest" in base_key or base_key.startswith("chatgpt-"):
+        return True
+    return any(
+        base_key == prefix or base_key.startswith(f"{prefix}-")
+        for prefix in _OPENAI_NON_REASONING_EXACT_OR_DASH
     )
+
+
+def _has_dash_prefix(base_key: str, prefixes: tuple[str, ...]) -> bool:
+    """Token-boundary prefix check for exact model id or ``<prefix>-*`` snapshots."""
+    return any(
+        base_key == prefix or base_key.startswith(f"{prefix}-") for prefix in prefixes
+    )
+
+
+def _openai_effort_spec(base_key: str) -> tuple[tuple[str, ...], bool] | None:
+    """Return ``(supported_levels, supports_none)`` for OpenAI reasoning tails."""
+    if base_key.endswith("-pro") or "-pro-" in base_key:
+        if base_key.startswith(("gpt-5.2", "gpt-5.4", "gpt-5.5")):
+            return (("medium", "high", "xhigh"), False)
+        return (("medium", "high"), False)
+    if "-codex" in base_key:
+        if base_key.startswith(("gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5")):
+            return (("low", "medium", "high", "xhigh"), False)
+        return (("low", "medium", "high"), False)
+    if _has_dash_prefix(base_key, ("gpt-oss",)):
+        return (("low", "medium", "high"), False)
+    if _has_dash_prefix(base_key, ("o1", "o3")) or base_key.startswith("o4-"):
+        return (("low", "medium", "high"), False)
+    if _has_dash_prefix(base_key, ("gpt-5.1",)):
+        return (("none", "low", "medium", "high"), True)
+    if _has_dash_prefix(base_key, ("gpt-5.2", "gpt-5.4", "gpt-5.5")):
+        return (("none", "low", "medium", "high", "xhigh"), True)
+    if base_key == "gpt-5" or base_key.startswith(("gpt-5-", "gpt-5.0")):
+        return (("minimal", "low", "medium", "high"), False)
+    if base_key.startswith(("gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-")):
+        return (("low", "medium", "high", "xhigh"), False)
+    return None
+
+
+def openai_supported_efforts(model_id: str) -> tuple[str, ...] | None:
+    """Return supported effort tuple for ``openai/`` or ``bedrock-mantle/openai.*`` models."""
+    tail = _openai_family_tail(normalize_model_ref(model_id))
+    if tail is None:
+        return None
+    if _is_openai_non_reasoning(tail):
+        return ()
+    spec = _openai_effort_spec(tail)
+    return spec[0] if spec is not None else None
 
 
 def _target_openai_effort(base_key: str, effort: str) -> str | None:
     """Return normalized effort for OpenAI model family, or '' to strip, None if unchanged."""
     low = effort.strip().lower()
-    if low in ("none", "off"):
-        return ""
-    if base_key in ("o1", "o3") or base_key.startswith(("o1-", "o3-", "o4-")):
-        if low == "minimal":
-            return "low"
-        if low in ("xhigh", "max"):
+    spec = _openai_effort_spec(base_key)
+    if spec is None:
+        if low in ("none", "off"):
+            return ""
+        if low == "max":
             return "high"
-    elif base_key == "gpt-5" or base_key.startswith(
-        ("gpt-5-", "gpt-5.0", "gpt-5.1", "gpt-5.2")
-    ):
-        if low in ("xhigh", "max"):
-            return "high"
-    elif base_key.startswith(("gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-")):
-        if low == "minimal":
-            return "low"
+        return None
+    levels, supports_none = spec
+    if low == "off":
+        return "none" if supports_none else ""
+    if low == "none":
+        return None if supports_none else ""
+    if low in levels:
+        return None
+    if low == "max":
+        return "xhigh" if "xhigh" in levels else "high"
+    if low == "xhigh":
+        return "high"
+    if low == "minimal":
+        return "low" if "low" in levels else "medium"
+    if low == "low" and "low" not in levels:
+        return "medium"
     return None
 
 
@@ -1346,24 +1411,20 @@ def _openai_reasoning_params(
 def configure_openai_for_model(model_id: str, resolved: Any) -> Any:
     """Apply OpenAI compatibility guards for non-reasoning and effort-subset models.
 
-    ``strands_harness.models._openai()`` emits ``reasoning.effort='high'``
-    unconditionally on OpenAI models and passes routed effort strings verbatim;
-    non-reasoning models (``gpt-4o``, ``gpt-4.1*``) and effort-subset models
-    (``o1``/``o3``/``o4-mini``, ``gpt-5``..``gpt-5.2``, ``gpt-6-astra``,
-    ``gpt-6.1-sol``, ``gpt-6.2-*``) reject unsupported values on the Responses
-    API.
+    # Upstream: strands-agents/harness-sdk#6522 (PR #6525) — retire openai/ portion once released
+    Covers both ``openai/<model>`` and ``bedrock-mantle/openai.<model>`` while
+    leaving non-OpenAI Mantle models (e.g. ``bedrock-mantle/google.gemma-4-*``)
+    untouched.
     """
     if not model_id or resolved is None:
         return resolved
     normalized = normalize_model_ref(model_id)
-    if _provider_of(normalized) != "openai":
-        return resolved
-    if getattr(resolved, "_bedrock_mantle_config", None) is not None:
+    base_key = _openai_family_tail(normalized)
+    if base_key is None:
         return resolved
     config = _read_model_config(resolved)
     if config is None:
         return resolved
-    base_key = _base_key(normalized).lower()
     params = config.get("params")
     if not isinstance(params, dict):
         return resolved
@@ -1705,10 +1766,11 @@ def _stamp_model_ref(model: Any, ref: str) -> Any:
 
 
 def _prepare_harness_effort(normalized: str, effort: str | None) -> str | None:
-    """Normalize/clamp OpenAI effort before calling upstream resolve_model()."""
-    if effort is None or _provider_of(normalized) != "openai":
+    """Normalize/clamp OpenAI and Mantle-OpenAI effort before calling resolve_model()."""
+    # Upstream: strands-agents/harness-sdk#6522 (PR #6525) — retire openai/ portion once released
+    base_lower = _openai_family_tail(normalized)
+    if effort is None or base_lower is None:
         return effort
-    base_lower = _base_key(normalized).lower()
     if _is_openai_non_reasoning(base_lower):
         return None
     mapped = _target_openai_effort(base_lower, effort)

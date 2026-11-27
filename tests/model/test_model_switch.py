@@ -3837,7 +3837,7 @@ class TestSameProviderSummaryAndOpenAIGuard:
             configure_openai_for_model(model_id, f_off)
             assert "reasoning" not in f_off.config["params"]
 
-        for model_id in ("openai/gpt-5", "openai/gpt-5.1", "openai/gpt-5.2"):
+        for model_id in ("openai/gpt-5", "openai/gpt-5-mini", "openai/gpt-5-nano"):
             f_max = self._fake_openai({"reasoning": {"effort": "max"}})
             configure_openai_for_model(model_id, f_max)
             assert f_max.config["params"]["reasoning"]["effort"] == "high"
@@ -3847,6 +3847,36 @@ class TestSameProviderSummaryAndOpenAIGuard:
             f_none = self._fake_openai({"reasoning": {"effort": "none"}})
             configure_openai_for_model(model_id, f_none)
             assert "reasoning" not in f_none.config["params"]
+
+    def test_configure_openai_gpt51_through_62_strips_and_clamps(self):
+        from strands_code_cli.model.model_switch import configure_openai_for_model
+
+        f_51_max = self._fake_openai({"reasoning": {"effort": "max"}})
+        configure_openai_for_model("openai/gpt-5.1", f_51_max)
+        assert f_51_max.config["params"]["reasoning"]["effort"] == "high"
+        f_51_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+        configure_openai_for_model("openai/gpt-5.1", f_51_min)
+        assert f_51_min.config["params"]["reasoning"]["effort"] == "low"
+        f_51_none = self._fake_openai({"reasoning": {"effort": "none"}})
+        configure_openai_for_model("openai/gpt-5.1", f_51_none)
+        assert f_51_none.config["params"]["reasoning"]["effort"] == "none"
+        f_51_off = self._fake_openai({"reasoning": {"effort": "off"}})
+        configure_openai_for_model("openai/gpt-5.1", f_51_off)
+        assert f_51_off.config["params"]["reasoning"]["effort"] == "none"
+
+        for model_id in ("openai/gpt-5.2", "openai/gpt-5.4", "openai/gpt-5.5"):
+            f_max = self._fake_openai({"reasoning": {"effort": "max"}})
+            configure_openai_for_model(model_id, f_max)
+            assert f_max.config["params"]["reasoning"]["effort"] == "xhigh"
+            f_min = self._fake_openai({"reasoning": {"effort": "minimal"}})
+            configure_openai_for_model(model_id, f_min)
+            assert f_min.config["params"]["reasoning"]["effort"] == "low"
+            f_none = self._fake_openai({"reasoning": {"effort": "none"}})
+            configure_openai_for_model(model_id, f_none)
+            assert f_none.config["params"]["reasoning"]["effort"] == "none"
+            f_off = self._fake_openai({"reasoning": {"effort": "off"}})
+            configure_openai_for_model(model_id, f_off)
+            assert f_off.config["params"]["reasoning"]["effort"] == "none"
 
         for model_id in (
             "openai/gpt-6-astra",
@@ -3911,10 +3941,22 @@ class TestSameProviderSummaryAndOpenAIGuard:
             resolve_harness_model,
         )
 
-        mantle = self._fake_openai({"reasoning": {"effort": "high"}})
-        mantle._bedrock_mantle_config = object()
-        configure_openai_for_model("openai/gpt-4o", mantle)
-        assert mantle.config["params"]["reasoning"]["effort"] == "high"
+        mantle_oai_chat = self._fake_openai({"reasoning": {"effort": "high"}})
+        mantle_oai_chat._bedrock_mantle_config = object()
+        configure_openai_for_model("bedrock-mantle/openai.gpt-4o", mantle_oai_chat)
+        assert "reasoning" not in mantle_oai_chat.config["params"]
+
+        mantle_oai_reason = self._fake_openai({"reasoning": {"effort": "minimal"}})
+        mantle_oai_reason._bedrock_mantle_config = object()
+        configure_openai_for_model(
+            "bedrock-mantle/openai.gpt-6.2-sol", mantle_oai_reason
+        )
+        assert mantle_oai_reason.config["params"]["reasoning"]["effort"] == "low"
+
+        mantle_gemma = self._fake_openai({"reasoning": {"effort": "high"}})
+        mantle_gemma._bedrock_mantle_config = object()
+        configure_openai_for_model("bedrock-mantle/google.gemma-4-31b-it", mantle_gemma)
+        assert mantle_gemma.config["params"]["reasoning"]["effort"] == "high"
 
         anthropic_fake = self._fake_openai({"reasoning": {"effort": "high"}})
         configure_openai_for_model("anthropic/claude-sonnet-5-5", anthropic_fake)
@@ -3952,6 +3994,116 @@ class TestSameProviderSummaryAndOpenAIGuard:
         monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
         entry_main.build_agent("s-oai", tmp_path / "sess", model="openai/gpt-4.1-mini")
         assert "reasoning" not in built_fake.config["params"]
+
+    def test_openai_and_bedrock_mantle_non_reasoning_boundaries(self):
+        from strands_code_cli.model.model_switch import (
+            _is_openai_non_reasoning,
+            _prepare_harness_effort,
+            configure_openai_for_model,
+            openai_supported_efforts,
+            supports_reasoning,
+        )
+
+        non_reasoning_tails = (
+            "o1-mini",
+            "o1-mini-2024-09-12",
+            "o1-preview",
+            "gpt-4.5",
+            "gpt-4.5-preview",
+            "gpt-4o",
+            "gpt-4.1",
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-4-0613",
+            "chatgpt-4o-latest",
+            "gpt-3.5-turbo",
+            "gpt-5-chat-latest",
+        )
+        for tail in non_reasoning_tails:
+            assert _is_openai_non_reasoning(tail) is True, tail
+            for prefix in ("openai/", "bedrock-mantle/openai."):
+                mid = f"{prefix}{tail}"
+                assert supports_reasoning(mid) is False, mid
+                assert openai_supported_efforts(mid) == (), mid
+                assert _prepare_harness_effort(mid, "high") is None, mid
+                fake = self._fake_openai({"reasoning": {"effort": "high"}})
+                configure_openai_for_model(mid, fake)
+                assert "reasoning" not in fake.config["params"], mid
+
+        for boundary_tail in (
+            "o1",
+            "o1-2024-12-17",
+            "o1-pro",
+            "o10",
+            "gpt-5",
+            "gpt-4.10",
+        ):
+            assert _is_openai_non_reasoning(boundary_tail) is False, boundary_tail
+
+    def test_openai_and_bedrock_mantle_reasoning_matrix(self):
+        from strands_code_cli.model.model_switch import (
+            _prepare_harness_effort,
+            configure_openai_for_model,
+            openai_supported_efforts,
+        )
+
+        strip_matrix = (
+            ("o1", "minimal", "low", "off"),
+            ("o3", "xhigh", "high", "none"),
+            ("o4-mini", "max", "high", "off"),
+            ("gpt-5", "max", "high", "off"),
+            ("gpt-5-mini", "minimal", "minimal", "off"),
+            ("gpt-5-nano", "xhigh", "high", "none"),
+            ("gpt-5-pro", "low", "medium", "off"),
+            ("gpt-5.2-pro", "max", "xhigh", "off"),
+            ("gpt-5-codex", "xhigh", "high", "off"),
+            ("gpt-5.3-codex", "max", "xhigh", "off"),
+            ("gpt-oss-120b", "minimal", "low", "off"),
+            ("gpt-oss-120b", "max", "high", "none"),
+            ("gpt-6-astra", "max", "xhigh", "off"),
+            ("gpt-6.1-sol", "minimal", "low", "off"),
+            ("gpt-6.2-sol", "max", "xhigh", "off"),
+        )
+        for tail, in_eff, expected_eff, off_eff in strip_matrix:
+            for prefix in ("openai/", "bedrock-mantle/openai."):
+                mid = f"{prefix}{tail}"
+                assert openai_supported_efforts(mid), mid
+                f_clamp = self._fake_openai({"reasoning": {"effort": in_eff}})
+                configure_openai_for_model(mid, f_clamp)
+                assert f_clamp.config["params"]["reasoning"]["effort"] == expected_eff
+                assert _prepare_harness_effort(mid, in_eff) == expected_eff
+                f_off = self._fake_openai({"reasoning": {"effort": off_eff}})
+                configure_openai_for_model(mid, f_off)
+                assert "reasoning" not in f_off.config["params"], (mid, off_eff)
+
+        none_matrix = (
+            ("gpt-5.1", "minimal", "low", "off"),
+            ("gpt-5.1", "max", "high", "none"),
+            ("gpt-5.2", "max", "xhigh", "off"),
+            ("gpt-5.4", "minimal", "low", "none"),
+            ("gpt-5.5", "max", "xhigh", "off"),
+        )
+        for tail, in_eff, expected_eff, off_eff in none_matrix:
+            for prefix in ("openai/", "bedrock-mantle/openai."):
+                mid = f"{prefix}{tail}"
+                f_clamp = self._fake_openai({"reasoning": {"effort": in_eff}})
+                configure_openai_for_model(mid, f_clamp)
+                assert f_clamp.config["params"]["reasoning"]["effort"] == expected_eff
+                assert _prepare_harness_effort(mid, in_eff) == expected_eff
+                f_off = self._fake_openai({"reasoning": {"effort": off_eff}})
+                configure_openai_for_model(mid, f_off)
+                assert f_off.config["params"]["reasoning"]["effort"] == "none"
+                assert _prepare_harness_effort(mid, off_eff) == "none"
+
+        # Non-OpenAI bedrock-mantle model remains untouched by OpenAI family clamping
+        assert openai_supported_efforts("bedrock-mantle/google.gemma-4-31b-it") is None
+        assert (
+            _prepare_harness_effort("bedrock-mantle/google.gemma-4-31b-it", "max")
+            == "max"
+        )
+        gemma_fake = self._fake_openai({"reasoning": {"effort": "high"}})
+        configure_openai_for_model("bedrock-mantle/google.gemma-4-31b-it", gemma_fake)
+        assert gemma_fake.config["params"]["reasoning"]["effort"] == "high"
 
 
 class TestLiveOpenAIAndAnthropicDiscovery:
@@ -5148,7 +5300,7 @@ class TestMetaModelAdapter:
         ms.resolve_harness_model("openai/gpt-4-0613", effort="high")
         assert "effort" not in res_kw[-1]
         ms.resolve_harness_model("openai/gpt-5.2", effort="max")
-        assert res_kw[-1]["effort"] == "high"
+        assert res_kw[-1]["effort"] == "xhigh"
 
         # 6. _reconcile_web_search_tool stashes AgentCore web_search and restores on return.
         ac_tool = object()

@@ -31,7 +31,11 @@ from strands_code_cli.cost.cost_context import (
     estimate_messages_tokens,
     price_for,
 )
-from strands_code_cli.model.model_switch import supports_reasoning
+from strands_code_cli.model.model_switch import (
+    normalize_model_ref,
+    openai_supported_efforts,
+    supports_reasoning,
+)
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
 from strands_code_cli.routing import transports as _transports
 from strands_code_cli.routing.transports import (
@@ -2047,6 +2051,29 @@ _EFFORT_NO_THINKING = ("auto", "off")
 """Effort values that need no thinking support (harness default / disabled)."""
 
 
+def _effort_supported_by_target(model_id: str, effort: str) -> bool:
+    """True when the target model accepts ``effort`` without upstream ValueError/400."""
+    if effort not in _EFFORT_NO_THINKING and not supports_reasoning(model_id):
+        return False
+    if effort in _EFFORT_NO_THINKING:
+        return True
+    oai_levels = openai_supported_efforts(model_id)
+    if oai_levels is not None:
+        return effort in oai_levels
+    try:
+        import strands_harness.models as harness_models
+    except ImportError:
+        return True
+    normalized = normalize_model_ref(model_id)
+    provider, _, tail = normalized.partition("/")
+    for prefix, levels in getattr(harness_models, "_MODEL_LEVELS", {}).get(
+        provider, ()
+    ):
+        if tail.startswith(prefix):
+            return effort in levels
+    return True
+
+
 def validate_routed_effort(
     pick: RoutingPick, candidates: list[RoutingCandidate]
 ) -> bool:
@@ -2054,18 +2081,15 @@ def validate_routed_effort(
 
     Pre-mutation gate, run before ``apply_switch``: the effort must sit
     inside the candidate's advertised levels when levels are
-    advertised, and any thinking level needs a reasoning-capable
-    candidate (``supports_reasoning`` family). Mismatches hold current
-    and never coerce the level down to a supported one (D-08).
+    advertised, match any reasoning/OpenAI/Mantle/_MODEL_LEVELS model
+    constraints, and never coerce the level down to a supported one (D-08).
     """
     candidate = next((entry for entry in candidates if entry.id == pick.model), None)
     if candidate is None:
         return False
     if candidate.levels is not None and pick.effort not in candidate.levels:
         return False
-    if pick.effort not in _EFFORT_NO_THINKING and not supports_reasoning(pick.model):
-        return False
-    return True
+    return _effort_supported_by_target(pick.model, pick.effort)
 
 
 def decision_model_for(strategy: RoutingStrategy, engine: str) -> str | None:
