@@ -37,7 +37,9 @@ def _provider_of_model(model: str) -> str:
 
 def _validate_base_url(base_url: str) -> None:
     """Validate persisted custom endpoint host: http(s) URL without embedded creds."""
-    if not base_url or any(ch.isspace() or ord(ch) < 32 for ch in base_url):
+    if not base_url or any(
+        ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in base_url
+    ):
         raise ValueError(
             "Provider config 'base_url' must be a non-empty URL without whitespace"
         )

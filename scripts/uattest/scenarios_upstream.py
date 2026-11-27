@@ -2,10 +2,9 @@
 
 Owns scenario_u1 (Bedrock unary tool mode on Mistral Large 24.02 + Pixtral
 Large 25.02 /model toggle), scenario_u2 (cross-family Sonnet -> Nova 2 Lite
---session-id resume + SDK model_info /context + InjectedBlock), and
-scenario_u3 (1.65.0 PolicyHumanInTheLoop approval, policy [deny], and Plan-mode
-deny). Uses XDG_CONFIG_HOME inside per-run /tmp workdirs so
-~/.config/strands-code/config.yaml stays untouched while HOME keeps ~/.aws
+scenario_u2 (cross-family Sonnet -> Nova 2 Lite --session-id resume + SDK model_info /context + InjectedBlock), and
+scenario_u3 (PolicyGateHandler approval, policy [deny] -> `Denied by policy rule`, and Plan-mode deny).
+Uses XDG_CONFIG_HOME inside per-run /tmp workdirs so ~/.config/strands-code/config.yaml stays untouched while HOME keeps ~/.aws
 credentials accessible.
 """
 
@@ -261,7 +260,7 @@ def scenario_u2() -> None:
 
 
 def scenario_u3() -> None:
-    """U3: Live 1.65.0 PolicyHumanInTheLoop approval, [deny] rule, and Plan mode."""
+    """U3: Live PolicyGateHandler approval, [deny] (`Denied by policy rule`), and Plan mode."""
     workdir, xdg = _fresh_upstream_workdir("u3")
     with open(
         os.path.join(workdir, ".agent", "policy.toml"), "w", encoding="utf-8"

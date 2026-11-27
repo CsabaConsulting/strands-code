@@ -702,3 +702,36 @@ class TestCwdDotenvGuard:
 
         assert dotenv.load_dotenv(dotenv_path=explicit) is True
         assert os.environ.get("STRANDS_TEST_DOTENV_EXPLICIT") == "from_explicit"
+
+    def test_wave5_vertex_enterprise_precedence_dotenv_values_and_openai_base_url(
+        self, tmp_path, monkeypatch
+    ):
+        import dotenv
+
+        from strands_code_cli.entry import first_run
+
+        # Exact google-genai truthiness: "yes" or padded whitespace is NOT enabled; ENTERPRISE overrides VERTEXAI.
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "yes")
+        assert first_run.has_google_credentials() is False
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", " true ")
+        assert first_run.has_google_credentials() is False
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "0")
+        assert first_run.has_google_credentials() is False
+        monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "0")
+        monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
+        assert first_run.has_google_credentials() is True
+
+        # disable_cwd_dotenv also blocks implicit dotenv.dotenv_values() from CWD .env.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("SECRET_FROM_CWD=leaked\n", encoding="utf-8")
+        explicit = tmp_path / "exp.env"
+        explicit.write_text("EXPLICIT_OK=yes\n", encoding="utf-8")
+        first_run.disable_cwd_dotenv()
+        assert dotenv.dotenv_values() == {}
+        assert dotenv.dotenv_values(dotenv_path=explicit) == {"EXPLICIT_OK": "yes"}
+
+        # openai_base_url validates & normalizes trailing slash.
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://oai.example/v1/")
+        assert first_run.openai_base_url() == "https://oai.example/v1"

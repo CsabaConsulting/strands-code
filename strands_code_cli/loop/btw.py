@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rich.console import Console
+from strands.models import Model
 from strands_harness import create_harness
 from strands_harness.memory import resolve_memory
 
@@ -192,7 +193,10 @@ def _fork_message_content(
             if isinstance(text, str) and text.strip():
                 blocks.append({"text": f"{SUMMARY_LABEL}\n{text}"})
             continue
-        blocks.append(copy.deepcopy(block))
+        copied = copy.deepcopy(block)
+        if isinstance(copied.get("toolUse"), dict):
+            copied["toolUse"].pop("reasoningSignature", None)
+        blocks.append(copied)
     return blocks
 
 
@@ -505,8 +509,11 @@ def build_btw_agent(
         # Never share the parent's cost side-channel (D-09): a replayed
         # wrapper gets its own emptied list; anything else passes through.
         kwargs["model"] = fresh_side_model(kwargs["model"])
-        if isinstance(getattr(kwargs["model"], "_strands_model_ref", None), str):
+        if isinstance(kwargs["model"], Model) or isinstance(
+            getattr(kwargs["model"], "_strands_model_ref", None), str
+        ):
             kwargs["caching"] = False
+            kwargs.pop("effort", None)
     steering_hook = kwargs.pop("steering_hook", None)
     if "hooks" in kwargs:
         hooks = list(kwargs["hooks"] or [])

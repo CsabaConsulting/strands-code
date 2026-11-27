@@ -25,6 +25,7 @@ from strands_code_agent.python_environments.local_sandboxed import (
 from strands_code_cli.dispatch.core import show_picker
 from strands_code_cli.entry.first_run import (
     BEDROCK_SETUP_POINTER,
+    openai_base_url,
     preflight_credentials,
 )
 from strands_code_cli.entry.provider_config import ProviderConfig
@@ -36,6 +37,7 @@ from strands_code_cli.memory.memory_file import load_memory, register_memory_plu
 from strands_code_cli.memory.skills import discover_plugin_sources
 from strands_code_cli.model.model_switch import (
     _provider_of,
+    _stamp_model_ref,
     build_meta_model,
     configure_base_url_for_model,
     configure_gemini_for_model,
@@ -129,6 +131,7 @@ def model_for_config(
     """
     if model is None:
         return None
+    model = normalize_model_ref(model)
     raw_prefix, _, rest = (
         model.partition("/") if "/" in model else ("bedrock", "", model)
     )
@@ -138,7 +141,10 @@ def model_for_config(
             return build_meta_model(model, base_url=base_url)
         except ImportError:
             return model
-    use_chat_completions = base_url and (
+    eff_base_url = base_url
+    if eff_base_url is None and prefix == "openai" and api_mode == "chat":
+        eff_base_url = openai_base_url()
+    use_chat_completions = eff_base_url and (
         prefix == "litellm" or (prefix == "openai" and api_mode == "chat")
     )
     if use_chat_completions:
@@ -146,7 +152,9 @@ def model_for_config(
             from strands.models.openai import OpenAIModel
 
             chat_id = rest if prefix == "openai" else model
-            resolved = OpenAIModel(model_id=chat_id, client_args={"base_url": base_url})
+            resolved = OpenAIModel(
+                model_id=chat_id, client_args={"base_url": eff_base_url}
+            )
             resolved._strands_model_ref = model
             return resolved
         except ImportError:
@@ -154,7 +162,9 @@ def model_for_config(
     return model
 
 
-def _build_web_fetch_model(model: str, base_url: str, api_mode: str | None) -> Any:
+def _build_web_fetch_model(
+    model: str, base_url: str | None, api_mode: str | None
+) -> Any:
     """Resolve web_fetch summarizer with the custom base_url when possible."""
     try:
         return resolve_harness_model(
@@ -238,14 +248,16 @@ def build_agent(
         "skills": skills_plugin,
         "memory": True,
     }
-    if (
-        base_url
-        and isinstance(model, str)
-        and model.partition("/")[0].lower() in ("openai", "anthropic", "meta")
+    model_ref = (
+        model if isinstance(model, str) else getattr(model, "_strands_model_ref", None)
+    )
+    if isinstance(model_ref, str) and (
+        model_ref.partition("/")[0].lower() == "meta"
+        or (base_url and model_ref.partition("/")[0].lower() in ("openai", "anthropic"))
     ):
-        kwargs["builtin_tools"]["web_fetch"] = {
-            "model": _build_web_fetch_model(model, base_url, api_mode)
-        }
+        wf_model = _build_web_fetch_model(model_ref, base_url, api_mode)
+        if not isinstance(wf_model, str):
+            kwargs["builtin_tools"]["web_fetch"] = {"model": wf_model}
     if model is not None:
         kwargs["model"] = model
         if isinstance(getattr(model, "_strands_model_ref", None), str):
@@ -256,6 +268,8 @@ def build_agent(
     agent = create_harness(**kwargs)
     parent_holder["agent"] = agent
     resolved_model = getattr(agent, "model", None)
+    if isinstance(model, str):
+        _stamp_model_ref(resolved_model, normalize_model_ref(model))
     target_id = model if isinstance(model, str) else model_id_of(resolved_model, "")
     if base_url:
         owner = _provider_of(normalize_model_ref(target_id)) if target_id else None
@@ -290,7 +304,9 @@ def build_agent(
                 and callable(getattr(resolved, "format_chunk", None))
                 and not callable(getattr(resolved, "take_reported_costs", None))
             ):
-                agent.model = wrap_for_openrouter(model, resolved)
+                agent.model = _stamp_model_ref(
+                    wrap_for_openrouter(model, resolved), normalize_model_ref(model)
+                )
         except Exception:
             pass
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
@@ -338,7 +354,10 @@ def _root(
     if model is not None and not model.strip():
         raise typer.BadParameter("invalid --model: must be non-empty")
     config = ProviderConfig.load()
-    effective_model = model.strip() if model is not None else config.model
+    raw_model = model.strip() if model is not None else config.model
+    effective_model = (
+        normalize_model_ref(raw_model) if isinstance(raw_model, str) else raw_model
+    )
     owner_provider = (
         _provider_of(normalize_model_ref(config.model))
         if config.model is not None

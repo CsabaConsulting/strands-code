@@ -1018,3 +1018,14 @@ class TestLivePricingAuditParity:
         assert hit_prefix is not None and hit_prefix["in"] == pytest.approx(3.0)
         hit_arn = live_pricing.litellm_entry(arn)
         assert hit_arn is not None and hit_arn["in"] == pytest.approx(3.0)
+
+    def test_wave5_anthropic_models_cache_rejects_nan_timestamp(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.delenv("STRANDS_CODE_NO_LIVE_PRICING", raising=False)
+        monkeypatch.setenv("STRANDS_CODE_CACHE_DIR", str(tmp_path))
+        (tmp_path / live_pricing.ANTHROPIC_MODELS_CACHE_FILE).write_text(
+            '{"fetched_at": NaN, "models": {"claude-sonnet-5-5": {"max_input_tokens": 1000}}}',
+            encoding="utf-8",
+        )
+        assert live_pricing.anthropic_models_cache() == {}

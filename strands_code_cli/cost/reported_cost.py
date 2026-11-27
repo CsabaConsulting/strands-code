@@ -110,14 +110,44 @@ def wrap_for_openrouter(model_id: str, resolved: Any) -> Any:
     return resolved
 
 
+def _clone_anthropic_model(model: Any) -> Any:
+    """Clone an ``AnthropicModel`` with its own async HTTP client pool."""
+    try:
+        import anthropic
+        from strands.models.anthropic import AnthropicModel
+    except ImportError:
+        return None
+    if not isinstance(model, AnthropicModel):
+        return None
+    client = getattr(model, "client", None)
+    if client is None or not callable(getattr(client, "copy", None)):
+        return None
+    try:
+        fresh_client = client.copy(http_client=anthropic.DefaultAsyncHttpxClient())
+        cloned = AnthropicModel(client=fresh_client, **copy.deepcopy(model.config))
+    except Exception:
+        return None
+    ref = getattr(model, "_strands_model_ref", None)
+    if isinstance(ref, str) and ref:
+        try:
+            cloned._strands_model_ref = ref
+        except Exception:
+            pass
+    return cloned
+
+
 def fresh_side_model(model: Any) -> Any:
-    """Fresh cost side-channel for a side-agent build, else input unchanged.
+    """Fresh HTTP client / cost side-channel for a side-agent build.
 
     A side build replaying the parent's wrapped model must never share
-    the parent's accumulated costs: shallow-copy the instance and empty
-    the copy's cost list. Inputs without a cost side channel pass
-    through untouched (the identical object).
+    the parent's accumulated costs, and an ``AnthropicModel`` delegate
+    must not share the parent's event-loop-bound ``AsyncAnthropic`` HTTP
+    pool across concurrent worker threads. Inputs needing neither pass
+    through untouched.
     """
+    cloned_anth = _clone_anthropic_model(model)
+    if cloned_anth is not None:
+        return cloned_anth
     if not callable(getattr(model, "take_reported_costs", None)):
         return model
     try:

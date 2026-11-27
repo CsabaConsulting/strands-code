@@ -169,3 +169,14 @@ class TestFailSoftReads:
         )
         index = SessionIndex(root)
         assert index.update_title(sid, "new words")["title"] == "new words"
+
+    def test_wave5_set_model_and_model_of_roundtrip(self, tmp_path):
+        index = SessionIndex(tmp_path / "index")
+        sid = index.mint("demo")
+        assert index.model_of(sid) is None
+        index.set_model(sid, "anthropic/claude-sonnet-5-5")
+        reloaded = SessionIndex(tmp_path / "index")
+        assert reloaded.model_of(sid) == "anthropic/claude-sonnet-5-5"
+        reloaded.set_model(sid, "   ")
+        assert reloaded.model_of(sid) == "anthropic/claude-sonnet-5-5"
+        assert reloaded.model_of("missing-id") is None

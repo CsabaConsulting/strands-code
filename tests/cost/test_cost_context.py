@@ -1603,3 +1603,75 @@ class TestCostContextAuditParity:
         scrubbed = cost_context.scrub_credentials(raw)
         for secret in (aiza, asia, sess_tok, bdr_tok, bearer_tok):
             assert secret not in scrubbed
+
+    def test_wave5_injected_latest_user_only_header_scrub_clamp_and_anthropic_pool(
+        self,
+    ):
+        import anthropic
+        from strands.models.anthropic import AnthropicModel
+
+        from strands_code_cli.cost.reported_cost import fresh_side_model
+
+        # 1. estimate_messages_tokens counts InjectedBlock ONLY on latest user message.
+        hist = [
+            {
+                "role": "user",
+                "content": [
+                    {"text": "hi"},
+                    {"injected": {"text": "old" * 200, "source": "mem"}},
+                ],
+            },
+            {"role": "assistant", "content": [{"text": "ok"}]},
+            {
+                "role": "user",
+                "content": [
+                    {"text": "next"},
+                    {"injected": {"text": "new" * 40, "source": "mem"}},
+                ],
+            },
+        ]
+        # 2 ("hi") + 2 ("ok") + 4 ("next") + 120 ("new"*40) = 128 chars -> 32 tokens (NOT 182).
+        assert cost_context.estimate_messages_tokens(hist) == 32
+
+        # 2. x-api-key and x-goog-api-key redacted case-insensitively.
+        scrubbed = cost_context.scrub_credentials(
+            "X-API-KEY: ant_secret_999\nx-goog-api-key=goog_secret_888"
+        )
+        assert "ant_secret_999" not in scrubbed
+        assert "goog_secret_888" not in scrubbed
+
+        # 3. Cache percentage clamped <= 100% & usage_line forwards model to window_for.
+        line = cost_context.usage_line(
+            100,
+            20,
+            "unknown/model",
+            cache_read_tokens=500,
+            model=type(
+                "M",
+                (),
+                {
+                    "model_info": type(
+                        "I",
+                        (),
+                        {"limits": type("L", (), {"context_window": 100_000})()},
+                    )()
+                },
+            )(),
+        )
+        assert "100% cached" in line
+        assert "100 (0%" in line
+
+        # 4. fresh_side_model clones AnthropicModel HTTP client pool independently.
+        m1 = AnthropicModel(
+            client=anthropic.AsyncAnthropic(
+                api_key="test-k", base_url="https://anth.test"
+            ),
+            model_id="claude-sonnet-5-5",
+            max_tokens=1024,
+        )
+        m1._strands_model_ref = "anthropic/claude-sonnet-5-5"
+        m2 = fresh_side_model(m1)
+        assert isinstance(m2, AnthropicModel) and m2 is not m1
+        assert m2.client is not m1.client
+        assert m2.client._client is not m1.client._client
+        assert m2._strands_model_ref == "anthropic/claude-sonnet-5-5"

@@ -169,3 +169,94 @@ class TestBackgroundCancelAndShutdown:
             loop_mod._close_loop_session(
                 object(), btw, None, "test-model", [], pool, None, index, sid
             )
+
+    def test_wave5_multihop_away_tail_unary_note_and_bedrock_cache_usage(self):
+        import warnings
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.model import model_switch as ms
+
+        # 1. Multi-hop restore G1 -> O -> B -> G2 converts B's away tail cleanly.
+        g_prefix = [
+            {"role": "user", "content": [{"text": "u1"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "gem", "signature": "gsig"}
+                        }
+                    },
+                    {"text": "g-ans"},
+                ],
+            },
+        ]
+        b_tail = [
+            {"role": "user", "content": [{"text": "u2"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "bdr-away", "signature": "bsig"}
+                        }
+                    },
+                    {"text": "b-ans"},
+                ],
+            },
+        ]
+        rich = loop_mod.RichHistory()
+        rich.messages = g_prefix
+        rich.model_id = "google/gemini-2.5-pro"
+        rich.length = len(g_prefix)
+        rich.prefix_hash = ms.canonical_prefix_hash(g_prefix)
+        away_converted = ms.convert_history(
+            g_prefix, "google/gemini-2.5-pro", "openai/gpt-5"
+        )
+        agent = SimpleNamespace(
+            messages=away_converted + b_tail,
+            model=SimpleNamespace(
+                config={"model_id": "us.anthropic.claude-sonnet-4-6"}
+            ),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _id, reply = loop_mod.apply_model_action(
+                agent,
+                "google/gemini-3.8-flash",
+                turn_running=False,
+                current_model="bedrock/us.anthropic.claude-sonnet-4-6",
+                rich=rich,
+            )
+        assert "thinking restored" in reply
+        assert (
+            agent.messages[1]["content"][0]["reasoningContent"]["reasoningText"][
+                "signature"
+            ]
+            == "gsig"
+        )
+        assert "reasoningContent" not in agent.messages[3]["content"][0]
+        assert agent.messages[3]["content"][0]["text"].startswith(ms.TRACE_LABEL)
+
+        # 2. Bedrock Converse exclusive inputTokens with equal raw_in+raw_out == totalTokens adds cache.
+        bdr_res = SimpleNamespace(
+            metrics=SimpleNamespace(
+                get_summary=lambda: {
+                    "accumulated_usage": {
+                        "inputTokens": 100,
+                        "outputTokens": 50,
+                        "totalTokens": 150,
+                        "cacheReadInputTokens": 20000,
+                        "cacheWriteInputTokens": 500,
+                    }
+                }
+            )
+        )
+        assert loop_mod._extract_prompt_usage(
+            bdr_res, "bedrock/us.anthropic.claude-sonnet-4-6", 100, 50
+        ) == (20600, 20000, 500)
+        # Non-Bedrock inclusive usage stays raw_in.
+        assert loop_mod._extract_prompt_usage(
+            bdr_res, "google/gemini-2.5-flash", 100, 50
+        ) == (100, 20000, 500)

@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from strands.experimental.context_manager import ContextManager
+from strands.hooks.events import BeforeModelCallEvent
 from strands.models import Model
 from strands.tools.mcp import MCPClient
 from strands.types.tools import AgentTool
@@ -30,12 +31,18 @@ from strands_code_cli.cost.reported_cost import fresh_side_model
 from strands_code_cli.loop.btw import fresh_tools_for_delegate
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
+    _provider_of,
     configure_base_url_for_model,
     configure_gemini_for_model,
     configure_openai_for_model,
     configure_streaming_for_model,
     model_id_of,
+    normalize_model_ref,
+    resolve_harness_model,
+    same_provider,
+    same_vendor,
     scoped_base_url,
+    supports_reasoning,
 )
 
 
@@ -92,6 +99,10 @@ def _resolve_child_model(
     parent: Any,
     parent_config: Mapping[str, Any],
     child_config: dict[str, Any],
+    *,
+    base_url: str | None = None,
+    base_url_provider: str | None = None,
+    api_mode: str | None = None,
 ) -> None:
     """Resolve explicit spec model or live parent model onto ``child_config``."""
     live_model = (
@@ -100,7 +111,25 @@ def _resolve_child_model(
         else parent_config.get("model")
     )
     if spec.model is not None:
-        child_config["model"] = spec.model
+        if isinstance(spec.model, str):
+            scoped = scoped_base_url(base_url, base_url_provider, spec.model)
+            eff_mode = api_mode if scoped is not None else None
+            normalized_spec = normalize_model_ref(spec.model)
+            if _provider_of(normalized_spec) == "meta" or (
+                scoped
+                and _provider_of(normalized_spec) == "openai"
+                and eff_mode == "chat"
+            ):
+                try:
+                    child_config["model"] = resolve_harness_model(
+                        normalized_spec, base_url=scoped, api_mode=eff_mode
+                    )
+                except ImportError:
+                    child_config["model"] = spec.model
+            else:
+                child_config["model"] = spec.model
+        else:
+            child_config["model"] = spec.model
     elif live_model is not None:
         child_config["model"] = fresh_side_model(live_model)
     chosen = child_config.get("model")
@@ -108,6 +137,29 @@ def _resolve_child_model(
         getattr(chosen, "_strands_model_ref", None), str
     ):
         child_config["caching"] = False
+        child_config.pop("effort", None)
+
+
+def _strip_foreign_signatures_hook(parent_id: str, target_id: str):
+    """Strip parent toolUse thought signatures before cross-provider child model calls."""
+
+    def _on_before_model(event: Any) -> None:
+        if (
+            parent_id
+            and target_id
+            and supports_reasoning(target_id)
+            and same_vendor(parent_id, target_id)
+            and same_provider(parent_id, target_id)
+        ):
+            return
+        agent_obj = getattr(event, "agent", None)
+        for msg in getattr(agent_obj, "messages", None) or ():
+            for blk in msg.get("content", ()):
+                tu = blk.get("toolUse")
+                if isinstance(tu, dict):
+                    tu.pop("reasoningSignature", None)
+
+    return _on_before_model
 
 
 def _configure_child_agent(
@@ -144,6 +196,11 @@ def _configure_child_agent(
     target_id = (
         raw_model if isinstance(raw_model, str) else model_id_of(resolved_model, "")
     )
+    parent_id = model_id_of(getattr(parent, "model", None), "")
+    if callable(getattr(child, "add_hook", None)):
+        child.add_hook(
+            _strip_foreign_signatures_hook(parent_id, target_id), BeforeModelCallEvent
+        )
     configure_streaming_for_model(target_id, resolved_model)
     configure_gemini_for_model(target_id, resolved_model)
     configure_openai_for_model(target_id, resolved_model)
@@ -176,7 +233,7 @@ def build_cli_subagent(
         child_config = dict(parent_config)
         base_url = child_config.pop("_base_url", None)
         base_url_provider = child_config.pop("_base_url_provider", None)
-        child_config.pop("_api_mode", None)
+        api_mode = child_config.pop("_api_mode", None)
         steering_hook = child_config.pop("steering_hook", None)
         if "hooks" in child_config:
             child_config["hooks"] = [
@@ -188,7 +245,16 @@ def build_cli_subagent(
         if parent is not None:
             base_url = getattr(parent, "_base_url", None)
             base_url_provider = getattr(parent, "_base_url_provider", None)
-        _resolve_child_model(spec, parent, parent_config, child_config)
+            api_mode = getattr(parent, "_api_mode", api_mode)
+        _resolve_child_model(
+            spec,
+            parent,
+            parent_config,
+            child_config,
+            base_url=base_url,
+            base_url_provider=base_url_provider,
+            api_mode=api_mode,
+        )
         if spec.instructions is not None:
             child_config["instructions"] = spec.instructions
         _select_child_tools(

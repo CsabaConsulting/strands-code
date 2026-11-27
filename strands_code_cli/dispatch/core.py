@@ -660,12 +660,14 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     from strands_harness.defaults import DEFAULT_MODEL
     from strands_harness.models import resolve_model
 
+    from strands_code_cli.entry.provider_config import ProviderConfig
     from strands_code_cli.model.model_switch import (
         _provider_of,
         build_meta_model,
         build_model_tree,
         discover_models,
         normalize_model_ref,
+        scoped_base_url,
         upstream_supports_meta,
     )
 
@@ -681,7 +683,16 @@ def _model_message(rest: str, current_model: str | None) -> tuple:
     target = normalize_model_ref(selection)
     try:
         if _provider_of(target) == "meta" and not upstream_supports_meta():
-            build_meta_model(target)
+            scoped_url: str | None = None
+            try:
+                cfg = ProviderConfig.load()
+                owner = (
+                    _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+                )
+                scoped_url = scoped_base_url(cfg.base_url, owner, target)
+            except ValueError:
+                pass
+            build_meta_model(target, base_url=scoped_url)
         else:
             resolve_model(target, DEFAULT_MODEL)
     except ValueError as exc:

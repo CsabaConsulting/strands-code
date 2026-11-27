@@ -415,10 +415,10 @@ def _format_usage_with_cache(
     if input_tokens <= 0:
         return base
     if cache_read_tokens > 0:
-        pct = round(cache_read_tokens / input_tokens * 100)
+        pct = min(100, round(cache_read_tokens / input_tokens * 100))
         return f"{base[:-1]}, {pct}% cached)"
     if cache_write_tokens > 0:
-        pct = round(cache_write_tokens / input_tokens * 100)
+        pct = min(100, round(cache_write_tokens / input_tokens * 100))
         return f"{base[:-1]}, {pct}% cache write)"
     return base
 
@@ -431,13 +431,14 @@ def usage_line(
     *,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    model: Any = None,
 ) -> str:
     """Post-turn usage line: tokens + % with money appended only on hit.
 
     A present reported cost renders as a marked actual and wins over
     the estimate (``is not None``: a present 0.0 stays an actual).
     """
-    window = window_for(model_id)
+    window = window_for(model_id, model=model)
     line = _format_usage_with_cache(
         input_tokens, window, cache_read_tokens, cache_write_tokens
     )
@@ -783,35 +784,47 @@ def price_table(word_filter: str | None = None, region: str | None = None) -> st
     return "\n".join(lines)
 
 
-def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
-    """Cheap local token estimate (chars/4 over text + tool payloads)."""
+def _block_chars(block: dict[str, Any], *, include_injected: bool) -> int:
     chars = 0
-    for message in messages:
-        for block in message.get("content", []):
-            text = block.get("text")
-            if isinstance(text, str):
-                chars += len(text)
-            tool_use = block.get("toolUse")
-            if isinstance(tool_use, dict):
-                chars += len(str(tool_use.get("input", ""))) + len(
-                    str(tool_use.get("name", ""))
-                )
-            tool_result = block.get("toolResult")
-            if isinstance(tool_result, dict):
-                chars += len(str(tool_result.get("content", "")))
-            reasoning = block.get("reasoningContent")
-            if isinstance(reasoning, dict):
-                chars += len(str(reasoning.get("reasoningText", {}).get("text", "")))
-            injected = block.get("injected")
-            if isinstance(injected, dict):
-                text_val = injected.get("text")
-                if text_val is not None:
-                    chars += len(str(text_val))
-            summary = block.get("summary")
-            if isinstance(summary, dict):
-                summary_text = summary.get("text")
-                if isinstance(summary_text, str):
-                    chars += len(summary_text)
+    text = block.get("text")
+    if isinstance(text, str):
+        chars += len(text)
+    tool_use = block.get("toolUse")
+    if isinstance(tool_use, dict):
+        chars += len(str(tool_use.get("input", ""))) + len(
+            str(tool_use.get("name", ""))
+        )
+    tool_result = block.get("toolResult")
+    if isinstance(tool_result, dict):
+        chars += len(str(tool_result.get("content", "")))
+    reasoning = block.get("reasoningContent")
+    if isinstance(reasoning, dict):
+        chars += len(str(reasoning.get("reasoningText", {}).get("text", "")))
+    if include_injected:
+        injected = block.get("injected")
+        if isinstance(injected, dict):
+            text_val = injected.get("text")
+            if text_val is not None:
+                chars += len(str(text_val))
+    summary = block.get("summary")
+    if isinstance(summary, dict):
+        summary_text = summary.get("text")
+        if isinstance(summary_text, str):
+            chars += len(summary_text)
+    return chars
+
+
+def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
+    """Cheap local token estimate (chars/4 over text, tools & active injected context)."""
+    last_user_idx = -1
+    for idx, msg in enumerate(messages):
+        if msg.get("role") == "user":
+            last_user_idx = idx
+    chars = sum(
+        _block_chars(block, include_injected=(idx == last_user_idx))
+        for idx, message in enumerate(messages)
+        for block in message.get("content", [])
+    )
     return max(1, chars // 4) if chars else 0
 
 
@@ -853,7 +866,7 @@ _CRED_PATTERNS = (
     re.compile(r"ASIA[0-9A-Z]{16}"),
     re.compile(r"AIza[0-9A-Za-z\-_]{35}"),
     re.compile(
-        r"(?i)(aws_secret_access_key|aws_session_token|aws_bearer_token_bedrock|api_key|bearer)\s*[:=]\s*\S+"
+        r"(?i)(aws_secret_access_key|aws_session_token|aws_bearer_token_bedrock|api_key|x-api-key|x-goog-api-key|bearer)\s*[:=]\s*\S+"
     ),
     re.compile(r"sk-ant-[A-Za-z0-9\-_]{8,}"),
     re.compile(r"sk-(?:proj-|svcacct-)?[A-Za-z0-9\-_]{20,}"),

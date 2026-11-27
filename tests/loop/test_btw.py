@@ -1604,3 +1604,70 @@ class TestBtwLiveModelBillingAndReplIsolation:
         assert child_repl(code="print(x)") == "STDOUT:\n999"
         assert parent_gate.tag_for(side_agent) == "btw"
         assert parent_gate.is_read_only(side_agent) is True
+
+    def test_wave5_btw_strips_tool_use_signature_and_model_instance_guards(
+        self, monkeypatch
+    ):
+        from strands.models import Model
+
+        import strands_code_cli.loop.btw as btw_mod
+
+        history = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "c1",
+                            "name": "read",
+                            "input": {"path": "a"},
+                            "reasoningSignature": b"gem-sig",
+                        }
+                    }
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"toolResult": {"toolUseId": "c1", "content": [{"text": "ok"}]}}
+                ],
+            },
+        ]
+        forked = btw_mod.fork_btw_history(history, "explain")
+        tu = forked[0]["content"][0]["toolUse"]
+        assert "reasoningSignature" not in tu
+        assert "reasoningSignature" in history[0]["content"][0]["toolUse"]
+
+        class _FakeModel(Model):
+            def update_config(self, **model_config):
+                pass
+
+            def get_config(self):
+                return {"model_id": "fake"}
+
+            async def stream(self, *args, **kwargs):
+                yield {}
+
+            def structured_output(self, *args, **kwargs):
+                return None
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            btw_mod,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(),
+        )
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda _a, _l: None)
+        btw_mod.build_btw_agent(
+            {
+                "model": _FakeModel(),
+                "effort": "low",
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+            },
+            [],
+            "q",
+        )
+        assert captured["caching"] is False
+        assert "effort" not in captured

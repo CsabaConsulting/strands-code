@@ -360,11 +360,14 @@ def _extract_prompt_usage(
     if cache_read == 0 and cache_write == 0:
         return (raw_in, 0, 0)
     if total_tok > 0:
-        total_in = (
-            raw_in
-            if raw_in + raw_out == total_tok
-            else raw_in + cache_read + cache_write
-        )
+        is_bedrock = _provider_of(normalize_model_ref(current_model)) == "bedrock"
+        if raw_in + raw_out != total_tok or (
+            _is_exclusive_usage_provider(current_model)
+            and (raw_in < cache_read or is_bedrock)
+        ):
+            total_in = raw_in + cache_read + cache_write
+        else:
+            total_in = raw_in
     elif _is_exclusive_usage_provider(current_model):
         total_in = raw_in + cache_read + cache_write
     else:
@@ -428,12 +431,13 @@ def record_turn_metrics(
         reported_cost=reported,
         cache_read_tokens=cache_read,
         cache_write_tokens=cache_write,
+        model=model,
     )
 
 
 def maybe_auto_compact(agent: Any, current_model: str) -> str | None:
     """Compact at 80% of the window, pair-atomic; announce or return None."""
-    window = window_for(current_model)
+    window = window_for(current_model, model=getattr(agent, "model", None))
     if not window:
         return None  # unknown window: no signal, no compaction
     messages = getattr(agent, "messages", None) or []
@@ -1208,6 +1212,25 @@ def _should_restore_rich(rich: RichHistory | None, new_id: str, source: list) ->
     )
 
 
+def _convert_restore_or_source(
+    source: list[dict[str, Any]],
+    current_model: str,
+    new_id: str,
+    rich: RichHistory | None,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Convert rich prefix (under rich.model_id) and away-model tail separately."""
+    if _should_restore_rich(rich, new_id, source):
+        assert (
+            rich is not None and rich.messages is not None and rich.model_id is not None
+        )
+        prefix = convert_history(copy.deepcopy(rich.messages), rich.model_id, new_id)
+        tail = convert_history(
+            copy.deepcopy(source[rich.length :]), current_model, new_id
+        )
+        return (prefix + tail, True)
+    return (convert_history(source, current_model, new_id), False)
+
+
 def apply_model_action(
     agent: Any,
     new_id: str,
@@ -1246,18 +1269,10 @@ def apply_model_action(
     # selection leaves the session (model AND messages) untouched.
     _model, resolved_id = apply_switch(agent, new_id, effort=effort)
     source = list(agent.messages)
-    restored = False
-    if _should_restore_rich(rich, new_id, source):
-        assert rich is not None and rich.messages is not None
-        source = copy.deepcopy(rich.messages) + copy.deepcopy(source[rich.length :])
-        restored = True
-    convert_from = current_model
-    if restored and rich is not None and rich.model_id is not None:
-        # Restored thinking keeps its original vendor for the same-vendor
-        # check — converting "from" the away model would re-strip it.
-        convert_from = rich.model_id
-    converted = convert_history(source, convert_from, new_id)
-    fits, _pct, _tokens = estimate_fit(converted, new_id)
+    converted, restored = _convert_restore_or_source(
+        source, current_model, new_id, rich
+    )
+    fits, _pct, _tokens = estimate_fit(converted, new_id, model=_model)
     if fits:
         del agent.messages[:]
         agent.messages.extend(converted)
@@ -1269,18 +1284,19 @@ def apply_model_action(
             agent, summarize=lambda old: model_summarize(agent, old)
         )
         mode_word = "compacted" if kept < len(converted) else "kept"
-    if rich is not None and _has_thinking(source):
-        rich.messages = copy.deepcopy(source)
-        # Provenance follows the thinking, not the away model: after a
-        # restore the stashed blocks are the ORIGINAL vendor's.
-        rich.model_id = convert_from
-        rich.length = len(source)
-        rich.prefix_hash = canonical_prefix_hash(source)
+    if rich is not None:
+        stash_src = converted if restored else source
+        stash_model = new_id if restored else current_model
+        if _has_thinking(stash_src):
+            rich.messages = copy.deepcopy(stash_src)
+            rich.model_id = stash_model
+            rich.length = len(stash_src)
+            rich.prefix_hash = canonical_prefix_hash(stash_src)
     count = len(agent.messages)
     suffix = ", thinking restored" if restored else ""
     tools_note = (
         f" {UNARY_TOOL_MODE_NOTE.format(model_id=new_id)}"
-        if not supports_streaming_tools(new_id)
+        if _provider_of(new_id) == "bedrock" and not supports_streaming_tools(new_id)
         else ""
     )
     return (
@@ -1511,6 +1527,7 @@ def _apply_routed_pick(
         current_model = pick.model
         explicit_save(agent)
         index.ensure(session_id)
+        index.set_model(session_id, current_model)
         if rich is not None and stash_path is not None:
             rich.save(stash_path)
     return current_model
@@ -2417,7 +2434,10 @@ def _load_initial_memory_mode() -> MemoryModeState:
 
 def _warn_if_no_streaming_tools(current_model: str) -> None:
     """Print a concise note when the opening model uses Bedrock unary tool mode."""
-    if not supports_streaming_tools(current_model):
+    normalized = normalize_model_ref(current_model)
+    if _provider_of(normalized) == "bedrock" and not supports_streaming_tools(
+        normalized
+    ):
         print_plain(
             console,
             UNARY_TOOL_MODE_NOTE.format(model_id=current_model),
@@ -2693,7 +2713,14 @@ def run_loop(
     routing_events: list = []
     stash_path = rich_stash_path(index.root, session_id)
     rich = RichHistory.load(stash_path)
-    prepare_resumed_history(agent, current_model, rich, stash_path)
+    prepare_resumed_history(
+        agent,
+        current_model,
+        rich,
+        stash_path,
+        prior_model=index.model_of(session_id),
+    )
+    index.set_model(session_id, current_model)
     slot = _steering_slot_for(agent)
     _set_gate_mode(agent, mode.mode)
     cancel_armed_at: float | None = None
@@ -2789,6 +2816,7 @@ def run_loop(
                     logger.warning("Model choice not persisted: %s", exc)
                 explicit_save(agent)
                 index.ensure(session_id)
+                index.set_model(session_id, current_model)
                 rich.save(stash_path)
                 if routing_mod.warn_applies(routing):
                     # Warn-path apply: manual override wins, routing off.

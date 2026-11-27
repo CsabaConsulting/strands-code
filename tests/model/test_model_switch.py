@@ -5040,3 +5040,230 @@ class TestMetaModelAdapter:
         )
         assert str(anth_client.base_url).rstrip("/") == "https://anth-proxy.local/v1"
         assert anth_client.api_key == "not-required"
+
+    def test_wave5_model_id_ref_media_case_vertex_effort_and_web_search(
+        self, monkeypatch
+    ):
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import strands_harness.models as harness_models
+
+        from strands_code_cli.model import model_switch as ms
+
+        # 1. Non-Bedrock resolved models keep provider prefix via _strands_model_ref.
+        for ref in (
+            "google/gemini-3.8-flash",
+            "openai/gpt-6.2-sol",
+            "anthropic/claude-sonnet-5-5",
+            "meta/muse-spark-1.3-contributor",
+        ):
+            stub = SimpleNamespace(config={"model_id": ref.split("/", 1)[1]})
+            monkeypatch.setattr(
+                harness_models, "resolve_model", lambda *_a, **_kw: stub
+            )
+            monkeypatch.setenv("MODEL_API_KEY", "test-meta-key")
+            resolved = ms.resolve_harness_model(ref, effort="max")
+            assert ms.model_id_of(resolved, "") == ref
+
+        # 2. OpenRouter Llama 3.3 is text-only & Bedrock/vendor case-folding holds.
+        assert (
+            ms.supports_media("litellm/openrouter/meta-llama/llama-3.3-70b-instruct")
+            is False
+        )
+        assert ms.supports_media("BEDROCK/us.meta.llama3-3-70b-instruct-v1:0") is False
+        assert (
+            ms.supports_streaming_tools("BEDROCK/us.meta.llama3-3-70b-instruct-v1:0")
+            is False
+        )
+
+        # 3. Same-provider OpenAI/Meta unsigned reasoning trace converts quietly.
+        unsigned_hist = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "streamed thought"}
+                        }
+                    },
+                    {"text": "ok"},
+                ],
+            },
+        ]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            conv_oai = ms.convert_history(
+                unsigned_hist, "openai/gpt-6.2-sol", "openai/gpt-6.1-terra"
+            )
+        assert not [w for w in caught if "Dropping reasoningContent" in str(w.message)]
+        assert conv_oai[1]["content"][0]["text"].startswith(ms.TRACE_LABEL)
+
+        # 4. Vertex publishers/google/models/ stripped & 500-item pager cap + Gemini 2.5 models/ guard.
+        assert (
+            ms._is_google_chat_model(
+                SimpleNamespace(
+                    name="publishers/google/models/gemini-2.5-flash",
+                    supported_actions=["generateContent"],
+                )
+            )
+            == "gemini-2.5-flash"
+        )
+        many = [
+            SimpleNamespace(
+                name=f"models/gemini-2.5-flash-{i}",
+                supported_actions=["generateContent"],
+            )
+            for i in range(700)
+        ]
+        monkeypatch.setenv("GOOGLE_API_KEY", "g-key")
+        fake_genai = types.SimpleNamespace(
+            Client=lambda: SimpleNamespace(
+                models=SimpleNamespace(list=lambda: iter(many))
+            )
+        )
+        monkeypatch.setitem(sys.modules, "google.genai", fake_genai)
+        monkeypatch.setitem(
+            sys.modules, "google", types.SimpleNamespace(genai=fake_genai)
+        )
+        g_models, g_live = ms._discover_google_models()
+        assert g_live is True and len(g_models) == 500
+
+        gem_calls: list[dict] = []
+        gem_stub = SimpleNamespace(
+            config={
+                "params": {"thinking_config": {"thinking_level": "high"}},
+                "gemini_tools": [object()],
+            },
+            update_config=lambda **kw: gem_calls.append(kw),
+        )
+        ms.configure_gemini_for_model("google/models/gemini-2.5-flash", gem_stub)
+        assert gem_calls and gem_calls[-1]["gemini_tools"] == []
+
+        # 5. gpt-4-0613 is non-reasoning & effort="max" clamps before resolve_model().
+        assert ms._is_openai_non_reasoning("gpt-4-0613") is True
+        res_kw: list[dict] = []
+        monkeypatch.setattr(
+            harness_models,
+            "resolve_model",
+            lambda *_a, **kw: res_kw.append(kw) or SimpleNamespace(),
+        )
+        ms.resolve_harness_model("openai/gpt-4-0613", effort="high")
+        assert "effort" not in res_kw[-1]
+        ms.resolve_harness_model("openai/gpt-5.2", effort="max")
+        assert res_kw[-1]["effort"] == "high"
+
+        # 6. _reconcile_web_search_tool stashes AgentCore web_search and restores on return.
+        ac_tool = object()
+        reg_agent = SimpleNamespace(
+            tool_registry=SimpleNamespace(
+                registry={"web_search": ac_tool}, dynamic_tools={}
+            ),
+            model=None,
+        )
+        ms.apply_switch(reg_agent, "anthropic/claude-sonnet-5-5")
+        assert "web_search" not in reg_agent.tool_registry.registry
+        assert reg_agent._stashed_web_search_tool is ac_tool
+        ms.apply_switch(reg_agent, "bedrock/us.anthropic.claude-sonnet-4-6")
+        assert reg_agent.tool_registry.registry["web_search"] is ac_tool
+
+    def test_wave5_prepare_resumed_history_and_entry_arn(self, tmp_path, monkeypatch):
+        import copy
+        from types import SimpleNamespace
+
+        import strands_code_cli.entry.main as entry_main
+        from strands_code_cli.entry.provider_config import _validate_base_url
+        from strands_code_cli.loop.core import RichHistory
+        from strands_code_cli.model import model_switch as ms
+
+        # 1. Same-model Anthropic/Gemini resume with prior_model preserves signed thinking quietly.
+        anth_hist = [
+            {"role": "user", "content": [{"text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "reasoningContent": {
+                            "reasoningText": {"text": "t", "signature": "s1"}
+                        }
+                    },
+                    {
+                        "toolUse": {
+                            "toolUseId": "c1",
+                            "name": "read",
+                            "input": {},
+                            "reasoningSignature": b"g",
+                        }
+                    },
+                    {"text": "done"},
+                ],
+            },
+        ]
+        ag_same = SimpleNamespace(messages=copy.deepcopy(anth_hist))
+        with warnings.catch_warnings(record=True) as w_same:
+            warnings.simplefilter("always")
+            changed = ms.prepare_resumed_history(
+                ag_same,
+                "anthropic/claude-sonnet-5-5",
+                RichHistory(),
+                prior_model="anthropic/claude-sonnet-5-5",
+            )
+        assert changed is False
+        assert not [w for w in w_same if "Dropping reasoningContent" in str(w.message)]
+        assert "reasoningSignature" in ag_same.messages[1]["content"][1]["toolUse"]
+
+        # 2. Non-Bedrock prior_model -> Bedrock converts signed thinking; stale rich.model_id also converts.
+        ag_cross = SimpleNamespace(messages=copy.deepcopy(anth_hist))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            assert (
+                ms.prepare_resumed_history(
+                    ag_cross,
+                    "bedrock/us.anthropic.claude-sonnet-4-6",
+                    RichHistory(),
+                    prior_model="anthropic/claude-sonnet-5-5",
+                )
+                is True
+            )
+        assert "reasoningContent" not in ag_cross.messages[1]["content"][0]
+
+        stale_rich = RichHistory()
+        stale_rich.messages = copy.deepcopy(anth_hist[:1])
+        stale_rich.model_id = "bedrock/us.anthropic.claude-sonnet-4-6"
+        stale_rich.length = 1
+        stale_rich.prefix_hash = "mismatch"
+        ag_stale = SimpleNamespace(messages=copy.deepcopy(anth_hist))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            assert (
+                ms.prepare_resumed_history(
+                    ag_stale, "bedrock/us.anthropic.claude-sonnet-4-6", stale_rich
+                )
+                is True
+            )
+
+        # 3. _validate_base_url rejects DEL (0x7f) & model_for_config normalizes ARNs & meta/ builds clean web_fetch.
+        with pytest.raises(ValueError, match="whitespace"):
+            _validate_base_url("https://proxy.example/v1\x7f")
+        arn = "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-sonnet-4-6"
+        assert entry_main.model_for_config(arn) == "us.anthropic.claude-sonnet-4-6"
+
+        captured: dict = {}
+        monkeypatch.setattr(
+            entry_main,
+            "create_harness",
+            lambda **kw: captured.update(kw) or SimpleNamespace(model=kw.get("model")),
+        )
+        monkeypatch.setattr(entry_main, "register_steering_hook", lambda _a: object())
+        monkeypatch.setattr(entry_main, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setenv("MODEL_API_KEY", "m-key")
+        entry_main.build_agent(
+            "sess-meta-wf",
+            tmp_path / "sess-meta-wf",
+            model="meta/muse-spark-1.3-contributor",
+        )
+        wf = captured["builtin_tools"]["web_fetch"]["model"]
+        assert "reasoning" not in getattr(wf, "params", {})
+        assert "tools" not in getattr(wf, "params", {})

@@ -86,7 +86,7 @@ strands-code --model openai/gpt-6.2-sol   # or omit --model to auto-pick from en
 ```
 
 - **Standard env vars honored automatically by the OpenAI SDK:**
-  `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT`
+  `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_ORG_ID`, and `OPENAI_PROJECT_ID`
   (keys are never written to `config.yaml`).
 - **Custom endpoints (`base_url` + optional `api_mode: chat`):**
   Point `~/.config/strands-code/config.yaml` at an OpenAI-compatible gateway:

@@ -38,9 +38,9 @@ Phase 7 for the `/btw` side channel; reusable for later phases.
   window, computes `17 * 23`, flushes session, resumes via `--session-id`
   on Nova 2 Lite (confirming `#5166` wire compatibility + recall + `1M`
   `/context`).
-- **u3** — Phase 13 live `1.65.0` `PolicyHumanInTheLoop`: approves one
-  `shell` command interactively via `Approve? [main] shell` (`Up` +
-  `Enter`), triggers a `[deny]` rule refusal without prompting, and runs
+- **u3** — Phase 13 live `PolicyGateHandler`: approves one `shell` command
+  interactively via `Approve? [main] shell` (`Up` + `Enter`), triggers a `[deny]`
+  rule refusal (`DENIED: Denied by policy rule ...`) without prompting, and runs
   `/mode plan` confirming no file mutation or prompt.
 - **g1** — Phase 14 zero-AWS Google Gemini launch: strips AWS env vars,
   launches `--model google/gemini-3.8-flash` under isolated

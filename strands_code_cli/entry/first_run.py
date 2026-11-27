@@ -63,9 +63,21 @@ def _fail_preflight(message: str) -> None:
     raise typer.Exit(code=2)
 
 
+def _is_google_vertex_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Match google.genai BaseApiClient Vertex AI env precedence and truthiness."""
+    source = os.environ if env is None else env
+    ent = source.get("GOOGLE_GENAI_USE_ENTERPRISE")
+    if ent is not None:
+        return ent.lower() in ("true", "1")
+    vtx = source.get("GOOGLE_GENAI_USE_VERTEXAI")
+    if vtx is not None:
+        return vtx.lower() in ("true", "1")
+    return False
+
+
 def _validate_google_env() -> None:
     """Reject mutually exclusive or incomplete Google Vertex configuration."""
-    if not _is_truthy("GOOGLE_GENAI_USE_VERTEXAI"):
+    if not _is_google_vertex_enabled():
         return
     if _nonempty("GOOGLE_API_KEY") or _nonempty("GEMINI_API_KEY"):
         _fail_preflight(
@@ -82,7 +94,7 @@ def _validate_google_env() -> None:
 def has_google_credentials() -> bool:
     """Return True when valid Gemini API key or Vertex ADC configuration is set."""
     has_key = _nonempty("GOOGLE_API_KEY") or _nonempty("GEMINI_API_KEY")
-    if _is_truthy("GOOGLE_GENAI_USE_VERTEXAI"):
+    if _is_google_vertex_enabled():
         return not has_key and _nonempty("GOOGLE_CLOUD_PROJECT")
     return has_key
 
@@ -112,6 +124,18 @@ def meta_api_key(env: Mapping[str, str] | None = None) -> str | None:
     return None
 
 
+def openai_base_url(env: Mapping[str, str] | None = None) -> str | None:
+    """Return validated OpenAI base URL override from ``OPENAI_BASE_URL``, else None."""
+    from strands_code_cli.entry.provider_config import _validate_base_url
+
+    source = os.environ if env is None else env
+    raw = (source.get("OPENAI_BASE_URL") or "").strip()
+    if not raw:
+        return None
+    _validate_base_url(raw)
+    return raw.rstrip("/")
+
+
 def meta_base_url(env: Mapping[str, str] | None = None) -> str:
     """Return validated Meta Model API base URL (defaulting to api.meta.ai/v1)."""
     from strands_code_cli.entry.provider_config import _validate_base_url
@@ -139,22 +163,38 @@ def disable_cwd_dotenv() -> None:
         return
 
     original = dotenv_main.load_dotenv
-    if getattr(original, "_strands_code_cwd_guarded", False):
-        return
+    if not getattr(original, "_strands_code_cwd_guarded", False):
 
-    def _guarded_load_dotenv(
-        dotenv_path: Any = None,
-        stream: Any = None,
-        *args: Any,
-        **kwargs: Any,
-    ) -> bool:
-        if dotenv_path is None and stream is None:
-            return False
-        return bool(original(dotenv_path, stream, *args, **kwargs))
+        def _guarded_load_dotenv(
+            dotenv_path: Any = None,
+            stream: Any = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> bool:
+            if dotenv_path is None and stream is None:
+                return False
+            return bool(original(dotenv_path, stream, *args, **kwargs))
 
-    _guarded_load_dotenv._strands_code_cwd_guarded = True  # type: ignore[attr-defined]
-    dotenv.load_dotenv = _guarded_load_dotenv
-    dotenv_main.load_dotenv = _guarded_load_dotenv
+        _guarded_load_dotenv._strands_code_cwd_guarded = True  # type: ignore[attr-defined]
+        dotenv.load_dotenv = _guarded_load_dotenv
+        dotenv_main.load_dotenv = _guarded_load_dotenv
+
+    original_values = dotenv_main.dotenv_values
+    if not getattr(original_values, "_strands_code_cwd_guarded", False):
+
+        def _guarded_dotenv_values(
+            dotenv_path: Any = None,
+            stream: Any = None,
+            *args: Any,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            if dotenv_path is None and stream is None:
+                return {}
+            return dict(original_values(dotenv_path, stream, *args, **kwargs))
+
+        _guarded_dotenv_values._strands_code_cwd_guarded = True  # type: ignore[attr-defined]
+        dotenv.dotenv_values = _guarded_dotenv_values
+        dotenv_main.dotenv_values = _guarded_dotenv_values
 
 
 def _provider_of(model: str) -> str:

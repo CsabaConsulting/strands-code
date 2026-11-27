@@ -193,6 +193,31 @@ class SessionIndex:
         self._save()
         return {"id": session_id, **self._entries[session_id]}
 
+    def model_of(self, session_id: str) -> str | None:
+        """Return the last persisted model id for ``session_id``, or None."""
+        self._ensure_loaded()
+        assert self._entries is not None
+        entry = self._entries.get(session_id)
+        if not isinstance(entry, dict):
+            return None
+        model = entry.get("model")
+        return model.strip() if isinstance(model, str) and model.strip() else None
+
+    def set_model(self, session_id: str, model_id: str) -> None:
+        """Persist the active model id for ``session_id`` across resumes."""
+        if not isinstance(model_id, str) or not model_id.strip():
+            return
+        self._ensure_loaded()
+        assert self._entries is not None
+        if session_id not in self._entries:
+            return
+        cleaned = model_id.strip()
+        if self._entries[session_id].get("model") == cleaned:
+            return
+        self._entries[session_id]["model"] = cleaned
+        self._entries[session_id]["updated_at"] = _utcnow()
+        self._save()
+
     def update_title(self, session_id: str, title: str) -> dict[str, Any]:
         """Model auto-title path; never overwrites a manual rename (D-04)."""
         self._ensure_loaded()

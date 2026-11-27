@@ -20,6 +20,7 @@ tried. ``STRANDS_CODE_NO_LIVE_PRICING=1`` forces static-only resolution
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -610,7 +611,7 @@ def anthropic_models_cache() -> dict[str, dict[str, Any]]:
         fetched_at = float(payload.get("fetched_at", 0))
     except (TypeError, ValueError):
         return {}
-    if time.time() - fetched_at >= CACHE_TTL_SECONDS:
+    if not math.isfinite(fetched_at) or time.time() - fetched_at >= CACHE_TTL_SECONDS:
         return {}
     models = payload.get("models")
     return dict(models) if isinstance(models, dict) else {}

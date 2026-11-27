@@ -274,3 +274,70 @@ class TestCliSubagentWiring:
         assert gate.is_read_only(main_agent) is False
         assert gate.is_read_only(side_agent) is True
         assert gate.is_read_only(child) is True
+
+    def test_wave5_subagent_meta_chat_and_cross_provider_signature_hook(
+        self, monkeypatch
+    ):
+        import strands_code_cli.entry.subagent as sub_mod
+
+        parent = SimpleNamespace(model=_ReplayModel("google/gemini-3.8-flash"))
+        captured: dict[str, Any] = {}
+        hooks: list[tuple[Any, Any]] = []
+
+        class _FakeChild:
+            def __init__(self, model):
+                self.model = model
+                self.messages = [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "t1",
+                                    "name": "read",
+                                    "input": {},
+                                    "reasoningSignature": b"gem-sig",
+                                }
+                            }
+                        ],
+                    }
+                ]
+
+            def add_hook(self, cb, ev_cls):
+                hooks.append((cb, ev_cls))
+
+        monkeypatch.setenv("MODEL_API_KEY", "meta-test")
+        monkeypatch.setattr(
+            sub_mod,
+            "create_harness",
+            lambda **kw: captured.update(kw) or _FakeChild(kw.get("model")),
+        )
+        monkeypatch.setattr(sub_mod, "register_memory_plugin", lambda _a, _l: None)
+
+        tool = build_cli_subagent(
+            {"agent": parent},
+            {
+                "model": parent.model,
+                "effort": "high",
+                "tools": [],
+                "builtin_tools": {"shell": True, "read": True, "web_search": True},
+                "memory": False,
+                "session": False,
+                "callback_handler": None,
+                "_base_url": "https://meta-custom.example/v1",
+                "_base_url_provider": "meta",
+            },
+        )
+        child = tool._builder(
+            AgentSpec(task="analyze", model="meta/muse-spark-1.3-contributor")
+        )
+        assert (
+            getattr(captured["model"], "_strands_model_ref", None)
+            == "meta/muse-spark-1.3-contributor"
+        )
+        assert captured["caching"] is False
+        assert "effort" not in captured
+        assert captured["builtin_tools"]["web_search"] is False
+        assert hooks
+        hooks[-1][0](SimpleNamespace(agent=child))
+        assert "reasoningSignature" not in child.messages[0]["content"][0]["toolUse"]

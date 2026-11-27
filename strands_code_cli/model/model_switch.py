@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import itertools
 import json
 import re
 import warnings
@@ -59,6 +60,10 @@ _MEDIA_LESS: tuple[tuple[str | None, str | None, str | None, str | None], ...] =
     # Bedrock Llama 3/4 is text-only while Meta Model API Muse models are multimodal.
     ("bedrock", "meta", "llama3", None),
     ("bedrock", "meta", "llama4", None),
+    # OpenRouter Llama 3 models are text-only (unlike Llama 4 Maverick/Scout or ollama/llama3.2-vision).
+    ("litellm", "meta-llama", None, "llama-3.3"),
+    ("litellm", "meta-llama", None, "llama-3.1"),
+    ("litellm", "meta-llama", None, "llama-3-"),
     (None, "deepseek", None, None),
     (None, "amazon", "titan", None),
     # Nova 1 only: generation-scoped substrings. Nova 2 Lite takes
@@ -105,12 +110,13 @@ def _vendor_of(entry: str) -> str:
     """
     if "/" in entry and not entry.startswith("arn:"):
         provider, _, rest = entry.partition("/")
-        if provider == "bedrock":
+        low_prov = provider.lower()
+        if low_prov == "bedrock":
             entry = rest
-        elif rest.startswith(_OPENROUTER_PREFIX):
+        elif rest.lower().startswith(_OPENROUTER_PREFIX):
             return rest[len(_OPENROUTER_PREFIX) :].split("/", 1)[0].lower()
         else:
-            return provider.lower()
+            return low_prov
     return _base_key(entry).split(".", 1)[0].lower()
 
 
@@ -363,11 +369,16 @@ def _convert_reasoning_block(
     signed = "signature" in (payload.get("reasoningText") or {})
     if reasoning_ok and (signed or "redactedContent" in payload):
         return copy.deepcopy(block)
-    warnings.warn(
-        f"Dropping reasoningContent for {new_id!r}; "
-        + ("trace kept as text." if text.strip() else "trace dropped."),
-        stacklevel=3,
+    target_provider = _provider_of(normalize_model_ref(new_id))
+    quiet_unsigned = (
+        reasoning_ok and not signed and target_provider in ("openai", "meta")
     )
+    if not quiet_unsigned:
+        warnings.warn(
+            f"Dropping reasoningContent for {new_id!r}; "
+            + ("trace kept as text." if text.strip() else "trace dropped."),
+            stacklevel=3,
+        )
     if text.strip():
         return {"text": f"{TRACE_LABEL}\n{text}"}
     return None
@@ -575,7 +586,11 @@ def _is_google_chat_model(entry: Any) -> str | None:
     raw = getattr(entry, "name", None)
     if not isinstance(raw, str):
         return None
-    short = raw.removeprefix("models/")
+    short = (
+        raw.split("/models/", 1)[1]
+        if "/models/" in raw
+        else raw.removeprefix("models/")
+    )
     if not short.lower().startswith("gemini-") or _looks_non_chat(short):
         return None
     actions = getattr(entry, "supported_actions", None)
@@ -600,7 +615,7 @@ def _discover_google_models() -> tuple[list[str], bool]:
         client = genai.Client()
         found = [
             f"google/{short}"
-            for entry in client.models.list()
+            for entry in itertools.islice(client.models.list(), 500)
             if (short := _is_google_chat_model(entry)) is not None
         ]
         deduped = list(dict.fromkeys(found))
@@ -686,16 +701,45 @@ def _is_openai_chat_model(model_id: str) -> bool:
     )
 
 
+def _scoped_discovery_base_url(provider: str) -> str | None:
+    """Return persisted or env custom endpoint base URL scoped to ``provider``."""
+    from strands_code_cli.entry.first_run import openai_base_url
+    from strands_code_cli.entry.provider_config import ProviderConfig
+
+    try:
+        cfg = ProviderConfig.load()
+        if cfg.base_url:
+            owner = _provider_of(normalize_model_ref(cfg.model)) if cfg.model else None
+            scoped = scoped_base_url(cfg.base_url, owner, f"{provider}/_")
+            if scoped:
+                return scoped.rstrip("/")
+    except ValueError:
+        pass
+    if provider == "openai":
+        try:
+            return openai_base_url()
+        except ValueError:
+            return None
+    return None
+
+
 def _discover_openai_models() -> tuple[list[str], bool]:
     """List live OpenAI chat/reasoning models when OpenAI credentials exist."""
     from strands_code_cli.entry.first_run import has_openai_credentials
 
-    if not has_openai_credentials():
+    has_creds = has_openai_credentials()
+    custom_url = _scoped_discovery_base_url("openai")
+    if not has_creds and not custom_url:
         return ([], False)
     try:
         import openai  # lazy: optional [openai] extra
 
-        client = openai.OpenAI()
+        client_kw: dict[str, Any] = {}
+        if custom_url:
+            client_kw["base_url"] = custom_url
+            if not has_creds:
+                client_kw["api_key"] = "not-required"
+        client = openai.OpenAI(**client_kw)
         found = [
             f"openai/{item.id.strip()}"
             for item in client.models.list()
@@ -748,14 +792,21 @@ def _discover_anthropic_models() -> tuple[list[str], bool]:
     """List live Anthropic models (caching metadata for 24h) when keyed."""
     from strands_code_cli.entry.first_run import has_anthropic_credentials
 
-    if not has_anthropic_credentials():
+    has_creds = has_anthropic_credentials()
+    custom_url = _scoped_discovery_base_url("anthropic")
+    if not has_creds and not custom_url:
         return ([], False)
     try:
         import anthropic  # lazy: optional [anthropic] extra
 
         import strands_code_cli.cost.live_pricing as live_pricing
 
-        client = anthropic.Anthropic()
+        client_kw: dict[str, Any] = {}
+        if custom_url:
+            client_kw["base_url"] = custom_url
+            if not has_creds:
+                client_kw["api_key"] = "not-required"
+        client = anthropic.Anthropic(**client_kw)
         metas: list[dict[str, Any]] = []
         found: list[str] = []
         for item in client.models.list():
@@ -827,14 +878,20 @@ def _discover_meta_models() -> tuple[list[str], bool]:
         meta_base_url,
     )
 
-    if not has_meta_credentials():
+    has_creds = has_meta_credentials()
+    custom_url = _scoped_discovery_base_url("meta")
+    if not has_creds and not custom_url:
         return ([], False)
     try:
         import openai  # lazy: optional [meta] / [openai] extra
 
+        endpoint = custom_url or meta_base_url()
         client = openai.OpenAI(
             **_meta_openai_client_args(
-                meta_base_url(), meta_api_key(), openai_mod=openai
+                endpoint,
+                meta_api_key(),
+                has_explicit_base_url=custom_url is not None,
+                openai_mod=openai,
             ),
             timeout=5.0,
             max_retries=0,
@@ -906,14 +963,15 @@ def _base_key(entry: str) -> str:
         tail = entry.rsplit("/", 1)[-1]
     elif "/" in entry:
         tail = entry.split("/", 1)[1]
-        if tail.startswith(_OPENROUTER_PREFIX):
+        if tail.lower().startswith(_OPENROUTER_PREFIX):
             # Aggregator see-through: litellm/openrouter/qwen/qwen3-32b
             # groups and matches rules as qwen/qwen3-32b.
             tail = tail[len(_OPENROUTER_PREFIX) :]
     else:
         tail = entry
+    low_tail = tail.lower()
     for prefix in _ROUTE_PREFIXES:
-        if tail.startswith(prefix) and "." in tail[len(prefix) :]:
+        if low_tail.startswith(prefix) and "." in tail[len(prefix) :]:
             return tail[len(prefix) :]
     return tail
 
@@ -1031,7 +1089,7 @@ def build_model_tree(
 
 
 def estimate_fit(
-    messages: list[dict[str, Any]], new_id: str
+    messages: list[dict[str, Any]], new_id: str, *, model: Any = None
 ) -> tuple[bool, float | None, int]:
     """Estimate whether converted history fits the new model's window.
 
@@ -1042,6 +1100,7 @@ def estimate_fit(
     Args:
         messages: Converted history to measure.
         new_id: Target model id string.
+        model: Optional live model instance for runtime window lookup.
 
     Returns:
         ``(fits, pct, tokens)`` with pct None when the window is unknown.
@@ -1049,7 +1108,7 @@ def estimate_fit(
     from strands_code_cli.cost.cost_context import estimate_messages_tokens, window_for
 
     tokens = estimate_messages_tokens(messages)
-    window = window_for(new_id)
+    window = window_for(new_id, model=model)
     if window is None:
         return (True, None, tokens)
     pct = tokens / window * 100.0
@@ -1166,7 +1225,8 @@ def configure_gemini_for_model(model_id: str, resolved: Any) -> Any:
     is_google = _provider_of(normalized) == "google" or (
         "/" not in normalized and not normalized.startswith("arn:")
     )
-    if not is_google or not _base_key(normalized).lower().startswith("gemini-2.5"):
+    base_name = _base_key(normalized).lower().removeprefix("models/")
+    if not is_google or not base_name.startswith("gemini-2.5"):
         return resolved
     config = _read_model_config(resolved)
     if config is None:
@@ -1187,6 +1247,7 @@ _OPENAI_NON_REASONING_PREFIXES = (
     "gpt-4o",
     "gpt-4.1",
     "gpt-4-turbo",
+    "gpt-4-",
     "chatgpt-4o",
     "gpt-3.5",
 )
@@ -1380,13 +1441,36 @@ def _has_reasoning(messages: list[dict[str, Any]]) -> bool:
     )
 
 
-def _needs_bedrock_resume_conversion(messages: list[dict[str, Any]], rich: Any) -> bool:
+def _resolve_resume_source(
+    messages: list[dict[str, Any]], rich: Any, prior_model: str | None
+) -> tuple[str, bool]:
+    """Return ``(source_model_id, stale_rich)`` for resumed history checks."""
+    if (
+        isinstance(prior_model, str)
+        and prior_model.strip()
+        and prior_model != "__resumed__"
+    ):
+        return (normalize_model_ref(prior_model.strip()), False)
+    rich_id = getattr(rich, "model_id", None)
+    if isinstance(rich_id, str) and rich_id.strip() and rich_id != "__resumed__":
+        if getattr(rich, "messages", None) is not None:
+            if getattr(rich, "length", None) == len(messages) and getattr(
+                rich, "prefix_hash", None
+            ) == canonical_prefix_hash(messages):
+                return (normalize_model_ref(rich_id.strip()), False)
+            return ("__resumed__", True)
+        return (normalize_model_ref(rich_id.strip()), False)
+    return ("__resumed__", False)
+
+
+def _needs_bedrock_resume_conversion(
+    messages: list[dict[str, Any]], source_id: str, stale_rich: bool
+) -> bool:
     """True when Bedrock resume must convert SummaryBlocks or foreign thinking."""
-    prior_id = getattr(rich, "model_id", None)
+    if stale_rich:
+        return True
     has_non_bedrock_source = (
-        isinstance(prior_id, str)
-        and prior_id != "__resumed__"
-        and _provider_of(normalize_model_ref(prior_id)) != "bedrock"
+        source_id != "__resumed__" and _provider_of(source_id) != "bedrock"
     )
     for msg in messages:
         for block in msg.get("content", []):
@@ -1407,6 +1491,8 @@ def prepare_resumed_history(
     current_model: str,
     rich: Any = None,
     stash_path: Path | None = None,
+    *,
+    prior_model: str | None = None,
 ) -> bool:
     """Normalize persisted session history on launch for the opening model (D-04).
 
@@ -1416,7 +1502,8 @@ def prepare_resumed_history(
     snapshot traces. Non-Bedrock targets, media-less Bedrock targets,
     and histories carrying Anthropic ``SummaryBlock``s, Gemini signatures,
     or known non-Bedrock thinking convert in place and preserve raw
-    traces into ``rich``.
+    traces into ``rich``. Same-provider Anthropic/Gemini resumes with
+    known matching ``prior_model`` keep signed thinking intact.
 
     Returns:
         ``True`` if ``agent.messages`` was converted in place, else ``False``.
@@ -1425,19 +1512,14 @@ def prepare_resumed_history(
     if not messages:
         return False
     target = normalize_model_ref(current_model)
+    old_id, stale_rich = _resolve_resume_source(messages, rich, prior_model)
     if (
         _provider_of(target) == "bedrock"
         and supports_media(target)
-        and not _needs_bedrock_resume_conversion(messages, rich)
+        and not _needs_bedrock_resume_conversion(messages, old_id, stale_rich)
     ):
         return False
     source = list(messages)
-    prior_id = getattr(rich, "model_id", None)
-    old_id = (
-        prior_id
-        if isinstance(prior_id, str) and prior_id != "__resumed__"
-        else "__resumed__"
-    )
     converted = convert_history(source, old_id, target)
     if converted == source:
         return False
@@ -1447,7 +1529,9 @@ def prepare_resumed_history(
         and _has_reasoning(source)
     ):
         rich.messages = copy.deepcopy(source)
-        rich.model_id = rich.model_id or "__resumed__"
+        rich.model_id = (
+            old_id if old_id != "__resumed__" else (rich.model_id or "__resumed__")
+        )
         rich.length = len(source)
         rich.prefix_hash = canonical_prefix_hash(source)
         if stash_path is not None:
@@ -1549,6 +1633,34 @@ def _build_openai_chat_model(normalized: str, base_url: str) -> Any:
     return resolved
 
 
+def _stamp_model_ref(model: Any, ref: str) -> Any:
+    """Attach canonical non-Bedrock ``provider/name`` ref for prefix-preserving lookups."""
+    if (
+        model is not None
+        and isinstance(ref, str)
+        and ref
+        and _provider_of(ref) != "bedrock"
+    ):
+        try:
+            model._strands_model_ref = ref
+        except (AttributeError, TypeError):
+            pass
+    return model
+
+
+def _prepare_harness_effort(normalized: str, effort: str | None) -> str | None:
+    """Normalize/clamp OpenAI effort before calling upstream resolve_model()."""
+    if effort is None or _provider_of(normalized) != "openai":
+        return effort
+    base_lower = _base_key(normalized).lower()
+    if _is_openai_non_reasoning(base_lower):
+        return None
+    mapped = _target_openai_effort(base_lower, effort)
+    if mapped == "":
+        return "off"
+    return mapped or effort
+
+
 def resolve_harness_model(
     model_ref: str,
     default: str | None = None,
@@ -1565,15 +1677,20 @@ def resolve_harness_model(
 
     normalized = normalize_model_ref(model_ref)
     if _provider_of(normalized) == "meta" and not upstream_supports_meta():
-        return build_meta_model(
+        return _stamp_model_ref(
+            build_meta_model(
+                normalized,
+                effort=effort,
+                base_url=base_url,
+                web_search=web_search,
+                caching=caching,
+            ),
             normalized,
-            effort=effort,
-            base_url=base_url,
-            web_search=web_search,
-            caching=caching,
         )
     if base_url and _provider_of(normalized) == "openai" and api_mode == "chat":
-        return _build_openai_chat_model(normalized, base_url)
+        return _stamp_model_ref(
+            _build_openai_chat_model(normalized, base_url), normalized
+        )
     target_default = default or normalized
     kwargs: dict[str, Any] = {
         "caching": bool(caching),
@@ -1589,14 +1706,45 @@ def resolve_harness_model(
                 kwargs["web_search"] = True
         except Exception:
             pass
-    if effort is not None:
-        kwargs["effort"] = effort
+    effective_effort = _prepare_harness_effort(normalized, effort)
+    if effective_effort is not None:
+        kwargs["effort"] = effective_effort
     model = resolve_model(normalized, target_default, **kwargs)
     model = reported_cost.wrap_for_openrouter(normalized, model)
     model = configure_streaming_for_model(normalized, model)
     model = configure_gemini_for_model(normalized, model)
     model = configure_openai_for_model(normalized, model)
-    return configure_base_url_for_model(normalized, model, base_url=base_url)
+    model = configure_base_url_for_model(normalized, model, base_url=base_url)
+    return _stamp_model_ref(model, normalized)
+
+
+def _reconcile_web_search_tool(agent: Any, normalized: str) -> None:
+    """Prevent duplicate/stale AgentCore web_search vs native search on switch."""
+    reg_obj = getattr(agent, "tool_registry", None)
+    reg = getattr(reg_obj, "registry", None)
+    if not isinstance(reg, dict):
+        return
+    try:
+        from strands_harness.models import _web_search_kind
+
+        target_kind = (
+            "native"
+            if _provider_of(normalized) == "meta" and not upstream_supports_meta()
+            else _web_search_kind(normalized)
+        )
+    except Exception:
+        target_kind = "native" if _provider_of(normalized) == "meta" else None
+    dyn = getattr(reg_obj, "dynamic_tools", None)
+    if target_kind == "native" and "web_search" in reg:
+        if getattr(agent, "_stashed_web_search_tool", None) is None:
+            agent._stashed_web_search_tool = reg["web_search"]
+        reg.pop("web_search", None)
+        if isinstance(dyn, dict):
+            dyn.pop("web_search", None)
+    elif target_kind == "agentcore" and "web_search" not in reg:
+        stashed = getattr(agent, "_stashed_web_search_tool", None)
+        if stashed is not None:
+            reg["web_search"] = stashed
 
 
 def apply_switch(
@@ -1656,4 +1804,5 @@ def apply_switch(
         api_mode=effective_api_mode,
     )
     agent.model = model
+    _reconcile_web_search_tool(agent, normalized)
     return (model, model_id_of(model, normalized))
