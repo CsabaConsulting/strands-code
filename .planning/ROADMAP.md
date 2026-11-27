@@ -22,7 +22,7 @@
 - [x] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 8-provider + `--allow-github-skills` egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs (completed 2026-11-25)
 - [ ] **Phase 19.1: Policy Gate, Persistence & Concurrency Hardening** *(INSERTED)* — Direct `PolicyGateHandler(InterventionHandler)` (`id(agent)` + per-agent `read_only_agents`), `policy/core.py` P0 bypass fixes (`is_fetch_get`, TOML escaping, `read` deny/scope, `trust_delegated`, `BatchState`, `effective_roots`, protected `.agent/`+`.git/`+`.env*`, live harness `KNOWN_TOOLS`), shared atomic `mkstemp`/`0o600`/symlink persistence helper, shared `ui/console.py`, and `CurateQueue`/`/btw`/`subagent` fixes
 - [x] **Phase 19.2: CLI, Routing/Cost, Provider & Packaging Parity** *(INSERTED)* — Session-sticky toggles + `config.yaml` consolidation (retiring `diff.yaml`, `memory.yaml`, `/diff approve-each`, redundant aliases), `/resume`/`--session-id` prefix parity, retiring `engine.primary` + 5-engine `/route setup` + `/cost` lanes + `_route_pre_turn` fix, `bedrock-mantle/`/`base_url`/discovery + OpenAI/`bedrock-mantle` per-model effort parity (`#6522`/`#6525` forward-compat + retirement bridge), `requires-python >=3.11`, `httpx`/`ollama`/`_SDK_EXTRA_HINTS`, hermetic `conftest.py` & CI extras (completed 2026-11-27)
-- [ ] **Phase 20: Monty Python VM for `python_repl` & CodeAct** — Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli`, explicit host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, worker teardown, `box.toml` compatibility & optional Strands Box Monty alignment
+- [x] **Phase 20: Monty Python VM for `python_repl` & CodeAct** — Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli`, explicit host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, worker teardown, `box.toml` compatibility & optional Strands Box Monty alignment (completed 2026-11-27)
 - [ ] **Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
 - [ ] **Phase 22: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
 - [ ] **Phase 23: v2.0 Structural Review + Hygiene** — 7-layer DAG untangling & 5 `import-linter` contracts, breakup of 6 oversized modules & 4 `CC 20` functions, dead `v1.0` shim sweep & repo-wide doc/codebase-map resync
@@ -275,15 +275,15 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] `20-01-PLAN.md` — Tracer: `pydantic-monty` core dep + `uv.lock`, `tests/conftest.py` `MONTY_BIN` scrub, Wave 0 `tests/sandbox/test_monty.py`, and `MontyPythonInterpreter` (`sandbox/monty.py` — stateful sessions, pure-Rust stdlib, blocked `os`/`pathlib`/`subprocess`, `256 MiB`/`60s`/`200`/`4 MiB` caps, fail-closed startup, `MontyCrashedError` salvage/recovery, lazy shared pool + teardown)
+- [x] `20-01-PLAN.md` — Tracer: `pydantic-monty` core dep + `uv.lock`, `tests/conftest.py` `MONTY_BIN` scrub, Wave 0 `tests/sandbox/test_monty.py`, and `MontyPythonInterpreter` (`sandbox/monty.py` — stateful sessions, pure-Rust stdlib, blocked `os`/`pathlib`/`subprocess`, `256 MiB`/`60s`/`200`/`4 MiB` caps, fail-closed startup, `MontyCrashedError` salvage/recovery, lazy shared pool + teardown) (`bc28c40`)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] `20-02-PLAN.md` — 3-site CLI migration (`entry/main.py`, `CodeactStint`, `loop/btw.py` / `entry/subagent.py`), deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close`, subagent cleanup), and Phase 19.1 symlink/`O_NOFOLLOW`/`atomic_write_text`/sensitive-read/protected-path + non-interactive `PolicyConfig` `[[deny]]` parity in `codeact_read`/`write`/`edit`/`shell`
+- [x] `20-02-PLAN.md` — 3-site CLI migration (`entry/main.py`, `CodeactStint`, `loop/btw.py` / `entry/subagent.py`), deterministic teardown (`_close_loop_session`, `_teardown_btw_agent`, `CodeactStint.close`, subagent cleanup), and Phase 19.1 symlink/`O_NOFOLLOW`/`atomic_write_text`/sensitive-read/protected-path + non-interactive `PolicyConfig` `[[deny]]` parity in `codeact_read`/`write`/`edit`/`shell` (`1d082de`)
 
 **Wave 3** *(blocked on Wave 1 & Wave 2 completion)*
 
-- [ ] `20-03-PLAN.md` — `_resolve_monty_binary()` `[agent.filesystem].exec` grant in `sandbox/box.py` (`[tool.python]` omitted), live `@pytest.mark.integration` Box+Monty check, `docs/QUICKSTART.md` guide, and complete CI/suite/rig/loopback verification
+- [x] `20-03-PLAN.md` — `_resolve_monty_binary()` `[agent.filesystem].exec` grant in `sandbox/box.py` (`[tool.python]` omitted), live `@pytest.mark.integration` Box+Monty check, `docs/QUICKSTART.md` guide, and complete CI/suite/rig/loopback verification
 
 ### Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)
 
@@ -337,7 +337,7 @@ Plans:
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
 | 19.1. Policy Gate, Persistence & Concurrency Hardening | `v2.0` | 4/4 | Complete | 2026-11-25 |
 | 19.2. CLI, Routing/Cost, Provider & Packaging Parity | `v2.0` | 4/4 | Complete | 2026-11-27 |
-| 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/3 | Planned | - |
+| 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 3/3 | Complete | 2026-11-27 |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
 | 23. v2.0 Structural Review + Hygiene | `v2.0` | 0/0 | Not started | - |

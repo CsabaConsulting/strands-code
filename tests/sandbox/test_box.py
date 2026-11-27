@@ -1326,6 +1326,55 @@ def _assert_box_run_clean(
     assert "Usage:" in run_proc.stdout
 
 
+def _assert_box_run_monty(
+    box_bin: Path, box_toml: Path, cwd: Path, env: dict[str, str]
+) -> None:
+    import json
+    import subprocess
+    import sys
+    import sysconfig
+
+    from pydantic_monty._binary import find_monty_binary
+
+    monty_real = str(Path(os.path.realpath(find_monty_binary())))
+    parsed = tomllib.loads(box_toml.read_text(encoding="utf-8"))
+    assert monty_real in parsed["agent"]["filesystem"]["exec"]
+    assert "python" not in parsed.get("tool", {})
+
+    py_real = str(Path(os.path.realpath(sys.executable)))
+    site_dir = sysconfig.get_paths()["purelib"]
+    monty_snippet = (
+        f"import site; site.addsitedir({site_dir!r}); "
+        "from strands_code_cli.sandbox.monty import MontyPythonInterpreter; "
+        "interp = MontyPythonInterpreter(); "
+        "out, err = interp.execute_code('import math, json; print(json.dumps({\"r\": math.isqrt(144)}))'); "
+        "interp.close(); "
+        "assert err == '', err; "
+        "print(out.strip())"
+    )
+    monty_cmd_line = f"command = {json.dumps([py_real, '-c', monty_snippet])}"
+    raw_lines = box_toml.read_text(encoding="utf-8").splitlines()
+    replaced = [
+        monty_cmd_line if line.startswith("command = ") else line for line in raw_lines
+    ]
+    monty_toml = box_toml.parent / "monty_box.toml"
+    monty_toml.write_text("\n".join(replaced) + "\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [str(box_bin), "run", "--config", str(monty_toml)],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    stderr = proc.stderr or ""
+    if "this identity may not create a user namespace" in stderr:
+        pytest.skip(stderr.strip().splitlines()[-1])
+    assert proc.returncode == 0, stderr or proc.stdout
+    assert '{"r": 12}' in proc.stdout
+
+
 @pytest.mark.integration
 def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
     """Validate generated box.toml / policy.dw against host binaries when present."""
@@ -1422,6 +1471,139 @@ def test_host_strands_box_or_dogwood_validates_generated_policy(tmp_path):
                 env=self_env,
             )
             _assert_box_run_clean(box_bin, self_res.box_toml, self_repo, self_env)
+            _assert_box_run_monty(box_bin, self_res.box_toml, self_repo, self_env)
+
+
+class TestMontyBinaryBoxGrant:
+    """Offline unit coverage for Monty binary discovery & [agent.filesystem].exec."""
+
+    def test_resolve_runtime_paths_discovers_venv_monty_binary(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        uv_py = tmp_path / "uv" / "cpython" / "bin" / "python"
+        uv_py.parent.mkdir(parents=True)
+        uv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        repo = tmp_path / "repo"
+        venv_bin = repo / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        venv_py = venv_bin / "python"
+        venv_py.symlink_to(uv_py)
+        monty_bin = venv_bin / "monty"
+        monty_bin.write_text("binary", encoding="utf-8")
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_data_dir",
+            lambda app: str(home / ".local" / "share" / app),
+        )
+
+        paths = resolve_runtime_paths(
+            repo,
+            python_executable=venv_py,
+            home=home,
+            env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
+        )
+        assert paths["monty_bin"] == monty_bin.resolve()
+        assert monty_bin.resolve() in paths["exec"]
+
+        res = init_box_config(
+            repo,
+            python_executable=venv_py,
+            home=home,
+            env={"HOME": str(home), "PATH": "/usr/local/bin:/usr/bin:/bin"},
+        )
+        parsed = tomllib.loads(res.box_toml.read_text(encoding="utf-8"))
+        assert str(monty_bin.resolve()) in parsed["agent"]["filesystem"]["exec"]
+        assert "python" not in parsed.get("tool", {})
+
+    def test_resolve_runtime_paths_honors_monty_bin_env_and_rejects_control_chars(
+        self, tmp_path, monkeypatch
+    ):
+        home = tmp_path / "home"
+        uv_py = tmp_path / "uv" / "cpython" / "bin" / "python"
+        uv_py.parent.mkdir(parents=True)
+        uv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        custom_dir = tmp_path / "custom_monty_dir"
+        custom_dir.mkdir()
+        custom_monty = custom_dir / "monty"
+        custom_monty.write_text("binary", encoding="utf-8")
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+
+        paths = resolve_runtime_paths(
+            repo,
+            python_executable=uv_py,
+            home=home,
+            env={"MONTY_BIN": str(custom_monty), "PATH": "/usr/bin:/bin"},
+        )
+        assert paths["monty_bin"] == custom_monty.resolve()
+        assert custom_monty.resolve() in paths["exec"]
+        assert any(
+            custom_dir.resolve() == r or r in custom_dir.resolve().parents
+            for r in paths["read"]
+        )
+
+        with pytest.raises(ValueError, match="control"):
+            resolve_runtime_paths(
+                repo,
+                python_executable=uv_py,
+                home=home,
+                env={"MONTY_BIN": "/tmp/bad\nmonty", "PATH": "/usr/bin:/bin"},
+            )
+
+        # Refused root MONTY_BIN is rejected cleanly (never adds / to read or exec).
+        root_paths = resolve_runtime_paths(
+            repo,
+            python_executable=uv_py,
+            home=home,
+            env={"MONTY_BIN": "/monty", "PATH": "/usr/bin:/bin"},
+        )
+        assert Path("/") not in root_paths["read"]
+        assert Path("/") not in root_paths["exec"]
+
+    def test_resolve_runtime_paths_monty_path_fallback(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        uv_py = tmp_path / "uv" / "cpython" / "bin" / "python"
+        uv_py.parent.mkdir(parents=True)
+        uv_py.write_text("#!/bin/sh\n", encoding="utf-8")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        extra_bin = tmp_path / "extra_bin"
+        extra_bin.mkdir()
+        path_monty = extra_bin / "monty"
+        path_monty.write_text("#!/bin/sh\n", encoding="utf-8")
+        path_monty.chmod(0o755)
+
+        monkeypatch.setattr(
+            "platformdirs.user_config_dir", lambda app: str(home / ".config" / app)
+        )
+        monkeypatch.setattr(
+            "platformdirs.user_cache_dir", lambda app: str(home / ".cache" / app)
+        )
+
+        paths = resolve_runtime_paths(
+            repo,
+            python_executable=uv_py,
+            home=home,
+            env={"PATH": str(extra_bin)},
+        )
+        assert paths["monty_bin"] == path_monty.resolve()
+        assert path_monty.resolve() in paths["exec"]
 
 
 def test_provider_from_model_id_unwraps_litellm_gemini():

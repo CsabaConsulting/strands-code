@@ -461,6 +461,40 @@ def _resolve_cli_command(
     ]
 
 
+def _valid_monty_candidate(cand: Path | None) -> Path | None:
+    if cand is None or not cand.is_file():
+        return None
+    real = Path(os.path.realpath(cand))
+    if not real.is_file() or _valid_nonroot_dir(real.parent) is None:
+        return None
+    return real
+
+
+def _resolve_monty_binary(
+    venv_bin: Path | None,
+    env_path: str,
+    env_map: Mapping[str, str],
+) -> Path | None:
+    """Resolve canonical non-root ``monty`` binary for Strands Box ``exec``."""
+    raw_override = env_map.get("MONTY_BIN", "")
+    if isinstance(raw_override, str) and raw_override.strip():
+        cleaned = _reject_control_chars(raw_override.strip(), "MONTY_BIN")
+        return _valid_monty_candidate(Path(cleaned))
+
+    candidates: list[Path | None] = [
+        venv_bin / "monty" if venv_bin is not None else None,
+        Path(hit) if (hit := shutil.which("monty", path=env_path)) else None,
+    ]
+    scripts_dir = sysconfig.get_path("scripts")
+    if scripts_dir:
+        candidates.append(Path(scripts_dir) / "monty")
+    for cand in candidates:
+        resolved = _valid_monty_candidate(cand)
+        if resolved is not None:
+            return resolved
+    return None
+
+
 def _valid_nonroot_dir(cand: Path | None) -> Path | None:
     if cand is None:
         return None
@@ -560,6 +594,8 @@ def resolve_runtime_paths(
     py_root = _valid_nonroot_dir(py_real.parent.parent)
     uv_python_dir = _valid_nonroot_dir(home_dir / ".local" / "share" / "uv" / "python")
     arch_lib_dir = _system_arch_lib_dir()
+    monty_bin = _resolve_monty_binary(venv_bin, env_path, env_map)
+    monty_dir = _valid_nonroot_dir(monty_bin.parent) if monty_bin is not None else None
 
     read_paths: list[Path] = []
     for cand in (
@@ -570,6 +606,7 @@ def resolve_runtime_paths(
         py_root,
         uv_python_dir,
         arch_lib_dir,
+        monty_dir,
         code_cfg,
         code_cache,
     ):
@@ -585,6 +622,8 @@ def resolve_runtime_paths(
 
     tools = _resolve_tool_commands(venv_bin, env_path, write_paths)
     exec_paths: list[Path] = [py_real]
+    if monty_bin is not None:
+        _append_unique(exec_paths, monty_bin)
     agent_cmd = _resolve_cli_command(venv_bin, py_real, env_path, exec_paths)
     exec_paths.extend(_python_extension_exec_dirs(stdlib_dir, venv_dir))
     exec_paths = _coalesce_dirs(exec_paths)
@@ -598,6 +637,7 @@ def resolve_runtime_paths(
         "py_root": py_root,
         "uv_python_dir": uv_python_dir,
         "arch_lib_dir": arch_lib_dir,
+        "monty_bin": monty_bin,
         "py_bin": py_bin,
         "py_real": py_real,
         "code_cfg": code_cfg,

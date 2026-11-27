@@ -27,7 +27,7 @@
 ### Sandbox & Policy
 
 - [x] **SANDBOX-01**: First-class Strands Box (`strands-agents/box` `v0.3.1+`) Linux wrapper workflow (`box.toml` + deterministic Dogwood `policy.dw` generator and 8-provider egress profiles with `x-goog-api-key` / `x-api-key` / `Authorization: Bearer` for OpenAI & `api.meta.ai` / OpenRouter path-scoping + policy-only `/api/v1/models*` / auto-detected `decisions_api` + opt-in `--allow-github-skills`), protected outside `[agent.filesystem].write`, at least one canonical MFOTL temporal rule (with formal `v2.0` scoped revisit of `D-05`), `STRANDS_BOX=1` `codeact_shell` `sh -c` alignment, and Linux `x86_64` + Ubuntu 24.04 AppArmor setup docs
-- [ ] **SANDBOX-02**: Crash-isolated Rust Python VM (`pydantic-monty`) for `strands_code_cli`'s `python_repl` and `CodeactStint` (`sandbox/monty.py`) with stateful multi-turn `feed_run`, explicit narrow host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, `MontyCrashedError` recovery, deterministic worker-pool teardown, `box.toml` runtime compatibility (plus Strands Box embedded Monty evaluation), and clean packaging/fallback while keeping `strands_code_agent/` pristine (`D-24`)
+- [x] **SANDBOX-02**: Crash-isolated Rust Python VM (`pydantic-monty`) for `strands_code_cli`'s `python_repl` and `CodeactStint` (`sandbox/monty.py`) with stateful multi-turn `feed_run`, explicit narrow host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, `MontyCrashedError` recovery, deterministic worker-pool teardown, `box.toml` runtime compatibility (plus Strands Box embedded Monty evaluation), and clean packaging/fallback while keeping `strands_code_agent/` pristine (`D-24`)
 
 ### Parity, Hardening & Structural Hygiene
 
@@ -87,7 +87,7 @@
 | SANDBOX-01 | Phase 19 | Complete |
 | HARDEN-01 | Phase 19.1 | Pending |
 | PARITY-01 | Phase 19.2 | Complete |
-| SANDBOX-02 | Phase 20 | Pending |
+| SANDBOX-02 | Phase 20 | Complete |
 | LOOP-06 | Phase 21 | Pending |
 | TOOL-05 | Phase 21 | Pending |
 | REVIEW-01 | Phase 21 | Pending |

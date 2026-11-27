@@ -349,6 +349,41 @@ zero pre-registered remote marketplaces):
     broad `[[allow]]` rules on `write`/`edit` targeting `.agent/skills*`,
     `.agent/skills-lock.json`, or `~/.config/strands-code/**` downgrade to a prompt.
 
+## Monty Python VM (`python_repl` & CodeAct)
+
+Every CLI `python_repl` surface — main REPL (`strands-code`), CodeAct mode
+(`--codeact` / `/codeact`), and isolated `/btw` & `subagent` delegates — runs
+inside a crash-isolated `pydantic-monty` Rust VM worker pool
+(`strands_code_cli/sandbox/monty.py`) instead of in-process `smolagents`. Missing
+`pydantic-monty` or `monty` worker binaries fail closed in `STDERR` rather than
+downgrading execution.
+
+- **Pure-computation stdlib & denied imports (`os=None`):** Monty exposes Rust
+  pure-computation modules (`math`, `json`, `re`, `collections`, `itertools`,
+  `datetime`, `base64`, `dataclasses`, `typing`) while explicitly rejecting `os`,
+  `pathlib`, `subprocess`, `__import__`, and `importlib`.
+- **Resource bounds & crash recovery:** Sessions run under `ResourceLimits`
+  (`256 MiB` memory, `60s` wall duration, `200` recursion depth) plus a `4 MiB`
+  captured stdout limit. If a worker crashes (`MontyCrashedError`), pre-crash
+  `print()` stdout is salvaged, the dead session is discarded and replaced on a
+  fresh worker, and `STDERR` reports that VM state was reset. Sessions tear down
+  deterministically on loop exit, `CodeactStint.close()`, `/btw` completion, and
+  subagent completion.
+- **Hardened CodeAct host callbacks:** CodeAct's `read`, `write`, `edit`, and
+  `shell` callbacks enforce the Phase 19.1 safety floor (symlink and FIFO
+  refusal via `O_NOFOLLOW | O_NONBLOCK`, `atomic_write_text`, sensitive-read
+  refusal for `.env*`/`.ssh/*`/`.aws/*`, protected-path blocks) plus
+  non-interactive `PolicyConfig` `[[deny]]` enforcement (failing closed on
+  symlinked `.agent/policy.toml`).
+- **Strands Box integration & `[tool.python]` evaluation:** `strands-code box init`
+  discovers the canonical `monty` binary realpath (`MONTY_BIN`,
+  `.venv/bin/monty`, `PATH`, or `sysconfig` scripts) and adds it to
+  `[agent.filesystem].exec` in `box.toml`. Strands Box's embedded `[tool.python]`
+  and Dogwood `python:execute` remain intentionally omitted because
+  `strands-code`'s `python_repl` and CodeAct already run inside `pydantic-monty`
+  Rust worker processes with workspace-scoped host callbacks rather than
+  delegating Python execution to an external Box broker tool.
+
 ## Strands Box Linux sandbox floor
 
 Strands Box (`strands-agents/box`) provides an OS-enforced Linux containment
