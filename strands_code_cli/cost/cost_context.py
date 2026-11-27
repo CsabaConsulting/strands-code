@@ -823,6 +823,8 @@ def _block_chars(block: dict[str, Any], *, include_injected: bool) -> int:
         summary_text = summary.get("text")
         if isinstance(summary_text, str):
             chars += len(summary_text)
+    if "document" in block or "image" in block or "video" in block:
+        return chars
     return chars
 
 

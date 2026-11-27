@@ -260,7 +260,7 @@ _LEGACY_TRACE_LABELS = (
 )
 """Retired labels still stripped by the canonical hash (pre-upgrade sessions)."""
 
-_MEDIA_PLACEHOLDER_RE = re.compile(r"\[(?:image|video): [^,\]]*, \d+ bytes\]")
+_MEDIA_PLACEHOLDER_RE = re.compile(r"\[(?:image|video|document): [^,\]]*, \d+ bytes\]")
 """Matches the media placeholders convert_history emits (kept in sync)."""
 
 
@@ -300,6 +300,7 @@ def _canonical_block(block: Any) -> dict[str, Any] | None:
         or "injected" in block
         or "image" in block
         or "video" in block
+        or "document" in block
         or "summary" in block
     ):
         return None
@@ -395,7 +396,15 @@ def _migrate_trace_block(block: dict[str, Any]) -> dict[str, Any]:
 
 
 def _media_placeholder_block(block: dict[str, Any]) -> dict[str, Any]:
-    """Placeholder text for an image/video block on a media-less target."""
+    """Placeholder text for an image/video/document block on a media-less target."""
+    if "document" in block:
+        payload = block.get("document") or {}
+        raw_name = str(payload.get("name", "document"))
+        safe_name = raw_name.replace(",", " ").replace("]", "").strip() or "document"
+        doc_format = payload.get("format", "unknown")
+        data = payload.get("source", {}).get("bytes", b"")
+        size = len(data) if data else 0
+        return {"text": f"[document: {safe_name}/{doc_format}, {size} bytes]"}
     kind = "image" if "image" in block else "video"
     payload = block.get(kind, {})
     media_format = payload.get("format", "unknown")
@@ -433,7 +442,7 @@ def _convert_block(
         return _migrate_trace_block(block)
     if "toolUse" in block:
         return _convert_tool_use_block(block, reasoning_ok)
-    if ("image" in block or "video" in block) and not media_ok:
+    if ("image" in block or "video" in block or "document" in block) and not media_ok:
         return _media_placeholder_block(block)
     return copy.deepcopy(block)
 

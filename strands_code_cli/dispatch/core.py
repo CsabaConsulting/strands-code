@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import typer
 
+from strands_code_cli.dispatch.help import build_usage_hint, help_message
 from strands_code_cli.memory.memory_file import (
     AGENT_MEMORY,
     MEMORY_FRONTMATTER_DEFAULTS,
@@ -65,17 +66,7 @@ if TYPE_CHECKING:
     from strands_code_cli.policy.codeact import CodeactState
     from strands_code_cli.routing.core import RoutingState
 
-USAGE_HINT = (
-    "Available commands: /resume, /rename <title>, /forget <id>, "
-    "/diff [on-demand|auto|show [path]|apply [path]|discard [path]], "
-    "/search <pattern>, /policy [show|last], /mode [plan|act], /approve, "
-    "/model [provider/name|id|ARN], /cost [refresh|table [filter]], "
-    "/compact, /clear, /context, /btw <side question>, /route [on|off|status|setup|validate], "
-    "/codeact [tool|code|both], /code <ask>, /tool <ask>, "
-    "/skills [marketplace|browse|install|update|sync|show|remove|reload], "
-    "/memory [mode [curate|silent]|list|approve <id>|deny <id>|approve-all|deny-all|revise <section> <instruction>], "
-    "/init [deeper], /exit"
-)
+USAGE_HINT = build_usage_hint()
 
 _MODEL_USAGE = "Usage: /model [provider/name|id|ARN]"
 _MODEL_CUSTOM = "custom-model-id"
@@ -229,6 +220,7 @@ def _dispatch_builtin_wins(
     rest: str,
     routing: RoutingState | None,
     interface: CodeactState | None,
+    skills: SkillIndex | None = None,
 ) -> tuple[str, str | None] | None:
     """Builtin commands placed before the skills-dynamic branch (shadow-proof)."""
     if cmd == "/btw":
@@ -249,6 +241,8 @@ def _dispatch_builtin_wins(
         # Before the skills-dynamic branch so the builtin always wins
         # the name (a skill named code/tool stays shadowed).
         return _codeact_route_action(cmd, rest, interface)
+    if cmd == "/help":
+        return ("reply", help_message(rest, skills))
     return None
 
 
@@ -370,7 +364,7 @@ def dispatch(
     )
     if handled is not None:
         return handled
-    handled = _dispatch_builtin_wins(cmd, rest, routing, interface)
+    handled = _dispatch_builtin_wins(cmd, rest, routing, interface, skills)
     if handled is not None:
         return handled
     if skills is not None:

@@ -42,6 +42,9 @@ BUILTIN_SLASH_HEADS = frozenset(
         "codeact",
         "code",
         "tool",
+        "help",
+        "file",
+        "review",
     }
 )
 """Builtin slash heads (no leading slash) that always win collisions (D-02).

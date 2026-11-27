@@ -42,6 +42,7 @@ from strands_code_cli.model.model_switch import (
     reconcile_delegate_builtin_tools,
     scoped_base_url,
 )
+from strands_code_cli.policy.tool_use_guard import register_reject_caller_tool_use_hook
 from strands_code_cli.ui.console import RENDER_LOCK, console, sanitize_line
 from strands_code_cli.ui.output import print_plain
 
@@ -563,6 +564,7 @@ def _configure_btw_agent(
         except (AttributeError, TypeError):
             pass
     register_memory_plugin(agent, load_memory)
+    register_reject_caller_tool_use_hook(agent)
 
 
 def build_btw_agent(

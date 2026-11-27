@@ -59,6 +59,7 @@ from strands_code_cli.policy.diff_gate import (
     make_safe_search_tool,
 )
 from strands_code_cli.policy.policy_gate import build_interventions
+from strands_code_cli.policy.tool_use_guard import register_reject_caller_tool_use_hook
 from strands_code_cli.sandbox.box import box_app
 from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 from strands_code_cli.session.session_index import SessionIndex, resolve_session_prefix
@@ -361,6 +362,7 @@ def build_agent(
     # it runs before PolicyGateHandler) closed over a session slot swapped per
     # turn; PolicyGateHandler checks event.cancel_tool directly and starts in Act.
     register_steering_hook(agent)
+    register_reject_caller_tool_use_hook(agent)
     # Phase 6: single memory injector (dual STRANDS.md + .agent/MEMORY.md
     # auto-load, .agent wins); idempotent per agent like the hook above.
     register_memory_plugin(agent, load_memory)

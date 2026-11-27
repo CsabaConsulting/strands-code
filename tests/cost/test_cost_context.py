@@ -1695,3 +1695,23 @@ class TestCostContextAuditParity:
         assert m2.client is not m1.client
         assert m2.client._client is not m1.client._client
         assert m2._strands_model_ref == "anthropic/claude-sonnet-5-5"
+
+
+def test_estimate_messages_tokens_ignores_binary_media_and_document_bytes():
+    hist = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "read attached"},  # 13 chars -> 3 tokens
+                {"image": {"format": "png", "source": {"bytes": b"\x89PNG" * 10000}}},
+                {
+                    "document": {
+                        "format": "pdf",
+                        "name": "report",
+                        "source": {"bytes": b"%PDF" * 10000},
+                    }
+                },
+            ],
+        }
+    ]
+    assert cost_context.estimate_messages_tokens(hist) == 3

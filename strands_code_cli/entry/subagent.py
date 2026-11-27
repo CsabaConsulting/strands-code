@@ -45,6 +45,7 @@ from strands_code_cli.model.model_switch import (
     scoped_base_url,
     supports_reasoning,
 )
+from strands_code_cli.policy.tool_use_guard import register_reject_caller_tool_use_hook
 from strands_code_cli.sandbox.monty import close_agent_repls
 
 
@@ -199,6 +200,7 @@ def _configure_child_agent(
         raw_model if isinstance(raw_model, str) else model_id_of(resolved_model, "")
     )
     parent_id = model_id_of(getattr(parent, "model", None), "")
+    register_reject_caller_tool_use_hook(child)
     if callable(getattr(child, "add_hook", None)):
         child.add_hook(
             _strip_foreign_signatures_hook(parent_id, target_id), BeforeModelCallEvent

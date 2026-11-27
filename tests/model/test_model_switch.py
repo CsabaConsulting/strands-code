@@ -5698,3 +5698,46 @@ class TestMetaModelAdapter:
             )
             is None
         )
+
+
+class TestDocumentBlockSwitching:
+    def test_document_converts_to_placeholder_on_medialess_and_keeps_prefix_hash(self):
+        from strands_code_cli.model.model_switch import (
+            canonical_prefix_hash,
+            convert_history,
+            from_stash_json,
+            to_stash_json,
+        )
+
+        hist = [
+            {
+                "role": "user",
+                "content": [
+                    {"text": "check attached doc"},
+                    {
+                        "document": {
+                            "format": "pdf",
+                            "name": "arch-spec, v2]",
+                            "source": {"bytes": b"%PDF-1.7-body"},
+                        }
+                    },
+                ],
+            }
+        ]
+        # Stash round-trip preserves raw document bytes.
+        restored = from_stash_json(to_stash_json(hist))
+        assert restored == hist
+
+        # Media-capable target preserves document block verbatim.
+        kept = convert_history(
+            hist, "anthropic/claude-sonnet-5-5", "openai/gpt-6.2-sol"
+        )
+        assert kept == hist
+
+        # Media-less target converts document to placeholder matching _MEDIA_PLACEHOLDER_RE.
+        converted = convert_history(
+            hist, "anthropic/claude-sonnet-5-5", "openai/nemotron-70b"
+        )
+        placeholder = converted[0]["content"][1]["text"]
+        assert placeholder == "[document: arch-spec  v2/pdf, 13 bytes]"
+        assert canonical_prefix_hash(converted) == canonical_prefix_hash(hist)
