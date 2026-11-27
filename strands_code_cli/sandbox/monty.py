@@ -353,3 +353,5 @@ def close_agent_repls(agent: Any) -> None:
     if isinstance(registry, dict):
         close_repl_tool(registry.get("python_repl"))
     close_repl_tool(getattr(agent, "_python_repl_tool", None))
+    for extra in getattr(agent, "_delegate_repl_tools", None) or ():
+        close_repl_tool(extra)

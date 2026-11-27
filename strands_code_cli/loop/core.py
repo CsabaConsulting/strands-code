@@ -983,10 +983,13 @@ def _shutdown_agent(agent: Any) -> None:
 
 
 def _teardown_btw_agent(btw_agent: Any) -> None:
-    """Cancel background tasks, shut down, and unregister a side agent."""
+    """Cancel background tasks, close REPLs, shut down, and unregister a side agent."""
     if btw_agent is None:
         return
+    from strands_code_cli.sandbox.monty import close_agent_repls
+
     _cancel_agent_background_tasks(btw_agent)
+    close_agent_repls(btw_agent)
     _shutdown_agent(btw_agent)
     gate = gate_for(btw_agent) or getattr(btw_agent, "_policy_gate", None)
     unregister = getattr(gate, "unregister_agent", None)
@@ -2589,6 +2592,7 @@ def _close_loop_session(
     session_pump: Any,
     index: SessionIndex,
     session_id: str,
+    stint: Any = None,
 ) -> None:
     """Drain side work and persist the session at loop exit.
 
@@ -2597,6 +2601,8 @@ def _close_loop_session(
     the session is over, so D-11's never-cut rule yields to a clean
     exit — and the pool join waits for the abort, never for full work.
     """
+    from strands_code_cli.sandbox.monty import close_agent_repls
+
     _drain_idle_btw(agent, btw, broker, current_model, session_turns, from_exit=True)
     _note_dropped_side(btw, broker)
     live_btw_agent = btw.live_agent if btw.has_live else None
@@ -2618,6 +2624,9 @@ def _close_loop_session(
         _cancel_agent_background_tasks(agent)
         explicit_save(agent)
         flush_memory(agent)
+        close_agent_repls(agent)
+        if stint is not None:
+            stint.close()
         _shutdown_agent(agent)
         if live_btw_agent is not None:
             _teardown_btw_agent(live_btw_agent)
@@ -2993,4 +3002,5 @@ def run_loop(
         session_pump,
         index,
         session_id,
+        stint=stint,
     )

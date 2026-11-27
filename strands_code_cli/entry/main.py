@@ -18,9 +18,6 @@ from strands_code_agent.code_agent import (
     CODE_AGENT_INSTRUCTIONS,
     DEFAULT_CODE_AGENT_CALLBACK_HANDLER,
 )
-from strands_code_agent.python_environments.local_sandboxed import (
-    SandboxedPythonInterpreter,
-)
 from strands_code_cli.dispatch.core import show_picker
 from strands_code_cli.entry.first_run import (
     BEDROCK_SETUP_POINTER,
@@ -63,6 +60,7 @@ from strands_code_cli.policy.diff_gate import (
 )
 from strands_code_cli.policy.policy_gate import build_interventions
 from strands_code_cli.sandbox.box import box_app
+from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 from strands_code_cli.session.session_index import SessionIndex, resolve_session_prefix
 
 app = typer.Typer(
@@ -234,7 +232,8 @@ def build_agent(
     session_path = ensure_private_dir(
         session_dir, "session dir", mode=0o700, max_ancestors=1
     )
-    interpreter = SandboxedPythonInterpreter("", authorized_imports=set())
+    interpreter = MontyPythonInterpreter()
+    repl_tool = interpreter.get_tool()
     cwd = os.getcwd()
     store = PendingStore(session_path, session_id=session_id)
     bind_session(session_id, store)
@@ -250,7 +249,7 @@ def build_agent(
     )
     kwargs: dict[str, Any] = {
         "tools": [
-            interpreter.get_tool(),
+            repl_tool,
             make_safe_search_tool(cwd=cwd),
             make_gated_write(
                 cwd=cwd,
@@ -352,6 +351,7 @@ def build_agent(
             pass
     agent._skills_plugin = skills_plugin  # owned handle for /skills reload
     agent._diff_mode = diff_holder
+    agent._python_repl_tool = repl_tool
     gate = interventions[0]
     agent._policy_gate = gate
     gate.bind_main_agent(agent)  # D-12 delegated-turn detection

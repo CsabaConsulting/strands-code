@@ -443,3 +443,47 @@ class TestBackgroundCancelAndShutdown:
                 btw, _InterruptBroker(), None, btw_agent, Future(), "q"
             )
         assert btw_calls == [True, True]
+
+    def test_close_loop_session_closes_agent_repl_and_codeact_stint(
+        self, tmp_path, monkeypatch
+    ):
+        from concurrent.futures import ThreadPoolExecutor
+        from types import SimpleNamespace
+
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.policy.codeact import CodeactStint
+        from strands_code_cli.sandbox.monty import MontyPythonInterpreter
+        from strands_code_cli.session.session_index import SessionIndex
+
+        interp = MontyPythonInterpreter()
+        repl_tool = interp.get_tool()
+        agent = SimpleNamespace(_python_repl_tool=repl_tool)
+        interp.execute_code("main_var = 1")
+        stint = CodeactStint(cwd=tmp_path)
+        stint.execute_code("stint_var = 2")
+
+        monkeypatch.setattr(loop_mod, "explicit_save", lambda _a: None)
+        monkeypatch.setattr(loop_mod, "flush_memory", lambda _a: None)
+        index = SessionIndex(tmp_path / "index")
+        btw = BtwContext(
+            spawn_queue=BtwQueue(),
+            build=lambda q: (None, []),
+            cancel_event=threading.Event(),
+            pending=[],
+        )
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            loop_mod._close_loop_session(
+                agent,
+                btw,
+                None,
+                "test-model",
+                [],
+                pool,
+                None,
+                index,
+                index.mint(),
+                stint=stint,
+            )
+        assert interp._session is None
+        assert stint._interpreter is not None
+        assert stint._interpreter._session is None

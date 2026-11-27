@@ -16,16 +16,21 @@ never policy-rule words, never ``/diff`` mode terms.
 from __future__ import annotations
 
 import functools
+import os
 import shlex
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from strands_code_agent.python_environments.base import STDERR_LABEL, STDOUT_LABEL
-from strands_code_agent.python_environments.local_sandboxed import (
-    SandboxedPythonInterpreter,
+from strands_code_cli.platform_io import (
+    atomic_write_text,
+    refuse_symlink,
+    refuse_symlink_under_roots,
 )
 from strands_code_cli.policy.scope import confine, resolve
+from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 
 CODEACT_PREFIX = """You are in CodeAct mode: solve this turn by generating Python first.
 
@@ -143,8 +148,8 @@ def codeact_label(turn_interface: str) -> str:
     return "interface: tool"
 
 
-CODEACT_AUTHORIZED_IMPORTS = frozenset({"math"})
-"""Stint import allowlist (D-10): capabilities ride narrow functions, never imports."""
+CODEACT_AUTHORIZED_IMPORTS = frozenset({"math", "json", "re"})
+"""Pure-computation Monty VM stdlib note (D-04): host FS/OS stays behind callbacks."""
 
 CODEACT_TIMEOUT_SECONDS = 60
 """Stint interpreter timeout (D-12 library default; no new setting)."""
@@ -153,81 +158,140 @@ CODEACT_SHELL_TIMEOUT_SECONDS = 60
 """Interior shell timeout, matching the interpreter bound (D-12)."""
 
 
-def codeact_read(cwd: str | Path, path: str) -> str:
-    """Read one in-scope file; missing files report, never raise.
+def _load_codeact_policy(base: Path) -> tuple[Any | None, str | None]:
+    """Load active home + repo policy fail-closed (returns error note on tamper)."""
+    from strands_code_cli.policy.core import PolicyConfig
 
-    Args:
-        cwd: The REPL working directory the stint was bound to.
-        path: Caller-supplied path (relative resolves against ``cwd``).
-
-    Returns:
-        The file text, a not-found note, or the confine refusal —
-        interior functions return error strings, never raise into
-        the executor.
-    """
     try:
-        target = confine(resolve(path, cwd), cwd)
+        return (PolicyConfig.load(repo_path=base / ".agent" / "policy.toml"), None)
     except ValueError as exc:
-        return str(exc)
+        return (None, f"Refused by policy: {exc}")
+
+
+def _prepare_codeact_path(
+    cwd: str | Path, raw_path: str, op: str
+) -> tuple[Path | None, str | None]:
+    """Confine and check Phase 19.1 symlink, sensitive, protected, and [[deny]] rules."""
+    from strands_code_cli.policy.core import (
+        Deny,
+        _is_protected_skills_or_config_path,
+        _is_sensitive_read_path,
+        decide,
+    )
+
+    base = Path(cwd)
+    policy, pol_err = _load_codeact_policy(base)
+    if pol_err is not None or policy is None:
+        return (None, pol_err or "Refused by policy")
+
+    expanded = Path(os.path.expanduser(raw_path))
+    pre_path = Path(
+        os.path.normpath(str(expanded if expanded.is_absolute() else base / expanded))
+    )
+    roots = (base, base.resolve(), Path("/tmp"))
     try:
-        return target.read_text(encoding="utf-8")
+        refuse_symlink(pre_path, f"codeact {op} target", max_ancestors=1)
+        refuse_symlink_under_roots(pre_path, roots, f"codeact {op} target")
+        target = confine(resolve(raw_path, base), base)
+        refuse_symlink_under_roots(target, roots, f"codeact {op} target")
+    except ValueError as exc:
+        return (None, str(exc))
+
+    if op in ("read", "edit") and (
+        _is_sensitive_read_path(raw_path, base)
+        or _is_sensitive_read_path(str(target), base)
+    ):
+        return (None, f"Refused {op}: sensitive path {raw_path!r}")
+    if op in ("write", "edit") and (
+        _is_protected_skills_or_config_path(raw_path, base)
+        or _is_protected_skills_or_config_path(str(target), base)
+    ):
+        return (None, f"Refused {op}: protected path {raw_path!r}")
+
+    verdict = decide(op, {"path": str(target)}, policy, cwd=base)
+    if isinstance(verdict, Deny):
+        return (None, verdict.reason)
+    return (target, None)
+
+
+def _read_regular_file_utf8(
+    target: Path, raw_path: str, op: str = "read"
+) -> tuple[str | None, str | None]:
+    """Read UTF-8 text from ``target`` with ``O_NOFOLLOW | O_NONBLOCK``."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(target, flags)
     except FileNotFoundError:
-        return f"File not found: {path}"
+        return (None, f"File not found: {raw_path}")
+    except OSError as exc:
+        return (None, f"Could not read {raw_path}: {exc}")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return (None, f"Refused {op}: {raw_path!r} is not a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return (b"".join(chunks).decode("utf-8", errors="strict"), None)
     except (OSError, UnicodeDecodeError) as exc:
-        return f"Could not read {path}: {exc}"
+        return (None, f"Could not read {raw_path}: {exc}")
+    finally:
+        os.close(fd)
+
+
+def codeact_read(cwd: str | Path, path: str) -> str:
+    """Read one in-scope regular file enforcing policy and symlink guards."""
+    target, err = _prepare_codeact_path(cwd, path, "read")
+    if err is not None or target is None:
+        return err or "Refused read"
+    text, read_err = _read_regular_file_utf8(target, path, "read")
+    if read_err is not None or text is None:
+        return read_err or f"Could not read {path}"
+    return text
 
 
 def codeact_write(cwd: str | Path, path: str, content: str) -> str:
-    """Write one in-scope file, creating parents; reports, never raises.
-
-    Args:
-        cwd: The REPL working directory the stint was bound to.
-        path: Caller-supplied path (relative resolves against ``cwd``).
-        content: Full replacement text for the file.
-
-    Returns:
-        A confirmation naming the path, or the confine refusal.
-    """
+    """Atomically write one in-scope file enforcing policy and symlink guards."""
+    target, err = _prepare_codeact_path(cwd, path, "write")
+    if err is not None or target is None:
+        return err or "Refused write"
     try:
-        target = confine(resolve(path, cwd), cwd)
-    except ValueError as exc:
-        return str(exc)
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
-    except (OSError, UnicodeEncodeError) as exc:
+        atomic_write_text(
+            target,
+            content,
+            mode=None,
+            dir_mode=None,
+            refuse_ancestors=1,
+            label="codeact write target",
+        )
+    except (ValueError, OSError, UnicodeEncodeError) as exc:
         return f"Could not write {path}: {exc}"
     return f"Wrote {target}"
 
 
 def codeact_edit(cwd: str | Path, path: str, old: str, new: str) -> str:
-    """Replace the first ``old`` with ``new`` in one in-scope file.
-
-    Args:
-        cwd: The REPL working directory the stint was bound to.
-        path: Caller-supplied path (relative resolves against ``cwd``).
-        old: The text to find (first occurrence only).
-        new: The replacement text.
-
-    Returns:
-        A confirmation, an absent-match note, a not-found note, or
-        the confine refusal — never raises into the executor.
-    """
-    try:
-        target = confine(resolve(path, cwd), cwd)
-    except ValueError as exc:
-        return str(exc)
-    try:
-        text = target.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return f"File not found: {path}"
-    except (OSError, UnicodeDecodeError) as exc:
-        return f"Could not read {path}: {exc}"
+    """Replace the first ``old`` with ``new`` in one in-scope regular file."""
+    target, err = _prepare_codeact_path(cwd, path, "edit")
+    if err is not None or target is None:
+        return err or "Refused edit"
+    text, read_err = _read_regular_file_utf8(target, path, "edit")
+    if read_err is not None or text is None:
+        return read_err or f"Could not read {path}"
     if old not in text:
         return f"No match for {old!r} in {path}"
     try:
-        target.write_text(text.replace(old, new, 1), encoding="utf-8")
-    except (OSError, UnicodeEncodeError) as exc:
+        atomic_write_text(
+            target,
+            text.replace(old, new, 1),
+            mode=None,
+            dir_mode=None,
+            refuse_ancestors=1,
+            label="codeact edit target",
+        )
+    except (ValueError, OSError, UnicodeEncodeError) as exc:
         return f"Could not write {path}: {exc}"
     return f"Edited {target}"
 
@@ -243,20 +307,21 @@ def _codeact_shell_cmd(argv: list[str] | tuple[str, ...]) -> list[str]:
 
 
 def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
-    """Run one argv command under ``cwd``; no shell, labeled output.
-
-    Args:
-        cwd: The REPL working directory the stint was bound to.
-        argv: Argument vector (a bare string is refused — argv only).
-
-    Returns:
-        Labeled stdout/stderr text with the exit code when nonzero,
-        or an error note — never raises into the executor.
-    """
+    """Run one argv command under ``cwd`` after evaluating ``[[deny]]`` rules."""
     if isinstance(argv, str) or not isinstance(argv, (list, tuple)):
         return "shell expects an argv list, e.g. shell(['ls'])"
     if not argv:
         return "shell expects a non-empty argv list"
+    from strands_code_cli.policy.core import Deny, decide
+
+    base = Path(cwd)
+    policy, pol_err = _load_codeact_policy(base)
+    if pol_err is not None or policy is None:
+        return pol_err or "Refused shell"
+    cmd_str = shlex.join([str(part) for part in argv])
+    verdict = decide("shell", {"command": cmd_str}, policy, cwd=base)
+    if isinstance(verdict, Deny):
+        return verdict.reason
     try:
         proc = subprocess.run(
             _codeact_shell_cmd(argv),
@@ -282,30 +347,24 @@ def codeact_shell(cwd: str | Path, argv: list[str]) -> str:
 
 
 class CodeactStint:
-    """One CodeAct stint: a loop-owned sandboxed interpreter (D-10/D-11).
+    """One CodeAct stint: a loop-owned Monty VM interpreter (D-10/D-11).
 
-    Lazily builds a single :class:`SandboxedPythonInterpreter` whose
-    ``additional_functions`` carry the sync scope-confined
-    ``read``/``write``/``edit``/``shell`` callables (D-09). REPL state
-    persists across code turns within the stint (D-11); the loop calls
-    :meth:`reset` on every interface switch (D-17). The stint
-    interpreter is separate from the always-on tool-turn REPL, so
-    tool turns never observe stint state.
-
-    Args:
-        cwd: The REPL working directory interior functions confine to.
+    Lazily builds a single :class:`MontyPythonInterpreter` whose
+    ``additional_functions`` carry the hardened sync host
+    ``read``/``write``/``edit``/``shell`` callables. REPL state persists
+    across code turns within the stint; the loop calls :meth:`reset` on
+    every interface switch and :meth:`close` on loop exit.
     """
 
     def __init__(self, cwd: str | Path) -> None:
         self._cwd = Path(cwd)
-        self._interpreter: SandboxedPythonInterpreter | None = None
+        self._interpreter: MontyPythonInterpreter | None = None
         self._tool: Any | None = None
 
-    def _ensure(self) -> SandboxedPythonInterpreter:
+    def _ensure(self) -> MontyPythonInterpreter:
         if self._interpreter is None:
-            self._interpreter = SandboxedPythonInterpreter(
+            self._interpreter = MontyPythonInterpreter(
                 "",
-                authorized_imports=CODEACT_AUTHORIZED_IMPORTS,
                 additional_functions={
                     "read": functools.partial(codeact_read, self._cwd),
                     "write": functools.partial(codeact_write, self._cwd),
@@ -324,6 +383,11 @@ class CodeactStint:
         """Clear stint REPL state; a never-built stint stays unbuilt."""
         if self._interpreter is not None:
             self._interpreter.clear_state()
+
+    def close(self) -> None:
+        """Release the stint's Monty VM worker session cleanly."""
+        if self._interpreter is not None:
+            self._interpreter.close()
 
     @property
     def tool(self) -> Any:

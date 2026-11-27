@@ -675,26 +675,29 @@ class TestCodeactStintLifecycle:
         _, stderr = stint.execute_code("import subprocess")
         assert "not allowed" in stderr
 
-    def test_math_import_works(self, tmp_path):
-        from strands_code_cli.policy.codeact import CodeactStint
-
-        stint = CodeactStint(cwd=tmp_path)
-        stdout, stderr = stint.execute_code("import math\nprint(math.floor(3.7))")
-        assert stderr == ""
-        assert "3" in stdout
-
-    def test_allowlist_pinned_to_math(self, tmp_path):
+    def test_math_json_re_and_denied_os_pathlib_subprocess(self, tmp_path):
         from strands_code_cli.policy.codeact import (
             CODEACT_AUTHORIZED_IMPORTS,
             CodeactStint,
         )
+        from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 
-        assert CODEACT_AUTHORIZED_IMPORTS == frozenset({"math"})
+        assert CODEACT_AUTHORIZED_IMPORTS == frozenset({"math", "json", "re"})
         stint = CodeactStint(cwd=tmp_path)
-        stint.execute_code("pass")
-        assert stint._interpreter is not None
-        assert stint._interpreter.authorized_imports == frozenset({"math"})
-        assert stint._interpreter.timeout_seconds == 60
+        stdout, stderr = stint.execute_code(
+            "import math, json, re\nprint(math.floor(3.7), json.dumps({'ok': bool(re.match('a+', 'aa'))}))"
+        )
+        assert stderr == ""
+        assert '3 {"ok": true}' in stdout
+        assert isinstance(stint._interpreter, MontyPythonInterpreter)
+        assert stint._interpreter.timeout_seconds == 60.0
+
+        for denied in ("import os", "import pathlib", "import subprocess"):
+            _, bad_err = stint.execute_code(denied)
+            assert "not allowed" in bad_err
+
+        stint.close()
+        assert stint._interpreter._session is None
 
     def test_tool_property_built_once(self, tmp_path):
         from strands_code_cli.policy.codeact import CodeactStint
@@ -865,6 +868,87 @@ class TestCodeactInteriorFunctions:
         monkeypatch.setattr(subprocess, "run", _fake_run)
         codeact_shell(tmp_path, ["git", "status"])
         assert captured[0] == ["git", "status"]
+
+    def test_phase191_symlink_fifo_sensitive_protected_and_policy_deny_floor(
+        self, tmp_path, monkeypatch
+    ):
+        import os
+
+        from strands_code_cli.policy.codeact import (
+            CodeactStint,
+            codeact_edit,
+            codeact_read,
+            codeact_shell,
+            codeact_write,
+        )
+
+        # Sensitive read floor (.env*, .ssh/*, .aws/*) even if repo has allow=*.
+        (tmp_path / ".agent").mkdir()
+        (tmp_path / ".agent" / "policy.toml").write_text(
+            '[[allow]]\ntool = "read"\npath = "*"\n', encoding="utf-8"
+        )
+        (tmp_path / ".env").write_text("SECRET=1\n", encoding="utf-8")
+        (tmp_path / ".env.local").write_text("SECRET_LOCAL=2\n", encoding="utf-8")
+        (tmp_path / ".ssh").mkdir()
+        (tmp_path / ".ssh" / "id_rsa").write_text("PRIVATE\n", encoding="utf-8")
+        (tmp_path / ".aws").mkdir()
+        (tmp_path / ".aws" / "credentials").write_text("KEY=1\n", encoding="utf-8")
+        assert "sensitive" in codeact_read(tmp_path, ".env").lower()
+        assert "sensitive" in codeact_read(tmp_path, ".env.local").lower()
+        assert "sensitive" in codeact_read(tmp_path, ".ssh/id_rsa").lower()
+        assert "sensitive" in codeact_read(tmp_path, ".aws/credentials").lower()
+        assert "sensitive" in codeact_edit(tmp_path, ".env", "SECRET", "X").lower()
+
+        # Protected paths cannot be written/edited dynamically from CodeAct.
+        (tmp_path / "STRANDS.md").write_text("base\n", encoding="utf-8")
+        assert "protected" in codeact_write(tmp_path, ".agent/policy.toml", "x").lower()
+        assert "protected" in codeact_edit(tmp_path, "STRANDS.md", "base", "x").lower()
+        assert "protected" in codeact_write(tmp_path, ".git/config", "x").lower()
+
+        # Symlink target & non-regular FIFO blocked cleanly.
+        secret_outside = tmp_path.parent / "outside_secret.txt"
+        secret_outside.write_text("OUTSIDE", encoding="utf-8")
+        try:
+            link_in = tmp_path / "sym.txt"
+            link_in.symlink_to(secret_outside)
+            assert "symlink" in codeact_read(tmp_path, "sym.txt").lower()
+            assert "symlink" in codeact_write(tmp_path, "sym.txt", "evil").lower()
+        except OSError:
+            pass
+        finally:
+            secret_outside.unlink(missing_ok=True)
+
+        fifo = tmp_path / "pipe.fifo"
+        os.mkfifo(fifo)
+        assert "regular file" in codeact_read(tmp_path, "pipe.fifo").lower()
+
+        # Active PolicyConfig [[deny]] rules block runtime read/write/edit/shell & inside VM.
+        (tmp_path / "blocked.txt").write_text("topsecret\n", encoding="utf-8")
+        (tmp_path / ".agent" / "policy.toml").write_text(
+            '[[deny]]\ntool = "read"\npath = "blocked.txt"\n'
+            '[[deny]]\ntool = "write"\npath = "locked/*.txt"\n'
+            '[[deny]]\ntool = "shell"\ncommand = "rm"\n',
+            encoding="utf-8",
+        )
+        assert "Denied by policy" in codeact_read(tmp_path, "blocked.txt")
+        assert "Denied by policy" in codeact_write(tmp_path, "locked/a.txt", "x")
+        assert "Denied by policy" in codeact_shell(tmp_path, ["rm", "-f", "x"])
+
+        stint = CodeactStint(cwd=tmp_path)
+        vm_out, vm_err = stint.execute_code("print(read('blocked.txt'))")
+        assert vm_err == ""
+        assert "Denied by policy" in vm_out
+        stint.close()
+
+        # Symlinked repo policy.toml fails closed.
+        evil_pol = tmp_path / "evil.toml"
+        evil_pol.write_text("", encoding="utf-8")
+        (tmp_path / ".agent" / "policy.toml").unlink()
+        try:
+            (tmp_path / ".agent" / "policy.toml").symlink_to(evil_pol)
+            assert "symlink" in codeact_read(tmp_path, "blocked.txt").lower()
+        except OSError:
+            pass
 
 
 class _FakeRegistry:

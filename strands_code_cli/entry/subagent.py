@@ -45,6 +45,7 @@ from strands_code_cli.model.model_switch import (
     scoped_base_url,
     supports_reasoning,
 )
+from strands_code_cli.sandbox.monty import close_agent_repls
 
 
 def _select_child_tools(
@@ -210,6 +211,16 @@ def _configure_child_agent(
         resolved_model,
         base_url=scoped_base_url(base_url, base_url_provider, target_id),
     )
+    repl_tools = [
+        t
+        for t in (child_config.get("tools") or ())
+        if getattr(t, "tool_name", None) == "python_repl"
+    ]
+    if repl_tools:
+        try:
+            child._delegate_repl_tools = repl_tools
+        except (AttributeError, TypeError):
+            pass
     register_memory_plugin(child, load_memory)
 
 
@@ -229,6 +240,8 @@ def build_cli_subagent(
         **_normalize_builtin_tools(parent_config.get("builtin_tools")),
         "subagent": False,
     }
+
+    built_children: list[Any] = []
 
     def builder(spec: AgentSpec) -> Any:
         child_config = dict(parent_config)
@@ -276,6 +289,7 @@ def build_cli_subagent(
         child_config["callback_handler"] = None
         child = create_harness(**child_config)
         _configure_child_agent(child, parent, child_config, base_url, base_url_provider)
+        built_children.append(child)
         return child
 
     builtin_names = [
@@ -294,5 +308,29 @@ def build_cli_subagent(
         max_depth=max_depth,
         context=Choice(list(_CONTEXT_MODES)),
     )
+    _wrap_subagent_cleanup(tool, built_children)
     consumer_by_name["subagent"] = tool
     return tool
+
+
+def _wrap_subagent_cleanup(tool: Any, built_children: list[Any]) -> None:
+    """Deterministically close finished child REPL sessions after stream completes."""
+    orig_stream = tool.stream
+
+    async def _closing_stream(
+        tool_use: Any, invocation_state: dict[str, Any], **kwargs: Any
+    ):
+        try:
+            async for event in orig_stream(tool_use, invocation_state, **kwargs):
+                yield event
+        finally:
+            pending_ids = {id(c) for c in getattr(tool, "_pending", {}).values()}
+            remaining: list[Any] = []
+            for child in built_children:
+                if id(child) in pending_ids:
+                    remaining.append(child)
+                else:
+                    close_agent_repls(child)
+            built_children[:] = remaining
+
+    tool.stream = _closing_stream

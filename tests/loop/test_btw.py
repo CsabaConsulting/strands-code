@@ -1554,16 +1554,15 @@ class TestBtwLiveModelBillingAndReplIsolation:
     def test_fresh_tools_for_delegate_and_build_btw_agent_isolate_python_repl(
         self, monkeypatch
     ):
-        from strands_code_agent.python_environments.local_sandboxed import (
-            SandboxedPythonInterpreter,
-        )
         from strands_code_cli.loop.btw import fresh_tools_for_delegate
+        from strands_code_cli.loop.core import _teardown_btw_agent
         from strands_code_cli.policy.policy_gate import PolicyGateHandler
+        from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 
         non_repl = [object()]
         assert fresh_tools_for_delegate(non_repl) is non_repl
 
-        parent_interp = SandboxedPythonInterpreter("", authorized_imports=set())
+        parent_interp = MontyPythonInterpreter()
         parent_repl = parent_interp.get_tool()
         other_tool = SimpleNamespace(tool_name="search")
         parent_gate = PolicyGateHandler()
@@ -1599,12 +1598,16 @@ class TestBtwLiveModelBillingAndReplIsolation:
         assert child_tools[1] is other_tool
         child_repl = child_tools[0]
         assert child_repl is not parent_repl
+        assert isinstance(child_repl._interpreter, MontyPythonInterpreter)
         parent_repl(code="x = 10")
         child_repl(code="x = 999")
         assert parent_repl(code="print(x)") == "STDOUT:\n10"
         assert child_repl(code="print(x)") == "STDOUT:\n999"
         assert parent_gate.tag_for(side_agent) == "btw"
         assert parent_gate.is_read_only(side_agent) is True
+        _teardown_btw_agent(side_agent)
+        assert child_repl._interpreter._session is None
+        parent_interp.close()
 
     def test_wave5_btw_strips_tool_use_signature_and_model_instance_guards(
         self, monkeypatch

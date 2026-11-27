@@ -12,12 +12,57 @@ from strands.models.model import Model
 from strands.tools.tools import AgentTool
 from strands_harness.tools.subagent import AgentSpec
 
-from strands_code_agent.python_environments.local_sandboxed import (
-    SandboxedPythonInterpreter,
-)
 from strands_code_cli.entry.subagent import build_cli_subagent
 from strands_code_cli.memory.memory_file import load_memory
 from strands_code_cli.policy.policy_gate import PolicyGateHandler
+
+
+def _install_subagent_doubles(monkeypatch, sub_mod):
+    captured: dict[str, Any] = {}
+    reg_calls: list[Any] = []
+    hook_calls: list[tuple[Any, ...]] = []
+
+    def fake_create_harness(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model=kwargs.get("model"))
+
+    def record_reg(agent_obj, fn):
+        reg_calls.append((agent_obj, fn))
+
+    def record_hook(kind):
+        def _cb(tid, _model, **extra):
+            entry = (
+                (kind, tid, extra["base_url"]) if "base_url" in extra else (kind, tid)
+            )
+            hook_calls.append(entry)
+
+        return _cb
+
+    monkeypatch.setattr(sub_mod, "create_harness", fake_create_harness)
+    monkeypatch.setattr(sub_mod, "register_memory_plugin", record_reg)
+    for attr, kind in (
+        ("configure_streaming_for_model", "stream"),
+        ("configure_gemini_for_model", "gemini"),
+        ("configure_openai_for_model", "openai"),
+        ("configure_base_url_for_model", "base_url"),
+    ):
+        monkeypatch.setattr(sub_mod, attr, record_hook(kind))
+    return captured, reg_calls, hook_calls
+
+
+def _assert_isolated_monty_repl(
+    parent_interp, parent_repl, child_repl, sub_mod, child, monty_cls
+):
+    assert getattr(child_repl, "tool_name", None) == "python_repl"
+    assert child_repl is not parent_repl
+    assert isinstance(child_repl._interpreter, monty_cls)
+    parent_repl(code="secret = 1")
+    child_repl(code="secret = 2")
+    assert parent_repl(code="print(secret)") == "STDOUT:\n1"
+    assert child_repl(code="print(secret)") == "STDOUT:\n2"
+    parent_interp.close()
+    sub_mod.close_agent_repls(child)
+    assert child_repl._interpreter._session is None
 
 
 class _ReplayModel(Model):
@@ -92,10 +137,11 @@ class TestCliSubagentWiring:
         self, monkeypatch
     ):
         import strands_code_cli.entry.subagent as sub_mod
+        from strands_code_cli.sandbox.monty import MontyPythonInterpreter
 
         initial_model = _ReplayModel("openai/gpt-5")
         switched_model = _ReplayModel("anthropic/claude-haiku-4-5")
-        parent_interp = SandboxedPythonInterpreter("", authorized_imports=set())
+        parent_interp = MontyPythonInterpreter()
         parent_repl = parent_interp.get_tool()
         search_tool = SimpleNamespace(tool_name="search")
         gate = PolicyGateHandler()
@@ -129,39 +175,8 @@ class TestCliSubagentWiring:
         parent._base_url = None
         parent._base_url_provider = None
 
-        captured: dict[str, Any] = {}
-        reg_calls: list[Any] = []
-        hook_calls: list[tuple[str, Any]] = []
-
-        def fake_create_harness(**kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(model=kwargs.get("model"))
-
-        monkeypatch.setattr(sub_mod, "create_harness", fake_create_harness)
-        monkeypatch.setattr(
-            sub_mod, "register_memory_plugin", lambda a, fn: reg_calls.append((a, fn))
-        )
-        monkeypatch.setattr(
-            sub_mod,
-            "configure_streaming_for_model",
-            lambda tid, m: hook_calls.append(("stream", tid)),
-        )
-        monkeypatch.setattr(
-            sub_mod,
-            "configure_gemini_for_model",
-            lambda tid, m: hook_calls.append(("gemini", tid)),
-        )
-        monkeypatch.setattr(
-            sub_mod,
-            "configure_openai_for_model",
-            lambda tid, m: hook_calls.append(("openai", tid)),
-        )
-        monkeypatch.setattr(
-            sub_mod,
-            "configure_base_url_for_model",
-            lambda tid, m, base_url=None: hook_calls.append(
-                ("base_url", tid, base_url)
-            ),
+        captured, reg_calls, hook_calls = _install_subagent_doubles(
+            monkeypatch, sub_mod
         )
 
         child = tool._builder(AgentSpec(task="inspect code"))
@@ -175,16 +190,14 @@ class TestCliSubagentWiring:
         assert captured["builtin_tools"]["subagent"] is False
 
         # Isolated REPL check.
-        child_repl = next(
-            t
-            for t in captured["tools"]
-            if getattr(t, "tool_name", None) == "python_repl"
+        _assert_isolated_monty_repl(
+            parent_interp,
+            parent_repl,
+            captured["tools"][0],
+            sub_mod,
+            child,
+            MontyPythonInterpreter,
         )
-        assert child_repl is not parent_repl
-        parent_repl(code="secret = 1")
-        child_repl(code="secret = 2")
-        assert parent_repl(code="print(secret)") == "STDOUT:\n1"
-        assert child_repl(code="print(secret)") == "STDOUT:\n2"
 
         # CLI hooks and gate posture.
         assert gate.tag_for(child) == "subagent"
@@ -510,3 +523,36 @@ class TestCliSubagentWiring:
             AgentSpec(task="meta fallback", model="meta/muse-spark-1.3-contributor")
         )
         assert captured["model"] == "meta/muse-spark-1.3-contributor"
+
+    def test_subagent_stream_cleanup_closes_completed_child_repls(self, monkeypatch):
+        import asyncio
+
+        import strands_code_cli.entry.subagent as sub_mod
+        from strands_code_cli.sandbox.monty import MontyPythonInterpreter
+
+        interp_pending = MontyPythonInterpreter()
+        interp_done = MontyPythonInterpreter()
+        interp_pending.execute_code("p = 1")
+        interp_done.execute_code("d = 2")
+        pending_child = SimpleNamespace(
+            _delegate_repl_tools=[interp_pending.get_tool()]
+        )
+        done_child = SimpleNamespace(_delegate_repl_tools=[interp_done.get_tool()])
+
+        async def _fake_stream(tool_use, invocation_state, **kwargs):
+            yield {"ok": True}
+
+        fake_tool = SimpleNamespace(
+            _pending={"tu-1": pending_child}, stream=_fake_stream
+        )
+        children = [pending_child, done_child]
+        sub_mod._wrap_subagent_cleanup(fake_tool, children)
+
+        async def _drain():
+            return [e async for e in fake_tool.stream({"toolUseId": "tu-1"}, {})]
+
+        assert asyncio.run(_drain()) == [{"ok": True}]
+        assert interp_pending._session is not None
+        assert interp_done._session is None
+        assert children == [pending_child]
+        interp_pending.close()

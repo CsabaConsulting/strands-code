@@ -31,9 +31,6 @@ from strands_harness import create_harness
 from strands_harness.memory import resolve_memory
 
 from strands_code_agent.code_agent import CODE_AGENT_INSTRUCTIONS
-from strands_code_agent.python_environments.local_sandboxed import (
-    SandboxedPythonInterpreter,
-)
 from strands_code_cli.memory.memory_file import load_memory, register_memory_plugin
 from strands_code_cli.model.model_switch import (
     SUMMARY_LABEL,
@@ -424,19 +421,19 @@ def fresh_tools_for_delegate(tools: Any) -> Any:
     When ``tools`` contains no ``python_repl`` tool, the original sequence is
     returned unchanged (preserving list identity). When ``python_repl`` is
     present, a shallow copy replaces it with a fresh
-    :class:`SandboxedPythonInterpreter` so concurrent delegates never share
-    executor state with the parent.
+    :class:`MontyPythonInterpreter` so concurrent delegates never share
+    VM session state with the parent.
     """
     if not isinstance(tools, (list, tuple)):
         return tools
     if not any(getattr(tool, "tool_name", None) == "python_repl" for tool in tools):
         return tools
+    from strands_code_cli.sandbox.monty import MontyPythonInterpreter
+
     isolated: list[Any] = []
     for tool in tools:
         if getattr(tool, "tool_name", None) == "python_repl":
-            isolated.append(
-                SandboxedPythonInterpreter("", authorized_imports=set()).get_tool()
-            )
+            isolated.append(MontyPythonInterpreter().get_tool())
         else:
             isolated.append(tool)
     return isolated
@@ -555,6 +552,16 @@ def _configure_btw_agent(
         resolved_model,
         base_url=scoped_base_url(base_url, base_url_provider, target_id),
     )
+    repl_tools = [
+        t
+        for t in (kwargs.get("tools") or ())
+        if getattr(t, "tool_name", None) == "python_repl"
+    ]
+    if repl_tools:
+        try:
+            agent._delegate_repl_tools = repl_tools
+        except (AttributeError, TypeError):
+            pass
     register_memory_plugin(agent, load_memory)
 
 
