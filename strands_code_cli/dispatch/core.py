@@ -158,7 +158,7 @@ def _dispatch_config_cmds(
 ) -> tuple[str, str | None] | None:
     """Config/policy slash commands; None when cmd is not one of them."""
     if cmd == "/diff":
-        return ("reply", _diff_message(session_id, rest, diff_mode=diff_mode))
+        return ("reply", _diff_message(session_id, rest, diff_mode=diff_mode, cwd=cwd))
     if cmd == "/search":
         return ("reply", _search_message(rest, cwd if cwd is not None else os.getcwd()))
     if cmd == "/policy":
@@ -2100,6 +2100,21 @@ def _marketplace_add_reply(rest: str) -> str:
     )
 
 
+def _parse_single_or_empty_arg(
+    raw: str, usage: str, *, required: bool = False
+) -> tuple[str, str | None]:
+    """Parse strict positional-only args (rejecting unknown ``--flag`` tokens)."""
+    try:
+        pos, _, _ = _parse_flag_args(raw)
+    except ValueError as exc:
+        return ("", sanitize_display(exc))
+    if required and len(pos) != 1:
+        return ("", usage)
+    if not required and len(pos) > 1:
+        return ("", usage)
+    return (pos[0] if pos else "", None)
+
+
 def _skills_marketplace_cmd(arg: str) -> str:
     from strands_code_cli.memory.marketplace import (
         remove_marketplace,
@@ -2113,11 +2128,19 @@ def _skills_marketplace_cmd(arg: str) -> str:
     rest = rest.strip()
     try:
         if sub == "list":
+            pos, _, _ = _parse_flag_args(rest)
+            if pos:
+                return "Usage: /skills marketplace list"
             return _marketplace_list_reply()
         if sub == "add":
             return _marketplace_add_reply(rest)
         if sub == "update":
-            updated = update_marketplace(rest or None)
+            target, err = _parse_single_or_empty_arg(
+                rest, "Usage: /skills marketplace update [name]"
+            )
+            if err is not None:
+                return err
+            updated = update_marketplace(target or None)
             if not updated:
                 return _empty_marketplaces_hint()
             return "\n".join(
@@ -2126,11 +2149,14 @@ def _skills_marketplace_cmd(arg: str) -> str:
                 for ns, items in sorted(updated.items())
             )
         if sub == "remove":
-            if not rest:
-                return "Usage: /skills marketplace remove <name>"
-            if remove_marketplace(rest):
-                return f"Removed marketplace '{rest}'."
-            return f"Unknown marketplace {rest!r}."
+            target, err = _parse_single_or_empty_arg(
+                rest, "Usage: /skills marketplace remove <name>", required=True
+            )
+            if err is not None:
+                return err
+            if remove_marketplace(target):
+                return f"Removed marketplace '{target}'."
+            return f"Unknown marketplace {target!r}."
     except ValueError as exc:
         return sanitize_display(exc)
     return "Usage: /skills marketplace [add|list|update|remove]"
@@ -2146,6 +2172,8 @@ def _skills_browse_cmd(arg: str) -> str:
         pos, _, switches = _parse_flag_args(
             arg, allowed_switches=frozenset({"--refresh"})
         )
+        if len(pos) > 1:
+            return "Usage: /skills browse [marketplace] [--refresh]"
         refresh = "--refresh" in switches
         target = pos[0] if pos else None
         if not list_marketplaces():
@@ -2189,8 +2217,11 @@ def _skills_update_cmd(
 ) -> str:
     from strands_code_cli.memory.marketplace import update_installed_skills
 
+    target, err = _parse_single_or_empty_arg(arg, "Usage: /skills update [name]")
+    if err is not None:
+        return err
     try:
-        outcome = update_installed_skills(arg or None, cwd=_skills_cwd(skills))
+        outcome = update_installed_skills(target or None, cwd=_skills_cwd(skills))
     except ValueError as exc:
         return sanitize_display(exc)
     lines: list[str] = []
@@ -2216,9 +2247,14 @@ def _skills_update_cmd(
     return "\n".join(lines)
 
 
-def _skills_sync_cmd(skills: SkillIndex | None, harness_refresh: Any) -> str:
+def _skills_sync_cmd(arg: str, skills: SkillIndex | None, harness_refresh: Any) -> str:
     from strands_code_cli.memory.marketplace import sync_installed_skills
 
+    target, err = _parse_single_or_empty_arg(arg, "Usage: /skills sync")
+    if err is not None:
+        return err
+    if target:
+        return "Usage: /skills sync"
     try:
         outcome = sync_installed_skills(cwd=_skills_cwd(skills))
     except ValueError as exc:
@@ -2238,11 +2274,14 @@ def _skills_sync_cmd(skills: SkillIndex | None, harness_refresh: Any) -> str:
     return "\n".join(lines)
 
 
-def _skills_show_cmd(name: str, skills: SkillIndex | None) -> str:
+def _skills_show_cmd(raw_name: str, skills: SkillIndex | None) -> str:
     from strands_code_cli.memory.skills import SKILLS_SOURCE
 
-    if not name:
-        return "Usage: /skills show <name>"
+    name, err = _parse_single_or_empty_arg(
+        raw_name, "Usage: /skills show <name>", required=True
+    )
+    if err is not None:
+        return err
     if skills is None:
         return f"Unknown skill {name!r}."
     entry = skills.resolve(name)
@@ -2281,12 +2320,15 @@ def _skills_show_cmd(name: str, skills: SkillIndex | None) -> str:
 
 
 def _skills_remove_cmd(
-    name: str, skills: SkillIndex | None, harness_refresh: Any
+    raw_name: str, skills: SkillIndex | None, harness_refresh: Any
 ) -> str:
     from strands_code_cli.memory.marketplace import valid_namespace, valid_skill_name
 
-    if not name:
-        return "Usage: /skills remove <name>"
+    name, err = _parse_single_or_empty_arg(
+        raw_name, "Usage: /skills remove <name>", required=True
+    )
+    if err is not None:
+        return err
     if skills is None:
         return f"Unknown skill {name!r}."
     entry = skills.resolve(name)
@@ -2339,10 +2381,15 @@ def _skills_message(
     if verb == "update":
         return _skills_update_cmd(name, skills, harness_refresh)
     if verb == "sync":
-        return _skills_sync_cmd(skills, harness_refresh)
+        return _skills_sync_cmd(name, skills, harness_refresh)
     if verb == "show":
         return _skills_show_cmd(name, skills)
     if verb == "reload":
+        target, err = _parse_single_or_empty_arg(name, "Usage: /skills reload")
+        if err is not None:
+            return err
+        if target:
+            return "Usage: /skills reload"
         if skills is None:
             return "No skills loaded (./.agent/skills missing or empty)."
         return _skills_reload(skills, harness_refresh)
@@ -2355,20 +2402,44 @@ def _diff_holder(diff_mode: DiffModeState | None) -> DiffModeState:
     return diff_mode if diff_mode is not None else DiffModeState()
 
 
+def _resolve_pending_key(
+    pending: dict[str, dict[str, Any]], target: str, cwd: str | Path | None
+) -> str:
+    """Resolve exact or cwd-relative path against ``pending`` store keys."""
+    if target in pending or not target:
+        return target
+    base = Path(cwd) if cwd is not None else Path.cwd()
+    cand = Path(target)
+    if not cand.is_absolute():
+        abs_cand = str(Path(os.path.normpath(base / cand)))
+        if abs_cand in pending:
+            return abs_cand
+        try:
+            res_cand = str((base / cand).resolve())
+            if res_cand in pending:
+                return res_cand
+        except OSError:
+            pass
+    return target
+
+
 def _render_diff_show(pending: dict[str, dict[str, Any]], target: str) -> str:
     """Render bounded sanitized unified_diff previews for /diff show [path]."""
     if not pending:
         return "No pending changes."
     if target:
         entry = pending.get(target)
+        safe_target = sanitize_display(target)
         if entry is None:
-            return f"No pending change to {target}."
+            return f"No pending change to {safe_target}."
         diff = unified_diff(
             entry.get("old_text") or "", entry.get("new_text") or "", target
         )
         preview = bounded_diff(diff, max_lines=40)
         return (
-            sanitize_multiline(preview) if preview else f"No textual diff for {target}."
+            sanitize_multiline(preview)
+            if preview
+            else f"No textual diff for {safe_target}."
         )
     blocks: list[str] = []
     for path in sorted(pending):
@@ -2380,13 +2451,16 @@ def _render_diff_show(pending: dict[str, dict[str, Any]], target: str) -> str:
         blocks.append(
             sanitize_multiline(preview)
             if preview
-            else f"{entry.get('op', 'edit')}: {path} (no diff)"
+            else f"{entry.get('op', 'edit')}: {sanitize_display(path)} (no diff)"
         )
     return "\n".join(blocks)
 
 
 def _diff_message(
-    session_id: str, rest: str, diff_mode: DiffModeState | None = None
+    session_id: str,
+    rest: str,
+    diff_mode: DiffModeState | None = None,
+    cwd: str | Path | None = None,
 ) -> str:
     """Handle /diff: status, diff preview, session-sticky mode switch, apply/discard."""
     holder = _diff_holder(diff_mode)
@@ -2395,34 +2469,41 @@ def _diff_message(
     if not rest:
         lines = [f"Diff mode: {holder.mode} ({len(pending)} pending)."]
         for path in sorted(pending):
-            lines.append(f"  {pending[path].get('op', 'edit')}: {path}")
+            lines.append(
+                f"  {pending[path].get('op', 'edit')}: {sanitize_display(path)}"
+            )
         return "\n".join(lines)
     verb, _, arg = rest.partition(" ")
     verb = verb.lower()
     if verb == "show":
-        return _render_diff_show(pending, arg.strip())
+        raw_target = arg.strip()
+        resolved = _resolve_pending_key(pending, raw_target, cwd) if raw_target else ""
+        return _render_diff_show(pending, resolved)
     if verb in DIFF_MODES:
         return holder.set(verb)
     if verb == "apply":
         if store is None:
             return "No pending-change store for this session."
-        target = arg.strip() or None
-        return asyncio.run(apply_stashed(store, target))
+        raw_target = arg.strip()
+        target = _resolve_pending_key(pending, raw_target, cwd) if raw_target else None
+        return asyncio.run(apply_stashed(store, target, cwd=cwd))
     if verb == "discard":
         if store is None:
             return "No pending-change store for this session."
-        target = arg.strip()
-        if target:
-            entry = store.pop(target)
+        raw_target = arg.strip()
+        if raw_target:
+            resolved = _resolve_pending_key(pending, raw_target, cwd)
+            entry = store.pop(resolved)
+            safe_target = sanitize_display(resolved)
             return (
-                f"Discarded pending change to {target}."
+                f"Discarded pending change to {safe_target}."
                 if entry
-                else f"No pending change to {target}."
+                else f"No pending change to {safe_target}."
             )
         count = len(pending)
         store.clear()
         return f"Discarded {count} pending change(s)."
-    return f"Unknown /diff mode {verb!r}. {_DIFF_USAGE}"
+    return f"Unknown /diff mode {sanitize_display(verb)!r}. {_DIFF_USAGE}"
 
 
 def _policy_message(rest: str, *, agent: Any = None) -> str:

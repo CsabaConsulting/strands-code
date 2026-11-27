@@ -1579,3 +1579,23 @@ class TestPhase18NyquistSkillsAndDispatch:
         )[1]
         assert "Removed skill 'gamma:unique'." in msg
         assert "Skills reload failed" in msg
+
+        # Unknown --flag tokens reject cleanly across every /skills verb (D-03).
+        for bad_cmd in (
+            "/skills sync --nope",
+            "/skills reload --nope",
+            "/skills update --nope",
+            "/skills show --nope",
+            "/skills remove --nope",
+            "/skills marketplace list --nope",
+            "/skills marketplace update --nope",
+            "/skills marketplace remove --nope",
+        ):
+            out = dispatch(bad_cmd, session_id="s1", index=s_idx, skills=idx)[1]
+            assert out == "Unknown flag --nope", bad_cmd
+        assert (
+            "Usage:"
+            in dispatch("/skills browse a b", session_id="s1", index=s_idx, skills=idx)[
+                1
+            ]
+        )

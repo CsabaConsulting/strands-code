@@ -666,3 +666,43 @@ class TestGateSubsumption:
         assert "no pending change." in _run(
             apply_stashed(store, path=str(repo / "missing.txt"), cwd=repo)
         )
+
+    def test_diff_show_apply_discard_resolve_relative_paths_and_sanitize(
+        self, tmp_path
+    ):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".agent").mkdir()
+        (repo / "notes.txt").write_text("old\n", encoding="utf-8")
+        store = PendingStore(tmp_path / "sess", session_id="rel-s1")
+        bind_session("rel-s1", store)
+        store.stash(str(repo / "notes.txt"), "old\n", "new\n", "write")
+        store.stash(str(repo / "drop.txt"), "a\n", "b\n", "write")
+        from strands_code_cli.session.session_index import SessionIndex
+
+        idx = SessionIndex(tmp_path / "idx")
+
+        show_rel = dispatch(
+            "/diff show notes.txt", session_id="rel-s1", index=idx, cwd=repo
+        )[1]
+        assert "@@" in show_rel and "+new" in show_rel
+
+        apply_rel = dispatch(
+            "/diff apply notes.txt", session_id="rel-s1", index=idx, cwd=repo
+        )[1]
+        assert "Applied" in apply_rel
+        assert (repo / "notes.txt").read_text(encoding="utf-8") == "new\n"
+
+        discard_rel = dispatch(
+            "/diff discard drop.txt", session_id="rel-s1", index=idx, cwd=repo
+        )[1]
+        assert "Discarded pending change" in discard_rel
+        assert str(repo / "drop.txt") not in store.list()
+
+        miss = dispatch(
+            "/diff show \x1b[31mevil\u202ename",
+            session_id="rel-s1",
+            index=idx,
+            cwd=repo,
+        )[1]
+        assert "\x1b" not in miss and "\u202e" not in miss
