@@ -1196,3 +1196,41 @@ class TestMemoryGapRound:
         assert "\x1b" not in acc_note and "\x07" not in acc_note
         assert acc_note == "Memory section 'Conv' updated."
         assert applied_rev == [(evil_sec, raw_block)]
+
+    def test_nyquist_memory_mode_config_errors_and_unreadable_fact(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.memory.memory_modes import MemoryModeConfig
+
+        empty_cfg = tmp_path / "empty.yaml"
+        empty_cfg.write_text("", encoding="utf-8")
+        assert MemoryModeConfig.load(empty_cfg).mode == "curate"
+
+        list_cfg = tmp_path / "list.yaml"
+        list_cfg.write_text("- item\n", encoding="utf-8")
+        assert MemoryModeConfig.load(list_cfg).mode == "curate"
+
+        bad_keys = tmp_path / "bad_keys.yaml"
+        bad_keys.write_text("mode: silent\nextra: 1\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="Unknown memory mode config keys"):
+            MemoryModeConfig.load(bad_keys)
+
+        with pytest.raises(ValueError, match="curate|silent"):
+            MemoryModeConfig(mode="bogus").save(tmp_path / "out.yaml")
+
+        fact_dir = tmp_path / ".agent" / "memory"
+        fact_dir.mkdir(parents=True)
+        (fact_dir / "bad.md").write_text("secret", encoding="utf-8")
+        (fact_dir / "good.md").write_text("Fact good.\n", encoding="utf-8")
+        orig_read = Path.read_text
+        monkeypatch.setattr(
+            Path,
+            "read_text",
+            lambda self, *a, **k: (
+                (_ for _ in ()).throw(OSError("perm denied"))
+                if self.name == "bad.md"
+                else orig_read(self, *a, **k)
+            ),
+        )
+        queued = CurateQueue().sweep_promotions(fact_dir, set())
+        assert [p.body for p in queued] == ["Fact good.\n"]

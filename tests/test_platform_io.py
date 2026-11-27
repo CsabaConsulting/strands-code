@@ -102,3 +102,35 @@ class TestPlatformIo:
         assert file_mode & stat.S_IRUSR
         assert file_mode & stat.S_IRGRP or file_mode & stat.S_IROTH
         assert dir_mode == 0o755
+
+    def test_nyquist_umask_fallback_and_roots_edge_cases(self, tmp_path, monkeypatch):
+        from strands_code_cli.platform_io import (
+            _read_process_umask,
+            refuse_symlink_under_roots,
+        )
+
+        orig_read = Path.read_text
+
+        def _missing_umask(self: Path, *args, **kwargs):
+            if self == Path("/proc/self/status"):
+                return "Name:\tpython\n"
+            return orig_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _missing_umask)
+        assert _read_process_umask() == 0o022
+
+        def _failing_proc(self: Path, *args, **kwargs):
+            if self == Path("/proc/self/status"):
+                raise OSError("procfs unavailable")
+            return orig_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", _failing_proc)
+        assert _read_process_umask() == 0o022
+
+        monkeypatch.setattr(
+            os.path,
+            "realpath",
+            lambda _p: (_ for _ in ()).throw(OSError("unresolvable")),
+        )
+        target = Path("/tmp/sc_nyquist_orphan/leaf.txt")
+        refuse_symlink_under_roots(target, (tmp_path / "other",), "orphan")

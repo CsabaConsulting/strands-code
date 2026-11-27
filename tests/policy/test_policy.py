@@ -1005,3 +1005,38 @@ class TestHardeningD02ThroughD05:
             assert not is_fetch_get(unsafe_fetch), f"must reject {unsafe_fetch!r}"
         assert is_fetch_get("git fetch origin")
         assert is_fetch_get("curl -sL https://example.com")
+
+    def test_nyquist_core_and_scope_edge_branches(self, tmp_path, monkeypatch):
+        import os
+
+        from strands_code_cli.policy.scope import effective_roots
+
+        assert is_fetch_get("curl --request=GET https://example.com")
+        assert not is_fetch_get("")
+        assert isinstance(
+            decide("read", {"path": ".env"}, PolicyConfig(), cwd=tmp_path), Prompt
+        )
+        assert isinstance(
+            decide(
+                "search",
+                {"pattern": "x", "file_glob": "foo/{}/bar"},
+                PolicyConfig(),
+                cwd=tmp_path,
+            ),
+            Allow,
+        )
+        assert isinstance(
+            decide("read", "not-a-dict", PolicyConfig(), cwd=tmp_path), Allow
+        )
+
+        cfg = PolicyConfig(
+            allow=[
+                Rule(tool="shell", command="pytest"),
+                Rule(tool="read", path=f"{tmp_path}/extra/*"),
+            ]
+        )
+        monkeypatch.setattr(
+            os.path, "realpath", lambda _p: (_ for _ in ()).throw(OSError("broken"))
+        )
+        roots = effective_roots(tmp_path, cfg, tool_name="read")
+        assert Path(tmp_path) in roots

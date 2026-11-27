@@ -433,3 +433,80 @@ class TestCliSubagentWiring:
         assert getattr(
             captured["builtin_tools"]["web_fetch"]["model"], "_strands_model_ref", None
         ) == ("openai/gpt-5")
+
+    def test_nyquist_import_error_fallback_same_vendor_signatures_and_instructions(
+        self, monkeypatch
+    ):
+        import strands_code_cli.entry.subagent as sub_mod
+
+        parent = SimpleNamespace(model=_ReplayModel("anthropic/claude-opus-4-6"))
+        captured: dict[str, Any] = {}
+        hooks: list[tuple[Any, Any]] = []
+
+        class _ChildWithSig:
+            def __init__(self, model):
+                self.model = model
+                self.messages = [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "toolUse": {
+                                    "toolUseId": "t1",
+                                    "name": "read",
+                                    "input": {},
+                                    "reasoningSignature": b"anth-sig",
+                                }
+                            }
+                        ],
+                    }
+                ]
+
+            def add_hook(self, cb, ev_cls):
+                hooks.append((cb, ev_cls))
+
+        monkeypatch.setattr(
+            sub_mod,
+            "create_harness",
+            lambda **kw: captured.update(kw) or _ChildWithSig(kw.get("model")),
+        )
+        monkeypatch.setattr(sub_mod, "register_memory_plugin", lambda _a, _l: None)
+        monkeypatch.setattr(
+            sub_mod, "configure_base_url_for_model", lambda *a, **k: None
+        )
+
+        tool = build_cli_subagent(
+            {"agent": parent},
+            {
+                "model": parent.model,
+                "tools": [],
+                "builtin_tools": {"shell": True, "read": True, "subagent": False},
+                "memory": False,
+                "session": False,
+                "callback_handler": None,
+            },
+        )
+        # Same-provider + same-vendor reasoning keeps toolUse reasoningSignature intact.
+        same_child = tool._builder(
+            AgentSpec(
+                task="inspect",
+                model=_ReplayModel("anthropic/claude-sonnet-4-6"),
+                instructions="custom child instructions",
+            )
+        )
+        assert captured["instructions"] == "custom child instructions"
+        hooks[-1][0](SimpleNamespace(agent=same_child))
+        assert same_child.messages[0]["content"][0]["toolUse"][
+            "reasoningSignature"
+        ] == (b"anth-sig")
+
+        # ImportError resolving meta/ falls back to string spec.model.
+        monkeypatch.setattr(
+            sub_mod,
+            "resolve_harness_model",
+            lambda *a, **k: (_ for _ in ()).throw(ImportError("no meta extra")),
+        )
+        tool._builder(
+            AgentSpec(task="meta fallback", model="meta/muse-spark-1.3-contributor")
+        )
+        assert captured["model"] == "meta/muse-spark-1.3-contributor"

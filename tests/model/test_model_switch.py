@@ -5267,3 +5267,30 @@ class TestMetaModelAdapter:
         wf = captured["builtin_tools"]["web_fetch"]["model"]
         assert "reasoning" not in getattr(wf, "params", {})
         assert "tools" not in getattr(wf, "params", {})
+
+    def test_nyquist_reconcile_delegate_builtin_tools_edge_branches(self, monkeypatch):
+        import strands_harness.models as hm
+
+        import strands_code_cli.model.model_switch as ms
+
+        assert ms.reconcile_delegate_builtin_tools(
+            ["read"], "anthropic/claude-sonnet-4-6"
+        ) == ["read"]
+        res = ms.reconcile_delegate_builtin_tools(
+            {"*": False, "read": True}, "meta/muse-spark-1.3-contributor"
+        )
+        assert res == {"*": False, "read": True}
+
+        monkeypatch.setattr(
+            hm,
+            "_web_search_kind",
+            lambda _m: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        assert ms._web_search_unsupported("anthropic/claude-sonnet-4-6") is False
+
+        monkeypatch.setattr(
+            ms,
+            "resolve_harness_model",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no key")),
+        )
+        assert ms._custom_web_fetch_model("meta/muse-spark-1.3-contributor") is None

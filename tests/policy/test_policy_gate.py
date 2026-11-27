@@ -1259,3 +1259,61 @@ class TestWave2HardeningInvariants:
         assert "\x1b" not in _dialog_title(
             "main\x1b[31m", poison_tool, {"path": "a\x07b"}
         )
+
+    def test_nyquist_gate_helpers_and_null_guards(self):
+        from strands_code_cli.policy.core import Deny
+        from strands_code_cli.policy.policy_gate import (
+            _derive_rule,
+            _input_signature,
+            broker_for,
+        )
+
+        sig = _input_signature("write", {"path": "a"}, Deny(reason="blocked"))
+        assert sig[:3] == ("deny", "write", "blocked")
+        assert worker_cancelled(EventLoopException(ValueError("x"))) is False
+        assert _derive_rule("shell", {"command": "  "}) is None
+        assert _derive_rule("python_repl", {"code": ""}) is None
+        assert _derive_rule("read", {"path": ""}) is None
+        assert _derive_rule("unknown_custom_tool", {"x": 1}) is None
+        assert (
+            _dialog_title("main", "shell", {"command": ""}) == "Approve? [main] shell"
+        )
+
+        with pytest.raises(ValueError, match="unknown mode"):
+            PolicyGateHandler(mode="bogus")
+
+        gate = PolicyGateHandler(policy_loader=PolicyConfig.load)
+        fake_main = _FakeAgent()
+        fake_main._policy_gate = gate
+        assert gate.broker is broker_for(fake_main)
+        gate.bind_main_agent(fake_main)
+        gate.register_agent(None, "x")
+        gate.enter_read_only(None)
+        gate.exit_read_only(None)
+        assert gate.is_delegated(None) is False
+        gate.unregister_agent(None)
+        gate.unregister_agent(fake_main)
+        assert gate.tag_for(fake_main) == "main"
+
+    def test_nyquist_gate_error_and_broker_orphan_paths(self, monkeypatch):
+        from strands_code_cli.policy.policy_gate import _ApprovalRequest
+
+        broker = ApprovalBroker()
+        orphan = _ApprovalRequest(lambda: "y")
+        with broker.pump(threading.Event()):
+            broker._queue.put(orphan)
+        assert orphan._done.is_set() and orphan.answer is None
+
+        bad_gate = PolicyGateHandler(
+            policy_loader=lambda: (_ for _ in ()).throw(RuntimeError("load err"))
+        )
+        assert bad_gate._current_policy() == PolicyConfig()
+
+        monkeypatch.setattr(
+            PolicyConfig,
+            "append_rule",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("ro fs")),
+        )
+        monkeypatch.setattr("builtins.input", lambda *a: "always")
+        res = _run(bad_gate, _event("shell", {"command": "echo hi"}, uid="ro-append"))
+        assert isinstance(res, Proceed)

@@ -67,3 +67,5 @@ class TestUiConsole:
             assert sanitize_multiline(poisoned) == expected
         assert sanitize_multiline("harmless\rSPOOFED") == "harmlessSPOOFED"
         assert sanitize_multiline("a\nb\tc") == "a\nb\tc"
+        assert sanitize_multiline("line1\nline2\nline3", max_len=8) == "line1..."
+        assert sanitize_multiline("abcdef", max_len=3) == "abc"

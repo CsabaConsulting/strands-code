@@ -674,3 +674,15 @@ class TestGateSubsumption:
         with pytest.raises(ValueError, match="Refusing symlink"):
             _run(_fs_write(str(sym_target), "clobber"))
         assert real_target.read_text(encoding="utf-8") == "orig"
+
+        # Symlinked repo policy fails closed in _validate_stashed_target; missing target reports.
+        evil_pol = repo / "evil.toml"
+        evil_pol.write_text('[[allow]]\ntool = "write"\npath = "*"\n', encoding="utf-8")
+        (repo / ".agent" / "policy.toml").unlink()
+        (repo / ".agent" / "policy.toml").symlink_to(evil_pol)
+        store.stash(str(repo / "notes.txt"), None, "blocked", "write")
+        sym_pol_res = _run(apply_stashed(store, path=str(repo / "notes.txt"), cwd=repo))
+        assert "Refusing symlink" in sym_pol_res
+        assert "no pending change." in _run(
+            apply_stashed(store, path=str(repo / "missing.txt"), cwd=repo)
+        )

@@ -1914,3 +1914,26 @@ class TestBtwTest5Hardening:
         assert "\u202e" not in out
         assert "btw failed (ValueError): bad msg" in out
         assert "> /btw hibody" in out
+
+    def test_nyquist_delegate_non_sequence_and_immutable_side_agent_attrs(
+        self, monkeypatch
+    ):
+        import strands_code_cli.loop.btw as btw_mod
+        from strands_code_cli.loop.btw import fresh_tools_for_delegate
+
+        assert fresh_tools_for_delegate("not-a-sequence") == "not-a-sequence"
+        monkeypatch.setattr(btw_mod, "create_harness", lambda **kw: object())
+        monkeypatch.setattr(btw_mod, "register_memory_plugin", lambda _a, _l: None)
+        agent_obj, _ = build_btw_agent(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "memory": False,
+                "session": False,
+                "callback_handler": object(),
+                "_base_url": "https://anth-proxy.example/v1",
+                "_base_url_provider": "anthropic",
+            },
+            [],
+            "immutable object",
+        )
+        assert type(agent_obj) is object
