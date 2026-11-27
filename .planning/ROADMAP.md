@@ -21,7 +21,7 @@
 - [x] **Phase 18: Skills Marketplaces & Lockfile Installer** — `/skills marketplace|browse|install|update|sync|remove`, `./.agent/skills-marketplaces/` + `./.agent/skills-lock.json`, dynamic `<ns>:` completion & deny-first supply-chain guards (completed 2026-11-24)
 - [x] **Phase 19: Strands Box Linux Sandbox Floor & Dogwood Policy** — `box.toml` + `policy.dw` generator, 8-provider + `--allow-github-skills` egress profiles, temporal Dogwood rule + scoped `D-05` revisit, `STRANDS_BOX=1` `codeact_shell` alignment & Ubuntu 24.04 AppArmor docs (completed 2026-11-25)
 - [ ] **Phase 19.1: Policy Gate, Persistence & Concurrency Hardening** *(INSERTED)* — Direct `PolicyGateHandler(InterventionHandler)` (`id(agent)` + per-agent `read_only_agents`), `policy/core.py` P0 bypass fixes (`is_fetch_get`, TOML escaping, `read` deny/scope, `trust_delegated`, `BatchState`, `effective_roots`, protected `.agent/`+`.git/`+`.env*`, live harness `KNOWN_TOOLS`), shared atomic `mkstemp`/`0o600`/symlink persistence helper, shared `ui/console.py`, and `CurateQueue`/`/btw`/`subagent` fixes
-- [ ] **Phase 19.2: CLI, Routing/Cost, Provider & Packaging Parity** *(INSERTED)* — Session-sticky toggles + `config.yaml` consolidation (retiring `diff.yaml`, `memory.yaml`, `/diff approve-each`, redundant aliases), `/resume`/`--session-id` prefix parity, retiring `engine.primary` + 5-engine `/route setup` + `/cost` lanes + `_route_pre_turn` fix, `bedrock-mantle/`/`base_url`/discovery + OpenAI/`bedrock-mantle` per-model effort parity (`#6522`/`#6525` forward-compat + retirement bridge), `requires-python >=3.11`, `httpx`/`ollama`/`_SDK_EXTRA_HINTS`, hermetic `conftest.py` & CI extras
+- [x] **Phase 19.2: CLI, Routing/Cost, Provider & Packaging Parity** *(INSERTED)* — Session-sticky toggles + `config.yaml` consolidation (retiring `diff.yaml`, `memory.yaml`, `/diff approve-each`, redundant aliases), `/resume`/`--session-id` prefix parity, retiring `engine.primary` + 5-engine `/route setup` + `/cost` lanes + `_route_pre_turn` fix, `bedrock-mantle/`/`base_url`/discovery + OpenAI/`bedrock-mantle` per-model effort parity (`#6522`/`#6525` forward-compat + retirement bridge), `requires-python >=3.11`, `httpx`/`ollama`/`_SDK_EXTRA_HINTS`, hermetic `conftest.py` & CI extras (completed 2026-11-27)
 - [ ] **Phase 20: Monty Python VM for `python_repl` & CodeAct** — Crash-isolated Rust Python VM (`pydantic-monty`) replacing in-process `smolagents` in `strands_code_cli`, explicit host callbacks (`read`/`write`/`edit`/`shell`), memory/timeout caps, worker teardown, `box.toml` compatibility & optional Strands Box Monty alignment
 - [ ] **Phase 21: CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)** — Isolated UX modules respecting `xenon C <= 20`, `"document"` history conversion & Python-collected read-only `/review`
 - [ ] **Phase 22: Strands Evals & Red-Team Suite** — `strands-agents-evals >=1.10` in `scripts/evals/` + `tests/evals/`, offline CI trajectory/canary invariants + `@pytest.mark.integration` `ActorSimulator` & Crescendo/GOAT/PAIR red-teaming
@@ -241,7 +241,24 @@ Plans:
   2. Legacy `engine.primary` is removed (`engine.order` sole schema); `decisions_api` + `llm` are wired into `/route setup` (auto-enabling routing) alongside an `OPENROUTER_API_KEY` skip note; `_route_pre_turn` double-record is fixed; `validate_routed_effort()` / pre-`resolve_model()` align with per-model OpenAI effort capabilities so routed switches stay safe once upstream PR `#6525` raises `ValueError` in `resolve_model()`; `/cost` preserves held/`Uncertain` spend, labels `native` estimated & `decisions_api` `cost n/a`, and reports `decisions` in `/cost refresh`
   3. `bedrock-mantle/` `_vendor_of`, `bedrock-mantle/` OpenAI `effort="off"`/`"none"` parity (out of scope in PR `#6525`), keyless `base_url` startup/switch/`web_fetch`, unified `provider_of()`, discovery `timeout=5.0`/`max_retries=0`/`_has_unsafe_model_chars` backport, and `configure_openai_for_model()` / `_is_openai_non_reasoning()` / `_target_openai_effort()` fixes (`o1-mini*`/`o1-preview*`/`gpt-4.5*`/`gpt-4-*`/`chatgpt-*`, `gpt-5.1`/`5.2`/`5.4`/`5.5` `"minimal"`/`"xhigh"`/`"none"` semantics, `-pro`/`-codex`/`gpt-oss-*`, token-boundary prefix checks, `# Upstream: strands-agents/harness-sdk#6522 (PR #6525)` auto-retire bridge) land; `requires-python = ">=3.11"` (dropping dead `tomllib = None` shims), `httpx` + `ollama` extra + `_SDK_EXTRA_HINTS`, hermetic `tests/conftest.py` env/XDG isolation, and full `.github/workflows/gates.yml` extras pass all CI gates
 
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+**Wave 1**
+
+- [x] `19.2-01-PLAN.md` — Tracer: dependency-free `model/provider_id.py`, Mantle `_vendor_of`, keyless `base_url` + discovery hardening, `requires-python >=3.11` / `httpx` / `ollama` extra / `_SDK_EXTRA_HINTS` / CI `--all-extras` & hermetic `conftest.py` (`990d7b8`)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] `19.2-02-PLAN.md` — Session-sticky toggles + consolidated `config.yaml` (`codeact`, `diff_mode`, `memory_mode`), session-scoped `PendingStore`, bounded `unified_diff` previews, explicit `--codeact`, shared `resolve_session_prefix`, pruned aliases & strict `--flag` parsing (`3f376f2`)
+
+**Wave 3** *(blocked on Wave 1 completion)*
+
+- [x] `19.2-03-PLAN.md` — Sole `engine.order` schema, 5-engine `/route setup` with active-session auto-enable, `OPENROUTER_API_KEY` skip note, `_route_pre_turn` `(model, applied)` fix, held/`Uncertain` usage preservation & `/cost` lanes / `refresh_report` parity (`fa6f94d`)
+
+**Wave 4** *(blocked on Wave 1 & Wave 3 completion)*
+
+- [x] `19.2-04-PLAN.md` — Unified per-model OpenAI + `bedrock-mantle/openai.*` effort guards (`#6522` / `PR #6525` bridge), `validate_routed_effort()` alignment & full CI/suite/Box verification (`e8a0409`)
 
 ### Phase 20: Monty Python VM for `python_repl` & CodeAct
 
@@ -306,7 +323,7 @@ Plans:
 | 18. Skills Marketplaces & Lockfile Installer | `v2.0` | 3/3 | Complete | 2026-11-24 |
 | 19. Strands Box Linux Sandbox Floor & Dogwood Policy | `v2.0` | 3/3 | Complete | 2026-11-25 |
 | 19.1. Policy Gate, Persistence & Concurrency Hardening | `v2.0` | 4/4 | Complete | 2026-11-25 |
-| 19.2. CLI, Routing/Cost, Provider & Packaging Parity | `v2.0` | 0/0 | Not started | - |
+| 19.2. CLI, Routing/Cost, Provider & Packaging Parity | `v2.0` | 4/4 | Complete | 2026-11-27 |
 | 20. Monty Python VM for `python_repl` & CodeAct | `v2.0` | 0/0 | Not started | - |
 | 21. CLI Ergonomics (`/help`, `@file` / `/file`, `/review`) | `v2.0` | 0/0 | Not started | - |
 | 22. Strands Evals & Red-Team Suite | `v2.0` | 0/0 | Not started | - |
