@@ -1,6 +1,6 @@
 """Deterministic TOML allow/deny policy store + match engine (TOOL-03, D-05..D-08).
 
-Shape mirrors :class:`strands_code_cli.policy.diff_config.DiffConfig` exactly
+Shape mirrors :class:`strands_code_cli.entry.provider_config.ProviderConfig` exactly
 (dataclass, platformdirs home, repo layer, symlink refusal fail-loud,
 atomic tmp+replace save, 0o700 home dir) but persists TOML via stdlib
 ``tomllib`` (read) plus a hand-rolled serialiser for the repo's own narrow

@@ -6,7 +6,7 @@ Session-sticky, in-memory only: new sessions default to ``act`` (D-05),
 and ``act`` exist — no general auto mode (D-08).
 
 Copy uses mode vocabulary only: never policy-rule words, never
-``/diff`` mode terms (``approve-each``/``on-demand``/``auto``).
+``/diff`` mode terms (``on-demand``/``auto``).
 """
 
 from __future__ import annotations

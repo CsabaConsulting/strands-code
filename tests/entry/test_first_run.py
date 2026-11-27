@@ -519,6 +519,22 @@ class TestFirstRunCli:
         assert "invalid --model" in plain
         assert not (tmp_path / ".agent").exists()
 
+    def test_invalid_config_yaml_exits_cleanly_at_startup(self, tmp_path, monkeypatch):
+        from strands_code_cli.entry.provider_config import default_config_path
+
+        main_module = importlib.import_module("strands_code_cli.entry.main")
+        cfg_path = default_config_path()
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path.write_text("codeact_remember: true\n", encoding="utf-8")
+
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(main_module.app, [])
+        assert result.exit_code == 2
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+        assert "Invalid config.yaml" in plain
+        assert "codeact_remember" in plain
+        assert not (tmp_path / ".agent").exists()
+
 
 # ----------------------------------------------------------------------
 # Provider choice persists across runs (D-06)

@@ -394,7 +394,11 @@ def _root(
         raise typer.BadParameter("invalid --codeact: expected tool|code|both")
     if model is not None and not model.strip():
         raise typer.BadParameter("invalid --model: must be non-empty")
-    config = ProviderConfig.load()
+    try:
+        config = ProviderConfig.load()
+    except ValueError as exc:
+        typer.echo(f"Invalid config.yaml: {exc}", err=True)
+        raise typer.Exit(2) from exc
     raw_model = model.strip() if model is not None else config.model
     effective_model = (
         normalize_model_ref(raw_model) if isinstance(raw_model, str) else raw_model
