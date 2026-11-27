@@ -95,8 +95,8 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 
 ### Pending Todos
 
-- Run `/gsd-discuss-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM).
-- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522`, plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
+- Run `/gsd-discuss-phase 19.2` (`PARITY-01`) before Phase 20 (`SANDBOX-02` Monty Python VM) — includes rolled-in OpenAI/`#6525` reasoning-effort guard fixes, `validate_routed_effort()` pre-`resolve_model()` alignment, and `bedrock-mantle/` OpenAI `effort="off"` parity.
+- Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
 
