@@ -811,10 +811,12 @@ def _catalog_entry_prices(pricing: object) -> tuple[float | None, float | None]:
 
 
 def _clean_catalog_model_id(raw: object) -> str | None:
-    """Return stripped model id when free of ANSI/control bytes, else None."""
+    """Return stripped model id free of ANSI/control/Bidi/whitespace/comma chars."""
     if not isinstance(raw, str):
         return None
-    stripped = raw.strip()
+    stripped = raw.strip(" ")
+    if not stripped or any(ch.isspace() or ch == "," for ch in stripped):
+        return None
     clean = sanitize_display(stripped)
     if not clean or clean != stripped:
         return None
@@ -2610,7 +2612,7 @@ def _picker_tty_loop(index: SessionIndex, session_dir, radio_choice) -> str | No
             [
                 (
                     e["id"],
-                    f"{sanitize_display(e.get('title', 'untitled'))} [{e['id'][:8]}]",
+                    f"{sanitize_display(e.get('title', 'untitled'))} [{sanitize_display(e['id'])[:8]}]",
                 )
                 for e in entries
             ]
@@ -2630,7 +2632,10 @@ def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) 
     target = radio_choice(
         "Delete a session",
         [
-            (e["id"], f"{sanitize_display(e.get('title', 'untitled'))} [{e['id'][:8]}]")
+            (
+                e["id"],
+                f"{sanitize_display(e.get('title', 'untitled'))} [{sanitize_display(e['id'])[:8]}]",
+            )
             for e in entries
         ]
         + [(None, "Cancel")],
@@ -2642,7 +2647,7 @@ def _picker_tty_delete(index: SessionIndex, session_dir, entries, radio_choice) 
         (e.get("title", "untitled") for e in entries if e["id"] == target), target
     )
     confirm = radio_choice(
-        f"Delete '{sanitize_display(title)}' [{target[:8]}]?",
+        f"Delete '{sanitize_display(title)}' [{sanitize_display(target)[:8]}]?",
         [(_SESSION_DELETE_CONFIRM, "Delete permanently"), (None, "Cancel")],
         default=1,
     )
@@ -2664,7 +2669,7 @@ def _picker_typed_loop(
         for pos, entry in enumerate(entries, 1):
             print_plain(
                 console,
-                f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{entry['id'][:8]}]",
+                f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{sanitize_display(entry['id'])[:8]}]",
             )
         delete_at = len(entries) + 1
         print_plain(console, f"  {delete_at}. Delete a session…")
@@ -2689,7 +2694,7 @@ def _picker_typed_delete(index, session_dir, entries, out_console) -> None:
     for pos, entry in enumerate(entries, 1):
         print_plain(
             out_console,
-            f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{entry['id'][:8]}]",
+            f"  {pos}. {sanitize_display(entry.get('title', 'untitled'))} [{sanitize_display(entry['id'])[:8]}]",
         )
     print_plain(out_console, f"  {len(entries) + 1}. Cancel")
     try:
@@ -2701,7 +2706,7 @@ def _picker_typed_delete(index, session_dir, entries, out_console) -> None:
     target = entries[choice - 1]
     print_plain(
         out_console,
-        f"Delete '{sanitize_display(target.get('title', 'untitled'))}' [{target['id'][:8]}]?",
+        f"Delete '{sanitize_display(target.get('title', 'untitled'))}' [{sanitize_display(target['id'])[:8]}]?",
     )
     print_plain(out_console, "  1. Delete permanently")
     print_plain(out_console, "  2. Cancel")

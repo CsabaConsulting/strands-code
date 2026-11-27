@@ -357,3 +357,35 @@ class TestCliConstructionContract:
         agent = _make_session_agent(session_id, tmp_path / "sessions", "probe")
         assert agent.session_id == session_id
         assert agent.agent_id == "default"
+
+    def test_validate_session_id_length_cap_and_picker_sanitizes_ids(
+        self, tmp_path, monkeypatch
+    ):
+        import io
+        import sys
+
+        from rich.console import Console
+
+        import strands_code_cli.dispatch.core as dispatch_mod
+        import strands_code_cli.entry.main as main_module
+        from strands_code_cli.session.session_index import SessionIndex
+
+        assert main_module._validate_session_id("a" * 128) == "a" * 128
+        for too_long in ("a" * 129, "a" * 300):
+            with pytest.raises(ValueError, match="session_id"):
+                main_module._validate_session_id(too_long)
+
+        idx = SessionIndex(tmp_path / "idx")
+        idx.ensure("\x1b[31mEVIL_ID\x1b[0m")
+        buf = io.StringIO()
+        monkeypatch.setattr(
+            dispatch_mod,
+            "console",
+            Console(file=buf, force_terminal=False, color_system=None),
+        )
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("typer.prompt", lambda *a, **kw: 3)
+        dispatch_mod.show_picker(idx, session_dir=None)
+        rendered = buf.getvalue()
+        assert "\x1b" not in rendered
+        assert "[EVIL_ID]" in rendered

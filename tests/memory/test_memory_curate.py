@@ -1130,3 +1130,49 @@ class TestMemoryGapRound:
         assert ".agent/sessions" in prompt
         assert "session index" in prompt
         assert "Draft ONLY these memory sections: Build." in prompt
+
+    def test_curate_and_revise_returned_notes_sanitize_ansi_while_applying_verbatim(
+        self, monkeypatch
+    ):
+        import strands_code_cli.loop.core as loop_mod
+        from strands_code_cli.memory.memory_modes import ReviseState, silent_note
+
+        q = CurateQueue()
+        evil_sec = "Conv\x1b]52;c;cHdu\x07\x1b[31m"
+        evil_src = "prom\x1b[31moted"
+        p1 = q.propose(
+            evil_sec, evil_src, "line [bold]body[/bold]", proposal_id="p\x1b[31m1"
+        )
+        applied_props: list = []
+        app_note = q.approve(p1.id, applied_props.append)
+        assert "\x1b" not in app_note and "\x07" not in app_note
+        assert "Approved p1 → Conv." == app_note
+        assert applied_props[0].section == evil_sec
+
+        p2 = q.propose(evil_sec, evil_src, "body2", proposal_id="p\x1b[31m2")
+        deny_note = q.deny(p2.id)
+        assert "\x1b" not in deny_note
+        assert "Denied p2" in deny_note
+
+        s_note = silent_note(evil_sec, evil_src)
+        assert s_note == "Memory updated (silent): Conv ← promoted"
+
+        rs = ReviseState()
+        rs.arm(evil_sec, "old", "fix")
+        no_fence = loop_mod.consume_revise_turn("plain reply", rs, lambda _s, _b: None)
+        assert "\x1b" not in no_fence and "\x07" not in no_fence
+        assert "'Conv' unchanged" in no_fence
+
+        rs.arm(evil_sec, "old", "fix")
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr("builtins.input", lambda *a: "accept")
+        applied_rev: list = []
+        raw_block = "keep \x1b[31mANSI\x1b[0m verbatim"
+        acc_note = loop_mod.consume_revise_turn(
+            f"```md\n{raw_block}\n```\nok",
+            rs,
+            lambda sec, blk: applied_rev.append((sec, blk)),
+        )
+        assert "\x1b" not in acc_note and "\x07" not in acc_note
+        assert acc_note == "Memory section 'Conv' updated."
+        assert applied_rev == [(evil_sec, raw_block)]

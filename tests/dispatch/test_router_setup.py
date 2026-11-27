@@ -576,3 +576,20 @@ class TestSetupCatalogSanitization:
         assert "\x1b" not in out
         assert "good/a ($1/1M)" in out
         assert "decide/a ($1/1M)" in out
+
+    def test_clean_catalog_model_id_rejects_spaces_commas_controls_and_bidi(self):
+        from strands_code_cli.dispatch.core import _clean_catalog_model_id
+
+        for bad in (
+            "openai/gpt-5 evil",
+            "openai/gpt-5,evil",
+            "openai/gpt-5\t",
+            "openai/gpt-5\n",
+            "openai/gpt-5\x0b",
+            "openai/gpt-5\x85",
+            "openai/gpt-5\u202eevil",
+            "openai/gpt-5\x9b31m",
+            "openai/gpt-5\x1b[>4;2m",
+        ):
+            assert _clean_catalog_model_id(bad) is None, f"expected None for {bad!r}"
+        assert _clean_catalog_model_id("  good/chat:free  ") == "good/chat:free"

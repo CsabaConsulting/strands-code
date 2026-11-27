@@ -1734,7 +1734,9 @@ def review_memory_queue(
             lines.append(queue.approve(proposal.id, apply_fn))
         elif answer == "revise":
             if on_revise is None:
-                lines.append(f"Revise for {proposal.id} noted — proposal kept pending.")
+                lines.append(
+                    f"Revise for {sanitize_display(proposal.id)} noted — proposal kept pending."
+                )
             else:
                 note = on_revise(proposal, instruction)
                 if note:
@@ -1849,10 +1851,13 @@ def consume_revise_turn(
     returns the revert note instead of raising.
     """
     section = revise_state.section
+    safe_section = sanitize_display(section)
     block, summary = _first_fence(result_text)
     if block is None:
         revise_state.disarm()
-        return f"No fenced block found — revision discarded, '{section}' unchanged."
+        return (
+            f"No fenced block found — revision discarded, '{safe_section}' unchanged."
+        )
     try:
         with output_context():
             for line in block.splitlines() or [""]:
@@ -1871,18 +1876,18 @@ def consume_revise_turn(
         raise
     except EOFError:
         revise_state.disarm()
-        return f"Reverted — '{section}' unchanged."
+        return f"Reverted — '{safe_section}' unchanged."
     if answer == "accept":
         apply_fn(section, block)
         revise_state.disarm()
-        return f"Memory section '{section}' updated."
+        return f"Memory section '{safe_section}' updated."
     if answer == "iterate" and instruction:
         revise_state.arm(section, revise_state.previous_text, instruction)
         return None
     # Revert — plus empty-instruction iterate, which fails closed
     # instead of re-arming with a broken prompt.
     revise_state.disarm()
-    return f"Reverted — '{section}' unchanged."
+    return f"Reverted — '{safe_section}' unchanged."
 
 
 def _drain_revise_rounds(

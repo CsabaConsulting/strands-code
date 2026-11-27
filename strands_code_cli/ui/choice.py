@@ -26,6 +26,7 @@ import sys
 from typing import Any, Sequence
 
 from strands_code_cli.loop.steering import stdin_guard
+from strands_code_cli.ui.console import sanitize_display
 
 CANCELLED = object()
 """Sentinel: the user pressed Ctrl-C inside the dialog (must re-raise)."""
@@ -47,7 +48,7 @@ def _choice_fragments(
     parts: list[tuple[str, str]] = []
     for pos, (_, label) in enumerate(window, start=top):
         mark = "(*)" if pos == selected else "( )"
-        parts.append(("", f" {mark} {label}"))
+        parts.append(("", f" {mark} {sanitize_display(label)}"))
         parts.append(("", "\n"))
     if parts:
         parts.pop()
@@ -135,7 +136,10 @@ def _build_app(
     )
     kwargs: dict[str, Any] = {
         "layout": Layout(
-            Frame(Window(content=control, dont_extend_height=True), title=title)
+            Frame(
+                Window(content=control, dont_extend_height=True),
+                title=sanitize_display(title),
+            )
         ),
         "full_screen": False,
         # Render straight to the real terminal: the turn's output proxy

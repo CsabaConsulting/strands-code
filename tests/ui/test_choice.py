@@ -320,3 +320,35 @@ class TestDialogGuard:
         # auto-confirm the next dialog.
         assert get_typeahead(probe) == []
         assert stdin_guard.held() is False  # released on the error path
+
+    def test_dialog_sanitizes_title_and_option_labels(self):
+        import io
+
+        from prompt_toolkit.input.defaults import create_pipe_input
+        from prompt_toolkit.output.plain_text import PlainTextOutput
+
+        frags = choice_module._choice_fragments(
+            [("v", "ok \x1b[31mred\x1b[0m\x1b]52;c;cHdu\x07\u202e")], 0
+        )
+        rendered_opts = "".join(chunk for _, chunk in frags)
+        assert rendered_opts == " (*) ok red"
+        assert "\x1b" not in rendered_opts
+        assert "\u202e" not in rendered_opts
+
+        buf = io.StringIO()
+        with create_pipe_input() as inp:
+            inp.send_text("\r")
+            app = choice_module._build_app(
+                "Pick \x1b]0;evil\x07\x1b[31mTitle",
+                [("v", "Opt \x1b[>4;2mOne\u202e")],
+                0,
+                input=inp,
+                output=PlainTextOutput(buf),
+            )
+            assert app.run() == "v"
+        rendered = buf.getvalue()
+        assert "Pick Title" in rendered
+        assert "(*) Opt One" in rendered
+        assert "\x1b" not in rendered
+        assert "\x07" not in rendered
+        assert "\u202e" not in rendered

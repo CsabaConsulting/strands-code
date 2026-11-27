@@ -27,6 +27,7 @@ import platformdirs
 import yaml
 
 from strands_code_cli.platform_io import atomic_write_text, refuse_symlink
+from strands_code_cli.ui.console import sanitize_display
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,10 @@ class MemoryModeState:
 
 def silent_note(section: str, source: str) -> str:
     """One transcript line per silent-mode applied write."""
-    return f"Memory updated (silent): {section} ← {source}"
+    return (
+        f"Memory updated (silent): {sanitize_display(section)}"
+        f" ← {sanitize_display(source)}"
+    )
 
 
 def seed_promotion_seen(memory_dir: str | Path) -> set[str]:
@@ -370,7 +374,10 @@ class CurateQueue:
         apply_fn(proposal)
         del self._pending[proposal_id]
         self._approved.add(proposal_id)
-        return f"Approved {proposal_id} → {proposal.section}."
+        return (
+            f"Approved {sanitize_display(proposal_id)}"
+            f" → {sanitize_display(proposal.section)}."
+        )
 
     def deny(self, proposal_id: str) -> str:
         """Skip one proposal; records id and content so it never re-queues.
@@ -385,7 +392,10 @@ class CurateQueue:
         self._denied_fingerprints.add(
             _proposal_fingerprint(proposal.section, proposal.body)
         )
-        return f"Denied {proposal_id} — skipped, will not re-ask this session."
+        return (
+            f"Denied {sanitize_display(proposal_id)}"
+            " — skipped, will not re-ask this session."
+        )
 
     def sweep_promotions(
         self,

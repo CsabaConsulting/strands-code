@@ -7,6 +7,7 @@ from strands_code_cli.ui.console import (
     console,
     sanitize_display,
     sanitize_line,
+    sanitize_multiline,
     stderr_console,
 )
 
@@ -47,3 +48,22 @@ class TestUiConsole:
         assert "\x07" not in cleaned
         assert "\t" not in cleaned
         assert "if ok: # keep [tag]" in cleaned
+
+    def test_sanitize_strips_ecma48_c1_dcs_apc_charset_and_bidi_controls(self):
+        cases = (
+            ("\x1b[>4;2mhello", "hello"),
+            ("\x1b[38:2:255:0:0mhello\x1b[0m", "hello"),
+            ("\x9b31mhello\x9b0m", "hello"),
+            ("\x9d0;evil-title\x9chello", "hello"),
+            ("\x1bP+q544e\x1b\\hello", "hello"),
+            ("\x1b_Ga=T,f=32\x1b\\hello", "hello"),
+            ("\x1b(0hello", "hello"),
+            ("\x1b]52;c;cHdu", ""),
+            ("safe\u202eevil\u2066x\u2069", "safeevilx"),
+        )
+        for poisoned, expected in cases:
+            assert sanitize_display(poisoned) == expected
+            assert sanitize_line(poisoned) == expected
+            assert sanitize_multiline(poisoned) == expected
+        assert sanitize_multiline("harmless\rSPOOFED") == "harmlessSPOOFED"
+        assert sanitize_multiline("a\nb\tc") == "a\nb\tc"

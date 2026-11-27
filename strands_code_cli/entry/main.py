@@ -75,6 +75,7 @@ app.add_typer(
 Bedrock_SETUP_POINTER = BEDROCK_SETUP_POINTER
 
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_MAX_SESSION_ID_LEN = 128
 
 
 def _validate_session_id(value: str) -> str:
@@ -82,12 +83,13 @@ def _validate_session_id(value: str) -> str:
 
     Raises:
         ValueError: When the id is malformed (separators, blank, dot-segments,
-            or characters outside ``[A-Za-z0-9._-]``).
+            excessive length, or characters outside ``[A-Za-z0-9._-]``).
     """
     checked = validate_identifier(value, Identifier.SESSION)
     if (
         not checked.strip()
         or checked in (".", "..")
+        or len(checked) > _MAX_SESSION_ID_LEN
         or not _SESSION_ID_RE.fullmatch(checked)
     ):
         raise ValueError(f"session_id is not a valid session identifier: {value!r}")
