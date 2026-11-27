@@ -1379,3 +1379,16 @@ class TestPhase17NyquistBranches:
             truncated=False,
         )
         assert missing_q.answers is None and missing_q.error == "invalid body"
+
+    def test_c1_and_bidi_control_chars_rejected_and_stripped(self, monkeypatch):
+        for bad in ("openai/gpt-4o\x9b31m", "openai/gpt-4o\u202e"):
+            assert transports.valid_model_id(bad) is False
+        assert transports.valid_base_url("http://127.0.0.1:11434/\x9b31m") is False
+        assert transports.valid_base_url("http://127.0.0.1:11434/\u202e") is False
+        for bad_key in ("key\x9b31m", "key\u202e"):
+            monkeypatch.setenv("OPENROUTER_API_KEY", bad_key)
+            assert transports.read_env_api_key("OPENROUTER_API_KEY") is None
+        assert (
+            transports._sanitize_uncertain_reason("bad\x9b31m\u202ereason")
+            == "bad31mreason"
+        )

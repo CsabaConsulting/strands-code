@@ -1464,6 +1464,25 @@ class TestRouteValidate:
         assert report.valid is True
         text = report.format()
         assert "engine: native model jev-1.13.0 — ok" in text
+        assert (
+            "note: unknown engine keys ignored: ['primary'] "
+            "(legacy 'primary' was retired — use engine.order)"
+        ) in text
+
+    def test_unknown_other_engine_key_emits_generic_note(self, tmp_path):
+        path = _write(
+            tmp_path / "repo.yaml",
+            "candidates: [{id: a/1}]\n"
+            "directives: d\n"
+            "engine: {bogus_key: 1, order: [native],"
+            " native_model: jev-1.13.0}\n",
+        )
+        report = validate_strategy(global_path=tmp_path / "absent.yaml", repo_path=path)
+        assert report.valid is True
+        assert (
+            "note: unknown engine keys ignored: ['bogus_key'] "
+            "(the loader warns and continues)"
+        ) in report.format()
 
     def test_empty_order_disables_routing_cleanly(self, tmp_path):
         path = _write(

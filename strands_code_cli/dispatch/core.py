@@ -1076,22 +1076,63 @@ def _setup_pick_candidates_typed(entries: list[dict[str, Any]]) -> list[str] | N
     return None
 
 
+def _setup_prompt_model_id(prompt: str, *, default: str | None = None) -> str | None:
+    """Prompt for one model id validated by ``valid_model_id`` (1 re-prompt)."""
+    from strands_code_cli.routing.core import valid_model_id
+
+    for attempt in range(2):
+        _prompt_inline(prompt)
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return default
+        if valid_model_id(typed):
+            return typed
+        if attempt == 0:
+            print_plain(
+                console,
+                "Invalid model id (whitespace or control characters) — try again.",
+            )
+            continue
+        return None
+    return None
+
+
 def _setup_typed_id_list(prompt: str) -> list[str] | None:
     """Comma-separated ids with no catalog to check against (typed fallback).
 
     Used only when the live catalog fetch fails; spelling cannot be
-    validated, so the caller warns and ``/route validate`` judges the
-    file afterwards. Empty input aborts.
+    validated against a catalog, though malformed ids (whitespace or
+    control characters) reject with one re-prompt and abort fail-closed
+    on a second bad attempt. Empty input aborts.
     """
-    _prompt_inline(f"{sanitize_display(prompt)} (empty aborts): ")
-    try:
-        typed = input().strip()
-    except (KeyboardInterrupt, EOFError):
+    from strands_code_cli.routing.core import valid_model_id
+
+    for attempt in range(2):
+        _prompt_inline(f"{sanitize_display(prompt)} (empty aborts): ")
+        try:
+            typed = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not typed:
+            return None
+        ids = list(
+            dict.fromkeys(part.strip() for part in typed.split(",") if part.strip())
+        )
+        if not ids:
+            return None
+        if all(valid_model_id(item) for item in ids):
+            return ids
+        if attempt == 0:
+            print_plain(
+                console,
+                "Invalid model id (whitespace or control characters) — try again.",
+            )
+            continue
         return None
-    if not typed:
-        return None
-    ids = list(dict.fromkeys(part.strip() for part in typed.split(",") if part.strip()))
-    return ids or None
+    return None
 
 
 def _setup_pick_decision(
@@ -1102,7 +1143,8 @@ def _setup_pick_decision(
     With a reachable catalog the choice is constrained to the offered
     entries (radio on tty, validated typed id off-tty with one
     re-prompt); without one — or when nothing usable was offered — a
-    typed id is accepted with a note. No default is ever assumed.
+    typed id validated by ``valid_model_id`` is accepted with a note. No
+    default is ever assumed.
     """
     if typed_only or not entries:
         if typed_only:
@@ -1116,12 +1158,7 @@ def _setup_pick_decision(
                 "No usable decision models in the live catalog — "
                 "enter a decision model id manually.",
             )
-        _prompt_inline("Decision model id (empty aborts): ")
-        try:
-            typed = input().strip()
-        except (KeyboardInterrupt, EOFError):
-            return None
-        return typed or None
+        return _setup_prompt_model_id("Decision model id (empty aborts): ")
     if sys.stdin.isatty():
         return _setup_ask(
             "Pick the decision model (explicit choice, no default)",
@@ -1156,16 +1193,13 @@ def _setup_pick_decision(
 def _setup_local_model() -> str | None:
     """Local decision-model tag as pulled in Ollama (empty takes nimble).
 
-    EOF and Ctrl-C abort; an empty line accepts the nimble default tag.
+    EOF, Ctrl-C, and a second invalid id abort; an empty line accepts
+    the nimble default tag.
     """
-    _prompt_inline(
-        "Local decision model tag as pulled in Ollama [nimble] (empty takes nimble): "
+    return _setup_prompt_model_id(
+        "Local decision model tag as pulled in Ollama [nimble] (empty takes nimble): ",
+        default="nimble",
     )
-    try:
-        typed = input().strip()
-    except (KeyboardInterrupt, EOFError):
-        return None
-    return typed or "nimble"
 
 
 def _setup_pick_order_tty(available: list[str]) -> list[str] | None:
@@ -1357,56 +1391,19 @@ def _setup_gather_candidates(
 
 def _setup_decisions_api_model() -> str | None:
     """Prompt for decisions_api model id (empty takes default)."""
-    from strands_code_cli.routing.core import (
-        DECISIONS_API_DEFAULT_MODEL,
-        valid_model_id,
-    )
+    from strands_code_cli.routing.core import DECISIONS_API_DEFAULT_MODEL
 
-    for attempt in range(2):
-        _prompt_inline(
-            f"Decisions API model id [{DECISIONS_API_DEFAULT_MODEL}] "
-            "(empty takes default): "
-        )
-        try:
-            typed = input().strip()
-        except (KeyboardInterrupt, EOFError):
-            return None
-        if not typed:
-            return DECISIONS_API_DEFAULT_MODEL
-        if valid_model_id(typed):
-            return typed
-        if attempt == 0:
-            print_plain(
-                console,
-                "Invalid model id (whitespace or control characters) — try again.",
-            )
-            continue
-        return None
-    return None
+    return _setup_prompt_model_id(
+        f"Decisions API model id [{DECISIONS_API_DEFAULT_MODEL}] (empty takes default): ",
+        default=DECISIONS_API_DEFAULT_MODEL,
+    )
 
 
 def _setup_llm_model() -> str | None:
     """Prompt for LLM routing model id (e.g. openai/gpt-4o-mini; empty aborts)."""
-    from strands_code_cli.routing.core import valid_model_id
-
-    for attempt in range(2):
-        _prompt_inline("LLM routing model id (e.g. openai/gpt-4o-mini, empty aborts): ")
-        try:
-            typed = input().strip()
-        except (KeyboardInterrupt, EOFError):
-            return None
-        if not typed:
-            return None
-        if valid_model_id(typed):
-            return typed
-        if attempt == 0:
-            print_plain(
-                console,
-                "Invalid model id (whitespace or control characters) — try again.",
-            )
-            continue
-        return None
-    return None
+    return _setup_prompt_model_id(
+        "LLM routing model id (e.g. openai/gpt-4o-mini, empty aborts): "
+    )
 
 
 def _setup_gather_engine_models(

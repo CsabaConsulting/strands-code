@@ -18,6 +18,7 @@ import math
 import os
 import socket
 import time
+import unicodedata
 import urllib.error
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -79,8 +80,12 @@ class EngineResult:
     uncertain: bool = False
 
 
+def _is_control_or_format_char(ch: str) -> bool:
+    return ord(ch) < 0x20 or ord(ch) == 0x7F or unicodedata.category(ch) in ("Cc", "Cf")
+
+
 def _has_unsafe_chars(value: str) -> bool:
-    return any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+    return any(ch.isspace() or _is_control_or_format_char(ch) for ch in value)
 
 
 def valid_model_id(value: object) -> bool:
@@ -94,7 +99,7 @@ def read_env_api_key(name: str) -> str | None:
     if not raw:
         return None
     cleaned = raw.strip()
-    if not cleaned or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cleaned):
+    if not cleaned or any(_is_control_or_format_char(ch) for ch in cleaned):
         return None
     return cleaned
 
@@ -107,7 +112,7 @@ def _sanitize_uncertain_reason(reason: str | None) -> str:
     """Strip control characters and bound length on untrusted Uncertain.reason."""
     if not isinstance(reason, str):
         return "uncertain"
-    cleaned = "".join(ch for ch in reason if ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    cleaned = "".join(ch for ch in reason if not _is_control_or_format_char(ch))
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         return "uncertain"

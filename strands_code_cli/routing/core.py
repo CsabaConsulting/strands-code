@@ -271,8 +271,7 @@ def _parse_candidate(entry: object, pos: int) -> RoutingCandidate | None:
     levels = entry.get("levels")
     if levels is not None:
         # YAML 1.1 folds unquoted on/off to bools: honor the intent as level
-        # strings so hand-edited strategies load as usable candidates
-        # (mirrors the _parse_engine primary fold).
+        # strings so hand-edited strategies load as usable candidates.
         levels = [
             "on" if level is True else "off" if level is False else level
             for level in levels
@@ -679,11 +678,10 @@ def _catalog_known(model_id: str, catalog: set[str]) -> bool:
 
 
 def _openrouter_catalog_lines(decision_model: str) -> tuple[bool, list[str]]:
-    """Catalog verdict lines for one decision model (both file shapes).
+    """Catalog verdict lines for one OpenRouter decision model.
 
-    Shared by the legacy primary branch and the ordered-list branch:
-    unchecked when the cached decisions catalog is unreachable,
-    known when the id matches, INVALID with a fix line otherwise.
+    Unchecked when the cached decisions catalog is unreachable, known
+    when the id matches, INVALID with a fix line otherwise.
     """
     catalog = _cached_decision_ids()
     if catalog is None:
@@ -950,6 +948,15 @@ def _validate_engine_head(
     lines: list[str],
 ) -> bool:
     """Judge the engine model ids plus the local base URL (strict)."""
+    if isinstance(raw_engine, dict):
+        unknown_eng = sorted(set(raw_engine) - _ENGINE_KEYS)
+        if unknown_eng:
+            hint = (
+                " (legacy 'primary' was retired — use engine.order)"
+                if "primary" in unknown_eng
+                else " (the loader warns and continues)"
+            )
+            lines.append(f"note: unknown engine keys ignored: {unknown_eng}{hint}")
     ok = _validate_engine_model_ids(raw_engine, lines)
     raw_base_url = (
         raw_engine.get("local_base_url") if isinstance(raw_engine, dict) else None

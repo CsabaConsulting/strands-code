@@ -641,3 +641,28 @@ class TestSetupCatalogSanitization:
         ):
             assert _clean_catalog_model_id(bad) is None, f"expected None for {bad!r}"
         assert _clean_catalog_model_id("  good/chat:free  ") == "good/chat:free"
+
+    def test_setup_manual_model_prompts_reject_unsafe_chars_with_reprompt(
+        self, monkeypatch
+    ):
+        import strands_code_cli.dispatch.core as dispatch_mod
+
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+        for bad in ("nimble bad", "id\x1b[31m", "id\x9b31m", "id\u202e"):
+            _scripted_input(monkeypatch, [bad, "nimble"])
+            assert dispatch_mod._setup_local_model() == "nimble"
+            _scripted_input(monkeypatch, [bad, bad])
+            assert dispatch_mod._setup_local_model() is None
+
+            _scripted_input(monkeypatch, [bad, "decide/ok"])
+            assert dispatch_mod._setup_pick_decision([], typed_only=True) == "decide/ok"
+            _scripted_input(monkeypatch, [bad, bad])
+            assert dispatch_mod._setup_pick_decision([], typed_only=True) is None
+
+            _scripted_input(monkeypatch, [f"{bad}, ok/one", "ok/one, ok/two"])
+            assert dispatch_mod._setup_typed_id_list("Candidates") == [
+                "ok/one",
+                "ok/two",
+            ]
+            _scripted_input(monkeypatch, [bad, bad])
+            assert dispatch_mod._setup_typed_id_list("Candidates") is None
