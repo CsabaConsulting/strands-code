@@ -195,3 +195,103 @@ class TestCollectReviewTurnDiffs:
         assert "<\\/untrusted_git_diff" in payload.prompt_text
         assert "<\\/review_focus" in payload.prompt_text
         assert "\t#" in payload.prompt_text
+
+    def test_nyquist_review_edges_unborn_head_timeouts_and_errors(
+        self, tmp_path, monkeypatch
+    ):
+        from strands_code_cli.dispatch import review
+
+        assert parse_review_args("--staged --") == ("staged", None, "")
+        assert parse_review_args("main --") == ("base", "main", "")
+        assert review._truncate_diff("abc", 10) == ("abc", False, 3)
+        clipped, was_trunc, total_b = review._truncate_diff("abcdef", 3)
+        assert was_trunc and total_b == 6 and "truncated at 3 bytes" in clipped
+
+        # Unborn HEAD repo falls back to ("working tree").
+        unborn = tmp_path / "unborn"
+        unborn.mkdir()
+        _git(unborn, "init", "-q")
+        p_unborn, r_unborn = collect_review_turn("", cwd=unborn)
+        assert p_unborn is None and r_unborn == "No changes to review (working tree)."
+
+        repo = _init_repo(tmp_path)
+        # validate_base_ref SubprocessError & empty resolved SHA
+        monkeypatch.setattr(
+            review,
+            "_run_git",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("git missing")),
+        )
+        with pytest.raises(ValueError, match="Git ref verification failed"):
+            review.validate_base_ref("main", repo)
+        p_top_err, r_top_err = collect_review_turn("", cwd=repo)
+        assert p_top_err is None and r_top_err is not None and "failed:" in r_top_err
+
+        monkeypatch.setattr(
+            review,
+            "_run_git",
+            lambda *_a, **_k: subprocess.CompletedProcess(
+                [], 0, stdout="   ", stderr=""
+            ),
+        )
+        with pytest.raises(ValueError, match="Invalid resolved commit SHA"):
+            review.validate_base_ref("main", repo)
+        monkeypatch.undo()
+
+        # _terminate_proc timeout -> kill fallback & already-exited early return
+        class _FakeProc:
+            def __init__(self, poll_val, raise_wait: bool = False) -> None:
+                self._poll = poll_val
+                self._raise_wait = raise_wait
+                self.killed = False
+                self.args = ["git"]
+                self.stdout = None
+                self.stderr = None
+
+            def poll(self):
+                return self._poll
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                if self._raise_wait:
+                    self._raise_wait = False
+                    raise subprocess.TimeoutExpired("git", timeout or 1)
+                return 0
+
+            def kill(self):
+                self.killed = True
+
+        done_proc = _FakeProc(0)
+        review._terminate_proc(done_proc)
+        stuck_proc = _FakeProc(None, raise_wait=True)
+        review._terminate_proc(stuck_proc)
+        assert stuck_proc.killed is True
+
+        # Timeout inside _run_git_bounded triggers _terminate_proc + SubprocessError handling.
+        (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+        monkeypatch.setattr(
+            review,
+            "_run_git_bounded",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired("git", 1)
+            ),
+        )
+        p_to, r_to = collect_review_turn("", cwd=repo)
+        assert p_to is None and r_to is not None and "Git diff failed" in r_to
+
+        monkeypatch.setattr(
+            review,
+            "_run_git_bounded",
+            lambda *_a, **_k: (2, "", "fatal\x1b[31m err", False),
+        )
+        p_rc, r_rc = collect_review_turn("", cwd=repo)
+        assert p_rc is None and r_rc == "Git diff failed (fatal err)."
+
+        monkeypatch.setattr(
+            review,
+            "_diff_args_for_target",
+            lambda *_a, **_k: ([], "HEAD", "Blocked target"),
+        )
+        p_ae, r_ae = collect_review_turn("", cwd=repo)
+        assert p_ae is None and r_ae == "Blocked target"

@@ -1,11 +1,12 @@
 ---
 phase: "21"
 slug: "cli-ergonomics-help-file-review"
-status: verified
-nyquist_compliant: false
+status: validated
+nyquist_compliant: true
 wave_0_complete: true
 created: "2026-11-27"
 verified: "2026-11-28"
+audited: "2026-11-28"
 ---
 
 # Phase 21 — Validation Strategy
@@ -65,4 +66,21 @@ verified: "2026-11-28"
 - [x] Wave 0 gaps explicitly mapped (`test_help.py`, `test_tool_use_guard.py`, `test_attachments.py`, `test_loop_attachments.py`, `test_review.py`, `test_loop_review.py`)
 - [x] No watch-mode flags
 - [x] Fast feedback latency (`< 30s` per targeted verification run)
-- [ ] `nyquist_compliant: true` audited post-execution
+- [x] `nyquist_compliant: true` audited post-execution
+
+## Post-Audit Nyquist Coverage (`sys.monitoring`)
+
+Audited on `2026-11-28` across the 5 Phase 21 new modules with zero runtime edits (`git diff 27e6ab8 -- strands_code_cli/ strands_code_agent/` empty, `git diff ee42ea2 -- strands_code_agent/` empty), closing remaining edge branches across [test_help.py](file:///home/csaba/repos/AWS/strands-code/tests/dispatch/test_help.py), [test_tool_use_guard.py](file:///home/csaba/repos/AWS/strands-code/tests/policy/test_tool_use_guard.py), [test_attachments.py](file:///home/csaba/repos/AWS/strands-code/tests/ui/test_attachments.py), and [test_review.py](file:///home/csaba/repos/AWS/strands-code/tests/dispatch/test_review.py):
+
+| Module | Covered / Executable Body Lines | Coverage | Remaining Gaps |
+| :--- | :---: | :---: | :--- |
+| [help.py](file:///home/csaba/repos/AWS/strands-code/strands_code_cli/dispatch/help.py) | `207 / 209` | `99.0%` | `TYPE_CHECKING` import (`L11`), empty-category guard (`L241`) |
+| [tool_use_guard.py](file:///home/csaba/repos/AWS/strands-code/strands_code_cli/policy/tool_use_guard.py) | `55 / 55` | `100.0%` | None |
+| [completer.py](file:///home/csaba/repos/AWS/strands-code/strands_code_cli/ui/completer.py) | `59 / 59` | `100.0%` | None |
+| [attachments.py](file:///home/csaba/repos/AWS/strands-code/strands_code_cli/ui/attachments.py) | `365 / 374` | `97.6%` | Defensive `ValueError`/`posix`-`""` normalization guards (`L92–93`, `L133`, `L143–144`, `L301–305`) and incremental mid-read `max_bytes` overflow (`L406`) |
+| [review.py](file:///home/csaba/repos/AWS/strands-code/strands_code_cli/dispatch/review.py) | `216 / 223` | `96.9%` | Live wall-timeout / stderr-pipe chunks / pipe-close `OSError` inside `_drain_stream_chunks` (`L127–150`, covered by direct `_terminate_proc` & mock fault-injection) |
+| **Total (5 Phase 21 modules)** | **`902 / 920`** | **`98.0%`** | Target slice `460 passed, 1 deselected` (`PYTEST_RC: 0`) |
+
+- **Post-audit full suite (`2026-11-28`):** `TERM=xterm-256color GITHUB_ACTIONS=true .venv/bin/pytest tests/ -k "not test_stub_server_systemone_decision_routes" -rs -q` → `2083 passed, 16 deselected`; loopback stub → `1 passed, 202 deselected` (`2084` total default unit tests); `tests/rig/` → `44 passed`; `uv lock --check` (`142` packages), `ruff format --check` (`147` files), `ruff check`, `xenon --max-absolute C` (`run_loop` `C 18`), `lint-imports` (`51 files, 165 deps, 1 kept / 0 broken`), and empty `git diff ee42ea2 -- strands_code_agent/` all green.
+
+**Approval:** validated (Nyquist audit complete `902/920` = `98.0%`, `2083 + 1 = 2084` default tests, `44/44` rig, all 6 CI gates green; ready for Phase 22)

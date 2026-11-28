@@ -393,3 +393,147 @@ class TestTokenResolutionAndSecurityFloor:
         assert "</ATTACHED_FILE>" not in prompt
         assert "</attached_file >" not in prompt
         assert prompt.count("<\\/attached_file") == 2
+
+    def test_nyquist_discovery_extra_roots_and_picker_edges(
+        self, tmp_path, monkeypatch
+    ):
+        import strands_code_cli.ui.choice as choice_mod
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        (repo / "sub").mkdir()
+        (repo / "sub" / "b.txt").write_text("b\n", encoding="utf-8")
+        extra = tmp_path / "extra_root"
+        extra.mkdir()
+        (extra / "ext.txt").write_text("from extra root", encoding="utf-8")
+        (repo / ".agent").mkdir()
+        (repo / ".agent" / "policy.toml").write_text(
+            f'[[allow]]\ntool = "read"\npath = "{extra}/**"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "fakehome"))
+
+        found = attachments.discover_workspace_files(cwd=repo)
+        assert "a.txt" in found and str(extra / "ext.txt") in found
+        assert len(attachments.discover_workspace_files(cwd=repo, limit=1)) == 1
+        assert len(attachments._walk_files(repo, limit=1)) == 1
+
+        monkeypatch.setattr(
+            attachments.subprocess,
+            "run",
+            lambda *_a, **_k: (_ for _ in ()).throw(OSError("git gone")),
+        )
+        assert attachments._git_ls_files(repo, 10) is None
+        monkeypatch.undo()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "fakehome"))
+
+        sym_repo = tmp_path / "sym_repo"
+        sym_repo.mkdir()
+        (sym_repo / ".agent").mkdir()
+        fake_pol = tmp_path / "other.toml"
+        fake_pol.write_text("", encoding="utf-8")
+        (sym_repo / ".agent" / "policy.toml").symlink_to(fake_pol)
+        assert attachments.discover_workspace_files(cwd=sym_repo) == []
+        p_sym, e_sym = attachments.prepare_turn_prompt(
+            "read @a.txt",
+            "read @a.txt",
+            current_model="openai/nemotron-70b",
+            cwd=sym_repo,
+        )
+        assert p_sym is None and e_sym is not None and "policy" in e_sym.lower()
+
+        ext_abs = str(extra / "ext.txt")
+        ask_ext = f"Read @{ext_abs} and @./a.txt, and @sub/../a.txt and @types/node"
+        p_ext, e_ext = attachments.prepare_turn_prompt(
+            ask_ext,
+            ask_ext,
+            current_model="openai/nemotron-70b",
+            cwd=repo,
+        )
+        assert e_ext is None and isinstance(p_ext, str)
+        assert "from extra root" in p_ext and "@types/node" in p_ext
+
+        assert attachments.pick_file_for_prompt("zzz_nope", cwd=repo)[1] is not None
+        assert (
+            attachments.pick_file_for_prompt("", cwd=tmp_path / "empty_dir")[1]
+            is not None
+        )
+        monkeypatch.setattr(
+            choice_mod, "radio_choice", lambda _t, opts, **_k: opts[0][0]
+        )
+        assert attachments.pick_file_for_prompt("subbtx", cwd=repo) == (
+            "@sub/b.txt ",
+            None,
+        )
+        many = tmp_path / "many"
+        many.mkdir()
+        for idx in range(55):
+            (many / f"file_{idx:02d}.txt").write_text("x", encoding="utf-8")
+        titles: list[str] = []
+        monkeypatch.setattr(
+            choice_mod,
+            "radio_choice",
+            lambda title, opts, **_k: (titles.append(title), opts[0][0])[1],
+        )
+        attachments.pick_file_for_prompt("", cwd=many)
+        assert titles and "showing 50 of" in titles[0]
+
+    def test_nyquist_attachment_fs_errors_and_total_cap(self, tmp_path, monkeypatch):
+        import os
+
+        repo = tmp_path / "repo_err"
+        repo.mkdir()
+        (repo / "a.txt").write_text("a\n", encoding="utf-8")
+        (repo / "sub").mkdir()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "fakehome"))
+
+        assert attachments.sanitize_document_name(Path("!!!.pdf")) == "document"
+
+        p_dir, e_dir = attachments.prepare_turn_prompt(
+            "read @sub", "read @sub", current_model="openai/nemotron-70b", cwd=repo
+        )
+        assert p_dir is None and e_dir is not None and "regular file" in e_dir
+        fifo = repo / "pipe.fifo"
+        os.mkfifo(fifo)
+        p_fifo, e_fifo = attachments.prepare_turn_prompt(
+            "read @pipe.fifo",
+            "read @pipe.fifo",
+            current_model="openai/nemotron-70b",
+            cwd=repo,
+        )
+        assert p_fifo is None and e_fifo is not None and "regular file" in e_fifo
+
+        p_open_err, e_open_err = attachments._read_bounded_bytes(
+            repo / "missing.txt", "missing.txt", 1024
+        )
+        assert (
+            p_open_err is None
+            and e_open_err is not None
+            and "Could not read" in e_open_err
+        )
+        monkeypatch.setattr(
+            attachments.os,
+            "read",
+            lambda *_a: (_ for _ in ()).throw(OSError("io fail")),
+        )
+        p_rd_err, e_rd_err = attachments._read_bounded_bytes(
+            repo / "a.txt", "a.txt", 1024
+        )
+        assert (
+            p_rd_err is None and e_rd_err is not None and "Could not read" in e_rd_err
+        )
+        monkeypatch.undo()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "fakehome"))
+
+        (repo / "big1.txt").write_text("a" * 60, encoding="utf-8")
+        (repo / "big2.txt").write_text("b" * 60, encoding="utf-8")
+        monkeypatch.setattr(attachments, "ATTACHMENT_MAX_TOTAL_BYTES", 80)
+        p_tot, e_tot = attachments.prepare_turn_prompt(
+            "read @big1.txt @big2.txt",
+            "read @big1.txt @big2.txt",
+            current_model="openai/nemotron-70b",
+            cwd=repo,
+        )
+        assert p_tot is None and e_tot is not None and "Total @file" in e_tot

@@ -154,6 +154,28 @@ class TestRejectCallerToolUseHook:
         RejectCallerToolUseHook().on_before_invocation(event)
         assert event.cancel == CALLER_TOOL_USE_ERROR
 
+    def test_contains_caller_tool_use_non_container_and_depth_limit(self):
+        assert contains_caller_tool_use("plain") is False
+        assert contains_caller_tool_use(None) is False
+        deep: dict = {"toolUse": {"name": "shell"}}
+        for _ in range(8):
+            deep = {"nested": deep}
+        assert contains_caller_tool_use([deep]) is False
+
+    def test_register_guard_on_slotted_agent_double(self):
+        class _SlottedAgent:
+            __slots__ = ("hooks",)
+
+            def __init__(self) -> None:
+                self.hooks: list = []
+
+            def add_hook(self, cb, event_type, **_kw) -> None:
+                self.hooks.append((cb, event_type))
+
+        slotted = _SlottedAgent()
+        register_reject_caller_tool_use_hook(slotted)
+        assert len(slotted.hooks) == 1
+
 
 class TestThreeSiteHookRegistration:
     def test_all_three_cli_agent_factories_register_guard_hook(

@@ -131,3 +131,27 @@ class TestHelpCommandRegistry:
         )
         assert ns_act == "reply"
         assert ns_msg is not None and "Unknown command" in ns_msg
+
+    def test_empty_skills_details_and_ambiguous_skill_help(self, tmp_path):
+        from strands_code_cli.memory.skills import SkillEntry
+
+        index = SessionIndex(tmp_path / "sessions")
+        skills = SkillIndex(skills_dir=tmp_path / ".agent" / "skills")
+        _, overview = dispatch("/help", session_id="s1", index=index, skills=skills)
+        assert overview is not None
+        assert "Loaded skills (0):" in overview
+        assert "  (none)" in overview
+
+        _, review_detail = dispatch(
+            "/help review", session_id="s1", index=index, skills=skills
+        )
+        assert review_detail is not None and "  Details:" in review_detail
+
+        skills._entries["mp1:dup"] = SkillEntry(
+            name="dup", source="mp1", namespaced="mp1:dup", description="From mp1"
+        )
+        skills._entries["mp2:dup"] = SkillEntry(
+            name="dup", source="mp2", namespaced="mp2:dup", description="From mp2"
+        )
+        _, amb_msg = dispatch("/help dup", session_id="s1", index=index, skills=skills)
+        assert amb_msg == "Ambiguous skill 'dup'; use one of: /mp1:dup, /mp2:dup"
