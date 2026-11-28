@@ -120,3 +120,14 @@ class TestHelpCommandRegistry:
         detail = help_message("local:help", skills)
         assert "shadowed by built-in" in detail
         assert "Shadowed help skill" in detail
+        assert "rename the skill to invoke it" in detail
+        assert "invoke with /local:help" not in detail
+
+        ns_act, ns_msg = dispatch(
+            "/local:help extra",
+            session_id="s1",
+            index=SessionIndex(tmp_path / "sessions"),
+            skills=skills,
+        )
+        assert ns_act == "reply"
+        assert ns_msg is not None and "Unknown command" in ns_msg

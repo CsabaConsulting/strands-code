@@ -224,7 +224,8 @@ def _format_skill_detail(entry) -> str:
         lines.append(f"  Path: {sanitize_display(entry.path)}")
     if entry.shadowed:
         lines.append(
-            f"  Note: Built-in '/{entry.name.lower()}' takes precedence; invoke with /{sanitize_display(entry.namespaced)}."
+            f"  Note: Built-in '/{sanitize_display(entry.name.lower())}' takes precedence"
+            " — rename the skill to invoke it."
         )
     return "\n".join(lines)
 
