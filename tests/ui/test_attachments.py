@@ -71,15 +71,20 @@ class TestDiscoveryAndPicker:
 
         import strands_code_cli.ui.choice as choice_mod
 
-        monkeypatch.setattr(
-            choice_mod, "radio_choice", lambda _t, opts, default=1: "notes.md"
-        )
+        captured_defaults: list[int] = []
+
+        def _pick_notes(_t, _opts, default=0):
+            captured_defaults.append(default)
+            return "notes.md"
+
+        monkeypatch.setattr(choice_mod, "radio_choice", _pick_notes)
         prefill, msg = attachments.pick_file_for_prompt("", cwd=tmp_path)
+        assert captured_defaults == [0]
         assert prefill == "@notes.md "
         assert msg is None
 
         monkeypatch.setattr(
-            choice_mod, "radio_choice", lambda _t, opts, default=1: "my report.pdf"
+            choice_mod, "radio_choice", lambda _t, opts, default=0: "my report.pdf"
         )
         prefill_q, _ = attachments.pick_file_for_prompt("report", cwd=tmp_path)
         assert prefill_q == '@"my report.pdf" '
@@ -88,12 +93,48 @@ class TestDiscoveryAndPicker:
         prefill_c, msg_c = attachments.pick_file_for_prompt("", cwd=tmp_path)
         assert prefill_c is None and "cancelled" in (msg_c or "").lower()
 
+        def _ctrl_c(*_a, **_k):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(choice_mod, "radio_choice", _ctrl_c)
+        prefill_k, msg_k = attachments.pick_file_for_prompt("", cwd=tmp_path)
+        assert prefill_k is None and "cancelled" in (msg_k or "").lower()
+
         def _nontty(*_a, **_k):
             raise RuntimeError("no tty")
 
         monkeypatch.setattr(choice_mod, "radio_choice", _nontty)
         prefill_n, msg_n = attachments.pick_file_for_prompt("", cwd=tmp_path)
         assert prefill_n is None and "TTY" in (msg_n or "")
+
+    def test_completer_supports_quoted_spaces_fuzzy_subsequence_and_skips_emails(self):
+        from prompt_toolkit.buffer import Buffer
+        from prompt_toolkit.document import Document
+
+        from strands_code_cli.ui.completer import build_completer
+
+        files = [
+            "README.md",
+            "strands_code_cli/ui/attachments.py",
+            "docs/my notes file.md",
+        ]
+        comp = build_completer(lambda: [("help", "/help")], lambda: files)
+
+        def _apply(line: str) -> list[str]:
+            doc = Document(line, len(line))
+            out: list[str] = []
+            for item in comp.get_completions(doc, None):
+                buf = Buffer(document=Document(line, len(line)))
+                buf.apply_completion(item)
+                out.append(buf.text)
+            return out
+
+        assert "check @strands_code_cli/ui/attachments.py" in _apply("check @s_c/att")
+        assert _apply('check @"my')[0] == 'check @"docs/my notes file.md"'
+        assert _apply('check @"my notes') == ['check @"docs/my notes file.md"']
+        assert _apply('check @"foo" ') == []
+        assert _apply("email@example.com") == []
+        assert _apply("/hel") == ["/help"]
 
 
 class TestTokenResolutionAndSecurityFloor:

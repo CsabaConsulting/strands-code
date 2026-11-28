@@ -17,7 +17,15 @@ from prompt_toolkit.document import Document
 WordList = list[tuple[str, str]]
 """``(bare, display)`` pairs: bare names match, display text completes."""
 
-_AT_QUERY_RE = re.compile(r'(?:^|[\s(\["\'])@([^\s"\']*)$')
+_AT_QUERY_RE = re.compile(r'(?:^|[\s(\[\'"])@(?:"([^"\r\n]*)|([^\s"\']*))$')
+
+
+def _is_subsequence(needle: str, haystack: str) -> bool:
+    pos = 0
+    for ch in haystack:
+        if pos < len(needle) and ch == needle[pos]:
+            pos += 1
+    return pos == len(needle)
 
 
 class SlashCompleter(Completer):
@@ -67,11 +75,16 @@ class AtFileCompleter(Completer):
         match = _AT_QUERY_RE.search(before)
         if match is None:
             return
-        query = match.group(1)
+        quoted, bare = match.group(1), match.group(2)
+        if quoted is not None:
+            query = quoted
+            start_pos = -(len(quoted) + 2)
+        else:
+            query = bare or ""
+            start_pos = -(len(query) + 1)
         lowered_q = query.lower()
-        start_pos = -(len(query) + 1)
         for path in self._get_files():
-            if lowered_q and lowered_q not in path.lower():
+            if lowered_q and not _is_subsequence(lowered_q, path.lower()):
                 continue
             display = f'@"{path}"' if any(c.isspace() for c in path) else f"@{path}"
             yield Completion(display, start_position=start_pos)

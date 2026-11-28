@@ -228,12 +228,14 @@ def pick_file_for_prompt(
     if len(matches) > len(shown):
         title = f"Attach workspace file (showing {len(shown)} of {len(matches)})"
     try:
-        picked = radio_choice(title, options, default=1)
+        picked = radio_choice(title, options, default=0)
     except RuntimeError:
         return (
             None,
             "Interactive TTY required for /file picker; reference files inline with @<path>.",
         )
+    except KeyboardInterrupt:
+        return (None, "File picker cancelled.")
     if picked is None:
         return (None, "File picker cancelled.")
     return (format_at_reference(picked), None)
