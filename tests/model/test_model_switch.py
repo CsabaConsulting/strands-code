@@ -5741,3 +5741,34 @@ class TestDocumentBlockSwitching:
         placeholder = converted[0]["content"][1]["text"]
         assert placeholder == "[document: arch-spec  v2/pdf, 13 bytes]"
         assert canonical_prefix_hash(converted) == canonical_prefix_hash(hist)
+
+    def test_malformed_and_punctuated_media_placeholders_preserve_prefix_hash(self):
+        from strands_code_cli.model.model_switch import (
+            _MEDIA_PLACEHOLDER_RE,
+            canonical_prefix_hash,
+            convert_history,
+        )
+
+        hist = [
+            {
+                "role": "user",
+                "content": [
+                    {"text": "edge payloads"},
+                    {"document": None},
+                    {"document": {"format": "pdf,v2]", "name": "a,b]", "source": None}},
+                    {"document": {"format": "pdf", "name": "x", "source": "bad"}},
+                    {"image": None},
+                    {"image": {"format": "png,hd]", "source": None}},
+                    {"video": {"format": "mp4]", "source": {"bytes": None}}},
+                ],
+            }
+        ]
+        converted = convert_history(
+            hist, "bedrock/us.anthropic.claude-sonnet-4-6", "bedrock/deepseek.r1-v1:0"
+        )
+        blocks = converted[0]["content"]
+        assert len(blocks) == len(hist[0]["content"])
+        for block in blocks[1:]:
+            txt = block["text"]
+            assert _MEDIA_PLACEHOLDER_RE.fullmatch(txt) is not None
+        assert canonical_prefix_hash(converted) == canonical_prefix_hash(hist)

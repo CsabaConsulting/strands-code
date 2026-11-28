@@ -395,22 +395,29 @@ def _migrate_trace_block(block: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _safe_placeholder_token(raw: Any, default: str) -> str:
+    text = str(raw if raw is not None else default)
+    return text.replace(",", " ").replace("]", "").strip() or default
+
+
 def _media_placeholder_block(block: dict[str, Any]) -> dict[str, Any]:
     """Placeholder text for an image/video/document block on a media-less target."""
-    if "document" in block:
-        payload = block.get("document") or {}
-        raw_name = str(payload.get("name", "document"))
-        safe_name = raw_name.replace(",", " ").replace("]", "").strip() or "document"
-        doc_format = payload.get("format", "unknown")
-        data = payload.get("source", {}).get("bytes", b"")
-        size = len(data) if data else 0
-        return {"text": f"[document: {safe_name}/{doc_format}, {size} bytes]"}
-    kind = "image" if "image" in block else "video"
-    payload = block.get(kind, {})
-    media_format = payload.get("format", "unknown")
-    data = payload.get("source", {}).get("bytes", b"")
-    size = len(data) if data else 0
-    return {"text": f"[{kind}: {media_format}, {size} bytes]"}
+    kind = (
+        "document"
+        if "document" in block
+        else ("image" if "image" in block else "video")
+    )
+    raw_payload = block.get(kind)
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_source = payload.get("source")
+    source = raw_source if isinstance(raw_source, dict) else {}
+    data = source.get("bytes")
+    size = len(data) if isinstance(data, (bytes, bytearray)) else 0
+    fmt = _safe_placeholder_token(payload.get("format"), "unknown")
+    if kind == "document":
+        name = _safe_placeholder_token(payload.get("name"), "document")
+        return {"text": f"[document: {name}/{fmt}, {size} bytes]"}
+    return {"text": f"[{kind}: {fmt}, {size} bytes]"}
 
 
 def _convert_summary_block(block: dict[str, Any], new_id: str) -> dict[str, Any] | None:
