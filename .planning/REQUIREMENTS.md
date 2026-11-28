@@ -38,9 +38,9 @@
 
 ### Interaction & Review
 
-- [ ] **LOOP-06**: Explicit `/help` command (`dispatch/help.py`) registered in `BUILTIN_SLASH_HEADS` sharing a single declarative command table with `USAGE_HINT` and listing loaded skills + shadow warnings via `print_plain`
-- [ ] **TOOL-05**: `@file` inline fuzzy attachment picker and `/file` TTY picker (`ui/attachments.py`) confined to gitignore-aware `effective_roots`, only resolving real existing files (never `@dataclass` / `@pytest.mark` code tokens), attaching images and binary docs (`ImageContent`/`DocumentContent`) when `supports_media(current_model)` holds post-routing via strictly allowlisted content-block construction (`text`/`image`/`document` only, never caller-supplied `"toolUse"` blocks; CVE-2026-18830 guard), and extending `model_switch.py` to convert `"document"` blocks across switches
-- [ ] **REVIEW-01**: Read-only `/review` command (`dispatch/review.py`) pre-collecting uncommitted (`git diff HEAD`), `--staged`, or `<base-ref>` diffs in Python inside an untrusted-diff boundary and running under a turn-scoped read-only Plan gate (`turn_interface = "tool"`) without mutating sticky `ModeState`
+- [x] **LOOP-06**: Explicit `/help` command (`dispatch/help.py`) registered in `BUILTIN_SLASH_HEADS` sharing a single declarative command table with `USAGE_HINT` and listing loaded skills + shadow warnings via `print_plain`
+- [x] **TOOL-05**: `@file` inline fuzzy attachment picker and `/file` TTY picker (`ui/attachments.py`) confined to gitignore-aware `effective_roots`, only resolving real existing files (never `@dataclass` / `@pytest.mark` code tokens), attaching images and binary docs (`ImageContent`/`DocumentContent`) when `supports_media(current_model)` holds post-routing via strictly allowlisted content-block construction (`text`/`image`/`document` only, never caller-supplied `"toolUse"` blocks; CVE-2026-18830 guard), and extending `model_switch.py` to convert `"document"` blocks across switches
+- [x] **REVIEW-01**: Read-only `/review` command (`dispatch/review.py`) pre-collecting uncommitted (`git diff HEAD`), `--staged`, or `<base-ref>` diffs in Python inside an untrusted-diff boundary and running under a turn-scoped read-only Plan gate (`turn_interface = "tool"`) without mutating sticky `ModeState`
 
 ### Evaluation & Red-Teaming
 
@@ -88,9 +88,9 @@
 | HARDEN-01 | Phase 19.1 | Pending |
 | PARITY-01 | Phase 19.2 | Complete |
 | SANDBOX-02 | Phase 20 | Complete |
-| LOOP-06 | Phase 21 | Pending |
-| TOOL-05 | Phase 21 | Pending |
-| REVIEW-01 | Phase 21 | Pending |
+| LOOP-06 | Phase 21 | Complete |
+| TOOL-05 | Phase 21 | Complete |
+| REVIEW-01 | Phase 21 | Complete |
 | EVAL-01 | Phase 22 | Pending |
 | STRUCT-02 | Phase 23 | Pending |
 | CLEANUP-02 | Phase 23 | Pending |
