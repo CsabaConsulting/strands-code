@@ -10,21 +10,24 @@ ALLOWLISTED_CONTENT_KEYS = frozenset({"text", "image", "document"})
 CALLER_TOOL_USE_ERROR = "Rejected caller-supplied toolUse block (CVE-2026-18830 guard)."
 
 
-def contains_caller_tool_use(messages: Any) -> bool:
-    """True when any incoming message or content block carries a ``toolUse`` entry."""
-    if not isinstance(messages, (list, tuple)):
+def contains_caller_tool_use(messages: Any, *, _depth: int = 0) -> bool:
+    """True when any incoming message or nested content block carries a ``toolUse`` entry."""
+    if _depth > 6:
         return False
-    for message in messages:
-        if isinstance(message, dict) and "toolUse" in message:
+    if isinstance(messages, dict):
+        if "toolUse" in messages:
             return True
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, (list, tuple)):
-            continue
-        for block in content:
-            if isinstance(block, dict) and "toolUse" in block:
-                return True
+        return any(
+            contains_caller_tool_use(val, _depth=_depth + 1)
+            for val in messages.values()
+            if isinstance(val, (dict, list, tuple))
+        )
+    if isinstance(messages, (list, tuple)):
+        return any(
+            contains_caller_tool_use(item, _depth=_depth + 1)
+            for item in messages
+            if isinstance(item, (dict, list, tuple))
+        )
     return False
 
 
@@ -33,7 +36,8 @@ def validate_content_blocks(blocks: Any) -> list[dict[str, Any]]:
 
     Raises:
         ValueError: When ``blocks`` is not a list/tuple, contains non-dicts,
-            contains ``toolUse``, or uses any key outside ``ALLOWLISTED_CONTENT_KEYS``.
+            contains ``toolUse``, uses any key outside ``ALLOWLISTED_CONTENT_KEYS``,
+            or specifies more than one ContentBlock tag key in a single dict.
     """
     if not isinstance(blocks, (list, tuple)):
         raise ValueError("Content blocks must be a list of dicts.")
@@ -48,6 +52,10 @@ def validate_content_blocks(blocks: Any) -> list[dict[str, Any]]:
             bad = sorted(keys - ALLOWLISTED_CONTENT_KEYS)
             raise ValueError(
                 f"Disallowed ContentBlock keys at index {idx}: {bad or ['<empty>']}"
+            )
+        if len(keys) != 1:
+            raise ValueError(
+                f"ContentBlock at index {idx} must have exactly one key, got {sorted(keys)}"
             )
         validated.append(block)
     return validated

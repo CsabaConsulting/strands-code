@@ -69,6 +69,7 @@ class TestValidateContentBlocks:
             ],
             [{"text": "ok"}, {"toolResult": {"toolUseId": "t1", "content": []}}],
             [{"injected": {"text": "x"}}],
+            [{"text": "hi", "image": {"format": "png", "source": {"bytes": b"x"}}}],
         ],
     )
     def test_rejects_tool_use_and_unlisted_shapes(self, bad):
@@ -86,6 +87,21 @@ class TestValidateContentBlocks:
                     "content": [
                         {"text": "hi"},
                         {"toolUse": {"toolUseId": "1", "name": "shell", "input": {}}},
+                    ],
+                }
+            ]
+        )
+        assert contains_caller_tool_use(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "toolResult": {
+                                "toolUseId": "1",
+                                "content": [{"toolUse": {"name": "shell"}}],
+                            }
+                        }
                     ],
                 }
             ]

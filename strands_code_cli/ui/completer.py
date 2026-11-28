@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Iterable
 
 from prompt_toolkit.completion import (
@@ -84,6 +85,10 @@ class AtFileCompleter(Completer):
             start_pos = -(len(query) + 1)
         lowered_q = query.lower()
         for path in self._get_files():
+            if '"' in path or any(
+                unicodedata.category(ch) in ("Cc", "Cf") for ch in path
+            ):
+                continue
             if lowered_q and not _is_subsequence(lowered_q, path.lower()):
                 continue
             display = f'@"{path}"' if any(c.isspace() for c in path) else f"@{path}"

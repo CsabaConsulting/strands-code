@@ -6,6 +6,7 @@ import os
 import re
 import stat
 import subprocess
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +51,14 @@ _SKIP_WALK_DIRS = frozenset(
     {".git", ".venv", "__pycache__", "node_modules", ".pytest_cache", ".ruff_cache"}
 )
 _AT_TOKEN_RE = re.compile(r'(?<![\w/\\])@(?:(?:"([^"\r\n]+)")|([^\s"\'`]+))')
+_ATTACHED_CLOSE_RE = re.compile(r"</\s*attached_file\b", re.IGNORECASE)
 _DOC_NAME_UNSAFE_RE = re.compile(r"[^A-Za-z0-9 \-()\[\]]+")
 _TRAILING_PUNCT = ",.;:!?)]}"
+
+
+def _has_unsafe_filename_chars(name: str) -> bool:
+    """True when filename contains quotes or control/format chars (Cc/Cf)."""
+    return '"' in name or any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name)
 
 
 def _load_read_policy(real_base: Path) -> tuple[PolicyConfig | None, str | None]:
@@ -70,11 +77,18 @@ def _is_candidate_safe(
     policy: PolicyConfig,
 ) -> bool:
     """Return True if candidate is a non-symlink regular file allowed under policy."""
-    if candidate.is_symlink():
+    if _has_unsafe_filename_chars(str(candidate)) or candidate.is_symlink():
         return False
+    roots = (real_base, *extra_roots)
     try:
+        rel_cand = (
+            candidate.relative_to(real_base)
+            if real_base in candidate.parents
+            else candidate
+        )
+        _refuse_token_symlinks(rel_cand, real_base, roots)
         resolved = confine(candidate, real_base, extra_roots=extra_roots)
-        refuse_symlink_under_roots(resolved, (real_base, *extra_roots), "attachment")
+        refuse_symlink_under_roots(resolved, roots, "attachment")
     except ValueError:
         return False
     if _is_sensitive_read_path(str(candidate), real_base) or _is_sensitive_read_path(
@@ -437,7 +451,7 @@ def _classify_attachment(
             f"Unsupported binary file @{label}; supported binary attachments are images ({', '.join(sorted(IMAGE_EXT_FORMATS))}) and docs ({', '.join(sorted(BINARY_DOC_EXT_FORMATS))}).",
         )
     safe_path = sanitize_display(label).replace('"', "'")
-    safe_body = text.replace("</attached_file>", "<\\/attached_file>")
+    safe_body = _ATTACHED_CLOSE_RE.sub(r"<\/attached_file", text)
     return (
         f'<attached_file path="{safe_path}">\n{safe_body}\n</attached_file>',
         None,
