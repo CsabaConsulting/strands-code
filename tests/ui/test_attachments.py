@@ -325,3 +325,13 @@ class TestTokenResolutionAndSecurityFloor:
         )
         assert err is None
         assert prompt == "<untrusted_git_diff>@secret.txt</untrusted_git_diff>"
+
+    def test_refuses_embedded_nul_byte_in_at_token(self, tmp_path):
+        prompt, err = attachments.prepare_turn_prompt(
+            "Read @ok\x00.txt",
+            "Read @ok\x00.txt",
+            current_model="anthropic/claude-sonnet-5-5",
+            cwd=tmp_path,
+        )
+        assert prompt is None
+        assert err is not None and "NUL" in err

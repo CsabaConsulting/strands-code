@@ -299,7 +299,11 @@ def _token_looks_explicit_path_or_secret(raw_token: str, real_base: Path) -> boo
 
 def _trim_sentence_punct(raw_token: str, real_base: Path) -> str:
     """Trim trailing sentence punctuation only if literal doesn't exist and trimmed does."""
-    if raw_token.startswith("~") or (real_base / raw_token).exists():
+    if (
+        "\x00" in raw_token
+        or raw_token.startswith("~")
+        or (real_base / raw_token).exists()
+    ):
         return raw_token
     trimmed = raw_token.rstrip(_TRAILING_PUNCT)
     if trimmed and trimmed != raw_token and (real_base / trimmed).exists():
@@ -320,6 +324,8 @@ def _resolve_attachment_target(
     Returns `(None, None)` when the token is clearly a non-file code/mention token
     (e.g. `@dataclass`, `@pytest.mark`) that does not exist anywhere on disk.
     """
+    if "\x00" in raw_token:
+        return (None, "Refused @file attachment: invalid NUL byte in path.")
     token = _trim_sentence_punct(raw_token, real_base)
     expanded = Path(os.path.expanduser(token))
     un_symlinked_cand = expanded if expanded.is_absolute() else (real_base / expanded)
