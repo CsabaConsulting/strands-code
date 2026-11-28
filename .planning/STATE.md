@@ -5,11 +5,11 @@ current_phase: "21"
 current_phase_name: CLI Ergonomics (/help, @file / /file, /review)
 current_plan: 3
 status: verified
-stopped_at: Phase 21 UAT complete (21-UAT.md 6/6 passed on d10c6fd) — ready for /gsd-secure-phase 21
-last_updated: "2026-11-28T00:52:52Z"
+stopped_at: Phase 21 security audit complete (21-SECURITY.md 14/14 closed, threats_open 0 on b5bd321) — ready for /gsd-validate-phase 21
+last_updated: "2026-11-28T01:00:00Z"
 last_activity: 2026-11-28
-last_activity_desc: Completed /gsd-verify-work 21 (21-UAT.md 6/6 passed; mid-UAT fixes fb8ab32..d10c6fd; 2073 + 1 = 2074 tests)
-state_head: d10c6fd
+last_activity_desc: Completed /gsd-secure-phase 21 (21-SECURITY.md 14/14 closed, b5bd321; 2077 + 1 = 2078 tests)
+state_head: b5bd321
 progress:
   total_phases: 13
   completed_phases: 11
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-11-25)
 
 **Core value:** A single ask — spec it, build it, test it, open the PR — completes end to end without the user leaving the conversation.
-**Current focus:** Milestone `v2.0` · Phase 21 UAT Complete (`21-UAT.md` `6/6` passed on `d10c6fd`) — ready for `/gsd-secure-phase 21`
+**Current focus:** Milestone `v2.0` · Phase 21 Security Audit Complete (`21-SECURITY.md` `14/14` closed on `b5bd321`) — ready for `/gsd-validate-phase 21`
 
 ## Current Position
 
-Phase: 21 of 23 (CLI Ergonomics — `/help`, `@file` / `/file`, `/review`) — UAT Complete (`21-UAT.md` `6/6` passed)
+Phase: 21 of 23 (CLI Ergonomics — `/help`, `@file` / `/file`, `/review`) — Security Audited (`21-SECURITY.md` `14/14` closed, `threats_open: 0`)
 Plan: 3 of 3 in Phase 21
-Status: UAT Complete (ready for `/gsd-secure-phase 21` and `/gsd-validate-phase 21`)
-Last activity: 2026-11-28 — Completed `/gsd-verify-work 21` (`21-UAT.md` `6/6` passed on `d10c6fd`; mid-UAT fixes `fb8ab32`..`d10c6fd`; `2073 + 1 = 2074` default tests, `44/44` rig, all 6 CI gates green)
+Status: Security Audited (ready for `/gsd-validate-phase 21`)
+Last activity: 2026-11-28 — Completed `/gsd-secure-phase 21` (`21-SECURITY.md` `14/14` closed, `b5bd321`; `2077 + 1 = 2078` default tests, `44/44` rig, all 6 CI gates green)
 
 Progress: [█████████░] 85%
 
@@ -111,10 +111,11 @@ Key `v1.0` decisions remain archived in `.planning/PROJECT.md`. Active `v2.0` al
 - Phase 21 planning (`21-RESEARCH.md`, `21-PATTERNS.md`, `21-01..03-PLAN.md`, `21-VALIDATION.md`, `21-PLAN-CHECK.md` PASS, 2026-11-27): structured Waves 1–3 with 6 Wave 0 TDD suites (`test_help.py`, `test_tool_use_guard.py`, `test_attachments.py`, `test_loop_attachments.py`, `test_review.py`, `test_loop_review.py`), `dispatch/help.py`, `policy/tool_use_guard.py`, `"document"` `model_switch.py`/`cost_context.py` parity, `ui/attachments.py` + `AtFileCompleter`, and `dispatch/review.py` + extracted `loop/core.py` helpers keeping `run_loop <= C (18)`, zero `os.environ`/restricted words, `lint-imports` clean, and `D-24` pristine `strands_code_agent/`.
 - Phase 21 (`dff1004`, `a721feb`, `fd5dfff`, `21-VERIFICATION.md` `11/11` PASS): delivered `LOOP-06`, `TOOL-05`, and `REVIEW-01` across Waves 1–3 with declarative `dispatch/help.py` (`BUILTIN_SLASH_HEADS` 25 heads + `USAGE_HINT` + built-in/skill `/help [name]`), 3-site fail-closed `RejectCallerToolUseHook` (`policy/tool_use_guard.py`) + allowlisted `validate_content_blocks`, `"document"` model-switch/stash/`canonical_prefix_hash`/`_block_chars` parity, gitignore-aware `ui/attachments.py` + `AtFileCompleter` + `/file` `default=buf` pre-fill under fail-closed `read`/`codeact_read` security bounds + post-routing `supports_media` abort gate, and `dispatch/review.py` (`HEAD`/`--staged`/`<base-ref>` + focus, `256 KiB` `<untrusted_git_diff>` frame, sanitized `routing_ask`, turn-scoped read-only Plan gate + `turn_interface="tool"` preserving sticky `ModeState`/`CodeactState`), plus `docs/QUICKSTART.md` and `2069 + 1 = 2070` default tests + `44/44` rig + all 6 CI gates (`run_loop` `C 18`, `strands_code_agent/` untouched per `D-24`).
 - Phase 21 UAT (`21-UAT.md` `6/6` passed on `d10c6fd`; mid-UAT adversarial fixes `fb8ab32`, `084cb37`, `5ab4746`, `174c56b`, `d10c6fd`): closed 8 adversarial pre-check gaps across Tests 1–5 (aligned shadowed-skill `/help` note with `_dispatch_skill_turn`; guarded `_media_placeholder_block()` across `"document"`/`"image"`/`"video"` against `None`/non-dict payloads and stripped `,`/`]` from `format` and `name`; fixed `/file` `default=0` highlight + `KeyboardInterrupt` catch and added open-quote `@"<query>` + subsequence `@file` completion in `ui/completer.py`; rejected embedded NUL bytes fail-closed in `ui/attachments.py`; and hardened `/review` + `_git_ls_files()` against `diff.external`, `diff.<driver>.textconv`, `core.fsmonitor`, and ANSI color injection); verified `2073 + 1 = 2074` default suite under CI env, `44/44` rig, and all 6 CI gates green on `d10c6fd`.
+- Phase 21 security audit (`21-SECURITY.md` `14/14 closed`, `threats_open: 0`, `status: verified`, `b5bd321`, 2026-11-28): remediated `T-21-11` MEDIUM (rejected `"` and `Cc`/`Cf` controls + directory symlinks in `attachments.py`/`completer.py` and case-insensitive `</attached_file>` escaping), `T-21-12` MEDIUM (bounded streaming `_run_git_bounded()` terminating oversized `git diff` at `256 KiB` + `sanitize_multiline()` diff sanitization + case-insensitive `</untrusted_git_diff>`/`</review_focus>` escaping in `review.py`), and `T-21-13` HIGH (single-key tagged-union check in `validate_content_blocks()` + recursive nested `"toolUse"` detection in `contains_caller_tool_use()`); verified live red-team PoCs, `2077 + 1 = 2078` default suite under CI env, `44/44` rig, and all 6 CI gates green (`strands_code_agent/` untouched per `D-24`).
 
 ### Pending Todos
 
-- Run `/gsd-secure-phase 21` and `/gsd-validate-phase 21` (Phase 21 post-UAT threat audit and Nyquist validation).
+- Run `/gsd-validate-phase 21` (Phase 21 post-security Nyquist coverage validation).
 - Monitor upstream issues `strands-agents/harness-sdk#6510`, `#6521` (title and body updated in place on 2026-11-24 with empirical probe results), and `#6522` (PR `#6525` — retire `configure_openai_for_model()` bridge in `strands_code_cli/model/model_switch.py` once upstream `_openai_levels` releases, and evaluate an upstream follow-up PR for `bedrock-mantle`), plus retireable bridge `strands_code_cli/entry/subagent.py` (upstream `strands-agents/harness-sdk` `build_default_subagent` live-model & consumer post-init hook enhancement).
 
 ### Blockers/Concerns
