@@ -215,6 +215,16 @@ def _dispatch_model_cmds(
     return None
 
 
+def _review_action(rest: str, cwd: str | Path | None) -> tuple[str, Any]:
+    """Handle /review pre-collection returning ('review', payload) or ('reply', msg)."""
+    from strands_code_cli.dispatch.review import collect_review_turn
+
+    payload, reply = collect_review_turn(rest, cwd=cwd)
+    if payload is not None:
+        return ("review", payload)
+    return ("reply", reply or "Nothing to review.")
+
+
 def _file_action(rest: str, cwd: str | Path | None) -> tuple[str, str | None]:
     """Handle /file picker returning prompt pre-fill or informational reply."""
     from strands_code_cli.ui.attachments import pick_file_for_prompt
@@ -256,6 +266,8 @@ def _dispatch_builtin_wins(
         return ("reply", help_message(rest, skills))
     if cmd == "/file":
         return _file_action(rest, cwd)
+    if cmd == "/review":
+        return _review_action(rest, cwd)
     return None
 
 

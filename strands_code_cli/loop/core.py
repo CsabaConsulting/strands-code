@@ -36,6 +36,7 @@ from strands_code_cli.dispatch.core import (
     dispatch,
     read_memory_section,
 )
+from strands_code_cli.dispatch.review import ReviewTurnPayload
 from strands_code_cli.entry.provider_config import ProviderConfig
 from strands_code_cli.loop.btw import (
     BTW_IDLE_APPROVAL,
@@ -2599,137 +2600,202 @@ def _finish_turn(
     return titled
 
 
-def _execute_turn_cycle(
-    agent: Any,
+def _make_skill_words_getter(skills: Any) -> Callable[[], list[tuple[str, str]]]:
+    from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS
+
+    def _skill_words() -> list[tuple[str, str]]:
+        words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
+        words.extend(
+            (entry.name, f"/{entry.namespaced}")
+            for entry in skills.list_entries()
+            if not entry.shadowed
+        )
+        return words
+
+    return _skill_words
+
+
+def _make_harness_skills_refresher(
+    agent: Any, skills: Any, btw_session: BtwContext
+) -> Callable[[], str | None]:
+    def _refresh_harness_skills() -> str | None:
+        plugin = getattr(agent, "_skills_plugin", None)
+        if plugin is None:
+            return None
+        if btw_session.has_live:
+            return "model registry refresh deferred — side answer running"
+        plugin.set_available_skills(skills.discover_plugin_sources())
+        return None
+
+    return _refresh_harness_skills
+
+
+def _make_arm_revise(
+    revise_state: ReviseState, boundary_revise: dict[str, Any]
+) -> Callable[[Any, str], str]:
+    def _arm_revise_from_review(proposal: Any, instruction: str) -> str:
+        current = read_memory_section(proposal.section) or ""
+        revise_state.arm(proposal.section, current, instruction)
+        boundary_revise["template"] = format_revise_prompt(
+            proposal.section, current, instruction
+        )
+        return f"Revise armed for '{proposal.section}' — running."
+
+    return _arm_revise_from_review
+
+
+def _compose_turn_inputs(
+    *,
+    review_turn: bool,
+    message: Any,
+    text: str,
+    mode: ModeState,
+    turn_interface: str,
+) -> tuple[str, str]:
+    if review_turn:
+        return (message.prompt_text, message.routing_ask)
+    return (
+        shape_turn_text(turn_interface, _compose_agent_text(message, text, mode)),
+        text,
+    )
+
+
+def _handle_prefill_or_reply(
     *,
     action: str,
+    agent: Any,
     message: Any,
+    mode: ModeState,
     text: str,
     session_id: str,
     index: SessionIndex,
-    mode: ModeState,
+    rich: RichHistory,
+    stash_path: Path | None,
+) -> str:
+    if action == "prefill":
+        return str(message or "")
+    _handle_reply_action(
+        agent, message, mode, text, session_id, index, rich, stash_path
+    )
+    return ""
+
+
+def _finish_model_switch(
+    agent: Any,
+    message: str,
+    *,
+    index: SessionIndex,
+    session_id: str,
+    rich: RichHistory,
+    stash_path: Path | None,
+    routing: routing_mod.RoutingState | None,
+) -> None:
+    explicit_save(agent)
+    index.ensure(session_id)
+    index.set_model(session_id, message)
+    rich.save(stash_path)
+    if routing_mod.warn_applies(routing):
+        routing.set("off")
+        print_plain(console, routing_mod.ROUTING_MANUAL_OFF_NOTE)
+
+
+def _set_review_read_only(agent: Any, active: bool, enter: bool) -> None:
+    if not active:
+        return
+    gate = gate_for(agent)
+    if gate is None:
+        return
+    fn = gate.enter_read_only if enter else gate.exit_read_only
+    fn(agent)
+
+
+def _is_review_turn(action: str, message: Any) -> bool:
+    """True when dispatched turn is a pre-collected /review payload."""
+    return action == "review" and isinstance(message, ReviewTurnPayload)
+
+
+def _run_routed_attachment_turn(
+    agent: Any,
+    *,
+    text: str,
+    agent_text: str,
+    routing_ask: str,
+    scan_attachments: bool,
+    turn_id: str,
+    cancel_event: threading.Event,
+    btw_session: BtwContext,
+    both_running: threading.Event,
+    side_pool: ThreadPoolExecutor,
     current_model: str,
     session_turns: list,
+    turn_interface: str,
+    turn_interfaces: list,
+    mode: ModeState,
     revise_state: ReviseState,
     init_state: InitState,
     curate_queue: CurateQueue,
+    index: SessionIndex,
+    session_id: str,
     rich: RichHistory,
     stash_path: Path | None,
     routing: routing_mod.RoutingState | None,
     routing_events: list,
-    interface: CodeactState,
-    stint: CodeactStint,
-    default_repl: Any,
-    turn_interfaces: list,
-    slot: Any,
-    btw_session: BtwContext,
-    side_pool: ThreadPoolExecutor,
-    cancel_armed_at: float | None,
-    titled: bool,
-) -> tuple[str, float | None, bool]:
-    """Execute one non-command agent turn with routing, attachments, and cleanup."""
-    steering = SteeringState()
-    turn_id = f"{session_id}:{uuid.uuid4().hex}"
-    cancel_event = threading.Event()
-    both_running = threading.Event()
-    reader = None
-    cancelled = False
-    note_plan = True
-    swapped = False
-    prev_sigint = _install_turn_sigint_handler(cancel_event, both_running)
-    try:
-        with output_context():
-            _bind_gate_turn(agent, turn_id)
-            steering.bind_turn(turn_id)
-            slot.state = steering
-            _set_gate_mode(agent, mode.mode)
-            reader = start_steering_reader(
-                steering, gate_open, on_btw=btw_session.submit
-            )
-            agent_text = _compose_agent_text(message, text, mode)
-            turn_interface = resolve_turn_interface(interface.resolve_turn())
-            agent_text = shape_turn_text(turn_interface, agent_text)
-            swapped = swap_for_code_turn(
-                agent,
-                turn_interface,
-                stint.tool if turn_interface == "code" else None,
-                default_repl,
-            )
-            current_model = _route_pre_turn(
-                agent,
-                current_model=current_model,
-                ask_text=text,
-                rich=rich,
-                index=index,
-                session_id=session_id,
-                stash_path=stash_path,
-                routing=routing,
-                routing_events=routing_events,
-            )
-            turn_prompt, attach_err = prepare_turn_prompt(
-                text,
-                agent_text,
-                current_model=current_model,
-                scan_attachments=True,
-            )
-            if attach_err is not None or turn_prompt is None:
-                print_plain(
-                    console,
-                    attach_err or "Attachment resolution cancelled the turn.",
-                )
-                note_plan = False
-                return current_model, cancel_armed_at, titled
-            result, failed, attempts, before = _run_turn_attempts(
-                agent,
-                turn_prompt,
-                turn_id,
-                cancel_event,
-                btw_session,
-                both_running,
-                side_pool,
-                current_model,
-                session_turns,
-                turn_interface,
-                turn_interfaces,
-            )
-            if failed:
-                _drop_armed_on_failure(revise_state, init_state)
-                return current_model, cancel_armed_at, titled
-            _consume_followup_rounds(
-                agent,
-                result,
-                revise_state,
-                init_state,
-                curate_queue,
-                cancel_event,
-                session_turns,
-                current_model,
-                mode,
-                turn_interface,
-                turn_interfaces,
-            )
-            _finish_successful_turn(
-                agent, current_model, index, session_id, before, attempts
-            )
-    except KeyboardInterrupt:
-        cancelled = True
-        cancel_armed_at = _handle_turn_cancel_path(
-            agent,
-            session_id,
-            index,
-            cancel_event,
-            btw_session,
-            cancel_armed_at,
-            revise_state,
-            init_state,
-        )
-    finally:
-        restore_after_turn(agent, swapped, default_repl)
-        _restore_turn_handlers(prev_sigint, reader, slot)
-    titled = _finish_turn(
-        mode, cancelled, titled, agent, session_id, index, text, note_plan=note_plan
+) -> tuple[str, bool]:
+    """Run routing, resolve attachments post-routing, invoke agent, and consume follow-ups."""
+    current_model = _route_pre_turn(
+        agent,
+        current_model=current_model,
+        ask_text=routing_ask,
+        rich=rich,
+        index=index,
+        session_id=session_id,
+        stash_path=stash_path,
+        routing=routing,
+        routing_events=routing_events,
     )
-    return current_model, cancel_armed_at, titled
+    turn_prompt, attach_err = prepare_turn_prompt(
+        text,
+        agent_text,
+        current_model=current_model,
+        scan_attachments=scan_attachments,
+    )
+    if attach_err is not None or turn_prompt is None:
+        print_plain(
+            console,
+            attach_err or "Attachment resolution cancelled the turn.",
+        )
+        return current_model, False
+    result, failed, attempts, before = _run_turn_attempts(
+        agent,
+        turn_prompt,
+        turn_id,
+        cancel_event,
+        btw_session,
+        both_running,
+        side_pool,
+        current_model,
+        session_turns,
+        turn_interface,
+        turn_interfaces,
+    )
+    if failed:
+        _drop_armed_on_failure(revise_state, init_state)
+        return current_model, True
+    _consume_followup_rounds(
+        agent,
+        result,
+        revise_state,
+        init_state,
+        curate_queue,
+        cancel_event,
+        session_turns,
+        current_model,
+        mode,
+        turn_interface,
+        turn_interfaces,
+    )
+    _finish_successful_turn(agent, current_model, index, session_id, before, attempts)
+    return current_model, True
 
 
 def _close_loop_session(
@@ -2858,7 +2924,7 @@ def run_loop(
     """
     from strands_harness.defaults import DEFAULT_MODEL
 
-    from strands_code_cli.memory.skills import BUILTIN_SLASH_HEADS, SkillIndex
+    from strands_code_cli.memory.skills import SkillIndex
     from strands_code_cli.ui.completer import build_completer
 
     print_plain(console, f"Session {session_id} — Ctrl-D to exit.", style="dim")
@@ -2867,40 +2933,11 @@ def run_loop(
     memory_snapshot = load_memory()
     print_plain(console, memory_banner(memory_snapshot))
 
-    def _skill_words() -> list[tuple[str, str]]:
-        words = [(head, f"/{head}") for head in sorted(BUILTIN_SLASH_HEADS)]
-        words.extend(
-            (entry.name, f"/{entry.namespaced}")
-            for entry in skills.list_entries()
-            if not entry.shadowed
-        )
-        return words
-
-    def _refresh_harness_skills() -> str | None:
-        """Rescan the harness skills registry (no-op without the plugin).
-
-        Reads the handle ``build_agent`` stashed; test doubles without
-        one simply skip the refresh. Defers while a side run is live:
-        the side agent shares this plugin object, so a mid-turn rescan
-        would mutate the registry concurrently with its use.
-
-        Returns:
-            A deferral note for the reload reply, or None when the
-            refresh ran (or there was no plugin to refresh).
-        """
-        plugin = getattr(agent, "_skills_plugin", None)
-        if plugin is None:
-            return None
-        if btw_session.has_live:
-            return "model registry refresh deferred — side answer running"
-        plugin.set_available_skills(skills.discover_plugin_sources())
-        return None
-
-    def _workspace_files() -> list[str]:
-        return discover_workspace_files()
-
     session: PromptSession = PromptSession(
-        history=_history(), completer=build_completer(_skill_words, _workspace_files)
+        history=_history(),
+        completer=build_completer(
+            _make_skill_words_getter(skills), discover_workspace_files
+        ),
     )
     mode = ModeState()
     interface, diff_mode, memory_mode = _load_initial_toggles(codeact, agent)
@@ -2918,15 +2955,7 @@ def run_loop(
     revise_state = ReviseState()
     init_state = InitState()
     boundary_revise: dict[str, Any] = {"template": None}
-
-    def _arm_revise_from_review(proposal: Any, instruction: str) -> str:
-        """Boundary revise choice: arm the round and stash its turn text."""
-        current = read_memory_section(proposal.section) or ""
-        revise_state.arm(proposal.section, current, instruction)
-        boundary_revise["template"] = format_revise_prompt(
-            proposal.section, current, instruction
-        )
-        return f"Revise armed for '{proposal.section}' — running."
+    _arm_revise_from_review = _make_arm_revise(revise_state, boundary_revise)
 
     current_model = model_id or ProviderConfig.load().model or DEFAULT_MODEL
     _warn_if_no_streaming_tools(current_model)
@@ -3006,7 +3035,7 @@ def run_loop(
             current_model,
             session_turns,
             skills,
-            _refresh_harness_skills,
+            _make_harness_skills_refresher(agent, skills, btw_session),
             memory_mode,
             curate_queue,
             init_state,
@@ -3019,12 +3048,17 @@ def run_loop(
         _emit_skill_match_note(skills, action, text)
         if action == "exit":
             break
-        if action == "prefill":
-            next_prefill = message or ""
-            continue
-        if action == "reply":
-            _handle_reply_action(
-                agent, message, mode, text, session_id, index, rich, stash_path
+        if action in ("prefill", "reply"):
+            next_prefill = _handle_prefill_or_reply(
+                action=action,
+                agent=agent,
+                message=message,
+                mode=mode,
+                text=text,
+                session_id=session_id,
+                index=index,
+                rich=rich,
+                stash_path=stash_path,
             )
             continue
         if action == "model" and message is not None:
@@ -3047,41 +3081,98 @@ def run_loop(
                     ProviderConfig.load().save_model_choice(message)
                 except ValueError as exc:
                     logger.warning("Model choice not persisted: %s", exc)
-                explicit_save(agent)
-                index.ensure(session_id)
-                index.set_model(session_id, current_model)
-                rich.save(stash_path)
-                if routing_mod.warn_applies(routing):
-                    # Warn-path apply: manual override wins, routing off.
-                    routing.set("off")
-                    print_plain(console, routing_mod.ROUTING_MANUAL_OFF_NOTE)
+                _finish_model_switch(
+                    agent,
+                    current_model,
+                    index=index,
+                    session_id=session_id,
+                    rich=rich,
+                    stash_path=stash_path,
+                    routing=routing,
+                )
             continue
-        current_model, cancel_armed_at, titled = _execute_turn_cycle(
-            agent,
-            action=action,
-            message=message,
-            text=text,
-            session_id=session_id,
-            index=index,
-            mode=mode,
-            current_model=current_model,
-            session_turns=session_turns,
-            revise_state=revise_state,
-            init_state=init_state,
-            curate_queue=curate_queue,
-            rich=rich,
-            stash_path=stash_path,
-            routing=routing,
-            routing_events=routing_events,
-            interface=interface,
-            stint=stint,
-            default_repl=default_repl,
-            turn_interfaces=turn_interfaces,
-            slot=slot,
-            btw_session=btw_session,
-            side_pool=side_pool,
-            cancel_armed_at=cancel_armed_at,
-            titled=titled,
+        steering = SteeringState()
+        turn_id = f"{session_id}:{uuid.uuid4().hex}"
+        cancel_event = threading.Event()
+        both_running = threading.Event()
+        btw = btw_session
+        reader = None
+        cancelled = False
+        swapped = False
+        review_turn = _is_review_turn(action, message)
+        note_plan = not review_turn
+        prev_sigint = _install_turn_sigint_handler(cancel_event, both_running)
+        try:
+            with output_context():
+                _bind_gate_turn(agent, turn_id)
+                steering.bind_turn(turn_id)
+                slot.state = steering
+                _set_gate_mode(agent, mode.mode)
+                _set_review_read_only(agent, review_turn, True)
+                reader = start_steering_reader(steering, gate_open, on_btw=btw.submit)
+                turn_interface = (
+                    "tool"
+                    if review_turn
+                    else resolve_turn_interface(interface.resolve_turn())
+                )
+                agent_text, routing_ask = _compose_turn_inputs(
+                    review_turn=review_turn,
+                    message=message,
+                    text=text,
+                    mode=mode,
+                    turn_interface=turn_interface,
+                )
+                swapped = swap_for_code_turn(
+                    agent,
+                    turn_interface,
+                    stint.tool if turn_interface == "code" else None,
+                    default_repl,
+                )
+                current_model, did_run = _run_routed_attachment_turn(
+                    agent,
+                    text=text,
+                    agent_text=agent_text,
+                    routing_ask=routing_ask,
+                    scan_attachments=not review_turn,
+                    turn_id=turn_id,
+                    cancel_event=cancel_event,
+                    btw_session=btw,
+                    both_running=both_running,
+                    side_pool=side_pool,
+                    current_model=current_model,
+                    session_turns=session_turns,
+                    turn_interface=turn_interface,
+                    turn_interfaces=turn_interfaces,
+                    mode=mode,
+                    revise_state=revise_state,
+                    init_state=init_state,
+                    curate_queue=curate_queue,
+                    index=index,
+                    session_id=session_id,
+                    rich=rich,
+                    stash_path=stash_path,
+                    routing=routing,
+                    routing_events=routing_events,
+                )
+                note_plan = note_plan and did_run
+        except KeyboardInterrupt:
+            cancelled = True
+            cancel_armed_at = _handle_turn_cancel_path(
+                agent,
+                session_id,
+                index,
+                cancel_event,
+                btw,
+                cancel_armed_at,
+                revise_state,
+                init_state,
+            )
+        finally:
+            _set_review_read_only(agent, review_turn, False)
+            restore_after_turn(agent, swapped, default_repl)
+            _restore_turn_handlers(prev_sigint, reader, slot)
+        titled = _finish_turn(
+            mode, cancelled, titled, agent, session_id, index, text, note_plan=note_plan
         )
     _close_loop_session(
         agent,

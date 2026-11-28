@@ -462,3 +462,20 @@ strands-code box run -- --codeact --model anthropic/claude-sonnet-5-5
   `formerly within 900s`). Per `v2.0`'s scoped revisit of `D-05`, external host-side
   deterministic `.dw` rules are scoped exclusively to Strands Box while in-process
   Python `interventions` remain deterministic TOML + Python only.
+
+## CLI Ergonomics (`/help`, `@file` / `/file`, `/review`)
+
+- **`/help` and `/help <command|skill>`:** Displays grouped built-in commands plus
+  loaded skills and any shadowed/drift warnings, or detailed usage for a single
+  built-in command or skill (`/local:...`, `/<ns>:...`).
+- **`@file` and `/file [filter]`:** Fuzzy-complete gitignore-filtered workspace
+  paths mid-line with `@<path>`, or open the TTY picker via `/file` to pre-fill
+  `@<relpath> ` into your next prompt. UTF-8 text/code files embed inline inside
+  `<attached_file>`, images (`png`/`jpeg`/`gif`/`webp`) and binary documents
+  (`pdf`/`docx`/`xlsx`/`doc`/`xls`) attach as native multimodal blocks when
+  supported post-routing, and sensitive paths (`.env*`, `~/.ssh/*`, `~/.aws/*`),
+  symlinks, and `[[deny]]` matches are refused fail-closed (`4 MiB` per file).
+- **`/review [--staged|<base-ref>] [focus...]`:** Pre-collects uncommitted,
+  staged, or branch diffs inside a bounded (`256 KiB`) `<untrusted_git_diff>`
+  frame and runs a turn-scoped read-only review on the tool interface without
+  altering sticky `/mode` or `/codeact` settings.
