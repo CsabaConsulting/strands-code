@@ -67,7 +67,16 @@ def _run_git(
     cwd: Path, args: list[str], *, timeout: int = 10
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", *args],
+        [
+            "git",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.pager=cat",
+            "-c",
+            "diff.external=",
+            *args,
+        ],
         cwd=cwd,
         shell=False,
         capture_output=True,
@@ -159,9 +168,30 @@ def collect_review_turn(
 
     try:
         stat_proc = _run_git(
-            repo_root, ["diff", "--stat", *diff_args, "--"], timeout=10
+            repo_root,
+            [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--stat",
+                *diff_args,
+                "--",
+            ],
+            timeout=10,
         )
-        diff_proc = _run_git(repo_root, ["diff", *diff_args, "--"], timeout=10)
+        diff_proc = _run_git(
+            repo_root,
+            [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                *diff_args,
+                "--",
+            ],
+            timeout=10,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         return (None, f"Git diff failed: {exc}")
     if diff_proc.returncode != 0:

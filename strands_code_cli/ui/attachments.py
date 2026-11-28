@@ -90,7 +90,7 @@ def _git_ls_files(root: Path, limit: int) -> list[Path] | None:
     """List gitignore-filtered workspace files via git ls-files when inside a repo."""
     try:
         top = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
+            ["git", "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel"],
             cwd=root,
             shell=False,
             capture_output=True,
@@ -100,7 +100,16 @@ def _git_ls_files(root: Path, limit: int) -> list[Path] | None:
         if top.returncode != 0:
             return None
         proc = subprocess.run(
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
             cwd=root,
             shell=False,
             capture_output=True,

@@ -158,3 +158,22 @@ class TestCollectReviewTurnDiffs:
         assert 'truncated="true"' in payload.prompt_text
         assert f"diff truncated at {REVIEW_MAX_DIFF_BYTES} bytes" in payload.prompt_text
         assert REVIEW_USAGE.startswith("Usage:")
+
+    def test_review_blocks_ext_diff_textconv_and_ansi_color(self, tmp_path):
+        repo = _init_repo(tmp_path)
+        pwn1 = tmp_path / "pwn_ext"
+        pwn2 = tmp_path / "pwn_textconv"
+        _git(repo, "config", "diff.external", f'sh -c "touch {pwn1}"')
+        (repo / ".gitattributes").write_text("*.py diff=evil\n", encoding="utf-8")
+        _git(repo, "config", "diff.evil.textconv", f'sh -c "touch {pwn2}; cat"')
+        _git(repo, "config", "color.diff", "always")
+        (repo / "app.py").write_text(
+            "def add(a, b):\n    return a - b\n", encoding="utf-8"
+        )
+
+        payload, reply = collect_review_turn("", cwd=repo)
+        assert reply is None
+        assert payload is not None
+        assert not pwn1.exists()
+        assert not pwn2.exists()
+        assert "\x1b" not in payload.prompt_text
